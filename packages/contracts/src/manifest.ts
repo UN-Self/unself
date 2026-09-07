@@ -21,6 +21,11 @@ export const ModuleManifestSchema = z.object({
   version: z.string().regex(/^\d+\.\d+\.\d+$/),
   /** 模块描述（可选）。 */
   description: z.string().optional(),
+  /** 图标名（可选）：Lucide 图标名 [a-z0-9-]+，壳白名单映射渲染；缺省/未知回退模块名首字（§5.1，拒绝 emoji）。 */
+  icon: z
+    .string()
+    .regex(/^[a-z0-9-]+$/)
+    .optional(),
 });
 
 export type ModuleManifest = z.infer<typeof ModuleManifestSchema>;
