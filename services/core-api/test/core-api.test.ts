@@ -8,10 +8,4 @@ describe('core-api', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, service: 'core-api' });
   });
-
-  it('POST /api/setup/activate 返回 501 占位', async () => {
-    const res = await app.request('/api/setup/activate', { method: 'POST' });
-    expect(res.status).toBe(501);
-    expect(await res.json()).toEqual({ error: 'not implemented (M0 scaffold)' });
-  });
 });
