@@ -28,8 +28,6 @@ import {
   storeSetupToken,
 } from './setup';
 
-import { deriveSigningRuntime, generateInstanceKeyPair, type SigningRuntime } from './keys';
-
 export interface Bindings {
   CORE_DB: D1Database;
   MODULES_DB: D1Database;
@@ -324,7 +322,10 @@ app.post('/api/modules/:id/token', async (c) => {
   if (!gate.ok) {
     return c.json({ error: gate.error ?? 'forbidden' }, (gate.status ?? 403) as 401 | 403 | 404);
   }
-  const runtime = await deriveSigningRuntimeOnce(secret);
+  const runtime = await getSigningRuntime(secret);
+  if (!runtime) {
+    return c.json({ error: 'signing key not provisioned (run deploy bootstrap)' }, 503);
+  }
   const issued = await issueModuleToken(
     runtime,
     { userId: session.uid, moduleId },
