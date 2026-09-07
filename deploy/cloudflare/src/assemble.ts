@@ -1,0 +1,308 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+/**
+ * 装配产物生成（③④）：
+ * - core：apps/shell 构建副本作 assets（SPA fallback + run_worker_first API）+ 两 D1 真实 id + route；
+ * - module：<id>.worker.js（esbuild ESM 打包）+ sdk/module-sdk.js（浏览器 IIFE）+ D1/vars/route。
+ * 一切文件写进 <root>/.deploy/cloudflare/（gitignore），重跑整体重建 → 幂等。
+ */
+import { spawn } from 'node:child_process';
+import { cp, mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { build } from 'esbuild';
+import type { UnselfConfig } from './config';
+import type { ModuleRef } from './config';
+import type { InstanceKeyPair } from './es256';
+import type { Wrangler } from './wrangler';
+
+export type RelPath = string;
+
+/** 一次装配生成的全部部署参数（steps 的输入）。 */
+export interface Provisioned {
+  /** 装配产物根（绝对路径，<root>/.deploy/cloudflare）。 */
+  outDir: string;
+  /** 实例对外 base URL（https://domain 或 workers.dev）。 */
+  baseUrl: string;
+  /** core Worker 名。 */
+  coreName: string;
+  /** 生成的 core 部署配置相对路径。 */
+  coreConfig: RelPath;
+  /** 各选中模块的部署参数。 */
+  modules: ModuleProvision[];
+  /** R2 桶名（provider=r2 时）。 */
+  r2Bucket?: string;
+}
+
+export interface ModuleProvision {
+  id: string;
+  dir: string;
+  /** 生成的模块部署配置相对路径。 */
+  config: RelPath;
+  /** Worker 入口相对路径。 */
+  workerEntry: RelPath;
+}
+
+/** 装配产物目录名（.deploy，gitignore）。 */
+export const DEPLOY_DIR = '.deploy/cloudflare';
+
+function runTool(cmd: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+    child.on('error', reject);
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`${cmd} ${args.join(' ')} 失败（${code}）：\n${stderr.slice(-1500)}`)),
+    );
+  });
+}
+
+/**
+ * 装配（步骤③④的构建与生成部分；上传在 steps.deploy*）：
+ * 1. vite build shell（若 dist 缺失或 FORCE_BUILD）→ 拷贝到 outDir/assets/shell；
+ * 2. esbuild 打包每个选中模块 Worker（platform=node_modules 外置 → 无；unself 模块自包含）；
+ * 3. esbuild 打包 @unself/module-sdk 为浏览器 IIFE → assets/<id>/sdk/module-sdk.js；
+ * 4. 生成 core 与各模块 wrangler jsonc。
+ */
+export async function provisionAll(options: {
+  rootDir: string;
+  config: UnselfConfig;
+  modules: ModuleRef[];
+  dbIds: { core: string; modules: string };
+  keypair: InstanceKeyPair | { existing: true };
+  wrangler: Wrangler;
+  log?: (msg: string) => void;
+}): Promise<Provisioned> {
+  const { rootDir, config, modules, dbIds, wrangler } = options;
+  const log = options.log ?? console.log;
+  const outDir = join(rootDir, DEPLOY_DIR);
+  await mkdir(outDir, { recursive: true });
+
+  // ---- 步骤③ 构建侧：shell ----
+  const shellDist = join(rootDir, 'apps/shell/dist');
+  if (!existsSync(shellDist)) {
+    log('构建 shell（vite build）…');
+    await runTool('pnpm', ['--filter', '@unself/shell', 'build'], rootDir);
+  } else {
+    log('shell dist 已存在，直接复用（幂等；需强制重建请删除 apps/shell/dist）');
+  }
+  const shellAssets = join(outDir, 'assets/shell');
+  await rm(shellAssets);
+  await cp(shellDist, shellAssets, { recursive: true });
+
+  // ---- 实例 base URL（workers.dev 回退）----
+  const coreName = 'unself-core-api';
+  let baseUrl: string;
+  if (config.domain) {
+    baseUrl = `https://${config.domain}`;
+  } else {
+    // 触发部署后才有 workers.dev URL；此处生成期先按名字推导（步骤③部署后校正）
+    const res = await wrangler.tryRun(['deploy', '--dry-run', '--outdir', join(outDir, 'dryrun')]);
+    void res; // dry-run 仅热身缓存，URL 以 deploy 输出为准
+    baseUrl = ''; // 占位：deployCore 后回填
+  }
+
+  // ---- 步骤④ 构建侧：模块 ----
+  const sdkEntry = join(rootDir, 'packages/module-sdk/src/index.ts');
+  const moduleProvisions: ModuleProvision[] = [];
+  for (const mod of modules.filter((m) => m.selected)) {
+    const modOut = join(outDir, 'modules', mod.id);
+    await mkdir(modOut, { recursive: true });
+    // Worker 入口（依赖打进单文件：模块部署单元自包含）
+    const workerEntry = join(modOut, 'worker.js');
+    await build({
+      entryPoints: [join(mod.dir, 'src/index.ts')],
+      outfile: workerEntry,
+      bundle: true,
+      format: 'esm',
+      platform: 'neutral',
+      target: 'es2022',
+      conditions: ['workerd', 'import'],
+      external: ['@cloudflare/workers-types'],
+      legalComments: 'inline',
+      banner: { js: '// SPDX-License-Identifier: AGPL-3.0-only' },
+      logLevel: 'silent',
+    });
+    // SDK 浏览器包（页面 import /sdk/module-sdk.js → 部署期静态资产）
+    const sdkAssets = join(modOut, 'assets/sdk');
+    await mkdir(sdkAssets, { recursive: true });
+    await build({
+      entryPoints: [sdkEntry],
+      outfile: join(sdkAssets, 'module-sdk.js'),
+      bundle: true,
+      format: 'iife',
+      platform: 'browser',
+      target: 'es2020',
+      globalName: '__unselfSDK',
+      legalComments: 'inline',
+      logLevel: 'silent',
+    });
+    // 兼容页面 `import ... from '/sdk/module-sdk.js'`：IIFE 全局名不足以满足
+    // 具名导入 —— 追加一个 ESM 重导出层不可行（IIFE 无导出），
+    // 因此资产侧提供 ESM 版（同包二次打包），页面 import 直接命中。
+    await build({
+      entryPoints: [sdkEntry],
+      outfile: join(sdkAssets, 'module-sdk.esm.js'),
+      bundle: true,
+      format: 'esm',
+      platform: 'browser',
+      target: 'es2020',
+      legalComments: 'inline',
+      logLevel: 'silent',
+    });
+    moduleProvisions.push({
+      id: mod.id,
+      dir: mod.dir,
+      config: `modules/${mod.id}.wrangler.jsonc`,
+      workerEntry: `modules/${mod.id}/worker.js`,
+    });
+  }
+  void sdkEntry;
+
+  return {
+    outDir,
+    baseUrl,
+    coreName,
+    coreConfig: 'core.wrangler.jsonc',
+    modules: moduleProvisions,
+    r2Bucket: config.storage.provider === 'r2' ? config.storage.bucket : undefined,
+  };
+}
+
+async function rm(path: string): Promise<void> {
+  if (existsSync(path)) {
+    await import('node:fs/promises').then((fs) => fs.rm(path, { recursive: true, force: true }));
+  }
+}
+
+/** 生成 core 部署配置（含 SPA fallback + run_worker_first + 真实 D1 id + route）。 */
+export function coreWranglerConfig(input: {
+  config: UnselfConfig;
+  dbIds: { core: string; modules: string };
+  coreName: string;
+}): string {
+  const { config, dbIds, coreName } = input;
+  const route = config.domain ? config.domain : undefined;
+  return JSON.stringify(
+    {
+      $schema: 'node_modules/wrangler/config-schema.json',
+      name: coreName,
+      main: `${DEPLOY_DIR}/core-worker.js`,
+      compatibility_date: '2026-09-01',
+      compatibility_flags: ['nodejs_compat'],
+      ...(route
+        ? {
+            routes: [{ pattern: `${route}`, zone_name: route }],
+          }
+        : {}),
+      assets: {
+        directory: `${DEPLOY_DIR}/assets/shell`,
+        binding: 'ASSETS',
+        // SPA：未命中文件回 index.html；API/JWKS 一律先跑 Worker
+        not_found_handling: 'single-page-application',
+        run_worker_first: ['/api/*', '/.well-known/*', '/setup'],
+      },
+      d1_databases: [
+        {
+          binding: 'CORE_DB',
+          database_name: 'unself-core',
+          database_id: dbIds.core,
+        },
+        {
+          binding: 'MODULES_DB',
+          database_name: 'unself-modules',
+          database_id: dbIds.modules,
+        },
+      ],
+      vars: {
+        ...(config.domain ? { UNSELF_BASE_URL: `https://${config.domain}` } : {}),
+      },
+      observability: { enabled: true },
+    },
+    null,
+    2,
+  );
+}
+
+/** 生成模块部署配置（前缀剥除 wrapper + D1 绑定 + CORE_JWKS_URL + route）。 */
+export function moduleWranglerConfig(input: {
+  config: UnselfConfig;
+  dbIds: { modules: string };
+  mod: { id: string };
+  jwksPath: string;
+}): string {
+  const { config, dbIds, mod, jwksPath } = input;
+  const host = config.domain || 'workers.dev-placeholder';
+  return JSON.stringify(
+    {
+      $schema: 'node_modules/wrangler/config-schema.json',
+      name: `unself-module-${mod.id}`,
+      main: `${DEPLOY_DIR}/modules/${mod.id}/worker.js`,
+      compatibility_date: '2026-09-01',
+      compatibility_flags: ['nodejs_compat'],
+      ...(config.domain
+        ? { routes: [{ pattern: `${config.domain}/m/${mod.id}/*`, zone_name: config.domain }] }
+        : {}),
+      assets: {
+        directory: `${DEPLOY_DIR}/modules/${mod.id}/assets`,
+        binding: 'ASSETS',
+        not_found_handling: 'none',
+        run_worker_first: ['**/*'],
+      },
+      d1_databases: [
+        {
+          binding: 'MODULES_DB',
+          database_name: 'unself-modules',
+          database_id: dbIds.modules,
+        },
+      ],
+      vars: {
+        MODULE_ID: mod.id,
+        CORE_JWKS_URL: `https://${host}${jwksPath}`,
+      },
+      observability: { enabled: true },
+    },
+    null,
+    2,
+  );
+}
+
+/** 写文件（自动建目录）。 */
+export async function writeConfig(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content, 'utf8');
+}
+
+/** 模块路由前缀 wrapper 代码模板（运行时剥 /m/<id> 前缀 + 静态资产回退）。 */
+export function prefixStripWrapperSource(moduleId: string): string {
+  return `// SPDX-License-Identifier: AGPL-3.0-only
+// 由 deploy/cloudflare 生成：剥 /m/${moduleId} 前缀 + ASSETS 回退 + 绝对 URL 头重写。
+import worker from './worker.js';
+
+const PREFIX = '/m/${moduleId}';
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const isAsset = !url.pathname.startsWith(PREFIX + '/api/') &&
+                    !url.pathname.startsWith(PREFIX + '/life/') &&
+                    request.method === 'GET';
+    if (isAsset) {
+      const assetPath = url.pathname.startsWith(PREFIX + '/')
+        ? url.pathname.slice(PREFIX.length + 1)
+        : 'index.html';
+      return env.ASSETS.fetch(new URL('/' + assetPath, url.origin).toString(), request);
+    }
+    // 模块代码按「部署在根路径」编写：剥掉挂载前缀
+    url.pathname = url.pathname.slice(PREFIX.length) || '/';
+    const headers = new Headers(request.headers);
+    // 模块自检/页面里的绝对 URL 以实例 origin 为准（相对路径在浏览器侧自然正确）
+    if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '')) {
+      const asset = await env.ASSETS.fetch(new URL('/index.html', url.origin).toString(), request);
+      if (asset.status !== 404) return asset;
+    }
+    return worker(new Request(url, { method: request.method, headers, body: request.body, duplex: 'half' }), env, ctx);
+  },
+};
+`;
+}
