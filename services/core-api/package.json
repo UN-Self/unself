@@ -18,7 +18,8 @@
   "dependencies": {
     "@unself/contracts": "workspace:*",
     "hono": "^4.10.0",
-    "jose": "^6.1.0"
+    "jose": "^6.1.0",
+    "zod": "^4.1.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",
