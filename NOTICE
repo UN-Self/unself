@@ -1,0 +1,6 @@
+Unself — 可插拔自托管协作平台
+Copyright (C) 2026 Unself contributors
+
+第三方归属预留：
+- EdgeChat 衍生件遵循 GPL-3.0（见 third_party/components.yaml，M0 登记后生效）
+- MiroTalk 衍生件遵循 AGPL-3.0（见 third_party/components.yaml，M0 登记后生效）

@@ -1,0 +1,22 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+coverage/
+
+# Cloudflare Wrangler 本地状态
+.wrangler/
+
+# 环境变量与密钥（pnpm-lock.yaml 必须入库，勿忽略）
+.dev.vars
+.env
+.env.*
+
+# 本地临时/个性化文件
+*.local
+
+# 系统与编辑器
+.DS_Store
+.idea/
+.vscode/
