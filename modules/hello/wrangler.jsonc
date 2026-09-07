@@ -1,0 +1,15 @@
+{
+  // SPDX-License-Identifier: AGPL-3.0-only
+  "name": "unself-module-hello",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "d1_databases": [
+    {
+      "binding": "MODULES_DB",
+      "database_name": "unself-modules",
+      "database_id": "REPLACE_ME",
+      // migrations_dir：本模块迁移在 migrations/hello/（表前缀 = 模块 id）
+      "migrations_dir": "migrations/hello"
+    }
+  ]
+}

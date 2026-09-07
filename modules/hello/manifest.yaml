@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+id: hello
+route: /m/hello
+entry: http://localhost:8790/ # 占位：M0 后由 core-api 注册的运行时地址
+runtime: worker
+requires:
+  - identity
+capabilities:
+  - demo
+version: 0.1.0

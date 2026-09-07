@@ -1,0 +1,24 @@
+{
+  // SPDX-License-Identifier: AGPL-3.0-only
+  "name": "unself-core-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "CORE_DB",
+      "database_name": "unself-core",
+      "database_id": "REPLACE_ME",
+      // migrations_dir：CORE_DB 迁移在本包 migrations/core/（wrangler d1 migrations apply CORE_DB）
+      "migrations_dir": "migrations/core"
+    },
+    {
+      "binding": "MODULES_DB",
+      "database_name": "unself-modules",
+      "database_id": "REPLACE_ME"
+      // migrations_dir：MODULES_DB 迁移由各 module 包自管（如 modules/hello/migrations/hello/）
+    }
+  ]
+}
