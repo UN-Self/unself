@@ -3,4 +3,4 @@ export { createModuleSDK, decodeJwtPayload } from './client';
 export type { CreateModuleSDKOptions, ModuleSDK } from './client';
 export { verifyModuleToken } from './verify';
 export type { VerifyModuleTokenOptions } from './verify';
-export type { ModuleStorage } from './storage';
+export type { ModuleStorage, ModuleContext } from './storage';
