@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// Unself 实例装配配置（唯一配置文件，PRODUCT_SPEC §5.5）：
+// deploy/cloudflare 幂等九步脚本与未来 Docker 编排读同一份。
+// OIDC 凭证不进本文件——部署后在 setup 向导填写并存 core 库。
+{
+  // 实例对外域名；留空/省略 → 用 <worker>.workers.dev 临时域（#15 验收路径）
+  "domain": "",
+  // 选中启用的模块（未列出的已存在模块注册表翻转 not_deployed）
+  "modules": ["hello"],
+  // 对象存储：r2（脚本建桶）或 s3（外部 S3/MinIO 参数）
+  "storage": { "provider": "r2" }
+}
