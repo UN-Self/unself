@@ -67,7 +67,9 @@ async function writeCount(db: D1Database, value: number): Promise<void> {
 
 const app = new Hono<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }>();
 
-/** 模块页：身份行（claims 姓名/邮箱）+ 计数 + [+1] 并排；样式只取 tokens。 */
+/** 模块页：身份行（claims 姓名/邮箱）+ 计数 + [+1] 并排；样式只取 tokens。
+ *  页面内 fetch/import 全部用相对路径（不帶前导 /）：同一路径制下模块同时挂载在
+ *  /m/<id>/（部署）与开发期根路径，根相对路径只在后者成立——相对路径两处皆可（#14）。 */
 app.get('/', (c) => {
   const jwksUrl = c.env?.CORE_JWKS_URL ?? '/.well-known/jwks.json';
   return c.html(`<!doctype html>
@@ -106,7 +108,7 @@ app.get('/', (c) => {
     </div>
   </main>
   <script type="module">
-    import { createModuleSDK } from '/sdk/module-sdk.js';
+    import { createModuleSDK } from './sdk/module-sdk.js';
 
     const sdk = createModuleSDK({ moduleId: 'hello', coreOrigin: window.location.origin });
     const who = document.getElementById('who');
@@ -118,7 +120,7 @@ app.get('/', (c) => {
     function fail(message) { err.textContent = message; err.hidden = false; }
 
     async function refresh() {
-      const res = await fetch('/api/count', { headers: { authorization: 'Bearer ' + (window.__helloToken ?? '') } });
+      const res = await fetch('api/count', { headers: { authorization: 'Bearer ' + (window.__helloToken ?? '') } });
       if (!res.ok) { fail(res.status === 401 ? '登录已过期，请刷新页面' : '计数加载失败'); return; }
       count.textContent = String((await res.json()).count ?? 0);
     }
@@ -136,7 +138,7 @@ app.get('/', (c) => {
     plus.addEventListener('click', async () => {
       plus.disabled = true;
       try {
-        const res = await fetch('/api/count', {
+        const res = await fetch('api/count', {
           method: 'POST',
           headers: { authorization: 'Bearer ' + (window.__helloToken ?? '') },
         });

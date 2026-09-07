@@ -175,4 +175,15 @@ describe('module-hello（#13 垂直切片载体）', () => {
     expect(html).toContain('createModuleSDK');
     expect(html).toContain('viewport');
   });
+
+  it('页面内 fetch/import 不用根相对路径（部署挂载在 /m/<id>/ 子路径，#14 装配前提）', async () => {
+    const res = await app.request('https://m.example/');
+    const html = await res.text();
+    // 根相对路径在 /m/hello/ 子路径下会逃逸出模块前缀（打到实例根），必须用相对路径
+    expect(html).not.toMatch(/fetch\(['"]\/api\//);
+    expect(html).not.toMatch(/from ['"]\/sdk\//);
+    // 相对路径形式存在（页面在 /m/hello/ 下解析为 /m/hello/api/count）
+    expect(html).toMatch(/fetch\(['"]api\/count['"]/);
+    expect(html).toMatch(/from ['"]\.\/sdk\/module-sdk\.js['"]/);
+  });
 });
