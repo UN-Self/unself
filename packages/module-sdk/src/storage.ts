@@ -145,6 +145,7 @@ export function createD1Storage(options: CreateD1StorageOptions): ModuleStorage 
       return results.map((row) => row.key);
     },
   };
+}
 
 /**
  * createModuleSDK 返回的完整模块环境：客户端桥 + 生命周期实现基座。
@@ -156,4 +157,4 @@ export interface ModuleContext {
   /** 模块键值存储（前缀收口后）。 */
   storage: ModuleStorage;
 }
-}
+
