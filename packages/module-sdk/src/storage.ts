@@ -3,6 +3,9 @@
 /**
  * 模块键值存储抽象：模块在自己的子域（moduleId）内读写键值数据。
  *
+ * 数据边界由契约执行不靠物理分库（PRODUCT_SPEC §5.4）：SDK 收口访问、拒绝跨模块查询；
+ * 与 @unself/contracts 的模块生命周期契约（ModuleLifecycle.export/purge）对齐：
+ * export 输出 ExportBundle（按表前缀全量导出），purge 按前缀清除。
  * 实现收口（createD1Storage）：模块 Worker 只持 MODULES_DB 绑定与自己的 moduleId，
  * 拿不到裸连接的其他模块数据；跨前缀访问（key 含保留分隔符 ':'）一律抛错。
  */
@@ -142,4 +145,15 @@ export function createD1Storage(options: CreateD1StorageOptions): ModuleStorage 
       return results.map((row) => row.key);
     },
   };
+
+/**
+ * createModuleSDK 返回的完整模块环境：客户端桥 + 生命周期实现基座。
+ * 生命周期方法（export/purge）由 SDK 供给（#8/#9 契约对齐）。
+ */
+export interface ModuleContext {
+  /** 当前模块 id。 */
+  moduleId: string;
+  /** 模块键值存储（前缀收口后）。 */
+  storage: ModuleStorage;
+}
 }
