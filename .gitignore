@@ -8,6 +8,9 @@ coverage/
 # Cloudflare Wrangler 本地状态
 .wrangler/
 
+# 部署脚本生成的装配产物（临时部署配置与 shell 构建副本）
+.deploy/
+
 # 环境变量与密钥（pnpm-lock.yaml 必须入库，勿忽略）
 .dev.vars
 .env

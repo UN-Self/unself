@@ -1,0 +1,30 @@
+{
+  "name": "@unself/deploy-cloudflare",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "deploy-cloudflare": "./bin.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc --noEmit",
+    "deploy": "tsx ./bin.ts"
+  },
+  "dependencies": {
+    "@unself/contracts": "workspace:*",
+    "esbuild": "^0.28.0",
+    "jose": "^6.1.0",
+    "tsx": "^4.19.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
