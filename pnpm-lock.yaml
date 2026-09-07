@@ -119,6 +119,9 @@ importers:
       jose:
         specifier: ^6.1.0
         version: 6.2.12
+      zod:
+        specifier: ^4.1.0
+        version: 4.5.4
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.0.0
