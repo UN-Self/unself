@@ -15,9 +15,9 @@ import {
   readSession,
   SESSION_COOKIE,
   sessionCookieOptions,
-  verifySessionToken,
   type SessionPayload,
 } from './session';
+import { capsFromManifest, checkTokenGate, issueModuleToken } from './token';
 
 export interface Bindings {
   CORE_DB: D1Database;
@@ -30,6 +30,9 @@ export interface Bindings {
   OIDC_CLIENT_SECRET?: string;
   OIDC_SCOPE?: string;
 }
+
+/** 模块 token 的 iss 标识（Core 自称；模块侧只验签不检查 iss 值）。 */
+const MODULE_TOKEN_ISSUER = 'unself-core';
 
 /** 登录流程 Cookie：HttpOnly，10 分钟有效，仅 /api/auth 路径可见。 */
 const FLOW_COOKIE = 'unself_oidc_flow';
@@ -226,10 +229,33 @@ app.post('/api/setup/activate', (c) =>
   c.json({ error: 'not implemented (M0 scaffold)' }, 501)
 );
 
-// M0 骨架：模块令牌签发尚未实现（#3 实装：用 signingKey 签 ES256 JWT，kid 取 runtime.kid）
-app.post('/api/modules/:id/token', (c) =>
-  c.json({ error: 'not implemented (M0 scaffold)' }, 501)
-);
+/**
+ * 模块 token 签发（§5.2）：
+ * 壳持有会话后为 iframe 模块取 token 的端点；aud=模块 id，10 分钟有效。
+ * 门禁：会话必须有效；模块必须存在且 enabled（注册表开关）。
+ */
+app.post('/api/modules/:id/token', async (c) => {
+  const secret = c.env.JWT_PRIVATE_KEY;
+  if (!secret) {
+    return c.json({ error: 'signing key not provisioned (run deploy bootstrap)' }, 503);
+  }
+  const session = await readSession(c);
+  if (!session) {
+    return c.json({ error: 'authentication required' }, 401);
+  }
+  const moduleId = c.req.param('id');
+  const gate = await checkTokenGate(c.env.CORE_DB, moduleId);
+  if (!gate.ok) {
+    return c.json({ error: gate.error ?? 'forbidden' }, (gate.status ?? 403) as 401 | 403 | 404);
+  }
+  const runtime = await deriveSigningRuntimeOnce(secret);
+  const issued = await issueModuleToken(
+    runtime,
+    { userId: session.uid, moduleId },
+    { issuer: MODULE_TOKEN_ISSUER, caps: capsFromManifest(gate.manifest!.manifest_json) },
+  );
+  return c.json(issued);
+});
 
 /** 实例公钥集：模块后端与 SDK 验签的唯一真值来源（§5.2）。 */
 app.get('/.well-known/jwks.json', async (c) => {
@@ -252,8 +278,7 @@ app.post('/api/admin/bootstrap-keygen', async (c) => {
   });
 });
 
-// keep referenced imports honest（#3 将消费 signingRuntime；#6 将消费 verifySessionToken）
-void verifySessionToken;
+// keep referenced imports honest（#6 将消费 verifySessionToken）
 type _SessionPayload = SessionPayload;
 void readSession;
 
