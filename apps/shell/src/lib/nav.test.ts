@@ -1,26 +1,50 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest'
-import { buildNav } from './nav'
 
-describe('buildNav', () => {
-  it('过滤 disabled 模块', () => {
+import { buildNav, firstEnabledModule, isHostView } from './nav'
+
+describe('buildNav（#12 双形态共用数据源）', () => {
+  it('过滤 disabled 模块（停用 = 从侧栏消失）', () => {
     const nav = buildNav([
-      { id: 'Hello', enabled: true },
-      { id: 'Secret', enabled: false },
+      { id: 'hello', enabled: true },
+      { id: 'chat', enabled: false },
     ])
-    expect(nav.map((n) => n.id)).toEqual(['工作台', 'Hello'])
+    expect(nav.map((n) => n.id)).toEqual(['workspace', 'hello'])
   })
 
   it('保持 enabled 模块的传入顺序', () => {
     const nav = buildNav([
-      { id: 'B', enabled: true },
-      { id: 'A', enabled: true },
+      { id: 'b', enabled: true },
+      { id: 'a', enabled: true },
     ])
-    expect(nav.map((n) => n.id)).toEqual(['工作台', 'B', 'A'])
+    expect(nav.map((n) => n.id)).toEqual(['workspace', 'b', 'a'])
   })
 
-  it('固定项“工作台”始终在第一位', () => {
+  it('固定项「工作台」始终在第一位（workspace id）', () => {
     const nav = buildNav([])
-    expect(nav[0]).toEqual({ id: '工作台', label: '工作台' })
+    expect(nav[0]).toEqual({ id: 'workspace', label: '工作台' })
+  })
+
+  it('icon 字段透传（manifest icon → 渲染器白名单映射）', () => {
+    const nav = buildNav([{ id: 'hello', enabled: true, icon: 'inbox' }])
+    expect(nav[1]).toEqual({ id: 'hello', label: 'hello', icon: 'inbox' })
+  })
+})
+
+describe('firstEnabledModule（登录落地 #11 消费）', () => {
+  it('返回第一个启用模块', () => {
+    expect(firstEnabledModule([{ id: 'a', enabled: false }, { id: 'b', enabled: true }])).toBe('b')
+  })
+
+  it('全部停用返回 null（空态）', () => {
+    expect(firstEnabledModule([{ id: 'a', enabled: false }])).toBeNull()
+    expect(firstEnabledModule([])).toBeNull()
+  })
+})
+
+describe('isHostView', () => {
+  it('只有 workspace 是壳内视图', () => {
+    expect(isHostView('workspace')).toBe(true)
+    expect(isHostView('hello')).toBe(false)
   })
 })
