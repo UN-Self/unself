@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 
 import {
@@ -27,6 +27,13 @@ import {
   promoteToAdmin,
   storeSetupToken,
 } from './setup';
+import {
+  listModules,
+  ModuleRegistrationSchema,
+  toggleModule,
+  upsertModule,
+} from './registry';
+import { z } from 'zod';
 
 export interface Bindings {
   CORE_DB: D1Database;
@@ -347,8 +354,80 @@ app.post('/api/admin/bootstrap-keygen', async (c) => {
   });
 });
 
-// keep referenced imports honest（#6 将消费 verifySessionToken）
+// keep referenced imports honest（后续 issue 会消费更多符号）
 type _SessionPayload = SessionPayload;
 void readSession;
+
+// ---------------------------------------------------------------------------
+// 模块注册表（#7）：deploy 脚本注册/upsert（装配时一次），运行时启停翻转（秒级）
+// 管理端点持有管理员会话；成员读接口只回 enabled（§5.5 装配/启停分离）
+// ---------------------------------------------------------------------------
+
+/**
+ * 管理员守卫：注册表写操作与全量列表仅限 admin 角色（§2 角色）。
+ * 返回 null 表示已放行；否则直接返回 401/403 响应。
+ */
+async function requireAdmin(
+  c: Context<{ Bindings: Bindings }>,
+): Promise<Response | null> {
+  const session = await readSession(c);
+  if (!session) {
+    return c.json({ error: 'authentication required' }, 401);
+  }
+  const roleRow = await c.env.CORE_DB.prepare('SELECT role FROM users WHERE id = ?')
+    .bind(session.uid)
+    .first<{ role: string }>();
+  if (roleRow?.role !== 'admin') {
+    return c.json({ error: 'admin required' }, 403);
+  }
+  return null;
+}
+
+/** 注册/更新模块（deploy 脚本装配时调用；manifest 快照随注册刷新）。 */
+app.post('/api/admin/modules', async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  const parsed = ModuleRegistrationSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: 'invalid registration', detail: z.prettifyError(parsed.error) }, 400);
+  }
+  const entry = await upsertModule(c.env.CORE_DB, parsed.data);
+  await audit(c.env.CORE_DB, (await readSession(c))!.uid, 'module_upserted', parsed.data.id);
+  return c.json(entry, 201);
+});
+
+/** 翻转启停：运行时秒级生效（边栏隐藏 + token 门禁拒发，§5.5）。 */
+app.patch('/api/admin/modules/:id/enabled', async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  const body = (await c.req.json().catch(() => null)) as { enabled?: unknown } | null;
+  if (typeof body?.enabled !== 'boolean') {
+    return c.json({ error: 'body must be { enabled: boolean }' }, 400);
+  }
+  const result = await toggleModule(c.env.CORE_DB, c.req.param('id'), body.enabled);
+  if (!result) {
+    return c.json({ error: 'module not found' }, 404);
+  }
+  await audit(
+    c.env.CORE_DB,
+    (await readSession(c))!.uid,
+    body.enabled ? 'module_enabled' : 'module_disabled',
+    c.req.param('id'),
+  );
+  return c.json(result);
+});
+
+/** 全量列表（管理端，含停用）。 */
+app.get('/api/admin/modules', async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  return c.json(await listModules(c.env.CORE_DB));
+});
+
+/** 成员侧：仅启用模块（边栏/nav 数据源，#12 消费）。 */
+app.get('/api/modules', async (c) => {
+  const all = await listModules(c.env.CORE_DB);
+  return c.json(all.filter((m) => m.enabled));
+});
 
 export default app;
