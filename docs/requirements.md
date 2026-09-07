@@ -107,7 +107,7 @@
 | 访问入口 | 每个实例使用自己的域名和 HTTPS |
 | 身份 | 通用 OIDC；Stalwart、Keycloak、Authentik 等均可接入 |
 | 模块 | 左侧导航由启用模块动态生成，模块可独立升级和停用 |
-| 移动端 | 已启用的工作台、IM、日历模块必须响应式或 PWA 可用 |
+| 移动端 | 平台级要求：一切界面 mobile 可用（能看+轻操作）；重编辑/重管理允许桌面增强。已启用模块的聊天/邮件/日历/会议/文档/看板手机均可看可轻操作；工作台壳双形态（桌面左栏/窄屏底部标签栏）；PWA 安装化在 M6 |
 | 数据备份 | 部署者负责关键数据备份；官方提供 R2/S3/NAS 等示例 |
 | 权限 | 管理员 / 用户 / 访客，另加模块级权限 |
 | 视频会议 | P2P WebRTC 优先；Worker 只做信令；TURN/SFU 为可选外部扩展 |
@@ -135,6 +135,11 @@
 | 15 | 部署编排 | 装配 = wrangler 幂等脚本读 `unself.config.jsonc`，只在部署时执行，实例不持 CF 凭证；一键 = Deploy Button + Workers Builds；已部署模块启停 = 注册表开关 + token 门禁，秒级免部署；Docker 读同一份配置 |
 | 16 | M0 技术栈 | TypeScript + Hono + Vue 3 + Vite + Tailwind + zod + jose + pnpm workspaces + Vitest；M0 = hello 模块七步验收剧本 |
 | 17 | 会议记录 | 音频存档永不上云；转写两档（云/机密强制本地），主持人选定、成员可 opt-out；房间时钟统一时间轴，散场只传纯文字由 Worker 合并；核心代调 act claim + 通用 ACL（参会者读、主持人写）；AI 纪要经 SDK 能力；个人片段参会者互见 |
+| 18 | 前端约定 | 设计令牌单一来源（tokens.css + Tailwind @theme，禁裸值）；组件查找序 beUI→shadcn 生态→手写（beUI 动效参数照抄移植 Vue）；基元内聚住 packages/ui；图标只用 Lucide（manifest 存图标名，拒绝 emoji）；中文写死、亮色单主题、系统字体 |
+| 19 | 手机原则 | 平台级要求：一切界面 mobile 可用 = 能看 + 轻操作；重编辑/重管理允许桌面增强（按操作深度分不按功能分）；工作台壳双形态：桌面左栏 / 窄屏底部标签栏（同一 nav 数据）；PWA 安装化在 M6 |
+| 20 | 身份与门户 | 已有 Stalwart 账号 OIDC 首登即自动建档复用（JIT，核心只存 issuer+sub 映射，不经手密码）；登录永远一个按钮整页跳 OIDC，Unself 无密码框；M1 开户只服务无邮箱新人 |
+| 21 | setup 动线 | 仅部署输出的一次性链接可配置；激活即成管理员并直接进工作台；已激活后 /setup 访问一律重定向，页面不复存在 |
+| 22 | 可观测性 | 错误三层透传：成员只见人话+request id；管理员登录态可展开技术详情；服务端 wrangler tail + audit_log，request id 串联排查 |
 
 ## 7. 第一性原理技术评估（初版）
 

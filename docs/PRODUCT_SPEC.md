@@ -214,7 +214,11 @@ runtime: worker            # worker | docker | external
 requires: [identity]       # 接受核心签发的模块 token
 capabilities: [messaging]
 version: 1.0.0
+icon: inbox                # 可选，Lucide 图标名（[a-z0-9-]）；
+                           # 缺省/未知时壳回退模块名首字
 ```
+
+**icon 字段规则**（用户拍板：拒绝 emoji）：manifest 存图标名而非图标资产，由壳内置的 lucide-vue-next 统一渲染（白名单映射，按需打包）；模块不自带图标文件。未来模块需要品牌标时再议 `iconUrl` 可选字段，暂不设。
 
 **装载器**：默认 iframe，对所有模块无例外（自研模块也住 iframe，逼契约诚实）。契约措辞是“iframe 是默认装载器”，不是“模块必须是 iframe”；未来某模块需要原生体验时可单独提升进壳，契约不变。
 
@@ -394,6 +398,47 @@ unself/
 1. **核心选 AGPL-3.0**：自托管产品防“拿代码开托管服务不回馈”的标准答案（Grafana/MinIO/Mastodon 同路）；威胁模型是云厂商白嫖，GPL 看不住托管路径，MIT/Apache 方向就不对。接受代价：AGPL 只强制开源、不阻止竞争性 fork；个别公司贡献政策会劝退贡献者，9 人社区可忽略。用户是唯一初始版权人，接受外部贡献前可随时改许可证或卖商业授权，这扇门目前开着。
 2. **边界标注**：根 `LICENSE` = AGPL-3.0 全文（核心/SDK/自研模块/文档）；`modules/chat-edgechat/` 下 GPL-3.0 模块级 LICENSE（上游继承，注明含本仓库修改）；MiroTalk 相关件 AGPL-3.0；根 `NOTICE` 记录上游归属；`third_party/components.yaml` 登记每个外部件的版本/来源/SPDX/接入方式；新代码文件头 `// SPDX-License-Identifier: AGPL-3.0-only`（脚手架自动带上）。
 3. **合并判定铁律**：代码进同一构建产物才是“合并”；独立 Worker + HTTP 边界 + 标准协议 ≠ 合并；从 GPL 上游重构进核心时必须按规格重写、不复制代码；fork 过的件必须登记。魔改 EdgeChat 后端自用不分发二进制则无公开义务，但源码照常在仓库中。
+
+## 6.5 前端约定（用户拍板，2026-09-07）
+
+适用于 apps/shell、apps/admin、apps/portal 及一切自研模块前端。四条铁律：
+
+**1. 设计令牌单一来源**：全部颜色/间距/圆角/阴影/字号定义在 `tokens.css`（CSS 自定义属性），Tailwind v4 `@theme` 映射为工具类；组件内禁止出现裸 hex、魔法数、散落样式值。暗色主题 = 未来换一份 tokens 值，零组件改动（M0 只做亮色单主题）。
+
+**2. 组件查找序**：实现任何组件前按序查——
+
+```text
+① beUI（github.com/starc007/ui-components，beui.dev/r/{slug}.json
+   可机读源码；React 实现移植成 Vue，动效参数照抄：
+   时长/缓动/弹簧。用户指定：能用就优先摸）
+② shadcn 生态（shadcn-vue / reka-ui，结构基座同源）
+③ 都没有 → 手写，样式只取自 tokens
+```
+
+**3. 基元内聚**：共享基元（Button/Input/Card/ErrorCard/Skeleton/Icon…）住 `packages/ui`，自包含、无外部样式依赖；页面不写一次性样式碎片。
+
+**4. 图标规范**：只用 Lucide（lucide-vue-next，ISC 许可）。manifest `icon` 存图标名，壳白名单映射渲染；界面内禁止 emoji 作图标（用户明确拒绝）。
+
+**界面动线**（shell，M0 范围）：
+
+```text
+布局      220px 左栏（顶部实例名 / 中部模块列表 / 底部用户区+退出），
+          无顶栏无首页；窄屏 = 底部标签栏（同一份 nav 数据两个渲染器）
+setup     部署输出一次性链接才可配置；三字段+测试连接；
+          激活成功直接进工作台；已激活后访问 /setup 一律重定向
+登录      一个按钮整页跳 OIDC（密码永远发生在 Stalwart 页面）；
+          登录后回原目标，直访落第一个启用模块
+侧栏可见性  停用模块 = 从侧栏消失（成员视角，与七步剧本一致）；
+            管理页（M1）列全量含停用
+异常      模块加载/失败/过期/被停用各一张卡；成员只见人话+
+          request id；管理员登录态可展开技术详情；
+          服务端配 wrangler tail + audit_log 串联排查
+手机      平台级要求：一切界面 mobile 可用 = 能看 + 轻操作；
+          重编辑/重管理允许桌面增强（按操作深度分，不按功能分）
+外观      中文写死、亮色单主题、系统字体栈、白灰底+单一主色
+hello 页  身份行（token claims 姓名/邮箱）+ 计数按钮并排：
+          证明“系统认识你、数据存得住”两件事
+```
 4. **贡献协议**：M0 阶段用 DCO（sign-off 即可）；CLA 仅在未来需要商业双重授权时再议。
 
 ## 7. 部署拓扑
