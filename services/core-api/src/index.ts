@@ -15,9 +15,18 @@ import {
   readSession,
   SESSION_COOKIE,
   sessionCookieOptions,
-  verifySessionToken,
   type SessionPayload,
 } from './session';
+import { capsFromManifest, checkTokenGate, issueModuleToken } from './token';
+import {
+  audit,
+  consumeSetupToken,
+  generateSetupToken,
+  isSetupDone,
+  markSetupDone,
+  promoteToAdmin,
+  storeSetupToken,
+} from './setup';
 
 export interface Bindings {
   CORE_DB: D1Database;
@@ -30,6 +39,9 @@ export interface Bindings {
   OIDC_CLIENT_SECRET?: string;
   OIDC_SCOPE?: string;
 }
+
+/** 模块 token 的 iss 标识（Core 自称；模块侧只验签不检查 iss 值）。 */
+const MODULE_TOKEN_ISSUER = 'unself-core';
 
 /** 登录流程 Cookie：HttpOnly，10 分钟有效，仅 /api/auth 路径可见。 */
 const FLOW_COOKIE = 'unself_oidc_flow';
@@ -221,15 +233,98 @@ async function upsertUser(
 // setup / 模块 token（M0 后续 issue 实装）
 // ---------------------------------------------------------------------------
 
-// M0 骨架：租户激活流程尚未实现（#6）
-app.post('/api/setup/activate', (c) =>
-  c.json({ error: 'not implemented (M0 scaffold)' }, 501)
-);
+// ---------------------------------------------------------------------------
+// setup：一次性 token + 首个管理员（§5.2）
+// 部署输出一次性链接：/setup?token=xxx（#10 前端页用）；后端负责校验与封死。
+// ---------------------------------------------------------------------------
 
-// M0 骨架：模块令牌签发尚未实现（#3 实装：用 signingKey 签 ES256 JWT，kid 取 runtime.kid）
-app.post('/api/modules/:id/token', (c) =>
-  c.json({ error: 'not implemented (M0 scaffold)' }, 501)
-);
+/** 部署脚本/自检：生成新一次性 setup token 并入库（打印进部署输出）。 */
+app.post('/api/admin/setup-token', async (c) => {
+  const db = c.env.CORE_DB;
+  if (await isSetupDone(db)) {
+    return c.json({ error: 'setup already completed; sealed forever' }, 409);
+  }
+  const { token } = generateSetupToken();
+  await storeSetupToken(db, token);
+  await audit(db, 'system', 'setup_token_issued');
+  return c.json({ token, setupUrl: `/setup?token=${token}` });
+});
+
+/** setup 状态查询（#10 向导页用）：是否已激活 / token 是否仍可用。 */
+app.get('/api/setup/status', async (c) => {
+  const db = c.env.CORE_DB;
+  const done = await isSetupDone(db);
+  if (done) {
+    return c.json({ done: true });
+  }
+  const token = c.req.query('token');
+  if (!token) {
+    return c.json({ done: false, tokenValid: false });
+  }
+  const row = await db
+    .prepare('SELECT used_at FROM setup_tokens WHERE token = ?')
+    .bind(token)
+    .first<{ used_at: string | null }>();
+  return c.json({ done: false, tokenValid: Boolean(row && !row.used_at) });
+});
+
+/**
+ * 激活：校验一次性 token + 当前 OIDC 会话，登记首个管理员，永久封死 setup。
+ * 已激活后一律拒绝（§6.5：已激活后访问 /setup 一律重定向，页面不复存在）。
+ */
+app.post('/api/setup/activate', async (c) => {
+  const db = c.env.CORE_DB;
+  if (await isSetupDone(db)) {
+    return c.json({ error: 'setup already completed; sealed forever' }, 409);
+  }
+  const token = c.req.query('token') ?? c.req.header('x-setup-token');
+  if (!token) {
+    return c.json({ error: 'missing setup token' }, 400);
+  }
+  const session = await readSession(c);
+  if (!session) {
+    // 未登录：提示需先登录（#10 前端带 token 跳 /api/auth/login?next=...）
+    const loginUrl = new URL('/api/auth/login', c.req.url);
+    loginUrl.searchParams.set('next', `/setup?token=${encodeURIComponent(token)}`);
+    return c.json({ error: 'authentication required', loginUrl: loginUrl.toString() }, 401);
+  }
+  const consumed = await consumeSetupToken(db, token);
+  if (!consumed) {
+    return c.json({ error: 'invalid or already-used setup token' }, 403);
+  }
+  await promoteToAdmin(db, session.uid);
+  await markSetupDone(db);
+  await audit(db, session.uid, 'setup_activated', session.uid);
+  return c.json({ ok: true, user: { id: session.uid, name: session.name, role: 'admin' } });
+});
+
+/**
+ * 模块 token 签发（§5.2）：
+ * 壳持有会话后为 iframe 模块取 token 的端点；aud=模块 id，10 分钟有效。
+ * 门禁：会话必须有效；模块必须存在且 enabled（注册表开关）。
+ */
+app.post('/api/modules/:id/token', async (c) => {
+  const secret = c.env.JWT_PRIVATE_KEY;
+  if (!secret) {
+    return c.json({ error: 'signing key not provisioned (run deploy bootstrap)' }, 503);
+  }
+  const session = await readSession(c);
+  if (!session) {
+    return c.json({ error: 'authentication required' }, 401);
+  }
+  const moduleId = c.req.param('id');
+  const gate = await checkTokenGate(c.env.CORE_DB, moduleId);
+  if (!gate.ok) {
+    return c.json({ error: gate.error ?? 'forbidden' }, (gate.status ?? 403) as 401 | 403 | 404);
+  }
+  const runtime = await deriveSigningRuntimeOnce(secret);
+  const issued = await issueModuleToken(
+    runtime,
+    { userId: session.uid, moduleId },
+    { issuer: MODULE_TOKEN_ISSUER, caps: capsFromManifest(gate.manifest!.manifest_json) },
+  );
+  return c.json(issued);
+});
 
 /** 实例公钥集：模块后端与 SDK 验签的唯一真值来源（§5.2）。 */
 app.get('/.well-known/jwks.json', async (c) => {
@@ -252,8 +347,7 @@ app.post('/api/admin/bootstrap-keygen', async (c) => {
   });
 });
 
-// keep referenced imports honest（#3 将消费 signingRuntime；#6 将消费 verifySessionToken）
-void verifySessionToken;
+// keep referenced imports honest（#6 将消费 verifySessionToken）
 type _SessionPayload = SessionPayload;
 void readSession;
 
