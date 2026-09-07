@@ -80,10 +80,12 @@
 - [ ] 默认官方实现：Cloudflare Worker + Durable Object 提供鉴权、房间状态和 WebSocket 信令。
 - [ ] 浏览器通过 WebRTC 建立 P2P 音视频与屏幕共享，媒体不经过 Worker。
 - [ ] 允许配置外部 STUN/TURN；SFU、录制和大规模会议为 Docker/外部服务扩展。
-- [ ] 浏览器本地记录参会者音频和说话人信息，并支持本地转写或用户选择后上传处理。
-- [ ] 会议结束后支持会议记录回顾、Markdown 文档链接和受控分享。
-- [ ] 配置 AI Provider 后支持根据转写生成摘要、行动项和会议纪要；未启用文档模块时，记录仍可在会议模块内查看或下载。
-- [ ] 会议录音、转写和 AI 处理默认需要用户确认，并受管理员策略控制。
+- [ ] 浏览器本地记录参会者音频；音频存档永不上云，可手动导出、不备份。
+- [ ] 转写两档：普通会云转写（Web Speech），机密会由主持人强制完全本地（量化 Whisper）或不转写；成员可 opt-out，各自转写自己的音轨。
+- [ ] 时间轴用会议 DO 房间时钟：入场领偏移、本地自打时间戳、散场只传纯文字片段，Worker 排序合并。
+- [ ] 合并记录参会者可读、主持人独占写；个人片段参会者互见；未启用文档模块时记录保留在会议模块内。
+- [ ] 配置 AI Provider 后经 SDK AI 能力（ai.complete()）生成摘要、行动项和纪要；文档模块启用时经核心代调（act claim）写入文档，参会者天然读、主持人写（记核心通用 ACL）。
+- [ ] 录音、转写和 AI 处理会前明确提示；管理员可按实例策略禁用云转写通道。
 
 ### 4.4 文档与看板（可选）
 - [ ] Markdown 文档协作、评论与基础权限。
@@ -125,12 +127,14 @@
 | 7 | 会议 | Cloudflare Worker + DO 做信令，浏览器 WebRTC P2P 传媒体；TURN/SFU/录制作为外部扩展 |
 | 8 | 日历与邮件 | CalDAV/iCalendar 与 SMTP 为通用协议；Stalwart 是官方参考适配器 |
 | 9 | 代码组织 | 单一 monorepo 管理核心、模块、适配器和部署；第三方完整源码保持独立构建边界 |
-| 10 | 许可证 | 自研核心按 Unself 选择的许可证发布；包含或修改 GPL/AGPL 上游代码的组件单独遵守上游许可证 |
+| 10 | 许可证 | **核心 = AGPL-3.0**（防 SaaS 白嫖，威胁模型明确）；EdgeChat 衍生件遵守 GPL-3.0（独立 Worker）；重写的 EdgeChat 前端为自研归 AGPL；MiroTalk 衍生件遵守 AGPL-3.0；边界靠构建产物判定，LICENSE/NOTICE/components.yaml 落仓库；贡献用 DCO |
 | 11 | 模块装载 | 模块为自包含部署单元；默认 iframe 装载器，第一方同域路径挂载，微前端不采用；契约不写死 iframe |
 | 12 | 模块身份 | 核心统一对接 OIDC 并签发模块 token；模块只验 token，不做 OIDC、不接触身份源 |
 | 13 | 域名 | 单域名路径制 `/m/<模块>/`；Workers Routes 与 openresty location 等价；第三方模块可用独立域名 entry |
 | 14 | 数据归属 | 两个 D1：core（平台数据，物理独立）+ modules（全部模块业务数据，表前缀=模块id）；R2 统一适配层按前缀隔离；export/purge 为模块生命周期契约；模块一律经 SDK 存储接口访问，禁止跨模块查询与外键 |
 | 15 | 部署编排 | 装配 = wrangler 幂等脚本读 `unself.config.jsonc`，只在部署时执行，实例不持 CF 凭证；一键 = Deploy Button + Workers Builds；已部署模块启停 = 注册表开关 + token 门禁，秒级免部署；Docker 读同一份配置 |
+| 16 | M0 技术栈 | TypeScript + Hono + Vue 3 + Vite + Tailwind + zod + jose + pnpm workspaces + Vitest；M0 = hello 模块七步验收剧本 |
+| 17 | 会议记录 | 音频存档永不上云；转写两档（云/机密强制本地），主持人选定、成员可 opt-out；房间时钟统一时间轴，散场只传纯文字由 Worker 合并；核心代调 act claim + 通用 ACL（参会者读、主持人写）；AI 纪要经 SDK 能力；个人片段参会者互见 |
 
 ## 7. 第一性原理技术评估（初版）
 
@@ -145,6 +149,7 @@
 8. **模块契约三通道**：壳与模块之间只有 manifest、module-sdk、Core API；模块默认 iframe 装载于 `/m/<模块id>/`，第一方同域同规，第三方可换独立域名 entry，契约不变；安全靠短时 token 验签，不靠 origin 隔离。
 9. **数据边界靠契约不靠物理**：core 库独立护住平台数据；模块业务数据共居 modules 库，表前缀隔离，SDK 收口访问；模块必须实现 export/purge 生命周期接口。
 10. **装配与启停分离**：装配只在部署时由 wrangler 幂等脚本执行，运行时进程不持有 Cloudflare 凭证；已部署模块的启停是注册表开关，秒级生效，免重部署。
+11. **跨模块协作走核心**：模块互通只经核心代调（act claim 双主体）；资源级权限记核心通用 ACL；AI、存储等基础设施能力由核心配置、SDK 供给。
 
 ### 技术选型与复用调研（v2：二次开发缝合路线）
 
