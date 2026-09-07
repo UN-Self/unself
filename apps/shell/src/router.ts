@@ -2,26 +2,31 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 import App from './App.vue'
+import LoginView from './LoginView.vue'
 import SetupView from './SetupView.vue'
 import { decideSetupAccess } from './lib/setup-guard'
 import { getSetupStatus } from './lib/setup-api'
+import { loginUrl } from './lib/session-api'
+import { installAuthGuard } from './lib/guarded-fetch'
 
 /**
- * M0 路由：/setup 向导（守卫见下）、/ 登录后工作台（#12 完整化）。
- * 登录页在 #11；先以占位承接重定向，避免死链。
+ * M0 路由：/setup 向导（守卫见下）、/login 登录页（#11）、/ 登录后工作台（#12 完整化）。
  */
-
-const LoginPlaceholder = { template: '<main class="login-placeholder">登录（#11 实装）</main>' }
 
 const routes: RouteRecordRaw[] = [
   { path: '/', component: App },
-  { path: '/login', component: LoginPlaceholder },
+  { path: '/login', component: LoginView },
   { path: '/setup', component: SetupView },
 ]
 
 export const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+/** 401 全局拦截：整页跳登录并带 next 回跳（#11 会话态）。 */
+installAuthGuard((next) => {
+  window.location.assign(loginUrl(next))
 })
 
 /** /setup 守卫：已激活 → 已登录进工作台 / 未登录去登录页（§6.5「页面不复存在」）。 */
