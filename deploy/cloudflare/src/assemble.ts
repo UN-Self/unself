@@ -316,7 +316,8 @@ export default {
       const asset = await env.ASSETS.fetch(new URL('/index.html', url.origin).toString(), request);
       if (asset.status !== 404) return asset;
     }
-    return worker(new Request(url, { method: request.method, headers, body: request.body, duplex: 'half' }), env, ctx);
+    // Hono 实例是对象非函数：走 .fetch（与 core 入口同款调用约定）
+    return worker.fetch(new Request(url, { method: request.method, headers, body: request.body, duplex: 'half' }), env, ctx);
   },
 };
 `;
