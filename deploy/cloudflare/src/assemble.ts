@@ -2,7 +2,8 @@
 /**
  * 装配产物生成（③④）：
  * - core：apps/shell 构建副本作 assets（SPA fallback + run_worker_first API）+ 两 D1 真实 id + route；
- * - module：<id>.worker.js（esbuild ESM 打包）+ sdk/module-sdk.js（浏览器 IIFE）+ D1/vars/route。
+ * - module：<id>.worker.js（esbuild ESM 打包）+ sdk/module-sdk.esm.js（浏览器 ESM 具名导出）
+ *   + sdk/module-sdk.js（浏览器 IIFE，历史兼容）+ D1/vars/zone 路径 route。
  * 一切文件写进 <root>/.deploy/cloudflare/（gitignore），重跑整体重建 → 幂等。
  */
 import { spawn } from 'node:child_process';
@@ -61,7 +62,7 @@ function runTool(cmd: string, args: string[], cwd: string): Promise<void> {
  * 装配（步骤③④的构建与生成部分；上传在 steps.deploy*）：
  * 1. vite build shell（若 dist 缺失或 FORCE_BUILD）→ 拷贝到 outDir/assets/shell；
  * 2. esbuild 打包每个选中模块 Worker（platform=node_modules 外置 → 无；unself 模块自包含）；
- * 3. esbuild 打包 @unself/module-sdk 为浏览器 IIFE → assets/<id>/sdk/module-sdk.js；
+ * 3. esbuild 打包 @unself/module-sdk 为浏览器 ESM（页面具名 import）+ IIFE（兼容）→ assets/<id>/sdk/；
  * 4. 生成 core 与各模块 wrangler jsonc。
  */
 export async function provisionAll(options: {
@@ -121,33 +122,8 @@ export async function provisionAll(options: {
       banner: { js: '// SPDX-License-Identifier: AGPL-3.0-only' },
       logLevel: 'silent',
     });
-    // SDK 浏览器包（页面 import /sdk/module-sdk.js → 部署期静态资产）
-    const sdkAssets = join(modOut, 'assets/sdk');
-    await mkdir(sdkAssets, { recursive: true });
-    await build({
-      entryPoints: [sdkEntry],
-      outfile: join(sdkAssets, 'module-sdk.js'),
-      bundle: true,
-      format: 'iife',
-      platform: 'browser',
-      target: 'es2020',
-      globalName: '__unselfSDK',
-      legalComments: 'inline',
-      logLevel: 'silent',
-    });
-    // 兼容页面 `import ... from '/sdk/module-sdk.js'`：IIFE 全局名不足以满足
-    // 具名导入 —— 追加一个 ESM 重导出层不可行（IIFE 无导出），
-    // 因此资产侧提供 ESM 版（同包二次打包），页面 import 直接命中。
-    await build({
-      entryPoints: [sdkEntry],
-      outfile: join(sdkAssets, 'module-sdk.esm.js'),
-      bundle: true,
-      format: 'esm',
-      platform: 'browser',
-      target: 'es2020',
-      legalComments: 'inline',
-      logLevel: 'silent',
-    });
+    // SDK 浏览器资产（页面 import ./sdk/module-sdk.esm.js → 部署期静态资产）
+    await buildModuleSdkAssets(sdkEntry, join(modOut, 'assets/sdk'));
     moduleProvisions.push({
       id: mod.id,
       dir: mod.dir,
@@ -155,7 +131,6 @@ export async function provisionAll(options: {
       workerEntry: `modules/${mod.id}/app.js`,
     });
   }
-  void sdkEntry;
 
   return {
     outDir,
@@ -171,6 +146,37 @@ async function rm(path: string): Promise<void> {
   if (existsSync(path)) {
     await import('node:fs/promises').then((fs) => fs.rm(path, { recursive: true, force: true }));
   }
+}
+
+/**
+ * SDK 浏览器资产构建（IIFE + ESM，§5.3 页面装载）：
+ * - module-sdk.js（IIFE，全局名 __unselfSDK）：历史兼容产物，无顶层 export；
+ * - module-sdk.esm.js（ESM）：页面 `import { createModuleSDK } from './sdk/module-sdk.esm.js'`
+ *   的命中目标——IIFE 无顶层 export，浏览器 ESM 具名导入会报 SyntaxError（T3 线上实锤）。
+ */
+export async function buildModuleSdkAssets(sdkEntry: string, assetsDir: string): Promise<void> {
+  await mkdir(assetsDir, { recursive: true });
+  await build({
+    entryPoints: [sdkEntry],
+    outfile: join(assetsDir, 'module-sdk.js'),
+    bundle: true,
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2020',
+    globalName: '__unselfSDK',
+    legalComments: 'inline',
+    logLevel: 'silent',
+  });
+  await build({
+    entryPoints: [sdkEntry],
+    outfile: join(assetsDir, 'module-sdk.esm.js'),
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    target: 'es2020',
+    legalComments: 'inline',
+    logLevel: 'silent',
+  });
 }
 
 /** 生成 core 部署配置（含 SPA fallback + run_worker_first + 真实 D1 id + route）。 */
@@ -189,7 +195,9 @@ export function coreWranglerConfig(input: {
       compatibility_date: '2026-09-01',
       compatibility_flags: ['nodejs_compat'],
       // Custom Domain 的配置形态是 routes + custom_domain:true（自动建 DNS/证书）；
-      // zone 路由（无 custom_domain 标记）对 OAuth 认证 10405
+      // core 主域保留此形态不动。模块挂载不用 Custom Domain 子域，改 zone 路径路由
+      // （见 moduleWranglerConfig）。zone 路由需 API Token 带 Zone: Workers Routes Edit——
+      // wrangler login 的 OAuth 凭证对 zone 路由授权不足，PUT 报 10405（e8b1660 背景，见 README）。
       ...(route ? { routes: [{ pattern: route, custom_domain: true }] } : {}),
       assets: {
         directory: 'assets/shell',
@@ -240,8 +248,12 @@ export function moduleWranglerConfig(input: {
       main: `${mod.id}/worker.js`, // wrapper 独占入口；bundle 在 app.js（同目录）
       compatibility_date: '2026-09-01',
       compatibility_flags: ['nodejs_compat'],
+      // §5.3 单域名路径制：zone 路径路由（无 custom_domain 标记 = 不自动建 DNS/证书），
+      // 模块与 core 同域，按 /m/<id>/* 前缀分发。pattern 用 config.domain 全值
+      // （多级子域推不出 zone，如 demo.handywote.top ∈ handywote.top；zone 解析交由
+      // wrangler 按 pattern 匹配，待真机验证——见 README 假设注记）。
       ...(config.domain
-        ? { routes: [{ pattern: `${mod.id}.${config.domain}`, custom_domain: true }] }
+        ? { routes: [{ pattern: `${config.domain}/m/${mod.id}/*` }] }
         : {}),
       assets: {
         directory: `${mod.id}/assets`,
@@ -295,7 +307,7 @@ export async function writeConfig(path: string, content: string): Promise<void> 
 /** 模块路由前缀 wrapper 代码模板（运行时剥 /m/<id> 前缀 + 静态资产回退）。 */
 export function prefixStripWrapperSource(moduleId: string): string {
   return `// SPDX-License-Identifier: AGPL-3.0-only
-// 由 deploy/cloudflare 生成：剥 /m/${moduleId} 前缀 + ASSETS 回退 + 绝对 URL 头重写。
+// 由 deploy/cloudflare 生成：剥 /m/${moduleId} 前缀 + ASSETS 回退。
 import worker from './app.js';
 
 const PREFIX = '/m/${moduleId}';
@@ -307,7 +319,7 @@ export default {
                     !url.pathname.startsWith(PREFIX + '/life/') &&
                     request.method === 'GET';
     if (isAsset && url.pathname.length > PREFIX.length + 1) {
-      // 页面以相对路径引用资产（import './sdk/module-sdk.js' → 请求
+      // 页面以相对路径引用资产（import './sdk/module-sdk.esm.js' → 请求
       // /m/<id>/sdk/...），剥前缀后= sdk/... 命中部署期静态资产。
       // 仅前缀本身（/m/<id>/ 或 /m/<id>）不是资产：落 worker 根分支，
       // 由 Hono 渲染模块页（模块无 index.html 静态文件）
@@ -317,7 +329,7 @@ export default {
     // 模块代码按「部署在根路径」编写：剥掉挂载前缀
     url.pathname = url.pathname.slice(PREFIX.length) || '/';
     const headers = new Headers(request.headers);
-    // 模块自检/页面里的绝对 URL 以实例 origin 为准（相对路径在浏览器侧自然正确）
+    // 仅根路径回 index.html：页面内相对引用已在浏览器侧按 /m/<id>/ 解析（不改写 URL/头）
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '')) {
       const asset = await env.ASSETS.fetch(new URL('/index.html', url.origin).toString(), request);
       if (asset.status !== 404) return asset;
