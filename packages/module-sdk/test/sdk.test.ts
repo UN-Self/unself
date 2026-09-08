@@ -132,14 +132,33 @@ describe('outbound messages（ready / navigate / notify / theme）', () => {
     expect(() => sdk.theme('sepia')).toThrow(/invalid theme mode/);
   });
 
-  it('outbound messages are no-ops without a window', () => {
-    const sdk = createModuleSDK({ moduleId: 'mod-a' });
-    expect(() => {
+  it('outbound guards are runtime-conditional: no window → parent untouched; window → real postMessage', () => {
+    // 无 window 环境：globalThis.parent 换成带 spy 的 getter。
+    // 若守卫失效，出站调用要么直接命中 spy，要么对 undefined 解包抛错——两者都判失败。
+    const parentGetter = vi.fn(() => undefined);
+    Object.defineProperty(globalThis, 'parent', { configurable: true, get: parentGetter });
+    try {
+      const sdk = createModuleSDK({ moduleId: 'mod-a', coreOrigin: CORE_ORIGIN });
+      expect(() => {
+        sdk.ready();
+        sdk.navigate('/m/a');
+        sdk.notify('x');
+        sdk.theme('dark');
+      }).not.toThrow();
+      expect(parentGetter).not.toHaveBeenCalled();
+
+      // 同一 SDK：装上浏览器式 window 后必须真的走 postMessage 通道（守卫是运行时条件，不是 no-op 桩）。
+      const fake = installFakeWindow();
       sdk.ready();
+      expect(fake.postMessage).toHaveBeenCalledWith({ type: 'ready' }, CORE_ORIGIN);
       sdk.navigate('/m/a');
-      sdk.notify('x');
-      sdk.theme('dark');
-    }).not.toThrow();
+      expect(fake.postMessage).toHaveBeenCalledWith(
+        { type: 'navigate', path: '/m/a' },
+        CORE_ORIGIN,
+      );
+    } finally {
+      Reflect.deleteProperty(globalThis, 'parent');
+    }
   });
 });
 
