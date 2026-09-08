@@ -188,8 +188,9 @@ export function coreWranglerConfig(input: {
       main: 'core-worker.js',
       compatibility_date: '2026-09-01',
       compatibility_flags: ['nodejs_compat'],
-      // v4：custom domain（自动建 DNS/证书）；zone 路由对 OAuth 认证 10405
-      ...(route ? { custom_domains: [route] } : {}),
+      // Custom Domain 的配置形态是 routes + custom_domain:true（自动建 DNS/证书）；
+      // zone 路由（无 custom_domain 标记）对 OAuth 认证 10405
+      ...(route ? { routes: [{ pattern: route, custom_domain: true }] } : {}),
       assets: {
         directory: 'assets/shell',
         binding: 'ASSETS',
@@ -239,7 +240,9 @@ export function moduleWranglerConfig(input: {
       main: `${mod.id}/worker.js`, // wrapper 独占入口；bundle 在 app.js（同目录）
       compatibility_date: '2026-09-01',
       compatibility_flags: ['nodejs_compat'],
-      ...(config.domain ? { custom_domains: [`${mod.id}.${config.domain}`] } : {}),
+      ...(config.domain
+        ? { routes: [{ pattern: `${mod.id}.${config.domain}`, custom_domain: true }] }
+        : {}),
       assets: {
         directory: `${mod.id}/assets`,
         binding: 'ASSETS',
