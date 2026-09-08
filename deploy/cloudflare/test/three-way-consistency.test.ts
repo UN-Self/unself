@@ -62,7 +62,7 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
     expect(probed).toContain(`https://${DOMAIN}/m/hello/api/health`);
   });
 
-  it('core 主域仍是 Custom Domain，模块路由不再是 custom_domain（同域路径承载）', () => {
+  it('core 与模块同走 zone 路径路由（同 host 上 Custom Domain 优先于路径路由，core 不挂）', () => {
     const core = JSON.parse(coreWranglerConfig({
       config: CONFIG,
       dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
@@ -75,7 +75,7 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
       jwksPath: '/.well-known/jwks.json',
     })) as { routes: unknown };
 
-    expect(core.routes).toEqual([{ pattern: DOMAIN, custom_domain: true }]);
+    expect(core.routes).toEqual([{ pattern: `${DOMAIN}/*` }]);
     expect(mod.routes).toEqual([{ pattern: `${DOMAIN}/m/hello/*` }]);
   });
 });

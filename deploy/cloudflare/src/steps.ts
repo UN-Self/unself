@@ -19,8 +19,9 @@ import {
   writeConfig,
   type Provisioned,
 } from './assemble';
-import { loadUnselfConfig, type ModuleRef } from './config';
+import { loadUnselfConfig, type ModuleRef, type UnselfConfig } from './config';
 import { createKeypair, detectExistingSecret, putSecret, JWT_SECRET_NAME } from './keypair';
+import { ensureZoneRecord } from './dns';
 import { ensureDatabases, ensureR2Bucket, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
 import { registryCommands, sqlString } from './registry';
 import { fetchSetupToken, parseWorkersDevFromDeployOutput, smokeCheck } from './smoke';
@@ -83,12 +84,16 @@ export async function runNineSteps(input: {
   };
   /** 测试注入口：跳过 workers.dev URL 解析（fake wrangler 无真实输出）。 */
   resolveBaseUrl?: (domain: string, workerName: string) => Promise<string>;
+  /** 测试注入口：拦截 DNS 自建（默认真实 ensureZoneRecord，读 CLOUDFLARE_API_TOKEN）。 */
+  ensureDns?: (domain: string) => Promise<void>;
+  /** 测试注入口：覆盖 unself.config.jsonc（默认 loadUnselfConfig(rootDir)）。 */
+  configOverride?: UnselfConfig;
   /** 测试注入口：拦截 secret put（默认走真实 spawn）。 */
   putSecret?: (workerName: string, value: string) => Promise<void>;
 }): Promise<Summary> {
   const { rootDir, wrangler } = input;
   const rep = input.reporter ?? consoleReporter();
-  const config = await loadUnselfConfig(rootDir);
+  const config = input.configOverride ?? (await loadUnselfConfig(rootDir));
   validateS3Storage(config);
   const modules = await discoverModules(rootDir, config.modules);
   const selected = modules.filter((m) => m.selected);
@@ -169,6 +174,13 @@ export async function runNineSteps(input: {
     }
     // secret put 会触发重新部署使 secret 生效
     await wrangler.run(['deploy', '--config', join(provisioned.outDir, 'core.wrangler.jsonc')]);
+  }
+  if (config.domain) {
+    // core 改 zone 路径路由后 Custom Domain 被解绑、CF 删其自建 DNS 记录——
+    // 补一条代理 A 记录（幂等）。必须在模块部署与冒烟之前（主域可解析）。
+    const ensureDns = input.ensureDns ?? ((domain) =>
+      ensureZoneRecord({ domain, apiToken: process.env.CLOUDFLARE_API_TOKEN, log: rep.log }));
+    await ensureDns(config.domain);
   }
   const baseUrl = await resolveBaseUrl(
     input,

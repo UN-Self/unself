@@ -37,7 +37,7 @@ pnpm --filter @unself/deploy-cloudflare exec deploy-cloudflare
 | 范围 | 权限 |
 |------|------|
 | Account（目标账户） | Workers Scripts Edit、D1 Edit、R2 Edit |
-| Zone（`config.domain` 所属 zone，如 demo.handywote.top ∈ handywote.top） | Workers Routes Edit |
+| Zone（`config.domain` 所属 zone，如 demo.handywote.top ∈ handywote.top） | Workers Routes Edit、DNS Edit |
 
 设置方式：`export CLOUDFLARE_API_TOKEN=...`——不落盘，脚本不持久化凭证；JWT 私钥经
 `wrangler secret put` 写入 Worker，不落盘（仅打印指纹备份提示）。
@@ -45,11 +45,12 @@ pnpm --filter @unself/deploy-cloudflare exec deploy-cloudflare
 `wrangler login` 的 OAuth 凭证对 zone 路由（zones/.../workers/routes）授权不足，
 PUT zone 路由报 10405——zone 路由必须用 API Token。
 
-## 假设（待真机验证）
+## 路由形态（§5.3 zone 路径路由，真机实证）
 
-模块 zone 路由 pattern 直接使用 `config.domain` 全值（如
-`demo.handywote.top/m/hello/*`）；wrangler 侧 zone 解析交由 pattern 匹配（多级子域
-推不出 zone，故不引入 zone 字段）。此假设待真机验证。
+core 与模块全部 zone 路径路由：core = `<domain>/*`，模块 = `<domain>/m/<id>/*`（最长前缀胜出）。
+不用 Custom Domain：同一 host 上 Custom Domain 优先于路径路由，core 挂 Custom Domain 会吞掉
+模块路由（#59）。zone 路由要求 host 有代理 DNS 记录：部署脚本在 core 部署后幂等补建一条
+代理 A 记录（192.0.2.1 占位），zone 逐级上溯探测（无需 config zone 字段）。
 
 ## 产物
 
