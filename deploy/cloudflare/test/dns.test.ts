@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ensureZoneRecord, findZone } from '../src/dns';
+import { ensureZoneRecord, findAccountId, findZone, removeLegacyCustomDomains } from '../src/dns';
 
 /** 记录 fetch 请求并回放预设响应（按 URL 前缀匹配）。 */
 function stubCf(routes: Array<{ match: RegExp; respond: unknown }>) {
@@ -40,6 +40,59 @@ describe('findZone（逐级上溯，不引入 config zone 字段）', () => {
   it('全链未命中 → null（不抛错，部署继续）', async () => {
     stubCf([{ match: /name=/, respond: { success: true, result: [] } }]);
     expect(await findZone('unself.demo.handywote.top', 'tok')).toBeNull();
+  });
+});
+
+describe('findAccountId（部署脚本账户发现，不引入 config account 字段）', () => {
+  it('取首个可访问账户', async () => {
+    stubCf([{ match: /\/accounts$/, respond: { success: true, result: [{ id: 'acc-1', name: 'a' }] } }]);
+    expect(await findAccountId('tok')).toBe('acc-1');
+  });
+
+  it('无可访问账户 → null', async () => {
+    stubCf([{ match: /\/accounts$/, respond: { success: true, result: [] } }]);
+    expect(await findAccountId('tok')).toBeNull();
+  });
+});
+
+describe('removeLegacyCustomDomains（B 方案迁移：解绑同域遗留 Custom Domain）', () => {
+  it('只删 domain 自身与 *.domain 的绑定，无关域不动', async () => {
+    const calls = stubCf([
+      {
+        match: /workers\/domains$/,
+        respond: {
+          success: true,
+          result: [
+            { id: 'd1', hostname: 'demo.handywote.top' },
+            { id: 'd2', hostname: 'hello.demo.handywote.top' },
+            { id: 'd3', hostname: 'other.example.com' },
+          ],
+        },
+      },
+      { match: /workers\/domains\/d[12]$/, respond: { success: true, result: { id: 'x' } } },
+    ]);
+    const logs: string[] = [];
+    await removeLegacyCustomDomains({
+      accountId: 'acc-1',
+      domain: 'demo.handywote.top',
+      apiToken: 'tok',
+      log: (m) => logs.push(m),
+    });
+    const deleted = calls.filter((c) => c.method === 'DELETE').map((c) => c.url);
+    expect(deleted).toHaveLength(2);
+    expect(deleted.every((u) => u.includes('workers/domains/d1') || u.includes('workers/domains/d2'))).toBe(true);
+    expect(logs.filter((l) => l.includes('已解绑'))).toHaveLength(2);
+  });
+
+  it('无匹配域 → 零删除', async () => {
+    const calls = stubCf([
+      {
+        match: /workers\/domains$/,
+        respond: { success: true, result: [{ id: 'd3', hostname: 'other.example.com' }] },
+      },
+    ]);
+    await removeLegacyCustomDomains({ accountId: 'acc-1', domain: 'demo.handywote.top', apiToken: 'tok' });
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
   });
 });
 

@@ -28,6 +28,11 @@ async function cfGet(url: string, token: string): Promise<CfResult> {
   return (await res.json()) as CfResult;
 }
 
+async function cfDelete(url: string, token: string): Promise<CfResult> {
+  const res = await fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+  return (await res.json()) as CfResult;
+}
+
 async function cfPost(url: string, token: string, body: unknown): Promise<CfResult> {
   const res = await fetch(url, {
     method: 'POST',
@@ -35,6 +40,51 @@ async function cfPost(url: string, token: string, body: unknown): Promise<CfResu
     body: JSON.stringify(body),
   });
   return (await res.json()) as CfResult;
+}
+
+/** 首个可访问账户 id（部署脚本无需 config account 字段；token 多账户时取第一个）。 */
+export async function findAccountId(token: string): Promise<string | null> {
+  const res = await cfGet('https://api.cloudflare.com/client/v4/accounts', token);
+  if (res.success && Array.isArray(res.result) && res.result.length > 0) {
+    return (res.result[0] as { id: string }).id;
+  }
+  return null;
+}
+
+/**
+ * 解绑遗留 Custom Domain（B 方案迁移：旧部署用 Custom Domain 挂过 core 主域与模块子域，
+ * wrangler 配置改路由形态后不会自动解绑——同一 host 上 Custom Domain 优先于路径路由，
+ * 不清理则模块路由永远被吞）。幂等：只删 hostname == domain 或 *.domain 的绑定。
+ */
+export async function removeLegacyCustomDomains(input: {
+  accountId: string;
+  domain: string;
+  apiToken: string;
+  log?: DnsLog;
+}): Promise<void> {
+  const { accountId, domain, apiToken, log = () => {} } = input;
+  const res = await cfGet(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains`,
+    apiToken,
+  );
+  if (!res.success) {
+    log(`Custom Domain 列表查询失败：${JSON.stringify(res.errors)}`);
+    return;
+  }
+  const list = (res.result ?? []) as Array<{ id: string; hostname: string }>;
+  for (const item of list) {
+    if (item.hostname === domain || item.hostname.endsWith(`.${domain}`)) {
+      const del = await cfDelete(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains/${item.id}`,
+        apiToken,
+      );
+      log(
+        del.success
+          ? `已解绑遗留 Custom Domain：${item.hostname}（CF 同步删其自建 DNS 记录）`
+          : `Custom Domain 解绑失败 ${item.hostname}：${JSON.stringify(del.errors)}`,
+      );
+    }
+  }
 }
 
 /** 逐级上溯找 domain 归属的 zone（无需 config zone 字段）。 */
