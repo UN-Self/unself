@@ -19,7 +19,7 @@ const helloManifest = {
 interface RegistryDb {
   _registry: Map<
     string,
-    { id: string; enabled: number; version: string | null; manifest_json: string; registered_at: string }
+    { id: string; enabled: number; version: string | null; manifest_json: string }
   >;
   _users: Map<
     string,
@@ -64,13 +64,7 @@ function makeDb(): D1Database & RegistryDb {
         async run() {
           if (sql.includes('INSERT INTO module_registry')) {
             const [id, enabled, version, manifestJson] = chain._args as [string, number, string, string];
-            registry.set(id, {
-              id,
-              enabled,
-              version,
-              manifest_json: manifestJson,
-              registered_at: new Date().toISOString(),
-            });
+            registry.set(id, { id, enabled, version, manifest_json: manifestJson });
           } else if (sql.includes('INSERT INTO audit_log')) {
             auditLog.push({
               action: chain._args[1] as string,
