@@ -323,16 +323,25 @@ async function writeFileIfMissing(path: string, content: string): Promise<void> 
   }
 }
 
-/** core Worker 入口（薄壳：re-export core-api 的 Hono app + ASSETS 兜底）。相对路径按生成文件目录（.deploy/cloudflare/）计。 */
+/** core Worker 入口：core-api 优先；未命中（HTML 导航）回退 ASSETS 的 SPA。相对路径按生成文件目录（.deploy/cloudflare/）计。 */
 export function coreWorkerEntrySource(outDir: string, rootDir: string): string {
   const rel = relative(outDir, join(rootDir, 'services/core-api/src/index.ts'));
   return `// SPDX-License-Identifier: AGPL-3.0-only
-// 由 deploy/cloudflare 生成：core-api Hono app + 非 API 路径回退 SPA 资产。
+// 由 deploy/cloudflare 生成：core-api Hono app + 未命中路径回退 SPA 资产。
 import app from '${rel.replaceAll("\\", "/")}';
 
 export default {
   async fetch(request, env, ctx) {
-    return app.fetch(request, env, ctx);
+    const res = await app.fetch(request, env, ctx);
+    if (res.status !== 404 || !env.ASSETS) return res;
+    // API/生命周期路径保持 JSON 404；页面导航回退 SPA
+    const url = new URL(request.url);
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/life/') ||
+        url.pathname.startsWith('/.well-known/') || !request.method ||
+        request.method !== 'GET') {
+      return res;
+    }
+    return env.ASSETS.fetch(new URL('/', url.origin).toString(), request);
   },
 };
 `;
