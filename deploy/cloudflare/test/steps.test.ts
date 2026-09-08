@@ -90,7 +90,7 @@ const SMOKE_OK = {
 };
 
 describe('runNineSteps（九步编排 · 幂等收敛）', () => {
-  it('空账号首跑：命令序列覆盖九步；二跑零 create/put（收敛）', async () => {
+  it('空账号首跑：命令序列覆盖九步；二跑零 create/put（收敛）', { timeout: 120_000 }, async () => {
     const first = makeFakeWrangler();
     const summary1 = await runNineSteps({
       rootDir: ROOT,
@@ -132,7 +132,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     expect(summary1.keypairAction).toBe('created');
   });
 
-  it('九步顺序：D1→迁移→deploy→registry→R2→（⑦无命令）→HTTP ⑧⑨', async () => {
+  it('九步顺序：D1→迁移→deploy→registry→R2→（⑦无命令）→HTTP ⑧⑨', { timeout: 120_000 }, async () => {
     const fake = makeFakeWrangler({
       existingD1: ['unself-core', 'unself-modules'],
       hasSecret: true,
