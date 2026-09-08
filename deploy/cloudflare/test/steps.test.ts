@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { runNineSteps } from '../src/steps';
+import { needsTotalTls, runNineSteps } from '../src/steps';
 import type { Wrangler } from '../src/wrangler';
 
 /**
@@ -99,6 +99,18 @@ const SMOKE_OK = {
       ids.map((id) => ({ name: `module:${id}`, url: `${b}/m/${id}/api/health`, ok: true, status: 200 })),
     ),
 };
+
+describe('needsTotalTls（Universal SSL 覆盖边界）', () => {
+  it('一级子域：覆盖，不需要', () => {
+    expect(needsTotalTls('unself.handywote.top', 'handywote.top')).toBe(false);
+  });
+  it('多级子域：不覆盖，需要', () => {
+    expect(needsTotalTls('unself.demo.handywote.top', 'handywote.top')).toBe(true);
+  });
+  it('apex 自身：覆盖，不需要', () => {
+    expect(needsTotalTls('handywote.top', 'handywote.top')).toBe(false);
+  });
+});
 
 describe('runNineSteps（九步编排 · 幂等收敛）', () => {
   it('空账号首跑：命令序列覆盖九步；二跑零 create/put（收敛）', { timeout: 120_000 }, async () => {

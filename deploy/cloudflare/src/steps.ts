@@ -69,6 +69,11 @@ export async function discoverModules(rootDir: string, selectedIds: string[]): P
   return refs;
 }
 
+/** 多级子域判定：Universal SSL 只覆盖 apex + 一级通配（*.zone），更深的需要 Total TLS。 */
+export function needsTotalTls(domain: string, zoneName: string): boolean {
+  return domain.split('.').length > zoneName.split('.').length + 1;
+}
+
 /** 九步主流程。返回部署摘要（供测试断言与部署输出）。 */
 export async function runNineSteps(input: {
   rootDir: string;
@@ -181,8 +186,14 @@ export async function runNineSteps(input: {
       await removeLegacyCustomDomains({ accountId, domain: config.domain, apiToken: token, log: rep.log });
     });
     await cleanup();
-    // 多级子域不在 Universal SSL 覆盖内：提前触发 Total TLS 签发（幂等）
+    // 多级子域不在 Universal SSL 覆盖内：提前触发 Total TLS 签发（幂等）。
+    // 一级子域（*.zone）由 Universal SSL 通配证书覆盖，无需 Total TLS（且免费计划无 ACM 会报 1450）
+    const needsTls = needsTotalTls(config.domain, zone.name);
     const totalTls = input.ensureTotalTls ?? (async () => {
+      if (!needsTls) {
+        rep.log(`跳过 Total TLS：${config.domain} 为一级子域（Universal SSL 覆盖）`);
+        return;
+      }
       await ensureTotalTls({
         zoneId: zone.id,
         apiToken: process.env.CLOUDFLARE_API_TOKEN ?? '',
