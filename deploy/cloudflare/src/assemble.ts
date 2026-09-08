@@ -195,7 +195,8 @@ export function coreWranglerConfig(input: {
         binding: 'ASSETS',
         // SPA：未命中文件回 index.html；API/JWKS 一律先跑 Worker
         not_found_handling: 'single-page-application',
-        run_worker_first: ['/api/*', '/.well-known/*', '/setup'],
+        // v4：'/setup' 精确路径命中 CF 内部处理并 404（未知机理）；'/setup*' 等价覆盖 /setup 与其查询串，且不误伤 /setupX（SPA 兜底）
+        run_worker_first: ['/api/*', '/.well-known/*', '/setup*'],
       },
       d1_databases: [
         {
