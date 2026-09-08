@@ -87,8 +87,10 @@ export async function toggleModule(db: D1Database, id: string, enabled: boolean)
 
 /** 列出全部模块（管理端；成员侧由 shell 过滤 enabled）。 */
 export async function listModules(db: D1Database): Promise<RegistryEntry[]> {
+  // 列集合与迁移 0001 建表严格一致（registered_at 列从未存在——旧实现线上 D1 报
+  // no such column → /api/modules、/api/admin/modules 全 500；测试库 DDL 与迁移两张皮掩盖了它）
   const result = await db
-    .prepare('SELECT id, enabled, version, manifest_json, registered_at FROM module_registry ORDER BY id')
-    .all<{ id: string; enabled: number; version: string | null; manifest_json: string; registered_at: string }>();
+    .prepare('SELECT id, enabled, version, manifest_json FROM module_registry ORDER BY id')
+    .all<{ id: string; enabled: number; version: string | null; manifest_json: string }>();
   return result.results.map(rowToEntry);
 }
