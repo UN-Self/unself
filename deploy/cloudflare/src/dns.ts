@@ -23,14 +23,25 @@ interface CfResult {
   result?: unknown;
 }
 
+/** 空响应体视为 2xx 成功（CF 部分 API 返回 200/204 无 body），JSON 解析失败则按状态码判断。 */
+async function toResult(res: Response): Promise<CfResult> {
+  const text = await res.text();
+  if (!text.trim()) return { success: res.ok };
+  try {
+    return (JSON.parse(text)) as CfResult;
+  } catch {
+    return { success: res.ok, errors: [{ code: 0, message: `非 JSON 响应：${text.slice(0, 80)}` }] };
+  }
+}
+
 async function cfGet(url: string, token: string): Promise<CfResult> {
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  return (await res.json()) as CfResult;
+  return toResult(res);
 }
 
 async function cfDelete(url: string, token: string): Promise<CfResult> {
   const res = await fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-  return (await res.json()) as CfResult;
+  return toResult(res);
 }
 
 async function cfPost(url: string, token: string, body: unknown): Promise<CfResult> {
