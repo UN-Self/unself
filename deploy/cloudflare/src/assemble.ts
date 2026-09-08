@@ -232,19 +232,17 @@ export function coreWranglerConfig(input: {
   );
 }
 
-/** 生成模块部署配置（前缀剥除 wrapper + D1 绑定 + CORE_JWKS_URL + route）。 */
+/** 生成模块部署配置（前缀剥除 wrapper + D1 绑定 + CORE_JWKS_JSON + route）。 */
 export function moduleWranglerConfig(input: {
   config: UnselfConfig;
   dbIds: { modules: string };
   mod: { id: string };
-  jwksPath: string;
-  /** baseUrl 已知时直接给完整 JWKS URL（workers.dev 场景在步骤③后才可知）。 */
-  jwksUrl?: string;
+  /** 部署期注入的 core 公钥 JWKS 字符串（模块本地验签，零运行时网络，§5.2/#71 根因①）。 */
+  jwksJson: string;
   /** zone 路由必填（wrangler schema：routes[] 元素需 zone_id|zone_name）；部署脚本经 API 探测注入。 */
   zoneName?: string;
 }): string {
-  const { config, dbIds, mod, jwksPath, jwksUrl, zoneName } = input;
-  const host = config.domain || 'workers.dev-placeholder';
+  const { config, dbIds, mod, jwksJson, zoneName } = input;
   return JSON.stringify(
     {
       $schema: 'node_modules/wrangler/config-schema.json',
@@ -275,7 +273,9 @@ export function moduleWranglerConfig(input: {
       ],
       vars: {
         MODULE_ID: mod.id,
-        CORE_JWKS_URL: jwksUrl ?? `https://${host}${jwksPath}`,
+        // 部署期注入公钥 JWKS：模块本地验签零运行时网络（#71 根因①：跨 Worker 拉 core JWKS)
+        // 被 CF 同 zone 禁令拦截 → 恒 401。换钥 = core secret 更新后重跑部署同步。
+        CORE_JWKS_JSON: jwksJson,
       },
       observability: { enabled: true },
     },
