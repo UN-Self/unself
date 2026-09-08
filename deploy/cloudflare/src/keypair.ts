@@ -19,10 +19,12 @@ export async function detectExistingSecret(
   wrangler: { tryRun(args: string[]): Promise<{ ok: boolean; stdout: string }> },
   workerName: string,
 ): Promise<boolean> {
-  const res = await wrangler.tryRun(['secret', 'list', '--name', workerName, '--json']);
+  const res = await wrangler.tryRun(['secret', 'list', '--name', workerName]);
   if (!res.ok) return false;
   try {
-    const parsed: unknown = JSON.parse(res.stdout.trim() || '[]');
+    // wrangler v4：secret list 默认即 JSON（--format json），但输出可能带日志前缀；取最后一个 '[' 起的 JSON 数组
+    const start = res.stdout.lastIndexOf('[');
+    const parsed: unknown = JSON.parse(start >= 0 ? res.stdout.slice(start) : res.stdout.trim() || '[]');
     if (Array.isArray(parsed)) {
       return parsed.some((s) => (s as Record<string, unknown>).name === JWT_SECRET_NAME);
     }

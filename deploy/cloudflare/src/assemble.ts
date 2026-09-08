@@ -96,10 +96,8 @@ export async function provisionAll(options: {
   if (config.domain) {
     baseUrl = `https://${config.domain}`;
   } else {
-    // 触发部署后才有 workers.dev URL；此处生成期先按名字推导（步骤③部署后校正）
-    const res = await wrangler.tryRun(['deploy', '--dry-run', '--outdir', join(outDir, 'dryrun')]);
-    void res; // dry-run 仅热身缓存，URL 以 deploy 输出为准
-    baseUrl = ''; // 占位：deployCore 后回填
+    // workers.dev 路径：URL 由步骤③后的 resolveBaseUrl 从真实 deploy 输出回填
+    baseUrl = '';
   }
 
   // ---- 步骤④ 构建侧：模块 ----
@@ -109,7 +107,7 @@ export async function provisionAll(options: {
     const modOut = join(outDir, 'modules', mod.id);
     await mkdir(modOut, { recursive: true });
     // Worker 入口（依赖打进单文件：模块部署单元自包含）
-    const workerEntry = join(modOut, 'worker.js');
+    const workerEntry = join(modOut, 'app.js');
     await build({
       entryPoints: [join(mod.dir, 'src/index.ts')],
       outfile: workerEntry,
@@ -154,7 +152,7 @@ export async function provisionAll(options: {
       id: mod.id,
       dir: mod.dir,
       config: `modules/${mod.id}.wrangler.jsonc`,
-      workerEntry: `modules/${mod.id}/worker.js`,
+      workerEntry: `modules/${mod.id}/app.js`,
     });
   }
   void sdkEntry;
@@ -187,7 +185,7 @@ export function coreWranglerConfig(input: {
     {
       $schema: 'node_modules/wrangler/config-schema.json',
       name: coreName,
-      main: `${DEPLOY_DIR}/core-worker.js`,
+      main: 'core-worker.js',
       compatibility_date: '2026-09-01',
       compatibility_flags: ['nodejs_compat'],
       ...(route
@@ -196,7 +194,7 @@ export function coreWranglerConfig(input: {
           }
         : {}),
       assets: {
-        directory: `${DEPLOY_DIR}/assets/shell`,
+        directory: 'assets/shell',
         binding: 'ASSETS',
         // SPA：未命中文件回 index.html；API/JWKS 一律先跑 Worker
         not_found_handling: 'single-page-application',
@@ -230,24 +228,28 @@ export function moduleWranglerConfig(input: {
   dbIds: { modules: string };
   mod: { id: string };
   jwksPath: string;
+  /** baseUrl 已知时直接给完整 JWKS URL（workers.dev 场景在步骤③后才可知）。 */
+  jwksUrl?: string;
 }): string {
-  const { config, dbIds, mod, jwksPath } = input;
+  const { config, dbIds, mod, jwksPath, jwksUrl } = input;
   const host = config.domain || 'workers.dev-placeholder';
   return JSON.stringify(
     {
       $schema: 'node_modules/wrangler/config-schema.json',
       name: `unself-module-${mod.id}`,
-      main: `${DEPLOY_DIR}/modules/${mod.id}/worker.js`,
+      // wrangler v4 的 main/assets 相对「配置文件所在目录」解析（本配置在 modules/ 下）
+      main: `${mod.id}/worker.js`, // wrapper 独占入口；bundle 在 app.js（同目录）
       compatibility_date: '2026-09-01',
       compatibility_flags: ['nodejs_compat'],
       ...(config.domain
         ? { routes: [{ pattern: `${config.domain}/m/${mod.id}/*`, zone_name: config.domain }] }
         : {}),
       assets: {
-        directory: `${DEPLOY_DIR}/modules/${mod.id}/assets`,
+        directory: `${mod.id}/assets`,
         binding: 'ASSETS',
         not_found_handling: 'none',
-        run_worker_first: ['**/*'],
+        // wrangler v4 路径规则须以 / 开头；等价全部请求先跑 Worker（模块自管资产回退）
+        run_worker_first: true,
       },
       d1_databases: [
         {
@@ -258,13 +260,31 @@ export function moduleWranglerConfig(input: {
       ],
       vars: {
         MODULE_ID: mod.id,
-        CORE_JWKS_URL: `https://${host}${jwksPath}`,
+        CORE_JWKS_URL: jwksUrl ?? `https://${host}${jwksPath}`,
       },
       observability: { enabled: true },
     },
     null,
     2,
   );
+}
+
+/** 迁移专用最小配置：真实 database_id；migrations_dir 相对本配置所在目录（调用方算好相对路径）。 */
+export function migrationWranglerConfig(input: {
+  binding: string;
+  databaseName: string;
+  databaseId: string;
+  migrationsDir: string;
+}): string {
+  const cfg = {
+    d1_databases: [{
+      binding: input.binding,
+      database_name: input.databaseName,
+      database_id: input.databaseId,
+      migrations_dir: input.migrationsDir,
+    }],
+  };
+  return `${JSON.stringify(cfg, null, 2)}\n`;
 }
 
 /** 写文件（自动建目录）。 */
@@ -277,7 +297,7 @@ export async function writeConfig(path: string, content: string): Promise<void> 
 export function prefixStripWrapperSource(moduleId: string): string {
   return `// SPDX-License-Identifier: AGPL-3.0-only
 // 由 deploy/cloudflare 生成：剥 /m/${moduleId} 前缀 + ASSETS 回退 + 绝对 URL 头重写。
-import worker from './worker.js';
+import worker from './app.js';
 
 const PREFIX = '/m/${moduleId}';
 
