@@ -21,7 +21,7 @@ import {
 } from './assemble';
 import { loadUnselfConfig, type ModuleRef, type UnselfConfig } from './config';
 import { createKeypair, detectExistingSecret, putSecret, JWT_SECRET_NAME } from './keypair';
-import { ensureZoneRecord } from './dns';
+import { ensureZoneRecord, findZone } from './dns';
 import { ensureDatabases, ensureR2Bucket, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
 import { registryCommands, sqlString } from './registry';
 import { fetchSetupToken, parseWorkersDevFromDeployOutput, smokeCheck } from './smoke';
@@ -86,6 +86,8 @@ export async function runNineSteps(input: {
   resolveBaseUrl?: (domain: string, workerName: string) => Promise<string>;
   /** 测试注入口：拦截 DNS 自建（默认真实 ensureZoneRecord，读 CLOUDFLARE_API_TOKEN）。 */
   ensureDns?: (domain: string) => Promise<void>;
+  /** 测试注入口：拦截 zone 上溯探测（默认真实 findZone，读 CLOUDFLARE_API_TOKEN）。 */
+  resolveZone?: (domain: string) => Promise<{ id: string; name: string } | null>;
   /** 测试注入口：覆盖 unself.config.jsonc（默认 loadUnselfConfig(rootDir)）。 */
   configOverride?: UnselfConfig;
   /** 测试注入口：拦截 secret put（默认走真实 spawn）。 */
@@ -150,9 +152,23 @@ export async function runNineSteps(input: {
   }
 
   // core 部署配置生成（在部署前生成，secret put 需要 Worker 先存在 → 首次先裸部署再补 secret）
+  // zone 路径路由的 zone_name 必填：经 API 逐级上溯探测（config 不引入 zone 字段，#59 待定案①）
+  let resolvedZone: { id: string; name: string } | null = null;
+  if (config.domain) {
+    const resolveZone = input.resolveZone ??
+      ((domain) => findZone(domain, process.env.CLOUDFLARE_API_TOKEN ?? ''));
+    const zone = await resolveZone(config.domain);
+    if (!zone) {
+      throw new Error(
+        `无法解析 "${config.domain}" 归属的 zone：zone 路径路由必需 zone_name（API Token 需该 zone 读权限）`,
+      );
+    }
+    resolvedZone = zone;
+    rep.log(`zone 解析：${config.domain} ∈ ${zone.name}`);
+  }
   await writeConfig(
     join(provisioned.outDir, 'core.wrangler.jsonc'),
-    coreWranglerConfig({ config, dbIds, coreName: provisioned.coreName }),
+    coreWranglerConfig({ config, dbIds, coreName: provisioned.coreName, zoneName: resolvedZone?.name }),
   );
   await writeFileIfMissing(
     join(provisioned.outDir, 'core-worker.js'),
@@ -179,7 +195,12 @@ export async function runNineSteps(input: {
     // core 改 zone 路径路由后 Custom Domain 被解绑、CF 删其自建 DNS 记录——
     // 补一条代理 A 记录（幂等）。必须在模块部署与冒烟之前（主域可解析）。
     const ensureDns = input.ensureDns ?? ((domain) =>
-      ensureZoneRecord({ domain, apiToken: process.env.CLOUDFLARE_API_TOKEN, log: rep.log }));
+      ensureZoneRecord({
+        domain,
+        zone: resolvedZone ?? undefined,
+        apiToken: process.env.CLOUDFLARE_API_TOKEN,
+        log: rep.log,
+      }));
     await ensureDns(config.domain);
   }
   const baseUrl = await resolveBaseUrl(
@@ -202,6 +223,7 @@ export async function runNineSteps(input: {
         mod,
         jwksPath: JWKS_PATH,
         jwksUrl: `${baseUrl}${JWKS_PATH}`,
+        zoneName: resolvedZone?.name,
       }),
     );
     // wrapper 每次重写（内容确定，幂等）：它独占 worker.js（main 入口），bundle 在 app.js
