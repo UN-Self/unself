@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { LogOut, LayoutDashboard } from 'lucide-vue-next'
 import { UButton, UErrorCard } from '@unself/ui'
@@ -43,8 +43,9 @@ const activeModule = computed(() => {
 })
 
 const frameSrc = computed(() => (activeModule.value ? moduleFrameSrc(activeModule.value) : null))
-const frameOrigin = computed(() => frameOriginFor(activeModule.value?.manifest?.entry ?? null))
-const frameKey = computed(() => `${activeModule.value?.id ?? 'none'}`)
+/** 重挂计数（#71 根因 2）：retry 自增 → frameKey 变化 → iframe 按 key 重挂 → SDK 重新发 ready。 */
+const frameReload = ref(0)
+const frameKey = computed(() => `${activeModule.value?.id ?? 'none'}#${frameReload.value}`)
 
 // iframe 生命周期状态（六种异常卡，§6.5）
 type FrameState = 'idle' | 'handshaking' | 'ready' | 'failed' | 'disabled'
@@ -52,6 +53,8 @@ const frameState = ref<FrameState>('idle')
 const frameError = ref<ApiError | Error | null>(null)
 
 let bridge: BridgeHandle | null = null
+/** iframe 模板 ref：挂载/重挂期间会短暂为空，挂桥前必须确认就位。 */
+const frameEl = ref<HTMLIFrameElement | null>(null)
 
 onMounted(async () => {
   // ① 会话真值检查（服务端）：未登录去登录页
@@ -92,21 +95,62 @@ watch(selectedId, () => {
   frameState.value = isHostView(selectedId.value) ? 'idle' : 'handshaking'
 })
 
-watch(activeModule, (mod) => {
-  bridge?.detach()
-  bridge = null
-  if (!mod) {
-    frameState.value = 'idle'
-    return
-  }
-  frameState.value = 'handshaking'
-  const iframe = frameEl.value
+/**
+ * 模块激活即挂桥（#71 根因 2）：
+ * flush 'post' 保证回调在 DOM 更新（iframe 挂载）之后执行；
+ * 回调内再等一拍取 frameEl；若仍未挂载则等模板 ref 就位，不再静默判 failed。
+ */
+watch(
+  activeModule,
+  async (mod) => {
+    bridge?.detach()
+    bridge = null
+    if (!mod) {
+      frameState.value = 'idle'
+      return
+    }
+    frameState.value = 'handshaking'
+    await nextTick()
+    await attachBridgeFor(mod)
+  },
+  { flush: 'post' },
+)
+
+/** 等 iframe 模板 ref 就位（首次挂载/重挂）；模块切换或组件卸载后返回 null。 */
+function waitForFrameEl(): Promise<HTMLIFrameElement | null> {
+  if (frameEl.value) return Promise.resolve(frameEl.value)
+  return new Promise((resolve) => {
+    let stopFrame = () => {}
+    const stopActive = watch(activeModule, () => {
+      stopFrame()
+      resolve(null)
+    })
+    stopFrame = watch(frameEl, (el) => {
+      if (el) {
+        stopActive()
+        stopFrame()
+        resolve(el)
+      }
+    })
+  })
+}
+
+/**
+ * 给模块挂桥（watch 与 retry 共用，避免两处漂移）：
+ * 仅入口配置无效（frameOriginFor 为 null）才判 failed；iframe 未挂载则等挂载后再挂。
+ */
+async function attachBridgeFor(mod: RegistryModule): Promise<void> {
   const origin = frameOriginFor(mod.manifest?.entry ?? null)
-  if (!iframe || !origin) {
-    frameState.value = 'failed'
+  if (origin === null) {
     frameError.value = new Error('模块入口配置无效，请联系管理员')
+    frameState.value = 'failed'
     return
   }
+  const iframe = await waitForFrameEl()
+  if (!iframe) return
+  // 等待期间用户可能已切换模块：交给新模块的 watch 处理
+  if (activeModule.value !== mod) return
+  bridge?.detach()
   bridge = attachModuleBridge({
     iframe,
     moduleId: mod.id,
@@ -119,9 +163,8 @@ watch(activeModule, (mod) => {
       frameState.value = 'failed'
     },
   })
-})
+}
 
-const frameEl = ref<HTMLIFrameElement | null>(null)
 onBeforeUnmount(() => bridge?.detach())
 
 // 15s 握手超时（§6.5 异常卡：加载中骨架 → 失败卡）
@@ -144,27 +187,20 @@ async function onLogout() {
   window.location.assign('/login')
 }
 
-/** 手动重试：重新拉 token 并触发 SDK 重新握手（发 ready 由 SDK 循环处理，这里重挂桥）。 */
-function retryFrame() {
+/**
+ * 手动重试：强制 iframe 重挂（frameReload 自增 → key 变化 → 新 iframe 重新发 ready），
+ * 重挂后对新 iframe 重新挂桥——旧消息不再丢失（#71 根因 2）。
+ */
+async function retryFrame() {
   frameError.value = null
   frameState.value = 'handshaking'
   const mod = activeModule.value
-  const iframe = frameEl.value
-  const origin = frameOriginFor(mod?.manifest?.entry ?? null)
-  if (!mod || !iframe || !origin) return
+  if (!mod) return
   bridge?.detach()
-  bridge = attachModuleBridge({
-    iframe,
-    moduleId: mod.id,
-    frameOrigin: origin,
-    onToken: () => {
-      frameState.value = 'ready'
-    },
-    onError: (err) => {
-      frameError.value = err
-      frameState.value = 'failed'
-    },
-  })
+  bridge = null
+  frameReload.value += 1
+  await nextTick()
+  await attachBridgeFor(mod)
 }
 
 /** 选中模块的完整 URL（新窗口打开，轻操作兜底）。 */
