@@ -94,6 +94,32 @@ describe('removeLegacyCustomDomains（B 方案迁移：解绑同域遗留 Custom
     await removeLegacyCustomDomains({ accountId: 'acc-1', domain: 'demo.handywote.top', apiToken: 'tok' });
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
   });
+
+  it('DELETE 返回空 body（真机：200 无体）→ 仍计成功并记录日志', async () => {
+    // stubCf 只能回放 JSON——这里直接手工 stub 空体响应
+    const rawFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith('/workers/domains')) {
+        return new Response(JSON.stringify({
+          success: true,
+          result: [{ id: 'd1', hostname: 'demo.handywote.top' }],
+        }), { status: 200 });
+      }
+      if (init?.method === 'DELETE') {
+        return new Response(null, { status: 200 }); // 空体
+      }
+      return new Response('{}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', rawFetch);
+    const logs: string[] = [];
+    await removeLegacyCustomDomains({
+      accountId: 'acc-1',
+      domain: 'demo.handywote.top',
+      apiToken: 'tok',
+      log: (m) => logs.push(m),
+    });
+    expect(logs.filter((l) => l.includes('已解绑'))).toHaveLength(1);
+  });
 });
 
 describe('ensureZoneRecord（幂等 DNS 自愈）', () => {
