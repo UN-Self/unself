@@ -73,7 +73,10 @@ export async function runNineSteps(input: {
   rootDir: string;
   wrangler: Wrangler;
   reporter?: StepReporter;
-  /** 测试注入口：跳过真实 HTTP（冒烟/setup token）。 */
+  /**
+   * @internal 仅供测试注入（steps.test.ts）：跳过真实 HTTP（冒烟/setup token）。
+   * 生产路径一律走 smoke.ts 的真实实现；smokeCheck 由 smoke.test.ts 直测。
+   */
   http?: {
     setupToken(baseUrl: string): Promise<{ token: string; setupUrl: string } | { sealed: true }>;
     smoke(baseUrl: string, moduleIds: string[]): Promise<Array<{ name: string; url: string; ok: boolean; status: number; detail?: string }>>;
@@ -177,7 +180,7 @@ export async function runNineSteps(input: {
   provisioned.baseUrl = baseUrl;
 
   // ④ 模块构建/上传/路由绑定
-  rep.step(4, '构建上传模块 Worker，绑 /m/<id>/* 路由与存储绑定');
+  rep.step(4, '构建上传模块 Worker，绑 <domain>/m/<id>/* 路由（zone 路径）与存储绑定');
   for (const mod of provisioned.modules) {
     await writeConfig(
       join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`),
@@ -195,7 +198,7 @@ export async function runNineSteps(input: {
       prefixStripWrapperSource(mod.id),
     );
     await wrangler.run(['deploy', '--config', join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`)]);
-    rep.log(`模块 ${mod.id} 已部署（路由 /m/${mod.id}/*）`);
+    rep.log(`模块 ${mod.id} 已部署（zone 路径路由 /m/${mod.id}/*）`);
   }
 
   // ⑤ registry 写入
@@ -240,8 +243,6 @@ export async function runNineSteps(input: {
     : await smokeCheck({
         baseUrl,
         moduleIds: selected.map((m) => m.id),
-        // custom domain 模式模块在 <id>.<域名>（与 custom_domains 绑定一致）
-        moduleSubdomain: Boolean(config.domain),
       });
   for (const r of smoke) {
     rep.log(`${r.ok ? '✓' : '✗'} ${r.name} → ${r.url}${r.detail ? `（${r.detail}）` : ''}`);
