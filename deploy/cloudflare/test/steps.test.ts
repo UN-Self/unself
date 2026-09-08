@@ -176,6 +176,9 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       configOverride: { domain: 'demo.handywote.top', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       resolveZone: async () => ({ id: 'zone-1', name: 'handywote.top' }),
+      cleanupCustomDomains: async () => {
+        fake.state.commands.push('__cleanupCustomDomains');
+      },
       resolveBaseUrl: async () => 'https://demo.handywote.top',
       ensureDns: async (domain) => {
         fake.state.commands.push(`__ensureDns:${domain}`);
@@ -184,6 +187,9 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     const cmds = fake.state.commands;
     const idxOf = (re: RegExp) => cmds.findIndex((c) => re.test(c));
     expect(cmds.filter((c) => c.startsWith('__ensureDns'))).toEqual(['__ensureDns:demo.handywote.top']);
+    expect(cmds.filter((c) => c === '__cleanupCustomDomains')).toHaveLength(1);
+    // 顺序：Custom Domain 清理 → core deploy → DNS 自建 → registry
+    expect(idxOf(/^__cleanupCustomDomains/)).toBeLessThan(idxOf(/^deploy/));
     expect(idxOf(/^__ensureDns/)).toBeGreaterThan(idxOf(/^deploy/));
     expect(idxOf(/^__ensureDns/)).toBeLessThan(idxOf(/module_registry/));
   });
