@@ -83,6 +83,44 @@ export async function ensureDatabases(
   return { core: ids.core!, modules: ids.modules! };
 }
 
+/**
+ * 解析 `wrangler r2 bucket list` 输出，返回桶名列表（去重）。
+ *
+ * wrangler v4 的 bucket list 无 --json，用 formatLabelledValues 输出文本，每桶形如
+ * ```
+ * name:             unself-storage
+ * creation_date:    Wed, 01 Jan 2025 00:00:00 GMT
+ * ```
+ * （label 对齐空格不定；桶间空行分隔）。兼容旧 JSON 数组输出；空行与 creation_date 行忽略。
+ */
+export function parseR2BucketList(stdout: string): string[] {
+  const trimmed = stdout.trim();
+  if (!trimmed) return [];
+  // 剥离 ANSI：wrangler 在 TTY / FORCE_COLOR 下用 chalk 为 label 与值着色（\x1b[37mname:\x1b[39m …）
+  const plain = trimmed.replace(/\x1b\[[0-9;]*m/g, '');
+  const names: string[] = [];
+  // 旧形态：JSON 数组（[{"name":"…"}]）
+  if (plain.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(plain);
+      if (Array.isArray(parsed)) {
+        for (const row of parsed) {
+          const name = (row as Record<string, unknown>).name;
+          if (typeof name === 'string' && name) names.push(name);
+        }
+      }
+    } catch {
+      // 落到文本解析
+    }
+  }
+  // 文本格式："name:             <桶名>" 行（对齐空格数量不定；容 CRLF 的 \r）。
+  // 首尾 \s* 容忍前导空格与行尾 \r；creation_date 行与空行天然不匹配。
+  for (const m of plain.matchAll(/^\s*name:\s+(\S+)\s*$/gm)) {
+    names.push(m[1]!);
+  }
+  return [...new Set(names)];
+}
+
 /** R2 桶查漏（步骤⑥）：provider=r2 时确保桶存在。 */
 export async function ensureR2Bucket(
   wrangler: Wrangler,
@@ -92,21 +130,7 @@ export async function ensureR2Bucket(
   const res = await wrangler.tryRun(['r2', 'bucket', 'list']);
   if (res.ok) {
     try {
-      // wrangler v4 的 bucket list 无 --json：成功输出形如 "name:  <桶名>"；JSON 旧形态兼容
-      const textNames = [...res.stdout.matchAll(/^name:\s+(\S+)$/gm)].map((m) => m[1]!);
-      const jsonNames = (() => {
-        const trimmed = res.stdout.trim();
-        if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return [] as string[];
-        try {
-          const parsed: unknown = JSON.parse(trimmed);
-          return Array.isArray(parsed)
-            ? parsed.map((b) => (b as Record<string, unknown>).name as string).filter(Boolean)
-            : [];
-        } catch {
-          return [];
-        }
-      })();
-      const names = [...new Set([...textNames, ...jsonNames])];
+      const names = parseR2BucketList(res.stdout);
       if (names.includes(bucket)) {
         log(`R2 桶 ${bucket} 已存在`);
         return 'exists';
