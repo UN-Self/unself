@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ensureZoneRecord, findAccountId, findZone, removeLegacyCustomDomains } from '../src/dns';
+import { ensureTotalTls, ensureZoneRecord, findAccountId, findZone, removeLegacyCustomDomains } from '../src/dns';
 
 /** 记录 fetch 请求并回放预设响应（按 URL 前缀匹配）。 */
 function stubCf(routes: Array<{ match: RegExp; respond: unknown }>) {
@@ -119,6 +119,24 @@ describe('removeLegacyCustomDomains（B 方案迁移：解绑同域遗留 Custom
       log: (m) => logs.push(m),
     });
     expect(logs.filter((l) => l.includes('已解绑'))).toHaveLength(1);
+  });
+});
+
+describe('ensureTotalTls（多级子域证书覆盖，幂等）', () => {
+  it('POST enabled:true 且成功日志', async () => {
+    const calls = stubCf([{ match: /acm\/total_tls$/, respond: { success: true, result: { enabled: true } } }]);
+    const logs: string[] = [];
+    await ensureTotalTls({ zoneId: 'zone-1', apiToken: 'tok', log: (m) => logs.push(m) });
+    const post = calls.find((c) => c.method === 'POST');
+    expect(post?.body).toEqual({ enabled: true });
+    expect(logs[0]).toContain('已开启');
+  });
+
+  it('无 SSL 权限 → 失败日志提示所需权限', async () => {
+    stubCf([{ match: /acm\/total_tls$/, respond: { success: false, errors: [{ code: 10000, message: 'Authentication error' }] } }]);
+    const logs: string[] = [];
+    await ensureTotalTls({ zoneId: 'zone-1', apiToken: 'tok', log: (m) => logs.push(m) });
+    expect(logs[0]).toContain('SSL and Certificates Edit');
   });
 });
 
