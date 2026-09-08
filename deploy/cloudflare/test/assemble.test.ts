@@ -25,7 +25,7 @@ describe('coreWranglerConfig（③生成的部署配置）', () => {
     const assets = (cfg as unknown as { assets: { not_found_handling: string; run_worker_first: string[] } }).assets;
     expect(assets.not_found_handling).toBe('single-page-application');
     expect(assets.run_worker_first).toContain('/api/*');
-    expect(cfg.custom_domains).toEqual(['team.example.com']);
+    expect(cfg.routes).toEqual([{ pattern: 'team.example.com', custom_domain: true }]);
   });
 
   it('domain 空 → 无 routes（workers.dev 回退）', () => {
@@ -54,11 +54,11 @@ describe('moduleWranglerConfig（④生成的部署配置）', () => {
 
   it('route 绑定 /m/<id>/* + MODULES_DB 真实 id + CORE_JWKS_URL 绝对地址', () => {
     const cfg = JSON.parse(moduleWranglerConfig(input)) as {
-      custom_domains: string[];
+      routes: Array<{ pattern: string; custom_domain: boolean }>;
       d1_databases: Array<{ binding: string; database_id: string }>;
       vars: { CORE_JWKS_URL: string; MODULE_ID: string };
     };
-    expect(cfg.custom_domains).toEqual(['hello.team.example.com']);
+    expect(cfg.routes).toEqual([{ pattern: 'hello.team.example.com', custom_domain: true }]);
     expect(cfg.d1_databases[0]?.database_id).toBe('modules-uuid');
     expect(cfg.vars.CORE_JWKS_URL).toBe('https://team.example.com/.well-known/jwks.json');
     expect(cfg.vars.MODULE_ID).toBe('hello');
