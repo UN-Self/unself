@@ -108,7 +108,9 @@ app.get('/', (c) => {
     </div>
   </main>
   <script type="module">
-    import { createModuleSDK } from './sdk/module-sdk.js';
+    // 装配产物中 sdk/module-sdk.js 是 esbuild IIFE 无顶层 export，浏览器 ESM 具名导入会报 SyntaxError；
+    // module-sdk.esm.js 是同包二次打包的 ESM 产物（assemble.ts 已生成），具名导出可用。
+    import { createModuleSDK } from './sdk/module-sdk.esm.js';
 
     const sdk = createModuleSDK({ moduleId: 'hello', coreOrigin: window.location.origin });
     const who = document.getElementById('who');
