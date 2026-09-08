@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import app from '../src/index';
 import { generateInstanceKeyPair } from '../src/keys';
+import { createCoreDb, type CoreTestDb } from './test-factory';
 
 const helloManifest = {
   id: 'hello',
@@ -15,110 +16,91 @@ const helloManifest = {
   icon: 'inbox',
 };
 
-/** 内存 D1：覆盖 registry CRUD + users 角色查询的最小面。 */
-interface RegistryDb {
-  _registry: Map<
-    string,
-    { id: string; enabled: number; version: string | null; manifest_json: string }
-  >;
-  _users: Map<
-    string,
-    { id: string; issuer: string; sub: string; display_name: string; role: string }
-  >;
-  _audit: Array<{ action: string; target: string | null }>;
-}
-
-function makeDb(): D1Database & RegistryDb {
-  type RegistryRow = RegistryDb['_registry'] extends Map<string, infer R> ? R : never;
-  type UserRow = RegistryDb['_users'] extends Map<string, infer R> ? R : never;
-  const registry = new Map<string, RegistryRow>();
-  const users = new Map<string, UserRow>();
-  const auditLog: RegistryDb['_audit'] = [];
-  const db = {
-    prepare(sql: string) {
-      const chain = {
-        _args: [] as unknown[],
-        bind(...args: unknown[]) {
-          chain._args = args;
-          return chain;
-        },
-        async first<T>(): Promise<T | null> {
-          if (sql.includes('UPDATE module_registry')) {
-            const row = registry.get(chain._args[1] as string);
-            if (!row) return null;
-            row.enabled = chain._args[0] as number;
-            return { id: row.id, enabled: row.enabled } as T;
-          }
-          if (sql.includes('FROM users')) {
-            return (users.get(chain._args[0] as string) as T) ?? null;
-          }
-          return null;
-        },
-        async all<T>() {
-          if (sql.includes('FROM module_registry')) {
-            const rows = [...registry.values()].sort((a, b) => a.id.localeCompare(b.id));
-            return { results: rows as unknown as T[] };
-          }
-          return { results: [] as T[] };
-        },
-        async run() {
-          if (sql.includes('INSERT INTO module_registry')) {
-            const [id, enabled, version, manifestJson] = chain._args as [string, number, string, string];
-            registry.set(id, { id, enabled, version, manifest_json: manifestJson });
-          } else if (sql.includes('INSERT INTO audit_log')) {
-            auditLog.push({
-              action: chain._args[1] as string,
-              target: (chain._args[2] as string) ?? null,
-            });
-          }
-          return { success: true };
-        },
-      };
-      return chain;
-    },
-  };
-  return { prepare: db.prepare, _registry: registry, _users: users, _audit: auditLog } as unknown as D1Database & RegistryDb;
-}
-
-/** 造一个带 admin/user 会话 Cookie 的环境。 */
-async function envFor(role: 'admin' | 'user') {
+/** 造一个带 admin/user 会话 Cookie 的环境；用户行落真 users 表（迁移 0001）。 */
+async function envFor(role: 'admin' | 'user'): Promise<{
+  env: { JWT_PRIVATE_KEY: string; CORE_DB: D1Database };
+  db: CoreTestDb;
+  cookie: string;
+}> {
   const pair = await generateInstanceKeyPair();
   const { createSessionToken } = await import('../src/session');
   const token = await createSessionToken(
     { uid: `u_${role}`, iss: 'https://idp', sub: `sub-${role}`, name: role },
     pair.privateKeyPem,
   );
-  const db = makeDb();
-  db._users.set('u_admin', { id: 'u_admin', issuer: 'https://idp', sub: 'sub-admin', display_name: '管理', role: 'admin' });
-  db._users.set('u_user', { id: 'u_user', issuer: 'https://idp', sub: 'sub-user', display_name: '成员', role: 'user' });
-  return { env: { JWT_PRIVATE_KEY: pair.privateKeyPem, CORE_DB: db as unknown as D1Database }, db, cookie: `unself_session=${token}` };
+  const db = createCoreDb();
+  db.run(
+    'INSERT INTO users (id, issuer, sub, display_name, role) VALUES (?, ?, ?, ?, ?)',
+    'u_admin',
+    'https://idp',
+    'sub-admin',
+    '管理',
+    'admin',
+  );
+  db.run(
+    'INSERT INTO users (id, issuer, sub, display_name, role) VALUES (?, ?, ?, ?, ?)',
+    'u_user',
+    'https://idp',
+    'sub-user',
+    '成员',
+    'user',
+  );
+  return {
+    env: { JWT_PRIVATE_KEY: pair.privateKeyPem, CORE_DB: db.d1 },
+    db,
+    cookie: `unself_session=${token}`,
+  };
+}
+
+const REG_URL = 'https://t.example/api/admin/modules';
+
+function register(
+  env: { JWT_PRIVATE_KEY: string; CORE_DB: D1Database },
+  cookie: string,
+  body: unknown,
+) {
+  return app.request(
+    REG_URL,
+    {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    env,
+  );
 }
 
 describe('registry CRUD 与启停语义（#7）', () => {
   it('注册模块：写入 manifest 快照，201 返回条目', async () => {
     const { env, db, cookie } = await envFor('admin');
-    const res = await app.request(
-      'https://t.example/api/admin/modules',
-      { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'hello', enabled: true, manifest: helloManifest }) },
-      env,
-    );
+    const res = await register(env, cookie, { id: 'hello', enabled: true, manifest: helloManifest });
     expect(res.status).toBe(201);
     const entry = (await res.json()) as { id: string; enabled: boolean; version: string };
     expect(entry.id).toBe('hello');
     expect(entry.enabled).toBe(true);
     expect(entry.version).toBe('1.0.0');
-    expect(db._registry.get('hello')?.manifest_json).toContain('"counter"');
+
+    // 断言真库行（不是替身内部 Map）
+    const row = db.first<{ id: string; enabled: number; version: string; manifest_json: string }>(
+      'SELECT id, enabled, version, manifest_json FROM module_registry WHERE id = ?',
+      'hello',
+    );
+    expect(row).toEqual({
+      id: 'hello',
+      enabled: 1,
+      version: '1.0.0',
+      manifest_json: expect.any(String),
+    });
+    expect(JSON.parse(row!.manifest_json).capabilities).toEqual(['counter']);
   });
 
   it('重复注册 upsert：刷新快照不炸（deploy 脚本幂等重跑）', async () => {
     const { env, cookie } = await envFor('admin');
-    const body = JSON.stringify({ id: 'hello', enabled: true, manifest: helloManifest });
-    const base = 'https://t.example/api/admin/modules';
-    expect((await app.request(base, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body }, env)).status).toBe(201);
+    expect((await register(env, cookie, { id: 'hello', enabled: true, manifest: helloManifest })).status).toBe(201);
     const v2 = { ...helloManifest, version: '1.0.1' };
-    const again = await app.request(base, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'hello', enabled: true, manifest: v2 }) }, env);
+    const again = await register(env, cookie, { id: 'hello', enabled: true, manifest: v2 });
     expect(again.status).toBe(201);
-    const list = (await (await app.request(base, { headers: { cookie } }, env)).json()) as Array<{
+    const list = (await (await app.request(REG_URL, { headers: { cookie } }, env)).json()) as Array<{
       version: string;
     }>;
     expect(list).toHaveLength(1);
@@ -127,26 +109,24 @@ describe('registry CRUD 与启停语义（#7）', () => {
 
   it('enabled 翻转生效；不存在的模块 404', async () => {
     const { env, db, cookie } = await envFor('admin');
-    await app.request(
-      'https://t.example/api/admin/modules',
-      { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'hello', manifest: helloManifest }) },
-      env,
-    );
+    await register(env, cookie, { id: 'hello', manifest: helloManifest });
     const off = await app.request(
-      'https://t.example/api/admin/modules/hello/enabled',
+      `${REG_URL}/hello/enabled`,
       { method: 'PATCH', headers: { cookie, 'content-type': 'application/json' }, body: '{"enabled":false}' },
       env,
     );
     expect(off.status).toBe(200);
-    expect(db._registry.get('hello')?.enabled).toBe(0);
+    expect(db.first<{ enabled: number }>('SELECT enabled FROM module_registry WHERE id = ?', 'hello')).toEqual({
+      enabled: 0,
+    });
     const on = await app.request(
-      'https://t.example/api/admin/modules/hello/enabled',
+      `${REG_URL}/hello/enabled`,
       { method: 'PATCH', headers: { cookie, 'content-type': 'application/json' }, body: '{"enabled":true}' },
       env,
     );
     expect(await on.json()).toEqual({ id: 'hello', enabled: true });
     const ghost = await app.request(
-      'https://t.example/api/admin/modules/ghost/enabled',
+      `${REG_URL}/ghost/enabled`,
       { method: 'PATCH', headers: { cookie, 'content-type': 'application/json' }, body: '{"enabled":true}' },
       env,
     );
@@ -155,12 +135,9 @@ describe('registry CRUD 与启停语义（#7）', () => {
 
   it('成员视角 GET /api/modules 只回 enabled；管理端回全量', async () => {
     const { env, cookie } = await envFor('admin');
-    const reg = 'https://t.example/api/admin/modules';
-    const post = (id: string, enabled: boolean) =>
-      app.request(reg, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ id, enabled, manifest: { ...helloManifest, id } }) }, env);
-    await post('hello', true);
-    await post('chat', false);
-    const adminList = (await (await app.request(reg, { headers: { cookie } }, env)).json()) as Array<{
+    await register(env, cookie, { id: 'hello', enabled: true, manifest: { ...helloManifest, id: 'hello' } });
+    await register(env, cookie, { id: 'chat', enabled: false, manifest: { ...helloManifest, id: 'chat' } });
+    const adminList = (await (await app.request(REG_URL, { headers: { cookie } }, env)).json()) as Array<{
       id: string;
     }>;
     expect(adminList.map((m) => m.id).sort()).toEqual(['chat', 'hello']);
@@ -172,42 +149,71 @@ describe('registry CRUD 与启停语义（#7）', () => {
 
   it('非管理员被拒：无会话 401、普通成员 403、坏 body 400', async () => {
     const { env, cookie } = await envFor('user');
-    const reg = 'https://t.example/api/admin/modules';
-    const anon = await app.request(reg, { method: 'POST' }, env);
+    const anon = await app.request(REG_URL, { method: 'POST' }, env);
     expect(anon.status).toBe(401);
-    const member = await app.request(
-      reg,
-      { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'hello', manifest: helloManifest }) },
-      env,
-    );
+    const member = await register(env, cookie, { id: 'hello', manifest: helloManifest });
     expect(member.status).toBe(403);
     const adminEnv = await envFor('admin');
-    const badBody = await app.request(
-      reg,
-      { method: 'POST', headers: { cookie: adminEnv.cookie, 'content-type': 'application/json' }, body: '{"id":"HELLO","manifest":{}}' },
-      adminEnv.env,
-    );
+    const badBody = await register(adminEnv.env, adminEnv.cookie, { id: 'HELLO', manifest: {} });
     expect(badBody.status).toBe(400);
     const badToggle = await app.request(
-      'https://t.example/api/admin/modules/hello/enabled',
+      `${REG_URL}/hello/enabled`,
       { method: 'PATCH', headers: { cookie: adminEnv.cookie, 'content-type': 'application/json' }, body: '{"enabled":"yes"}' },
       adminEnv.env,
     );
     expect(badToggle.status).toBe(400);
   });
 
-  it('启停动作写入审计', async () => {
+  it('启停动作写入审计（真 audit_log 表）', async () => {
     const { env, db, cookie } = await envFor('admin');
+    await register(env, cookie, { id: 'hello', manifest: helloManifest });
     await app.request(
-      'https://t.example/api/admin/modules',
-      { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'hello', manifest: helloManifest }) },
-      env,
-    );
-    await app.request(
-      'https://t.example/api/admin/modules/hello/enabled',
+      `${REG_URL}/hello/enabled`,
       { method: 'PATCH', headers: { cookie, 'content-type': 'application/json' }, body: '{"enabled":false}' },
       env,
     );
-    expect(db._audit.map((a) => a.action)).toContain('module_disabled');
+    const actions = db.query<{ action: string; target: string | null }>(
+      'SELECT action, target FROM audit_log ORDER BY id',
+    );
+    expect(actions).toContainEqual({ action: 'module_upserted', target: 'hello' });
+    expect(actions).toContainEqual({ action: 'module_disabled', target: 'hello' });
+  });
+
+  // --- 守护用例（审核 T1：查询列 ↔ 建表列错位即红） ------------------------
+
+  it('守护：module_registry 行结构 == 迁移建表列（幻影列/漏列即红）', async () => {
+    const { env, db, cookie } = await envFor('admin');
+    expect(db.columns('module_registry')).toEqual(['id', 'enabled', 'version', 'manifest_json']);
+    await register(env, cookie, { id: 'hello', manifest: helloManifest });
+
+    // 真库全字段行：列集合必须与建表一致（#56 的 registered_at 幻影列会在此暴露）
+    const row = db.first<Record<string, unknown>>('SELECT * FROM module_registry WHERE id = ?', 'hello');
+    expect(Object.keys(row ?? {}).sort()).toEqual([...db.columns('module_registry')].sort());
+
+    // 路由级：源码 SELECT 一旦引用不存在的列，这里就是 500（而非假 D1 的静默绿）
+    const list = await app.request(REG_URL, { headers: { cookie } }, env);
+    expect(list.status).toBe(200);
+    const entries = (await list.json()) as Array<Record<string, unknown>>;
+    expect(Object.keys(entries[0] ?? {}).sort()).toEqual([
+      'enabled',
+      'id',
+      'manifest',
+      'registeredAt',
+      'version',
+    ]);
+  });
+
+  it('守护：真 schema 约束生效（users UNIQUE(issuer,sub)、module_registry NOT NULL）', async () => {
+    const { db } = await envFor('admin');
+    expect(() =>
+      db.run(
+        'INSERT INTO users (id, issuer, sub, role) VALUES (?, ?, ?, ?)',
+        'u_dup',
+        'https://idp',
+        'sub-admin',
+        'user',
+      ),
+    ).toThrow(); // 同一 issuer+sub 二次建档必须违反 UNIQUE
+    expect(() => db.run('INSERT INTO module_registry (id, enabled) VALUES (?, ?)', 'bad', 1)).toThrow(); // manifest_json NOT NULL
   });
 });
