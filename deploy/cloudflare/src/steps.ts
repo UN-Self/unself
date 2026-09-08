@@ -237,7 +237,12 @@ export async function runNineSteps(input: {
   rep.step(9, '冒烟检查 /api/health 与各模块 health');
   const smoke = input.http
     ? await input.http.smoke(baseUrl, selected.map((m) => m.id))
-    : await smokeCheck({ baseUrl, moduleIds: selected.map((m) => m.id) });
+    : await smokeCheck({
+        baseUrl,
+        moduleIds: selected.map((m) => m.id),
+        // custom domain 模式模块在 <id>.<域名>（与 custom_domains 绑定一致）
+        moduleSubdomain: Boolean(config.domain),
+      });
   for (const r of smoke) {
     rep.log(`${r.ok ? '✓' : '✗'} ${r.name} → ${r.url}${r.detail ? `（${r.detail}）` : ''}`);
   }
