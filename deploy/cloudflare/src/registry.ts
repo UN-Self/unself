@@ -17,16 +17,36 @@ ON CONFLICT(id) DO UPDATE SET
   manifest_json = excluded.manifest_json`;
 }
 
-/** 最小 manifest.yaml 读取：顶层 key: value 行（id/route/version/icon 等标量）。 */
-function manifestScalarFields(text: string): Record<string, string> {
-  const out: Record<string, string> = {};
+/**
+ * 最小 manifest.yaml 读取（§5.5 快照所需子集，不引入完整 YAML 解析）：
+ * - 顶层标量 `key: value` 行（id/route/version/icon/description 等）；
+ * - 缩进 list 项 `  - item`（requires/capabilities），归属最近一个「key: 空值」的顶层 key（行尾注释剥除）。
+ */
+function manifestTopLevelFields(
+  text: string,
+): { scalars: Record<string, string>; lists: Record<string, string[]> } {
+  const scalars: Record<string, string> = {};
+  const lists: Record<string, string[]> = {};
+  let currentListKey: string | null = null;
   for (const line of text.split('\n')) {
-    const m = /^([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*(?:#.*)?$/.exec(line);
-    if (m && m[2] !== undefined && m[2] !== '') {
-      out[m[1]!] = m[2]!;
+    const scalar = /^([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*(?:#.*)?$/.exec(line);
+    if (scalar) {
+      const value = scalar[2]!;
+      if (value !== '') {
+        scalars[scalar[1]!] = value;
+        currentListKey = null;
+      } else {
+        // 顶层 key 空值 → 后续缩进 list 项归属该 key
+        currentListKey = scalar[1]!;
+      }
+      continue;
+    }
+    const item = /^\s*-\s+(.+?)\s*(?:#.*)?$/.exec(line);
+    if (item && currentListKey) {
+      (lists[currentListKey] ??= []).push(item[1]!);
     }
   }
-  return out;
+  return { scalars, lists };
 }
 
 /** manifest.yaml 文本 → ModuleManifest（§5.5 快照 + §5.3 entry 重写为实例 URL）。 */
@@ -36,7 +56,7 @@ export function buildManifestSnapshot(input: {
   /** 实例 base URL（https://domain 或 workers.dev）；空字符串 = workers.dev 占位。 */
   baseUrl: string;
 }): ModuleManifest {
-  const fields = manifestScalarFields(input.manifestText);
+  const { scalars: fields, lists } = manifestTopLevelFields(input.manifestText);
   const host = input.baseUrl || 'https://unself-module-placeholder.workers.dev';
   const candidate = {
     id: fields.id ?? input.moduleId,
@@ -44,9 +64,11 @@ export function buildManifestSnapshot(input: {
     // 部署后模块实际从实例根相对路径装载（同域路径制 §5.3）
     entry: `${host}/m/${input.moduleId}/`,
     runtime: 'worker' as const,
-    requires: ['identity' as const],
-    capabilities: ['demo'],
+    // 契约 requires min(1)：清单缺失时回退 identity；capabilities 缺失为空（不再硬编码 'demo'）
+    requires: (lists.requires?.length ? lists.requires : ['identity']) as Array<'identity'>,
+    capabilities: lists.capabilities ?? [],
     version: fields.version ?? '0.0.0',
+    ...(fields.description ? { description: fields.description } : {}),
     ...(fields.icon ? { icon: fields.icon } : {}),
   };
   return ModuleManifestSchema.parse(candidate);
