@@ -56,11 +56,13 @@ export async function findZone(domain: string, token: string): Promise<{ id: str
 
 /**
  * 确保 config.domain 有一条代理 A 记录（幂等：已存在任何 A 记录即跳过）。
+ * zone 可传入（部署脚本已探测，避免二次 API）；不传则内部逐级上溯。
  * 无 token 时仅记日志跳过（workers.dev 占位模式不设 domain，不会走到此处）。
  */
 export async function ensureZoneRecord(input: {
   domain: string;
   apiToken?: string;
+  zone?: { id: string; name: string };
   log?: DnsLog;
 }): Promise<void> {
   const { domain, apiToken, log = () => {} } = input;
@@ -68,7 +70,7 @@ export async function ensureZoneRecord(input: {
     log('跳过 DNS 自建：未提供 CLOUDFLARE_API_TOKEN');
     return;
   }
-  const zone = await findZone(domain, apiToken);
+  const zone = input.zone ?? (await findZone(domain, apiToken));
   if (!zone) {
     log(`跳过 DNS 自建：未找到 "${domain}" 归属的 zone（或 token 无该 zone 读权限）`);
     return;
