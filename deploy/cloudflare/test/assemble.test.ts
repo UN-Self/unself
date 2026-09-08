@@ -32,7 +32,7 @@ describe('coreWranglerConfig（③生成的部署配置）', () => {
     const assets = (cfg as unknown as { assets: { not_found_handling: string; run_worker_first: string[] } }).assets;
     expect(assets.not_found_handling).toBe('single-page-application');
     expect(assets.run_worker_first).toContain('/api/*');
-    expect(cfg.routes).toEqual([{ pattern: 'team.example.com', custom_domain: true }]);
+    expect(cfg.routes).toEqual([{ pattern: 'team.example.com/*' }]);
   });
 
   it('domain 空 → 无 routes（workers.dev 回退）', () => {
