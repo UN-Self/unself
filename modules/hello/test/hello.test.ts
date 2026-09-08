@@ -105,13 +105,29 @@ describe('module-hello（#13 垂直切片载体）', () => {
     ).toBe('1');
   });
 
-  it('身份行数据源：claims 姓名/邮箱进入 token（验收 2 的数据面）', async () => {
+  it('身份行数据源：claims 姓名/邮箱真值只能来自服务端验签通过的 token（签名载荷不可篡改）', async () => {
     const env = await envFor();
-    const token = await makeToken();
-    const { decodeJwtPayload } = await import('@unself/module-sdk');
-    const claims = decodeJwtPayload(token) as { name?: string; email?: string };
-    expect(claims.name).toBe('黄一');
-    expect(claims.email).toBe('huang@example.com');
+    const token = await makeToken(); // 真实 ES256 签名，payload 含 name=黄一 / email=huang@example.com
+
+    // 正签 token：服务端真实验签（jose + JWKS）通过——验签接受的 claims 即签名载荷。
+    const ok = await app.request('https://m.example/api/count', {
+      headers: { authorization: `Bearer ${token}` },
+    }, env);
+    expect(ok.status).toBe(200);
+
+    // 同一签名换 payload（姓名/邮箱被改写，其余字段不变）：签名不再匹配，服务端必须拒绝。
+    // 证明身份行可展示的 claims（姓名/邮箱）不能由客户端任意注入，只能来自签发方签名过的 token。
+    const [header, payloadB64, signature] = token.split('.');
+    const payload = JSON.parse(
+      Buffer.from(payloadB64!, 'base64url').toString('utf8'),
+    ) as Record<string, unknown>;
+    const forged = `${header}.${Buffer.from(
+      JSON.stringify({ ...payload, name: '黑客', email: 'evil@example.com' }),
+    ).toString('base64url')}.${signature}`;
+    const forgedRes = await app.request('https://m.example/api/count', {
+      headers: { authorization: `Bearer ${forged}` },
+    }, env);
+    expect(forgedRes.status).toBe(401);
   });
 
   it('GET /life/export 返回契约形状 ExportBundle', async () => {
@@ -151,6 +167,10 @@ describe('module-hello（#13 垂直切片载体）', () => {
     expect(html).toContain('+1');
     expect(html).toContain('createModuleSDK');
     expect(html).toContain('viewport');
+    // 身份行数据源接线：token claims 经 decodeContext 填入 who/email（与上一条验签用例呼应）。
+    expect(html).toContain('sdk.decodeContext');
+    expect(html).toContain('claims.name ?? claims.sub');
+    expect(html).toContain('claims.email');
   });
 
   it('页面内 fetch/import 不用根相对路径（部署挂载在 /m/<id>/ 子路径，#14 装配前提）', async () => {
