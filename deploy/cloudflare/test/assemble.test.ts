@@ -21,6 +21,7 @@ describe('coreWranglerConfig（③生成的部署配置）', () => {
     } as UnselfConfig,
     dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
     coreName: 'unself-core-api',
+    zoneName: 'example.com',
   };
 
   it('真实 database_id 回填 + SPA 资产 + run_worker_first API', () => {
@@ -32,7 +33,7 @@ describe('coreWranglerConfig（③生成的部署配置）', () => {
     const assets = (cfg as unknown as { assets: { not_found_handling: string; run_worker_first: string[] } }).assets;
     expect(assets.not_found_handling).toBe('single-page-application');
     expect(assets.run_worker_first).toContain('/api/*');
-    expect(cfg.routes).toEqual([{ pattern: 'team.example.com/*' }]);
+    expect(cfg.routes).toEqual([{ pattern: 'team.example.com/*', zone_name: 'example.com' }]);
   });
 
   it('domain 空 → 无 routes（workers.dev 回退）', () => {
@@ -57,6 +58,7 @@ describe('moduleWranglerConfig（④生成的部署配置）', () => {
     dbIds: { modules: 'modules-uuid' },
     mod: { id: 'hello' },
     jwksPath: '/.well-known/jwks.json',
+    zoneName: 'example.com',
   };
 
   it('route 绑定 zone 路径 <domain>/m/<id>/*（无 custom_domain）+ MODULES_DB 真实 id + CORE_JWKS_URL 绝对地址', () => {
@@ -66,7 +68,7 @@ describe('moduleWranglerConfig（④生成的部署配置）', () => {
       vars: { CORE_JWKS_URL: string; MODULE_ID: string };
     };
     // 整对象断言：zone 路径 pattern 且无 custom_domain 键（Custom Domain 子域形态已废弃）
-    expect(cfg.routes).toEqual([{ pattern: 'team.example.com/m/hello/*' }]);
+    expect(cfg.routes).toEqual([{ pattern: 'team.example.com/m/hello/*', zone_name: 'example.com' }]);
     expect(cfg.d1_databases[0]?.database_id).toBe('modules-uuid');
     expect(cfg.vars.CORE_JWKS_URL).toBe('https://team.example.com/.well-known/jwks.json');
     expect(cfg.vars.MODULE_ID).toBe('hello');

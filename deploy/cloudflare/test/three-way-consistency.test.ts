@@ -34,7 +34,8 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
       dbIds: { modules: 'modules-uuid' },
       mod: { id: 'hello' },
       jwksPath: '/.well-known/jwks.json',
-    })) as { routes: Array<{ pattern: string; custom_domain?: boolean }> };
+      zoneName: 'handywote.top',
+    })) as { routes: Array<{ pattern: string; custom_domain?: boolean; zone_name?: string }> };
 
     // 装载点：步骤⑤写入注册表的 manifest.entry（壳按此装载 iframe）
     const entry = buildManifestSnapshot({ manifestText: MANIFEST, moduleId: 'hello', baseUrl: `https://${DOMAIN}` });
@@ -50,8 +51,8 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
     });
     const smoke = await smokeCheck({ baseUrl: `https://${DOMAIN}`, moduleIds: ['hello'] });
 
-    // 路由点：zone 路径路由（无 custom_domain 标记 = 不自动建 DNS/证书）
-    expect(routeCfg.routes).toEqual([{ pattern: `${DOMAIN}/m/hello/*` }]);
+    // 路由点：zone 路径路由（无 custom_domain 标记 = 不自动建 DNS/证书；zone_name 必填）
+    expect(routeCfg.routes).toEqual([{ pattern: `${DOMAIN}/m/hello/*`, zone_name: 'handywote.top' }]);
 
     const route = normalizeRoutePattern(routeCfg.routes[0]!.pattern);
     const entryUrl = new URL(entry.entry);
@@ -67,15 +68,17 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
       config: CONFIG,
       dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
       coreName: 'unself-core-api',
+      zoneName: 'handywote.top',
     })) as { routes: unknown };
     const mod = JSON.parse(moduleWranglerConfig({
       config: CONFIG,
       dbIds: { modules: 'modules-uuid' },
       mod: { id: 'hello' },
       jwksPath: '/.well-known/jwks.json',
+      zoneName: 'handywote.top',
     })) as { routes: unknown };
 
-    expect(core.routes).toEqual([{ pattern: `${DOMAIN}/*` }]);
-    expect(mod.routes).toEqual([{ pattern: `${DOMAIN}/m/hello/*` }]);
+    expect(core.routes).toEqual([{ pattern: `${DOMAIN}/*`, zone_name: 'handywote.top' }]);
+    expect(mod.routes).toEqual([{ pattern: `${DOMAIN}/m/hello/*`, zone_name: 'handywote.top' }]);
   });
 });

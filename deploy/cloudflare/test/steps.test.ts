@@ -105,6 +105,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     const first = makeFakeWrangler();
     const summary1 = await runNineSteps({
       rootDir: ROOT,
+      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: first.wrangler,
       http: SMOKE_OK,
       resolveBaseUrl: async () => 'https://unself-core-api.test-subdomain.workers.dev',
@@ -129,6 +130,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     });
     const summary2 = await runNineSteps({
       rootDir: ROOT,
+      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: second.wrangler,
       http: SMOKE_OK,
       resolveBaseUrl: async () => summary1.baseUrl,
@@ -150,6 +152,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     });
     await runNineSteps({
       rootDir: ROOT,
+      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: fake.wrangler,
       http: SMOKE_OK,
       resolveBaseUrl: async () => 'https://x.example',
@@ -172,6 +175,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       wrangler: fake.wrangler,
       configOverride: { domain: 'demo.handywote.top', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
+      resolveZone: async () => ({ id: 'zone-1', name: 'handywote.top' }),
       resolveBaseUrl: async () => 'https://demo.handywote.top',
       ensureDns: async (domain) => {
         fake.state.commands.push(`__ensureDns:${domain}`);
@@ -189,6 +193,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     await expect(
       runNineSteps({
         rootDir: ROOT,
+      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
         wrangler: fake.wrangler,
         http: {
           setupToken: SMOKE_OK.setupToken,
@@ -203,6 +208,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
     const summary = await runNineSteps({
       rootDir: ROOT,
+      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: fake.wrangler,
       http: { setupToken: async () => ({ sealed: true }), smoke: SMOKE_OK.smoke },
       resolveBaseUrl: async () => 'https://x.example',

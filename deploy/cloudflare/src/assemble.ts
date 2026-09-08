@@ -184,8 +184,10 @@ export function coreWranglerConfig(input: {
   config: UnselfConfig;
   dbIds: { core: string; modules: string };
   coreName: string;
+  /** zone 路由必填（wrangler schema：routes[] 元素需 zone_id|zone_name）；部署脚本经 API 探测注入。 */
+  zoneName?: string;
 }): string {
-  const { config, dbIds, coreName } = input;
+  const { config, dbIds, coreName, zoneName } = input;
   const route = config.domain ? config.domain : undefined;
   return JSON.stringify(
     {
@@ -199,7 +201,7 @@ export function coreWranglerConfig(input: {
       // Custom Domain，模块的 <domain>/m/<id>/* 路由会被 core 全部吞掉。故 core 亦为路由形态
       // <domain>/*，具体路径由「最长前缀胜出」分发到模块。DNS 记录由部署脚本自建（API Token
       // 带 Zone: DNS Edit）；zone 路由还需 Zone: Workers Routes Edit（OAuth 10405 背景见 README）。
-      ...(route ? { routes: [{ pattern: `${route}/*` }] } : {}),
+      ...(route ? { routes: [{ pattern: `${route}/*`, zone_name: zoneName }] } : {}),
       assets: {
         directory: 'assets/shell',
         binding: 'ASSETS',
@@ -238,8 +240,10 @@ export function moduleWranglerConfig(input: {
   jwksPath: string;
   /** baseUrl 已知时直接给完整 JWKS URL（workers.dev 场景在步骤③后才可知）。 */
   jwksUrl?: string;
+  /** zone 路由必填（wrangler schema：routes[] 元素需 zone_id|zone_name）；部署脚本经 API 探测注入。 */
+  zoneName?: string;
 }): string {
-  const { config, dbIds, mod, jwksPath, jwksUrl } = input;
+  const { config, dbIds, mod, jwksPath, jwksUrl, zoneName } = input;
   const host = config.domain || 'workers.dev-placeholder';
   return JSON.stringify(
     {
@@ -250,11 +254,10 @@ export function moduleWranglerConfig(input: {
       compatibility_date: '2026-09-01',
       compatibility_flags: ['nodejs_compat'],
       // §5.3 单域名路径制：zone 路径路由（无 custom_domain 标记 = 不自动建 DNS/证书），
-      // 模块与 core 同域，按 /m/<id>/* 前缀分发。pattern 用 config.domain 全值
-      // （多级子域推不出 zone，如 demo.handywote.top ∈ handywote.top；zone 解析交由
-      // wrangler 按 pattern 匹配，待真机验证——见 README 假设注记）。
+      // 模块与 core 同域，按 /m/<id>/* 前缀分发。zone_name 由部署脚本经 API 探测注入
+      // （wrangler schema 必填，多级子域推不出 zone，故不引入 config zone 字段）。
       ...(config.domain
-        ? { routes: [{ pattern: `${config.domain}/m/${mod.id}/*` }] }
+        ? { routes: [{ pattern: `${config.domain}/m/${mod.id}/*`, zone_name: zoneName }] }
         : {}),
       assets: {
         directory: `${mod.id}/assets`,
