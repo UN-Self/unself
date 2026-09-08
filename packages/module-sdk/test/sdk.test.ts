@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SignJWT, calculateJwkThumbprint, exportJWK, generateKeyPair, type CryptoKey } from 'jose';
 
 import { createModuleSDK, decodeJwtPayload, verifyModuleToken } from '../src/index';
 
@@ -346,12 +347,76 @@ describe('startTokenLoop / stopTokenLoop（静默续期）', () => {
 });
 
 describe('verifyModuleToken', () => {
-  it('rejects a garbage token (fails inside jose before any JWKS fetch)', async () => {
+  let privateKey: CryptoKey;
+  let coreJwksJson: string;
+
+  beforeEach(async () => {
+    // 真实 ES256 密钥对；kid = RFC 7638 JWK 指纹（与 Core 签发侧同规）。
+    const pair = await generateKeyPair('ES256', { extractable: true });
+    privateKey = pair.privateKey;
+    const publicJwk = await exportJWK(pair.publicKey);
+    const kid = await calculateJwkThumbprint(publicJwk);
+    coreJwksJson = JSON.stringify({ keys: [{ ...publicJwk, kid, use: 'sig', alg: 'ES256' }] });
+  });
+
+  async function sign(overrides: Record<string, unknown> = {}): Promise<string> {
+    const now = Math.floor(Date.now() / 1000);
+    const kid = (JSON.parse(coreJwksJson) as { keys: { kid: string }[] }).keys[0]!.kid;
+    return new SignJWT({ iss: 'https://core.unself.example', sub: 'mod-a', aud: 'core-api', ...overrides })
+      .setProtectedHeader({ alg: 'ES256', kid })
+      .setIssuedAt(now)
+      .setExpirationTime(now + 600)
+      .sign(privateKey);
+  }
+
+  it('verifies a token signed by the core key pair and returns schema-parsed claims', async () => {
+    // 签名 keypair 与注入 JWKS 同源：jose 本地验签通过，claims 载荷原样解析。
+    const now = Math.floor(Date.now() / 1000);
+    const token = await sign();
+    await expect(verifyModuleToken(token, { coreJwksJson, audience: 'core-api' })).resolves.toEqual({
+      iss: 'https://core.unself.example',
+      sub: 'mod-a',
+      aud: 'core-api',
+      iat: now,
+      exp: now + 600,
+    });
+  });
+
+  it('rejects a garbage token (fails inside jose before any key use)', async () => {
     await expect(
-      verifyModuleToken('not-a-jwt', {
-        jwksUrl: 'https://core.unself.example/.well-known/jwks.json',
-        audience: 'core-api',
-      }),
+      verifyModuleToken('not-a-jwt', { coreJwksJson, audience: 'core-api' }),
     ).rejects.toThrow();
+  });
+
+  it('rejects a token signed by a different key pair (signature mismatch)', async () => {
+    const other = await generateKeyPair('ES256', { extractable: true });
+    const token = await new SignJWT({
+      iss: 'https://core.unself.example',
+      sub: 'mod-a',
+      aud: 'core-api',
+    })
+      .setProtectedHeader({ alg: 'ES256' })
+      .setIssuedAt()
+      .setExpirationTime('10m')
+      .sign(other.privateKey);
+    await expect(verifyModuleToken(token, { coreJwksJson, audience: 'core-api' })).rejects.toThrow();
+  });
+
+  it('rejects a token with the wrong audience (aud 锁定不变)', async () => {
+    const token = await sign({ aud: 'other-module' });
+    await expect(verifyModuleToken(token, { coreJwksJson, audience: 'core-api' })).rejects.toThrow(
+      /aud/,
+    );
+  });
+
+  it('verifies with zero network calls: global fetch throwing does not break verification', async () => {
+    // 本地 JWKS 验签：即使网络被破坏（fetch 抛错），合法 token 仍通过——B 方案零运行时网络的直接证明。
+    vi.stubGlobal('fetch', () => {
+      throw new Error('network must not be used');
+    });
+    const token = await sign();
+    await expect(verifyModuleToken(token, { coreJwksJson, audience: 'core-api' })).resolves.toEqual(
+      expect.objectContaining({ sub: 'mod-a', aud: 'core-api' }),
+    );
   });
 });
