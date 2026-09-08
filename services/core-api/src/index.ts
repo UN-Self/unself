@@ -201,6 +201,41 @@ app.post('/api/auth/logout', (c) => {
   return c.json({ ok: true });
 });
 
+/**
+ * 搭建向导 test-connection（#44）：服务端代理探测 issuer 发现文档。
+ * 浏览器直连会被 IdP CORS 拦（Stalwart 实测命中），改经 core-api。
+ * 匿名可调：只回结构化结果（成功含端点、失败统一不透传内部细节）。
+ */
+app.post('/api/oidc/test-connection', async (c) => {
+  const parsed = z.object({ issuer: z.string() }).safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ ok: false, error: 'body must be { issuer: string }' }, 400);
+  }
+  const { issuer } = parsed.data;
+  let issuerUrl: URL;
+  try {
+    issuerUrl = new URL(issuer);
+  } catch {
+    return c.json({ ok: false, error: 'issuer must be https' }, 400);
+  }
+  // 与 oidc.ts discover() 一致：https 门禁（NODE_ENV=test 允许 http）
+  if (issuerUrl.protocol !== 'https:' && process.env.NODE_ENV !== 'test') {
+    return c.json({ ok: false, error: 'issuer must be https' }, 400);
+  }
+  try {
+    const metadata = await discover(issuer);
+    return c.json({
+      ok: true,
+      issuer: metadata.issuer,
+      authorization_endpoint: metadata.authorization_endpoint,
+      token_endpoint: metadata.token_endpoint,
+    });
+  } catch {
+    // 匿名调用方不透传内部错误（discover 错误可能含 fetch 详情/内网地址）
+    return c.json({ ok: false, error: 'discovery failed' }, 502);
+  }
+});
+
 /** 站内回跳白名单：仅允许本站绝对路径。 */
 function sanitizeNext(next: string | null): string | null {
   if (!next) return null;
@@ -280,8 +315,49 @@ app.get('/api/setup/status', async (c) => {
   return c.json({ done: false, tokenValid: Boolean(row && !row.used_at) });
 });
 
+/** instance_config 键与激活 body 字段的映射（与 getOidcConfig 读取键一致）。 */
+const OIDC_CONFIG_KEYS = {
+  issuer: 'oidc_issuer',
+  clientId: 'oidc_client_id',
+  clientSecret: 'oidc_client_secret',
+  scope: 'oidc_scope',
+} as const;
+
+/** 激活 body 中合法 OIDC 字段的形状（非法/缺失 → 忽略该字段）。 */
+const OIDC_FIELD_SCHEMAS = {
+  issuer: z.string().min(1),
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(1),
+  scope: z.string().min(1),
+} as const;
+
+/**
+ * 把向导录入的 OIDC 字段写入 instance_config（UPSERT，与 markSetupDone 同语法）。
+ * 返回是否有字段落库（全部无效返回 false，调用方据此决定是否审计）。
+ */
+async function persistOidcConfig(
+  db: D1Database,
+  body: Record<string, unknown> | null,
+): Promise<boolean> {
+  let stored = false;
+  for (const field of Object.keys(OIDC_CONFIG_KEYS) as Array<keyof typeof OIDC_CONFIG_KEYS>) {
+    const parsed = OIDC_FIELD_SCHEMAS[field].safeParse(body?.[field]);
+    if (!parsed.success) continue;
+    await db
+      .prepare(
+        'INSERT INTO instance_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime(\'now\')',
+      )
+      .bind(OIDC_CONFIG_KEYS[field], parsed.data)
+      .run();
+    stored = true;
+  }
+  return stored;
+}
+
 /**
  * 激活：校验一次性 token + 当前 OIDC 会话，登记首个管理员，永久封死 setup。
+ * 可选 JSON body 携带向导录入的 OIDC 字段（camelCase，见 OIDC_CONFIG_KEYS）；
+ * 字段非法/缺失则忽略——保持纯 token 激活向后兼容。
  * 已激活后一律拒绝（§6.5：已激活后访问 /setup 一律重定向，页面不复存在）。
  */
 app.post('/api/setup/activate', async (c) => {
@@ -303,6 +379,11 @@ app.post('/api/setup/activate', async (c) => {
   const consumed = await consumeSetupToken(db, token);
   if (!consumed) {
     return c.json({ error: 'invalid or already-used setup token' }, 403);
+  }
+  // 向导录入的 OIDC 字段落库（consume 成功后、promoteToAdmin 前；字段非法/缺失忽略）
+  const oidcBody = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+  if (await persistOidcConfig(c.env.CORE_DB, oidcBody)) {
+    await audit(db, session.uid, 'oidc_config_stored');
   }
   await promoteToAdmin(db, session.uid);
   await markSetupDone(db);
