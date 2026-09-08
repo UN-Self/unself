@@ -306,11 +306,13 @@ export default {
     const isAsset = !url.pathname.startsWith(PREFIX + '/api/') &&
                     !url.pathname.startsWith(PREFIX + '/life/') &&
                     request.method === 'GET';
-    if (isAsset) {
-      const assetPath = url.pathname.startsWith(PREFIX + '/')
-        ? url.pathname.slice(PREFIX.length + 1)
-        : 'index.html';
-      return env.ASSETS.fetch(new URL('/' + assetPath, url.origin).toString(), request);
+    if (isAsset && url.pathname.length > PREFIX.length + 1) {
+      // 页面以相对路径引用资产（import './sdk/module-sdk.js' → 请求
+      // /m/<id>/sdk/...），剥前缀后= sdk/... 命中部署期静态资产。
+      // 仅前缀本身（/m/<id>/ 或 /m/<id>）不是资产：落 worker 根分支，
+      // 由 Hono 渲染模块页（模块无 index.html 静态文件）
+      const assetPath = url.pathname.slice(PREFIX.length + 1);
+      return env.ASSETS.fetch(new URL('/' + assetPath, url.origin));
     }
     // 模块代码按「部署在根路径」编写：剥掉挂载前缀
     url.pathname = url.pathname.slice(PREFIX.length) || '/';
