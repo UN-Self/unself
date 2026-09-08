@@ -37,7 +37,7 @@ pnpm --filter @unself/deploy-cloudflare exec deploy-cloudflare
 | 范围 | 权限 |
 |------|------|
 | Account（目标账户） | Workers Scripts Edit、D1 Edit、R2 Edit |
-| Zone（`config.domain` 所属 zone，如 demo.handywote.top ∈ handywote.top） | Workers Routes Edit、DNS Edit |
+| Zone（`config.domain` 所属 zone，如 demo.handywote.top ∈ handywote.top） | Workers Routes Edit、DNS Edit、SSL and Certificates Edit |
 
 设置方式：`export CLOUDFLARE_API_TOKEN=...`——不落盘，脚本不持久化凭证；JWT 私钥经
 `wrangler secret put` 写入 Worker，不落盘（仅打印指纹备份提示）。
@@ -49,8 +49,10 @@ PUT zone 路由报 10405——zone 路由必须用 API Token。
 
 core 与模块全部 zone 路径路由：core = `<domain>/*`，模块 = `<domain>/m/<id>/*`（最长前缀胜出）。
 不用 Custom Domain：同一 host 上 Custom Domain 优先于路径路由，core 挂 Custom Domain 会吞掉
-模块路由（#59）。zone 路由要求 host 有代理 DNS 记录：部署脚本在 core 部署后幂等补建一条
-代理 A 记录（192.0.2.1 占位），zone 逐级上溯探测（无需 config zone 字段）。
+模块路由（#59）；旧 Custom Domain 由脚本幂等解绑。zone 路由要求 host 有代理 DNS 记录：
+部署脚本在 core 部署后幂等补建一条代理 A 记录（192.0.2.1 占位），zone 逐级上溯探测
+（无需 config zone 字段）。多级子域不在 Universal SSL 覆盖内，脚本自动开启 Total TLS
+逐个签发证书（签发秒级延迟，冒烟前已触发）。
 
 ## 产物
 

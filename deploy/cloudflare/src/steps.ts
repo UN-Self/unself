@@ -21,7 +21,7 @@ import {
 } from './assemble';
 import { loadUnselfConfig, type ModuleRef, type UnselfConfig } from './config';
 import { createKeypair, detectExistingSecret, putSecret, JWT_SECRET_NAME } from './keypair';
-import { ensureZoneRecord, findAccountId, findZone, removeLegacyCustomDomains } from './dns';
+import { ensureTotalTls, ensureZoneRecord, findAccountId, findZone, removeLegacyCustomDomains } from './dns';
 import { ensureDatabases, ensureR2Bucket, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
 import { registryCommands, sqlString } from './registry';
 import { fetchSetupToken, parseWorkersDevFromDeployOutput, smokeCheck } from './smoke';
@@ -90,6 +90,8 @@ export async function runNineSteps(input: {
   resolveZone?: (domain: string) => Promise<{ id: string; name: string } | null>;
   /** 测试注入口：拦截遗留 Custom Domain 清理（默认真实 removeLegacyCustomDomains）。 */
   cleanupCustomDomains?: () => Promise<void>;
+  /** 测试注入口：拦截 Total TLS 开启（默认真实 ensureTotalTls）。 */
+  ensureTotalTls?: () => Promise<void>;
   /** 测试注入口：覆盖 unself.config.jsonc（默认 loadUnselfConfig(rootDir)）。 */
   configOverride?: UnselfConfig;
   /** 测试注入口：拦截 secret put（默认走真实 spawn）。 */
@@ -179,6 +181,15 @@ export async function runNineSteps(input: {
       await removeLegacyCustomDomains({ accountId, domain: config.domain, apiToken: token, log: rep.log });
     });
     await cleanup();
+    // 多级子域不在 Universal SSL 覆盖内：提前触发 Total TLS 签发（幂等）
+    const totalTls = input.ensureTotalTls ?? (async () => {
+      await ensureTotalTls({
+        zoneId: zone.id,
+        apiToken: process.env.CLOUDFLARE_API_TOKEN ?? '',
+        log: rep.log,
+      });
+    });
+    await totalTls();
   }
   await writeConfig(
     join(provisioned.outDir, 'core.wrangler.jsonc'),

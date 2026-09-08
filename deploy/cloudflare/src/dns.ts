@@ -50,7 +50,7 @@ async function cfPost(url: string, token: string, body: unknown): Promise<CfResu
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  return (await res.json()) as CfResult;
+  return toResult(res);
 }
 
 /** 首个可访问账户 id（部署脚本无需 config account 字段；token 多账户时取第一个）。 */
@@ -96,6 +96,29 @@ export async function removeLegacyCustomDomains(input: {
       );
     }
   }
+}
+
+/**
+ * 开启 Total TLS（幂等）：Universal SSL 只覆盖 apex + 一级通配（*.handywote.top），
+ * 多级子域（unself.demo.handywote.top）的代理记录没有证书 → TLS handshake failure。
+ * Total TLS 为全部代理主机名逐个签发证书（签发有秒级延迟，冒烟前已触发）。
+ */
+export async function ensureTotalTls(input: {
+  zoneId: string;
+  apiToken: string;
+  log?: DnsLog;
+}): Promise<void> {
+  const { zoneId, apiToken, log = () => {} } = input;
+  const res = await cfPost(
+    `https://api.cloudflare.com/client/v4/zones/${zoneId}/acm/total_tls`,
+    apiToken,
+    { enabled: true },
+  );
+  log(
+    res.success
+      ? 'Total TLS 已开启（多级子域证书逐个签发）'
+      : `Total TLS 开启失败：${JSON.stringify(res.errors)}（需 Zone: SSL and Certificates Edit）`,
+  );
 }
 
 /** 逐级上溯找 domain 归属的 zone（无需 config zone 字段）。 */
