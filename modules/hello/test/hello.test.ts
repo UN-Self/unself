@@ -184,6 +184,6 @@ describe('module-hello（#13 垂直切片载体）', () => {
     expect(html).not.toMatch(/from ['"]\/sdk\//);
     // 相对路径形式存在（页面在 /m/hello/ 下解析为 /m/hello/api/count）
     expect(html).toMatch(/fetch\(['"]api\/count['"]/);
-    expect(html).toMatch(/from ['"]\.\/sdk\/module-sdk\.js['"]/);
+    expect(html).toMatch(/from ['"]\.\/sdk\/module-sdk\.esm\.js['"]/);
   });
 });
