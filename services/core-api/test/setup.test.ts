@@ -44,6 +44,14 @@ function makeDb(): D1Database & SetupDb {
           return null;
         },
         async all<T>() {
+          // 读 instance_config 一批键（getOidcConfig 的 SELECT ... key IN (...)）
+          if (sql.includes('FROM instance_config') && sql.includes('IN (')) {
+            const keys = (chain._args as string[]).filter((k) => typeof k === 'string');
+            const results = keys
+              .filter((k) => config.has(k))
+              .map((k) => ({ key: k, value: config.get(k) as string }));
+            return { results: results as T[] };
+          }
           return { results: [] as T[] };
         },
         async run() {
@@ -206,4 +214,104 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it('激活持久化向导录入的 OIDC 字段（instance_config + 审计），登录走表优先', async () => {
+    const env = await envFor();
+    const db = makeDb();
+    const base = { ...env, CORE_DB: db };
+
+    const gen = (await (await app.request(
+      'https://team.example.com/api/admin/setup-token',
+      { method: 'POST' },
+      base,
+    )).json()) as { token: string };
+
+    const oidc = {
+      issuer: 'https://idp.example.com',
+      clientId: 'app-1',
+      clientSecret: 's3cret',
+      scope: 'openid profile email',
+    };
+    const ok = await app.request(
+      `https://team.example.com/api/setup/activate?token=${gen.token}`,
+      {
+        method: 'POST',
+        headers: { cookie: env.cookie, 'content-type': 'application/json' },
+        body: JSON.stringify(oidc),
+      },
+      base,
+    );
+    expect(ok.status).toBe(200);
+
+    // 写库：与 getOidcConfig 读取键一致的 oidc_* 四键
+    expect(db._config.get('oidc_issuer')).toBe(oidc.issuer);
+    expect(db._config.get('oidc_client_id')).toBe(oidc.clientId);
+    expect(db._config.get('oidc_client_secret')).toBe(oidc.clientSecret);
+    expect(db._config.get('oidc_scope')).toBe(oidc.scope);
+
+    // 审计
+    const actions = (db._audit as Array<{ action: string }>).map((a) => a.action);
+    expect(actions).toContain('oidc_config_stored');
+
+    // 表优先：env 无 OIDC_* 时 login 仍按 instance_config 配置走 → 302（发现文档来自表里 issuer）
+    const restore = installFakeDiscovery('https://idp.example.com');
+    try {
+      const login = await app.request('https://team.example.com/api/auth/login', {}, base);
+      expect(login.status).toBe(302);
+      expect(login.headers.get('location') ?? '').toContain('https://idp.example.com');
+    } finally {
+      restore();
+    }
+  });
+
+  it('激活 body 字段非法时忽略该字段，纯 token 激活兼容', async () => {
+    const env = await envFor();
+    const db = makeDb();
+    const base = { ...env, CORE_DB: db };
+
+    const gen = (await (await app.request(
+      'https://team.example.com/api/admin/setup-token',
+      { method: 'POST' },
+      base,
+    )).json()) as { token: string };
+
+    const ok = await app.request(
+      `https://team.example.com/api/setup/activate?token=${gen.token}`,
+      {
+        method: 'POST',
+        headers: { cookie: env.cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ issuer: 123, clientId: '', scope: 'openid', extra: 'ignored' }),
+      },
+      base,
+    );
+    expect(ok.status).toBe(200);
+    // issuer=123（非字符串）/ clientId=''（空串）→ 忽略；scope 合法 → 落库；未知键忽略
+    expect(db._config.has('oidc_issuer')).toBe(false);
+    expect(db._config.has('oidc_client_id')).toBe(false);
+    expect(db._config.get('oidc_scope')).toBe('openid');
+    expect(db._users.get('u_1')?.role).toBe('admin');
+  });
 });
+
+/** 假发现文档（仅 login 需要；test-connection 的完整假 IdP 在 auth-routes.test.ts）。 */
+function installFakeDiscovery(issuer: string) {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/.well-known/openid-configuration')) {
+      return new Response(
+        JSON.stringify({
+          issuer,
+          authorization_endpoint: `${issuer}/authorize`,
+          token_endpoint: `${issuer}/token`,
+          jwks_uri: `${issuer}/jwks`,
+        }),
+        { status: 200 },
+      );
+    }
+    throw new Error(`fake discovery: unexpected fetch ${url}`);
+  }) as typeof fetch;
+  return () => {
+    globalThis.fetch = original;
+  };
+}

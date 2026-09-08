@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
 /**
  * OIDC 会话配置（PRODUCT_SPEC §5.2 / requirements #4）：
  * - 全系统只有核心对接外部 OIDC；发现 + 授权码 PKCE + callback 换 token；
@@ -28,6 +30,8 @@ export interface DiscoveredMetadata {
   issuer: string;
   authorization_endpoint: string;
   token_endpoint: string;
+  /** JWKS 集合地址（id_token 验签用；标准 IdP 必有，发现文档缺失则拒）。 */
+  jwks_uri?: string;
   userinfo_endpoint?: string;
   revocation_endpoint?: string;
   code_challenge_methods_supported?: string[];
@@ -43,6 +47,21 @@ interface DiscoveryCacheEntry {
 const DISCOVERY_TTL_MS = 15 * 60 * 1000;
 
 const discoveryCache = new Map<string, DiscoveryCacheEntry>();
+
+/** id_token 签名算法白名单：仅非对称带密钥协商的 RS/ES/PS（256/384/512），禁 HS 共享秘密类。 */
+const ID_TOKEN_ALGS: string[] = ['RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512', 'PS256', 'PS384', 'PS512'];
+
+/**
+ * 进程内 JWKS 集合缓存：键 = issuer，值 = jose remote set（自带 10 分钟 JWKS 缓存
+ * + unknown kid 冷启动重取）。换序测试/换钥测试务必先 resetOidcCaches，避免残留旧钥。
+ */
+const jwksSets = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+
+/** 清空进程内缓存（发现文档 + JWKS 集合）；测试隔离用。 */
+export function resetOidcCaches(): void {
+  discoveryCache.clear();
+  jwksSets.clear();
+}
 
 /** OIDC Discovery（.well-known/openid-configuration），带进程内缓存；仅 https（测试可放宽）。 */
 export async function discover(issuer: string): Promise<DiscoveredMetadata> {
@@ -69,6 +88,10 @@ export async function discover(issuer: string): Promise<DiscoveredMetadata> {
   }
   if (!metadata.authorization_endpoint || !metadata.token_endpoint) {
     throw new Error('oidc: discovery document missing endpoints');
+  }
+  if (!metadata.jwks_uri) {
+    // id_token 验签的前提（标准 IdP 必有）；缺失 → 拒绝（fail-closed）
+    throw new Error('oidc: discovery document missing jwks_uri');
   }
   discoveryCache.set(issuer, { metadata, fetchedAt: now });
   return metadata;
@@ -125,7 +148,7 @@ export async function buildAuthorizationRequest(
 
 /** callback 请求已校验通过后的结果。 */
 export interface CallbackResult {
-  /** IdP 颁发的 ID token（JWT；未校验签名时不得作为身份真值单独使用）。 */
+  /** IdP 颁发的 ID token（JWT；已验签+claims 校验，可作身份真值）。 */
   idToken: string;
   /** ID token payload（含 iss/sub/aud/nonce/exp）。 */
   claims: Record<string, unknown>;
@@ -178,9 +201,22 @@ export async function exchangeAuthorizationCode(
   };
   if (!token.id_token) throw new Error('oidc: token response missing id_token');
 
-  // ID token 解码 + 核心校验（iss/aud/nonce/exp；RS256 验签属 IdP 侧信任，
-  // token 端点 TLS 信道已保证来源，M0 按 OAuth 2.0 最低要求校验 claims）。
-  const claims = decodeIdToken(token.id_token);
+  // ID token 验签：issuer JWKS（发现文档 jwks_uri）+ 算法白名单；
+  // JWKS 拉取失败 / 找不到匹配 key / 签名不符 → 抛错拒绝登录（fail-closed）。
+  let claims: Record<string, unknown>;
+  try {
+    const { payload } = await jwtVerify(token.id_token, jwksSetFor(metadata), {
+      algorithms: ID_TOKEN_ALGS,
+    });
+    claims = payload as unknown as Record<string, unknown>;
+  } catch (err) {
+    // jose 的过期错误不带 /expired/ 字样；统一成本库错误，调用方按人话提示
+    if ((err as { code?: string }).code === 'ERR_JWT_EXPIRED') {
+      throw new Error('oidc: id_token expired');
+    }
+    throw err;
+  }
+  // claims 级核心校验（iss/aud/nonce/exp/sub）
   const iss = claims.iss as string;
   if (iss.replace(/\/$/, '') !== metadata.issuer.replace(/\/$/, '')) {
     throw new Error('oidc: id_token iss mismatch');
@@ -201,14 +237,18 @@ export async function exchangeAuthorizationCode(
   };
 }
 
-/** 解码 ID token payload（不验签；验签依赖 token 端点 TLS + claims 校验，见上）。 */
-function decodeIdToken(idToken: string): Record<string, unknown> {
-  const parts = idToken.split('.');
-  if (parts.length !== 3 || !parts[1]) throw new Error('oidc: malformed id_token');
-  const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
-  const bytes = Uint8Array.from(atob(padded), (ch) => ch.charCodeAt(0));
-  const claims = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
-  if (claims === null || typeof claims !== 'object') throw new Error('oidc: malformed id_token payload');
-  return claims;
+/**
+ * 取 issuer 对应的 remote JWKS 集合（进程内缓存）。
+ * jose 集合自带：JWKS 拉取缓存（默认 10 分钟）、unknown kid 冷却后重取、失败抛错。
+ */
+function jwksSetFor(metadata: DiscoveredMetadata): ReturnType<typeof createRemoteJWKSet> {
+  if (!metadata.jwks_uri) {
+    throw new Error('oidc: discovery document missing jwks_uri');
+  }
+  let set = jwksSets.get(metadata.issuer);
+  if (!set) {
+    set = createRemoteJWKSet(new URL(metadata.jwks_uri));
+    jwksSets.set(metadata.issuer, set);
+  }
+  return set;
 }

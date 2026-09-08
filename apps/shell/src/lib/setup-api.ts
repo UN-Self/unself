@@ -3,7 +3,8 @@
 /**
  * setup 向导 API 客户端（#10）：
  * - GET /api/setup/status：实例是否已激活 / token 是否有效（路由守卫用）
- * - POST /api/setup/activate：一次性 token + 会话 → 首个管理员 + 永久封死
+ * - POST /api/setup/activate：一次性 token + 可选 OIDC 字段 → 首个管理员 + 永久封死
+ * - POST /api/oidc/test-connection：服务端代理探测 OIDC Provider（#44，避开浏览器直连 CORS）
  * - GET /api/auth/login：整页跳转 OIDC（密码永远发生在 IdP 页面，§6.5）
  *
  * 后端契约见 services/core-api（#5/#6）。异常三层透传（§6.5）：
@@ -80,9 +81,23 @@ export interface ActivateResult {
   user: { id: string; name: string; role: string }
 }
 
-export function activateSetup(token: string): Promise<ActivateResult> {
+/** 向导录入的 OIDC 连接配置（camelCase，与后端契约一致）；scope 缺省服务端回退。 */
+export interface OidcSetup {
+  issuer: string
+  clientId: string
+  clientSecret: string
+  scope?: string
+}
+
+/**
+ * POST /api/setup/activate：一次性 token +（可选）OIDC 字段 → 首个管理员 + 永久封死。
+ * oidc 缺省时发空对象 {}（服务端回退 env 注入的 OIDC_ISSUER 等）。
+ */
+export function activateSetup(token: string, oidc?: OidcSetup): Promise<ActivateResult> {
   return request<ActivateResult>(`/api/setup/activate?token=${encodeURIComponent(token)}`, {
     method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(oidc ?? {}),
   })
 }
 
@@ -91,10 +106,13 @@ export interface ActivateNeedLogin extends ApiError {
   loginUrl: string
 }
 
-/** 发起激活；401 时带出 loginUrl 供整页跳转。 */
-export async function activateOrLogin(token: string): Promise<ActivateResult | { needLogin: string }> {
+/** 发起激活（携带可选 OIDC 字段）；401 时带出 loginUrl 供整页跳转。 */
+export async function activateOrLogin(
+  token: string,
+  oidc?: OidcSetup,
+): Promise<ActivateResult | { needLogin: string }> {
   try {
-    return await activateSetup(token)
+    return await activateSetup(token, oidc)
   } catch (err) {
     const apiErr = err as ApiError & { body?: unknown }
     if (apiErr.status === 401) {
@@ -103,6 +121,8 @@ export async function activateOrLogin(token: string): Promise<ActivateResult | {
       try {
         const res = await fetch(`/api/setup/activate?token=${encodeURIComponent(token)}`, {
           method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(oidc ?? {}),
           credentials: 'same-origin',
         })
         const body = (await res.json().catch(() => null)) as { loginUrl?: string } | null
@@ -117,35 +137,49 @@ export async function activateOrLogin(token: string): Promise<ActivateResult | {
 }
 
 /**
- * 测试连接：现场拉一次 OIDC 发现文档（§6.5 动线：失败就地报错，不等到登录才炸）。
- * 直连 issuer 的 .well-known/openid-configuration；浏览器侧 CORS 受限时
- * 回退为提示（不阻塞保存，激活链路以服务端为准）。
+ * 测试连接（#44）：改经 core-api 服务端代理（浏览器直连 issuer 会被 CORS 拦，
+ * Stalwart 实测命中），本地只保留 URL 格式预检（非 URL / 非 https 直接报错，不发请求）；
+ * 失败信息按状态映射为人话（§6.5），网络异常统一提示服务端侧不可达。
  */
-export async function testOidcConnection(issuer: string): Promise<{ ok: true; issuer: string } | { ok: false; reason: string }> {
+export async function testOidcConnection(
+  issuer: string,
+): Promise<{ ok: true; issuer: string } | { ok: false; reason: string }> {
   let issuerUrl: URL
   try {
     issuerUrl = new URL(issuer)
   } catch {
     return { ok: false, reason: 'Issuer 地址格式不正确，需要完整 URL（https://…）' }
   }
-  if (issuerUrl.protocol !== 'https:' && issuerUrl.protocol !== 'http:') {
+  if (issuerUrl.protocol !== 'https:') {
     return { ok: false, reason: 'Issuer 地址需要以 https:// 开头' }
   }
-  const base = `${issuerUrl.protocol}//${issuerUrl.host}`
-  const path = issuerUrl.pathname === '/' || issuerUrl.pathname === ''
-    ? '/.well-known/openid-configuration'
-    : `${issuerUrl.pathname.replace(/\/$/, '')}/.well-known/openid-configuration`
   try {
-    const res = await fetch(`${base}${path}`, { headers: { accept: 'application/json' } })
-    if (!res.ok) {
-      return { ok: false, reason: `发现文档返回 ${res.status}：请检查 Issuer 地址是否正确` }
+    const res = await fetch('/api/oidc/test-connection', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ issuer }),
+      credentials: 'same-origin',
+    })
+    const body = (await res.json().catch(() => null)) as
+      | { ok?: boolean; issuer?: string; error?: string }
+      | null
+    if (!res.ok || !body?.ok) {
+      return { ok: false, reason: humanizeOidcTest(res.status, body?.error) }
     }
-    const doc = (await res.json()) as { issuer?: string; authorization_endpoint?: string; token_endpoint?: string }
-    if (!doc.authorization_endpoint || !doc.token_endpoint) {
-      return { ok: false, reason: '发现文档缺少 authorize/token 端点：该服务可能不是 OIDC Provider' }
-    }
-    return { ok: true, issuer: doc.issuer ?? issuer }
+    return { ok: true, issuer: body.issuer ?? issuer }
   } catch {
-    return { ok: false, reason: '无法访问该地址：请确认地址可达且允许跨域探测（同域部署时无此限制）' }
+    return { ok: false, reason: '连接测试失败：请确认服务端可访问该 Issuer' }
+  }
+}
+
+/** 服务端代理错误 → 人话：400/502 固定文案，其余状态用 body.error 兜底。 */
+function humanizeOidcTest(status: number, error?: string): string {
+  switch (status) {
+    case 400:
+      return 'Issuer 地址需要以 https:// 开头'
+    case 502:
+      return '无法访问该 Issuer：请检查地址是否正确或网络可达性'
+    default:
+      return error || `连接测试失败（${status}），请稍后重试`
   }
 }

@@ -41,6 +41,8 @@ const activating = ref(false)
 const activateError = ref<ApiError | null>(null)
 // 侧记到 sessionStorage：登录回来若 setup 已封死直接进工作台
 const ACTIVATED_KEY = 'unself_setup_done'
+// 跳登录前把表单（不含 secret）侧记到 sessionStorage，登录回来字段为空时恢复
+const OIDC_DRAFT_KEY = 'unself_setup_oidc'
 
 onMounted(async () => {
   let status: Awaited<ReturnType<typeof getSetupStatus>>
@@ -48,10 +50,12 @@ onMounted(async () => {
     status = await getSetupStatus(token.value ?? undefined)
   } catch {
     phase.value = 'ready'
+    restoreOidcDraft()
     return
   }
   if (status.done) {
     // 已激活：本页不复存在。已登录→工作台；未登录→登录页（守卫补一刀）
+    sessionStorage.removeItem(OIDC_DRAFT_KEY)
     if (sessionStorage.getItem(ACTIVATED_KEY) === '1') {
       sessionStorage.removeItem(ACTIVATED_KEY)
       await router.replace('/')
@@ -71,7 +75,21 @@ onMounted(async () => {
     return
   }
   phase.value = 'ready'
+  restoreOidcDraft()
 })
+
+/** 恢复跳登录前侧记的 issuer/clientId（secret 从不持久化）。 */
+function restoreOidcDraft() {
+  try {
+    const raw = sessionStorage.getItem(OIDC_DRAFT_KEY)
+    if (!raw) return
+    const draft = JSON.parse(raw) as { issuer?: unknown; clientId?: unknown }
+    if (issuer.value === '' && typeof draft.issuer === 'string') issuer.value = draft.issuer
+    if (clientId.value === '' && typeof draft.clientId === 'string') clientId.value = draft.clientId
+  } catch {
+    // 侧记数据损坏：忽略，用户重填
+  }
+}
 
 function validate(): boolean {
   const errors: typeof fieldErrors.value = {}
@@ -105,19 +123,30 @@ async function onTestConnection() {
 async function onSaveAndActivate() {
   activateError.value = null
   if (!validate() || !token.value) return
-  // OIDC 凭证属于 setup 向导录入内容：#6 后端从 core 库读取；
-  // M0 激活链路只携带一次性 token（凭证由部署环境注入或后续管理接口写入），
-  // 此处明确不把 secret 发到任何非必要通道。
+  // 向导三字段（issuer/client id/secret + scope）随激活请求发给后端（#44）：
+  // 后端持久化到 instance_config，登录链路不再退回 env 注入回退，此前缺发已落空修复。
+  const oidc = {
+    issuer: issuer.value.trim(),
+    clientId: clientId.value.trim(),
+    clientSecret: clientSecret.value,
+    scope: 'openid profile email',
+  }
   activating.value = true
   try {
-    const result = await activateOrLogin(token.value)
+    const result = await activateOrLogin(token.value, oidc)
     if ('needLogin' in result) {
       // 未登录：整页跳 OIDC，next 已带回 token；回来时激活在守卫里续跑
+      // 表单（除 secret）侧记到 sessionStorage，登录回来字段为空时恢复
       sessionStorage.setItem(ACTIVATED_KEY, '1')
+      sessionStorage.setItem(
+        OIDC_DRAFT_KEY,
+        JSON.stringify({ issuer: oidc.issuer, clientId: oidc.clientId }),
+      )
       window.location.assign(result.needLogin)
       return
     }
-    // 激活成功：直接进工作台（不停留，§6.5）
+    // 激活成功：直接进工作台（不停留，§6.5），侧记的字段不再需要
+    sessionStorage.removeItem(OIDC_DRAFT_KEY)
     await router.replace('/')
   } catch (err) {
     activateError.value = err as ApiError
