@@ -1,21 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it } from 'vitest';
-import { generateKeyPair, SignJWT } from 'jose';
+import { generateKeyPair, SignJWT, exportJWK, type JWK } from 'jose';
 
 import app from '../src/index';
+import { resetOidcCaches } from '../src/oidc';
 
 /**
- * 假身份源：拦截全局 fetch（discovery/token），签发真 RS256 id_token。
+ * 假身份源：拦截全局 fetch（discovery/token/jwks），签发真 RS256 id_token。
  * 覆盖 GET /api/auth/login → 302 授权页、GET /api/auth/callback → 签会话、
- * POST /api/auth/logout → 清 Cookie、GET /api/me → 会话态。
+ * POST /api/auth/logout → 清 Cookie、GET /api/me → 会话态、
+ * POST /api/oidc/test-connection → 服务端探测。
  */
 const ISSUER = 'https://idp.example.com';
+const JWKS_URI = `${ISSUER}/jwks`;
 let privateKey: CryptoKey;
+let publicJwk: JWK;
 let kid: string;
 
 beforeEach(async () => {
+  resetOidcCaches(); // 发现文档 + JWKS 集合按 issuer 缓存，换钥测试必须重置
   const pair = await generateKeyPair('RS256', { extractable: true });
   privateKey = pair.privateKey;
+  publicJwk = await exportJWK(pair.publicKey);
   kid = 'test-key';
 });
 
@@ -40,8 +46,15 @@ function installFakeIdp(idToken: string) {
           issuer: ISSUER,
           authorization_endpoint: `${ISSUER}/authorize`,
           token_endpoint: `${ISSUER}/token`,
+          jwks_uri: JWKS_URI,
           scopes_supported: ['openid'],
         }),
+        { status: 200 },
+      );
+    }
+    if (url === JWKS_URI) {
+      return new Response(
+        JSON.stringify({ keys: [{ ...publicJwk, kid, alg: 'RS256', use: 'sig' }] }),
         { status: 200 },
       );
     }
@@ -189,5 +202,111 @@ describe('OIDC 登录路由', () => {
   it('未认证 /api/me 回 401', async () => {
     const res = await app.request('https://team.example.com/api/me', {}, env());
     expect(res.status).toBe(401);
+  });
+});
+
+describe('POST /api/oidc/test-connection（服务端代理探测，#44）', () => {
+  it('合法 https issuer：回文档 issuer + 授权/令牌端点', async () => {
+    const restore = installFakeIdp('unused');
+    try {
+      const res = await app.request(
+        'https://team.example.com/api/oidc/test-connection',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ issuer: ISSUER }),
+        },
+        env(),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        ok: true,
+        issuer: ISSUER,
+        authorization_endpoint: `${ISSUER}/authorize`,
+        token_endpoint: `${ISSUER}/token`,
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it('发现文档缺失 jwks_uri → 502 discovery failed（不透传内部错误）', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/.well-known/openid-configuration')) {
+        // 缺 jwks_uri：标准 IdP 必有，缺失即 discover 抛错
+        return new Response(
+          JSON.stringify({
+            issuer: ISSUER,
+            authorization_endpoint: `${ISSUER}/authorize`,
+            token_endpoint: `${ISSUER}/token`,
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.request(
+        'https://team.example.com/api/oidc/test-connection',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ issuer: ISSUER }),
+        },
+        env(),
+      );
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ ok: false, error: 'discovery failed' });
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it('http issuer（非 test 环境）→ 400 issuer must be https', async () => {
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const res = await app.request(
+        'https://team.example.com/api/oidc/test-connection',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ issuer: 'http://insecure.example.com' }),
+        },
+        env(),
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ ok: false, error: 'issuer must be https' });
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
+  it('非法 URL issuer → 400 issuer must be https（不触发 discover）', async () => {
+    const res = await app.request(
+      'https://team.example.com/api/oidc/test-connection',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ issuer: 'not a url' }),
+      },
+      env(),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('body 缺 issuer → 400', async () => {
+    const res = await app.request(
+      'https://team.example.com/api/oidc/test-connection',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      },
+      env(),
+    );
+    expect(res.status).toBe(400);
   });
 });
