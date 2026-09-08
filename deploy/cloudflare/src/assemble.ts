@@ -194,11 +194,12 @@ export function coreWranglerConfig(input: {
       main: 'core-worker.js',
       compatibility_date: '2026-09-01',
       compatibility_flags: ['nodejs_compat'],
-      // Custom Domain 的配置形态是 routes + custom_domain:true（自动建 DNS/证书）；
-      // core 主域保留此形态不动。模块挂载不用 Custom Domain 子域，改 zone 路径路由
-      // （见 moduleWranglerConfig）。zone 路由需 API Token 带 Zone: Workers Routes Edit——
-      // wrangler login 的 OAuth 凭证对 zone 路由授权不足，PUT 报 10405（e8b1660 背景，见 README）。
-      ...(route ? { routes: [{ pattern: route, custom_domain: true }] } : {}),
+      // §5.3 单域名路径制：core 与模块全部 zone 路径路由（Workers Routes），不用 Custom Domain。
+      // 硬约束（#59 真机实证）：同一 host 上 Custom Domain 优先于路径路由——若 core 主域挂
+      // Custom Domain，模块的 <domain>/m/<id>/* 路由会被 core 全部吞掉。故 core 亦为路由形态
+      // <domain>/*，具体路径由「最长前缀胜出」分发到模块。DNS 记录由部署脚本自建（API Token
+      // 带 Zone: DNS Edit）；zone 路由还需 Zone: Workers Routes Edit（OAuth 10405 背景见 README）。
+      ...(route ? { routes: [{ pattern: `${route}/*` }] } : {}),
       assets: {
         directory: 'assets/shell',
         binding: 'ASSETS',

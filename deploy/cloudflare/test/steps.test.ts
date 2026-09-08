@@ -165,6 +165,25 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     expect(cmds.filter((c) => c.includes('UPDATE module_registry'))).toHaveLength(0);
   });
 
+  it('domain 设定时：core 部署后立即 ensureDns（先于 registry 与冒烟）', { timeout: 120_000 }, async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    await runNineSteps({
+      rootDir: ROOT,
+      wrangler: fake.wrangler,
+      configOverride: { domain: 'demo.handywote.top', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      http: SMOKE_OK,
+      resolveBaseUrl: async () => 'https://demo.handywote.top',
+      ensureDns: async (domain) => {
+        fake.state.commands.push(`__ensureDns:${domain}`);
+      },
+    });
+    const cmds = fake.state.commands;
+    const idxOf = (re: RegExp) => cmds.findIndex((c) => re.test(c));
+    expect(cmds.filter((c) => c.startsWith('__ensureDns'))).toEqual(['__ensureDns:demo.handywote.top']);
+    expect(idxOf(/^__ensureDns/)).toBeGreaterThan(idxOf(/^deploy/));
+    expect(idxOf(/^__ensureDns/)).toBeLessThan(idxOf(/module_registry/));
+  });
+
   it('冒烟失败 → 明确报错非零语义', async () => {
     const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
     await expect(
