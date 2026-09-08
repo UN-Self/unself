@@ -40,19 +40,26 @@ export async function fetchSetupToken(input: {
   return { token: body.token, setupUrl: body.setupUrl };
 }
 
-/** 冒烟：core health + 各模块 health（路径路由 §5.3）。全部 200 且 ok=true 才算通过。 */
+/** 冒烟：core health + 各模块 health。custom domain 模式下模块在 <id>.<域名>（子域式）；workers.dev 模式走主域路径路由 §5.3。全部 200 且 ok=true 才算通过。 */
 export async function smokeCheck(input: {
   baseUrl: string;
   moduleIds: string[];
   timeoutMs?: number;
+  /** custom domain 模式：模块 host = <id>.<baseUrl host> */
+  moduleSubdomain?: boolean;
 }): Promise<SmokeResult[]> {
-  const targets: Array<{ name: string; path: string }> = [
-    { name: 'core-api', path: '/api/health' },
-    ...input.moduleIds.map((id) => ({ name: `module:${id}`, path: `/m/${id}/api/health` })),
+  const host = input.baseUrl.replace(/^https?:\/\//, '');
+  const targets: Array<{ name: string; path: string; base: string }> = [
+    { name: 'core-api', path: '/api/health', base: input.baseUrl },
+    ...input.moduleIds.map((id) => ({
+      name: `module:${id}`,
+      path: `/m/${id}/api/health`,
+      base: input.moduleSubdomain ? `https://${id}.${host}` : input.baseUrl,
+    })),
   ];
   const results: SmokeResult[] = [];
   for (const t of targets) {
-    const url = `${input.baseUrl}${t.path}`;
+    const url = `${t.base}${t.path}`;
     try {
       const res = await fetch(url, {
         signal: AbortSignal.timeout(input.timeoutMs ?? 10_000),
