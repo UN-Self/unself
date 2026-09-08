@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { ensureDatabases, parseD1List } from '../src/provision';
+import { ensureDatabases, parseD1List, parseR2BucketList } from '../src/provision';
 import { registryCommands, registryDisableCommand, registryUpsertCommand, sqlString } from '../src/registry';
 import { buildManifestSnapshot } from '../src/registry';
 import { ModuleManifestSchema } from '@unself/contracts';
@@ -24,6 +24,43 @@ describe('parseD1List', () => {
   });
   it('空输出 → 空数组', () => {
     expect(parseD1List('')).toEqual([]);
+  });
+});
+
+describe('parseR2BucketList（真实文本 · issue #60）', () => {
+  // wrangler v4 formatLabelledValues：valuesAlignment=14、spacer=2 → name: 后 11 空格、creation_date: 后 2 空格
+  const block = (name: string) =>
+    `name:${' '.repeat(11)}${name}\n` +
+    `creation_date:${' '.repeat(2)}Wed, 01 Jan 2025 00:00:00 GMT`;
+  const listOf = (...names: string[]) => `${names.map(block).join('\n\n')}\n`;
+
+  it('多桶真实文本 → [a,b]（对齐空格、creation_date 行、桶间空行不误判）', () => {
+    expect(parseR2BucketList(listOf('a', 'b'))).toEqual(['a', 'b']);
+  });
+
+  it('空输出 / 纯空白 → []', () => {
+    expect(parseR2BucketList('')).toEqual([]);
+    expect(parseR2BucketList('\n\n')).toEqual([]);
+  });
+
+  it('旧 JSON 数组 → 名称', () => {
+    expect(parseR2BucketList('[{"name":"a"},{"name":"b"}]')).toEqual(['a', 'b']);
+  });
+
+  it('重复名去重（文本与 JSON 混合重复）', () => {
+    expect(parseR2BucketList(listOf('a', 'b', 'a'))).toEqual(['a', 'b']);
+    expect(parseR2BucketList('[{"name":"a"},{"name":"a"}]')).toEqual(['a']);
+  });
+
+  it('含 ANSI 着色（TTY/FORCE_COLOR）仍可解析', () => {
+    const colored =
+      `\x1b[37mname:\x1b[39m${' '.repeat(11)}\x1b[90ma\x1b[39m\n` +
+      `\x1b[37mcreation_date:\x1b[39m  \x1b[90mWed, 01 Jan 2025 00:00:00 GMT\x1b[39m\n`;
+    expect(parseR2BucketList(colored)).toEqual(['a']);
+  });
+
+  it('CRLF（\r\n）与尾行空白不破坏解析', () => {
+    expect(parseR2BucketList(listOf('a').replace(/\n/g, '\r\n'))).toEqual(['a']);
   });
 });
 

@@ -43,7 +43,18 @@ function makeFakeWrangler(options?: { existingD1?: string[]; existingBuckets?: s
       const sub = rest[0];
       if (sub === 'bucket') {
         const op = rest[1];
-        if (op === 'list') return json([...state.buckets].map((name) => ({ name })));
+        if (op === 'list') {
+          // wrangler v4 真机格式：formatLabelledValues 输出（label 对齐、桶间空行、无 --json）
+          return okOut(
+            [...state.buckets]
+              .map(
+                (name) =>
+                  `name:${' '.repeat(11)}${name}\n` +
+                  `creation_date:${' '.repeat(2)}Wed, 01 Jan 2025 00:00:00 GMT`,
+              )
+              .join('\n\n'),
+          );
+        }
         if (op === 'create') {
           const name = rest[2]!;
           if (state.buckets.has(name)) return fail(`bucket exists: ${name}`);
