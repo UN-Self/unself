@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { needsTotalTls, runNineSteps } from '../src/steps';
 import type { Wrangler } from '../src/wrangler';
@@ -87,6 +89,19 @@ function makeFakeWrangler(options?: { existingD1?: string[]; existingBuckets?: s
 /** 步骤依赖的最小仓库现场（真实文件布局：modules/hello、services/core-api、apps/shell）。 */
 const ROOT = new URL('../../..', import.meta.url).pathname;
 
+/** 合法公钥 JWKS 字符串（真实 P-256 公钥 JWK 形状的静态夹具，与 core GET /.well-known/jwks.json 同形）。 */
+const FIXED_JWKS = JSON.stringify({
+  keys: [{
+    kty: 'EC',
+    crv: 'P-256',
+    x: '2zYTVcy0bDXQ7qqeNDB38zsPVvwUkKZ6-m3xA1zwA2U',
+    y: 'j8zUPxAyGRUAaHRNYwdU3IW7TSBI1kSrg7RmUhb8lZk',
+    kid: 'RDB_5KqpPvLCvU7V6n8r6-xxpSJutKJCWNmyZWesNSg',
+    use: 'sig',
+    alg: 'ES256',
+  }],
+});
+
 const SMOKE_OK = {
   setupToken: async () => ({ token: 't', setupUrl: '/setup?token=t' }),
   smoke: async (b: string, ids: string[]) =>
@@ -146,6 +161,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       wrangler: second.wrangler,
       http: SMOKE_OK,
       resolveBaseUrl: async () => summary1.baseUrl,
+      fetchJwks: async () => FIXED_JWKS,
     });
     // 收敛：零创建、零 secret 重写、registry 仍 upsert（终态一致）
     expect(second.state.commands.some((c) => c.startsWith('d1 create'))).toBe(false);
@@ -168,6 +184,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       wrangler: fake.wrangler,
       http: SMOKE_OK,
       resolveBaseUrl: async () => 'https://x.example',
+      fetchJwks: async () => FIXED_JWKS,
     });
     const cmds = fake.state.commands;
     const idxOf = (re: RegExp) => cmds.findIndex((c) => re.test(c));
@@ -195,6 +212,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
         fake.state.commands.push('__ensureTotalTls');
       },
       resolveBaseUrl: async () => 'https://demo.handywote.top',
+      fetchJwks: async () => FIXED_JWKS,
       ensureDns: async (domain) => {
         fake.state.commands.push(`__ensureDns:${domain}`);
       },
@@ -223,6 +241,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
           smoke: async () => [{ name: 'core-api', url: 'x', ok: false, status: 503, detail: 'HTTP 503' }],
         },
         resolveBaseUrl: async () => 'https://x.example',
+        fetchJwks: async () => FIXED_JWKS,
       }),
     ).rejects.toThrow(/冒烟失败/);
   });
@@ -235,7 +254,90 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       wrangler: fake.wrangler,
       http: { setupToken: async () => ({ sealed: true }), smoke: SMOKE_OK.smoke },
       resolveBaseUrl: async () => 'https://x.example',
+      fetchJwks: async () => FIXED_JWKS,
     });
     expect(summary.setup).toEqual({ sealed: true });
+  });
+
+  it('分支 A：首部署（无 secret）→ vars.CORE_JWKS_JSON 用本运行公钥，不调用 fetchJwks', { timeout: 120_000 }, async () => {
+    const fake = makeFakeWrangler();
+    let fetchCalls = 0;
+    await runNineSteps({
+      rootDir: ROOT,
+      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      wrangler: fake.wrangler,
+      http: SMOKE_OK,
+      resolveBaseUrl: async () => 'https://unself-core-api.test-subdomain.workers.dev',
+      // spy：被调用即失败——分支 A 必须完全跳过公网抓取
+      fetchJwks: async () => {
+        fetchCalls++;
+        throw new Error('分支 A 不应调用 fetchJwks');
+      },
+      putSecret: async (workerName) => {
+        fake.state.secrets.add('JWT_PRIVATE_KEY');
+        fake.state.secretsPut++;
+        fake.state.commands.push(`secret put JWT_PRIVATE_KEY --name ${workerName}`);
+      },
+    });
+    expect(fetchCalls).toBe(0);
+    const cfg = JSON.parse(
+      await readFile(join(ROOT, '.deploy/cloudflare/modules/hello.wrangler.jsonc'), 'utf8'),
+    ) as { vars: { CORE_JWKS_JSON: string } };
+    const jwks = JSON.parse(cfg.vars.CORE_JWKS_JSON) as { keys: Array<Record<string, string>> };
+    expect(jwks.keys).toHaveLength(1);
+    expect(jwks.keys[0]?.kty).toBe('EC');
+    expect(jwks.keys[0]?.crv).toBe('P-256');
+    expect(jwks.keys[0]?.kid).toBeTruthy();
+    expect(jwks.keys[0]?.use).toBe('sig');
+    expect(jwks.keys[0]?.alg).toBe('ES256');
+  });
+
+  it('分支 B：已有 secret → 公网抓取 JWKS 注入 vars.CORE_JWKS_JSON（fetchJwks 收到 baseUrl）', { timeout: 120_000 }, async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    const received: string[] = [];
+    await runNineSteps({
+      rootDir: ROOT,
+      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      wrangler: fake.wrangler,
+      http: SMOKE_OK,
+      resolveBaseUrl: async () => 'https://unself-core-api.test-subdomain.workers.dev',
+      fetchJwks: async (baseUrl) => {
+        received.push(baseUrl);
+        return FIXED_JWKS;
+      },
+    });
+    expect(received).toEqual(['https://unself-core-api.test-subdomain.workers.dev']);
+    const cfg = JSON.parse(
+      await readFile(join(ROOT, '.deploy/cloudflare/modules/hello.wrangler.jsonc'), 'utf8'),
+    ) as { vars: { CORE_JWKS_JSON: string } };
+    expect(cfg.vars.CORE_JWKS_JSON).toBe(FIXED_JWKS);
+  });
+
+  it('分支 C：公网抓取失败 → 硬报错（含「无法获取 Core 公钥」与重跑提示）', async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    await expect(
+      runNineSteps({
+        rootDir: ROOT,
+        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        wrangler: fake.wrangler,
+        http: SMOKE_OK,
+        resolveBaseUrl: async () => 'https://unself-core-api.test-subdomain.workers.dev',
+        fetchJwks: async () => {
+          throw new Error('boom');
+        },
+      }),
+    ).rejects.toThrow(/无法获取 Core 公钥/);
+    await expect(
+      runNineSteps({
+        rootDir: ROOT,
+        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        wrangler: fake.wrangler,
+        http: SMOKE_OK,
+        resolveBaseUrl: async () => 'https://unself-core-api.test-subdomain.workers.dev',
+        fetchJwks: async () => {
+          throw new Error('boom');
+        },
+      }),
+    ).rejects.toThrow(/可重跑部署（幂等）/);
   });
 });

@@ -48,6 +48,19 @@ describe('coreWranglerConfig（③生成的部署配置）', () => {
   });
 });
 
+/** 合法公钥 JWKS（真实 P-256 公钥 JWK 形状的静态夹具，与 core GET /.well-known/jwks.json 同形）。 */
+const JWKS_FIXTURE = JSON.stringify({
+  keys: [{
+    kty: 'EC',
+    crv: 'P-256',
+    x: '2zYTVcy0bDXQ7qqeNDB38zsPVvwUkKZ6-m3xA1zwA2U',
+    y: 'j8zUPxAyGRUAaHRNYwdU3IW7TSBI1kSrg7RmUhb8lZk',
+    kid: 'RDB_5KqpPvLCvU7V6n8r6-xxpSJutKJCWNmyZWesNSg',
+    use: 'sig',
+    alg: 'ES256',
+  }],
+});
+
 describe('moduleWranglerConfig（④生成的部署配置）', () => {
   const input = {
     config: {
@@ -57,21 +70,33 @@ describe('moduleWranglerConfig（④生成的部署配置）', () => {
     } as UnselfConfig,
     dbIds: { modules: 'modules-uuid' },
     mod: { id: 'hello' },
-    jwksPath: '/.well-known/jwks.json',
+    jwksJson: JWKS_FIXTURE,
     zoneName: 'example.com',
   };
 
-  it('route 绑定 zone 路径 <domain>/m/<id>/*（无 custom_domain）+ MODULES_DB 真实 id + CORE_JWKS_URL 绝对地址', () => {
+  it('route 绑定 zone 路径 <domain>/m/<id>/*（无 custom_domain）+ MODULES_DB 真实 id + CORE_JWKS_JSON 完整 JWKS', () => {
     const cfg = JSON.parse(moduleWranglerConfig(input)) as {
       routes: Array<{ pattern: string; custom_domain?: boolean }>;
       d1_databases: Array<{ binding: string; database_id: string }>;
-      vars: { CORE_JWKS_URL: string; MODULE_ID: string };
+      vars: { MODULE_ID: string; CORE_JWKS_JSON: string; CORE_JWKS_URL?: string };
     };
     // 整对象断言：zone 路径 pattern 且无 custom_domain 键（Custom Domain 子域形态已废弃）
     expect(cfg.routes).toEqual([{ pattern: 'team.example.com/m/hello/*', zone_name: 'example.com' }]);
     expect(cfg.d1_databases[0]?.database_id).toBe('modules-uuid');
-    expect(cfg.vars.CORE_JWKS_URL).toBe('https://team.example.com/.well-known/jwks.json');
     expect(cfg.vars.MODULE_ID).toBe('hello');
+    // vars：仅注入的 JWKS JSON 字符串，无运行时 JWKS URL（#71 根因①：模块零运行时网络取钥）
+    expect(cfg.vars.CORE_JWKS_URL).toBeUndefined();
+    expect(cfg.vars.CORE_JWKS_JSON).toBe(JWKS_FIXTURE);
+    const jwks = JSON.parse(cfg.vars.CORE_JWKS_JSON) as { keys: Array<Record<string, string>> };
+    expect(Array.isArray(jwks.keys)).toBe(true);
+    const key = jwks.keys[0]!;
+    expect(key.kty).toBe('EC');
+    expect(key.crv).toBe('P-256');
+    expect(key.x!.length).toBeGreaterThan(0);
+    expect(key.y!.length).toBeGreaterThan(0);
+    expect(key.kid!.length).toBeGreaterThan(0);
+    expect(key.use).toBe('sig');
+    expect(key.alg).toBe('ES256');
   });
 
   it('domain 空 → 无 routes（workers.dev 回退）', () => {
@@ -80,6 +105,10 @@ describe('moduleWranglerConfig（④生成的部署配置）', () => {
       config: { ...input.config, domain: '' },
     })) as { routes?: unknown };
     expect(cfg.routes).toBeUndefined();
+  });
+
+  it('同一输入生成字节级相同配置（确定性/幂等前提）', () => {
+    expect(moduleWranglerConfig(input)).toBe(moduleWranglerConfig(input));
   });
 });
 
