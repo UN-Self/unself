@@ -7,6 +7,7 @@ import {
   discover,
   exchangeAuthorizationCode,
   type AuthorizationRequest,
+  type CallbackResult,
   type OidcClientConfig,
 } from './oidc';
 import { deriveSigningRuntime, generateInstanceKeyPair, type SigningRuntime } from './keys';
@@ -77,6 +78,17 @@ export async function getSigningRuntime(jwtPrivateKey: string | undefined): Prom
 }
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+/**
+ * 全局请求 ID（#60 T3）：每个请求生成唯一 `req-` + 16 位 hex，
+ * 回写所有响应（含 401/403/503/错误）的 x-request-id，排障对账用。
+ * 必须在所有路由之前注册，且最后设置头部以覆盖错误/404 等非 c.* 构造的响应。
+ */
+app.use('*', async (c, next) => {
+  const requestId = `req-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  await next();
+  c.header('x-request-id', requestId);
+});
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'core-api' }));
 
@@ -149,6 +161,25 @@ app.get('/api/auth/login', async (c) => {
   return c.redirect(flow.authorizeUrl);
 });
 
+/**
+ * OIDC callback 失败 → 短错误码（#60 T4）：
+ * 只映射到固定枚举，不把内部细节（如 IdP 返回的 error_description）带进 URL。
+ * LoginView.vue 消费 route.query.error 仅展示人话（"登录校验失败…"）。
+ */
+function oidcErrorCode(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes('state mismatch')) return 'oidc_state_mismatch';
+  if (message.includes('id_token expired')) return 'oidc_token_expired';
+  if (message.includes('provider returned')) return 'oidc_provider_error';
+  return 'oidc_failed';
+}
+
+/** 失败态统一出口：清流程 Cookie（该轮流程作废）+ 302 回登录页带短错误码。 */
+function redirectToLoginError(c: Context<{ Bindings: Bindings }>, err: unknown): Response {
+  deleteCookie(c, FLOW_COOKIE, { path: '/' });
+  return c.redirect(`/login?error=${encodeURIComponent(oidcErrorCode(err))}`);
+}
+
 /** 授权回调：state/PKCE/nonce 校验 → 换 token → JIT 建档 → 签会话 Cookie。 */
 app.get('/api/auth/callback', async (c) => {
   const config = await getOidcConfig(c);
@@ -165,12 +196,18 @@ app.get('/api/auth/callback', async (c) => {
   } catch {
     return c.json({ error: 'corrupted login flow cookie' }, 400);
   }
-  const metadata = await discover(config.issuer);
-  const result = await exchangeAuthorizationCode(config, metadata, c.req.url, {
-    state: flow.state,
-    nonce: flow.nonce,
-    codeVerifier: flow.codeVerifier,
-  });
+  // 换 token/验签失败态：不抛未捕获异常（避免 500），统一 302 回登录页（§6.5）。
+  let result: CallbackResult;
+  try {
+    const metadata = await discover(config.issuer);
+    result = await exchangeAuthorizationCode(config, metadata, c.req.url, {
+      state: flow.state,
+      nonce: flow.nonce,
+      codeVerifier: flow.codeVerifier,
+    });
+  } catch (err) {
+    return redirectToLoginError(c, err);
+  }
   deleteCookie(c, FLOW_COOKIE, { path: '/' });
 
   // JIT 建档（requirements #20：OIDC 首登自动建档复用；issuer+sub 映射只存核心）
