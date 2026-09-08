@@ -7,11 +7,12 @@
  */
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { execFile } from 'node:child_process';
 import {
   DEPLOY_DIR,
   coreWranglerConfig,
+  migrationWranglerConfig,
   moduleWranglerConfig,
   prefixStripWrapperSource,
   provisionAll,
@@ -21,7 +22,7 @@ import {
 import { loadUnselfConfig, type ModuleRef } from './config';
 import { createKeypair, detectExistingSecret, putSecret, JWT_SECRET_NAME } from './keypair';
 import { ensureDatabases, ensureR2Bucket, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
-import { registryCommands } from './registry';
+import { registryCommands, sqlString } from './registry';
 import { fetchSetupToken, parseWorkersDevFromDeployOutput, smokeCheck } from './smoke';
 import type { Wrangler } from './wrangler';
 
@@ -95,18 +96,26 @@ export async function runNineSteps(input: {
 
   // ② 迁移（core + 各选中模块；未选模块不动数据）
   rep.step(2, '跑核心迁移与选中模块迁移（表前缀版本化）');
-  await wrangler.run([
-    'd1', 'migrations', 'apply', 'CORE_DB',
-    '--local', 'false',
-    '--config', join(rootDir, 'services/core-api/wrangler.jsonc'),
-  ]);
+  // 包内 wrangler.jsonc 的 database_id 是占位符 → 迁移用「生成配置」（真实 uuid），migrations_dir 相对配置目录
+  const migrateDir = join(rootDir, DEPLOY_DIR, 'migrate');
+  const coreMigrateCfg = join(migrateDir, 'core.wrangler.jsonc');
+  await writeConfig(coreMigrateCfg, migrationWranglerConfig({
+    binding: 'CORE_DB',
+    databaseName: CORE_DB_NAME,
+    databaseId: dbIds.core,
+    migrationsDir: '../../../services/core-api/migrations/core',
+  }));
+  await wrangler.run(['d1', 'migrations', 'apply', 'CORE_DB', '--remote', '--config', coreMigrateCfg]);
   rep.log('core 迁移已应用（unself-core）');
   for (const mod of selected) {
-    await wrangler.run([
-      'd1', 'migrations', 'apply', 'MODULES_DB',
-      '--local', 'false',
-      '--config', join(mod.dir, 'wrangler.jsonc'),
-    ]);
+    const cfg = join(migrateDir, `${mod.id}.wrangler.jsonc`);
+    await writeConfig(cfg, migrationWranglerConfig({
+      binding: 'MODULES_DB',
+      databaseName: MODULES_DB_NAME,
+      databaseId: dbIds.modules,
+      migrationsDir: `../../../modules/${mod.id}/migrations/${mod.id}`,
+    }));
+    await wrangler.run(['d1', 'migrations', 'apply', 'MODULES_DB', '--remote', '--config', cfg]);
     rep.log(`模块 ${mod.id} 迁移已应用`);
   }
 
@@ -139,7 +148,7 @@ export async function runNineSteps(input: {
   );
   await writeFileIfMissing(
     join(provisioned.outDir, 'core-worker.js'),
-    coreWorkerEntrySource(),
+    coreWorkerEntrySource(provisioned.outDir, rootDir),
   );
   await wrangler.run(['deploy', '--config', join(provisioned.outDir, 'core.wrangler.jsonc')]);
   if (freshPair) {
@@ -158,7 +167,13 @@ export async function runNineSteps(input: {
     // secret put 会触发重新部署使 secret 生效
     await wrangler.run(['deploy', '--config', join(provisioned.outDir, 'core.wrangler.jsonc')]);
   }
-  const baseUrl = await resolveBaseUrl(input, config.domain ?? '', provisioned.coreName, wrangler, rep);
+  const baseUrl = await resolveBaseUrl(
+    input,
+    config.domain ?? '',
+    join(provisioned.outDir, provisioned.coreConfig),
+    wrangler,
+    rep,
+  );
   provisioned.baseUrl = baseUrl;
 
   // ④ 模块构建/上传/路由绑定
@@ -166,10 +181,17 @@ export async function runNineSteps(input: {
   for (const mod of provisioned.modules) {
     await writeConfig(
       join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`),
-      moduleWranglerConfig({ config, dbIds: { modules: dbIds.modules }, mod, jwksPath: JWKS_PATH }),
+      moduleWranglerConfig({
+        config,
+        dbIds: { modules: dbIds.modules },
+        mod,
+        jwksPath: JWKS_PATH,
+        jwksUrl: `${baseUrl}${JWKS_PATH}`,
+      }),
     );
-    await writeFileIfMissing(
-      join(provisioned.outDir, `modules/${mod.id}/index.js`),
+    // wrapper 每次重写（内容确定，幂等）：它独占 worker.js（main 入口），bundle 在 app.js
+    await writeConfig(
+      join(provisioned.outDir, `modules/${mod.id}/worker.js`),
       prefixStripWrapperSource(mod.id),
     );
     await wrangler.run(['deploy', '--config', join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`)]);
@@ -183,14 +205,13 @@ export async function runNineSteps(input: {
     manifestTexts[mod.id] = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
   }
   for (const cmd of registryCommands({ config, modules, baseUrl, manifestTexts })) {
-    const args = ['d1', 'execute', MODULES_DB_NAME, '--command', cmd.sql];
-    if (cmd.binds?.length) {
-      for (const bind of cmd.binds) {
-        args.push('--param', jsonParam(bind));
-      }
-    }
-    args.push('-y', '--remote');
-    await wrangler.run(args, { silent: true });
+    // wrangler v4 d1 execute 无 --param：binds 以 SQL 字符串字面量内联（单引号翻倍转义）
+    const sql = cmd.binds?.length ? inlineParams(cmd.sql, cmd.binds) : cmd.sql;
+    // module_registry 在 core 库（core 迁移 0001 建），不是 modules 库
+    await wrangler.run(
+      ['d1', 'execute', CORE_DB_NAME, '--command', sql, '-y', '--remote', '--json'],
+      { silent: true },
+    );
     rep.log(cmd.description);
   }
 
@@ -236,28 +257,23 @@ export async function runNineSteps(input: {
   };
 }
 
-/** baseUrl 决策：config.domain 优先；否则从 deploy 输出抓 workers.dev。 */
+/** baseUrl 决策：config.domain 优先；否则重放一次幂等 deploy 从其 stdout 抓 workers.dev（wrangler v4 仅在真实部署输出中给出 URL）。 */
 async function resolveBaseUrl(
   input: { resolveBaseUrl?: (domain: string, workerName: string) => Promise<string>; http?: unknown },
   domain: string,
-  workerName: string,
+  coreConfigPath: string,
   wrangler: Wrangler,
   rep: StepReporter,
 ): Promise<string> {
   if (input.resolveBaseUrl) {
-    return input.resolveBaseUrl(domain, workerName);
+    return input.resolveBaseUrl(domain, coreConfigPath);
   }
   if (domain) {
     return `https://${domain}`;
   }
-  const res = await wrangler.tryRun(['deploy', '--dry-run']);
-  void res;
   rep.log('未配置 domain：以 workers.dev 域名对外（unself.config.jsonc domain 留空）');
-  const probe = await wrangler.tryRun(['triggers', 'deploy', '--dry-run']);
-  void probe;
-  // wrangler deploy 的 stdout 已在步骤③消耗；此处用 triggers 输出解析不到时退回触发一次触发器查询
-  const triggerRes = await wrangler.tryRun(['deploy', '--dry-run', '--outdir', '/tmp/unself-dryrun']);
-  const url = parseWorkersDevFromDeployOutput(triggerRes.stdout) ?? '';
+  const res = await wrangler.tryRun(['deploy', '--config', coreConfigPath]);
+  const url = parseWorkersDevFromDeployOutput(res.stdout);
   if (!url) {
     throw new Error('无法从 wrangler 输出解析 workers.dev 域名；请在 unself.config.jsonc 配置 domain');
   }
@@ -286,8 +302,14 @@ function wranglerBin(rootDir: string): string {
   return existsSync(local) ? local : 'wrangler';
 }
 
-function jsonParam(value: unknown): string {
-  return typeof value === 'string' ? value : JSON.stringify(value);
+/** 把 ?N 占位符替换为 SQL 字符串字面量（wrangler v4 无 --param 时的等价内联）。 */
+function inlineParams(sql: string, binds: unknown[]): string {
+  let out = sql;
+  binds.forEach((bind, i) => {
+    const literal = typeof bind === 'number' ? String(bind) : sqlString(String(bind));
+    out = out.replace(new RegExp(`\\?${i + 1}`, 'g'), literal);
+  });
+  return out;
 }
 
 async function writeFileIfMissing(path: string, content: string): Promise<void> {
@@ -296,14 +318,15 @@ async function writeFileIfMissing(path: string, content: string): Promise<void> 
   }
 }
 
-/** core Worker 入口（薄壳：re-export core-api 的 Hono app + ASSETS 兜底）。 */
-export function coreWorkerEntrySource(): string {
+/** core Worker 入口（薄壳：re-export core-api 的 Hono app + ASSETS 兜底）。相对路径按生成文件目录（.deploy/cloudflare/）计。 */
+export function coreWorkerEntrySource(outDir: string, rootDir: string): string {
+  const rel = relative(outDir, join(rootDir, 'services/core-api/src/index.ts'));
   return `// SPDX-License-Identifier: AGPL-3.0-only
 // 由 deploy/cloudflare 生成：core-api Hono app + 非 API 路径回退 SPA 资产。
-import app from '../../../services/core-api/src/index.ts';
+import app from '${rel.replaceAll("\\", "/")}';
 
 export default {
-  fetch(request, env, ctx) {
+  async fetch(request, env, ctx) {
     return app.fetch(request, env, ctx);
   },
 };

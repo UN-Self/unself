@@ -19,7 +19,10 @@ export class WranglerError extends Error {
     readonly args: string[],
     readonly result: ExecResult,
   ) {
-    super(`${message}\n  命令: wrangler ${args.join(' ')}\n  stderr: ${result.stderr.slice(0, 2000)}`);
+    const detail = result.stderr.trim()
+      ? result.stderr.slice(0, 2000)
+      : `(stderr 为空，stdout 前 800 字符)\n${result.stdout.slice(0, 800)}`;
+    super(`${message}\n  命令: wrangler ${args.join(' ')}\n  stderr: ${detail}`);
     this.name = 'WranglerError';
   }
 }

@@ -20,7 +20,15 @@ export async function fetchSetupToken(input: {
   log?: (msg: string) => void;
 }): Promise<{ token: string; setupUrl: string } | { sealed: true }> {
   const log = input.log ?? console.log;
-  const res = await fetch(`${input.baseUrl}/api/admin/setup-token`, { method: 'POST' });
+  let res: Response;
+  try {
+    res = await fetch(`${input.baseUrl}/api/admin/setup-token`, { method: 'POST' });
+  } catch (err) {
+    throw new Error(
+      `无法访问 ${input.baseUrl}（fetch failed）。workers.dev 域名在本机网络可能不可达（DNS 污染/拦截）；` +
+      `可用代理环境变量重试，或稍后在可直连的网络执行第⑧⑨步。原因：${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   if (res.status === 409) {
     log('setup 已完成（实例已封死激活入口）——跳过 token 打印');
     return { sealed: true };
