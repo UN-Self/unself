@@ -3,55 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
 
 import app from '../src/index';
+import { createModuleDb, type ModuleTestDb } from '../../../packages/module-sdk/test/test-factory';
 
 /**
  * #13 测试：假 JWKS（本测内生成 ES256 对，服务 JWKS 端点）+
- * 内存假 D1（module_kv 表语义，与 #9 假 D1 同构）。
- * 验收链路：SDK 存储读写 hello 计数、跨前缀拒绝由 SDK 层保证（#9 用例），
+ * 真 SQLite module_kv（#60：假 D1 换真库——modules 统一迁移真建表，SDK 收口由真库裁决）。
+ * 验收链路：SDK 存储读写 hello 计数、跨前缀拒绝由 SDK 层保证（#9/#60 用例），
  * 这里验证 HTTP 面验签/计数/生命周期骨架。
  */
-
-/** 内存 module_kv（与 #9 存储模型一致：module_id 列隔离）。 */
-function makeDb(): D1Database & { _rows: Map<string, Map<string, string>> } {
-  const rows = new Map<string, Map<string, string>>();
-  const prepare = (sql: string) => {
-    const chain = {
-      _args: [] as unknown[],
-      bind(...args: unknown[]) {
-        chain._args = args;
-        return chain;
-      },
-      async first<T>(): Promise<T | null> {
-        const [moduleId, key] = chain._args as [string, string];
-        if (sql.includes('SELECT value FROM')) {
-          const value = rows.get(moduleId)?.get(key);
-          return (value !== undefined ? { value } : null) as T | null;
-        }
-        return null;
-      },
-      async all<T>() {
-        const [moduleId] = chain._args as [string];
-        const keys = rows.get(moduleId) ?? new Map();
-        const results = [...keys.entries()]
-          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-          .map(([key]) => ({ key }));
-        return { results } as { results: T[] };
-      },
-      async run() {
-        const [moduleId, key, value] = chain._args as [string, string, string];
-        if (sql.startsWith('INSERT INTO')) {
-          if (!rows.has(moduleId)) rows.set(moduleId, new Map());
-          rows.get(moduleId)!.set(key, value);
-        } else if (sql.startsWith('DELETE FROM')) {
-          rows.get(moduleId)?.delete(key);
-        }
-        return { success: true };
-      },
-    };
-    return chain;
-  };
-  return { prepare, _rows: rows } as unknown as D1Database & { _rows: Map<string, Map<string, string>> };
-}
 
 let privateKey: CryptoKey;
 
@@ -65,22 +24,34 @@ async function makeToken(overrides: Record<string, unknown> = {}): Promise<strin
 }
 
 /** 假 Core：/.well-known/jwks.json 返回测试公钥；token 校验走真实 jose。 */
-async function envFor(): Promise<{ MODULES_DB: D1Database & { _rows: Map<string, Map<string, string>> }; CORE_JWKS_URL: string }> {
+async function envFor(): Promise<{
+  MODULES_DB: D1Database;
+  CORE_JWKS_URL: string;
+  db: ModuleTestDb;
+}> {
   const pair = await generateKeyPair('ES256', { extractable: true });
   privateKey = pair.privateKey;
   const publicJwk = await exportJWK(pair.publicKey);
   const jwksBody = JSON.stringify({ keys: [{ ...publicJwk, use: 'sig', alg: 'ES256' }] });
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    if (String(input).includes('/.well-known/jwks.json')) {
-      return new Response(jwksBody, { status: 200, headers: { 'content-type': 'application/json' } });
+  globalThis.fetch = (
+    async (input: RequestInfo | URL) => {
+      if (String(input).includes('/.well-known/jwks.json')) {
+        return new Response(jwksBody, { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error(`unexpected fetch ${String(input)}`);
     }
-    throw new Error(`unexpected fetch ${String(input)}`);
-  }) as typeof fetch;
+  ) as typeof fetch;
+  const db = createModuleDb();
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    db.close();
   });
-  return { MODULES_DB: makeDb(), CORE_JWKS_URL: 'https://core.example/.well-known/jwks.json' };
+  return {
+    MODULES_DB: db.d1 as unknown as D1Database,
+    CORE_JWKS_URL: 'https://core.example/.well-known/jwks.json',
+    db,
+  };
 }
 
 describe('module-hello（#13 垂直切片载体）', () => {
@@ -120,12 +91,18 @@ describe('module-hello（#13 垂直切片载体）', () => {
     expect(await again.json()).toEqual({ count: 1 });
   });
 
-  it('计数写入落在 hello 子域（module_id=hello，SDK 收口）', async () => {
+  it('计数写入落在 hello 子域（真库直查 module_kv 行）', async () => {
     const env = await envFor();
     const token = await makeToken();
     await app.request('https://m.example/api/count', { method: 'POST', headers: { authorization: `Bearer ${token}` } }, env);
-    // SDK 键模型：module_kv(module_id='hello', key='counter')
-    expect(env.MODULES_DB._rows.get('hello')?.get('counter')).toBe('1');
+    // SDK 键模型：module_kv(module_id='hello', key='counter')——直查真库行（不经适配器）
+    expect(
+      env.db.first<{ value: string }>(
+        'SELECT value FROM module_kv WHERE module_id = ? AND key = ?',
+        'hello',
+        'counter',
+      )?.value,
+    ).toBe('1');
   });
 
   it('身份行数据源：claims 姓名/邮箱进入 token（验收 2 的数据面）', async () => {
