@@ -59,14 +59,25 @@ export async function ensureDatabases(
       ids[key] = found.uuid;
       log(`D1 ${name} 已存在（${found.uuid}）`);
     } else {
-      const created = await wrangler.run(['d1', 'create', name, '--json']);
-      const parsed = parseD1List(created.stdout);
-      const uuid = parsed[0]?.uuid;
-      if (!uuid) {
-        throw new Error(`D1 ${name} 创建后未返回 database_id，无法继续（原始输出见上方）`);
+      // create；「已存在」竞态（瞬时 list 失败走到这）→ catch 后回查列表自愈
+      try {
+        const created = await wrangler.run(['d1', 'create', name]);
+        const createdId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(created.stdout)?.[1]
+          ?? parseD1List(created.stdout)[0]?.uuid;
+        if (!createdId) {
+          throw new Error(`创建输出未含 database_id`);
+        }
+        ids[key] = createdId;
+        log(`D1 ${name} 已创建（${createdId}）`);
+      } catch (err) {
+        const again = await wrangler.tryRun(['d1', 'list', '--json']);
+        const refound = again.ok ? parseD1List(again.stdout).find((db) => db.name === name) : undefined;
+        if (!refound?.uuid) {
+          throw new Error(`D1 ${name} 创建失败且列表查不到：${err instanceof Error ? err.message : String(err)}`);
+        }
+        ids[key] = refound.uuid;
+        log(`D1 ${name} 已存在（列表重查 ${refound.uuid}）`);
       }
-      ids[key] = uuid;
-      log(`D1 ${name} 已创建（${uuid}）`);
     }
   }
   return { core: ids.core!, modules: ids.modules! };
@@ -78,11 +89,25 @@ export async function ensureR2Bucket(
   bucket: string,
   log: (msg: string) => void = console.log,
 ): Promise<'exists' | 'created'> {
-  const res = await wrangler.tryRun(['r2', 'bucket', 'list', '--json']);
+  const res = await wrangler.tryRun(['r2', 'bucket', 'list']);
   if (res.ok) {
     try {
-      const parsed: unknown = JSON.parse(res.stdout.trim() || '[]');
-      if (Array.isArray(parsed) && parsed.some((b) => (b as Record<string, unknown>).name === bucket)) {
+      // wrangler v4 的 bucket list 无 --json：成功输出形如 "name:  <桶名>"；JSON 旧形态兼容
+      const textNames = [...res.stdout.matchAll(/^name:\s+(\S+)$/gm)].map((m) => m[1]!);
+      const jsonNames = (() => {
+        const trimmed = res.stdout.trim();
+        if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return [] as string[];
+        try {
+          const parsed: unknown = JSON.parse(trimmed);
+          return Array.isArray(parsed)
+            ? parsed.map((b) => (b as Record<string, unknown>).name as string).filter(Boolean)
+            : [];
+        } catch {
+          return [];
+        }
+      })();
+      const names = [...new Set([...textNames, ...jsonNames])];
+      if (names.includes(bucket)) {
         log(`R2 桶 ${bucket} 已存在`);
         return 'exists';
       }

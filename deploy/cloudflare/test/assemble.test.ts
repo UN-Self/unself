@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import { coreWranglerConfig, moduleWranglerConfig, prefixStripWrapperSource } from '../src/assemble';
+import { migrationWranglerConfig } from '../src/assemble';
 import { coreWorkerEntrySource } from '../src/steps';
 import type { UnselfConfig } from '../src/config';
 
@@ -69,14 +70,31 @@ describe('prefixStripWrapperSource（④挂载前缀剥除）', () => {
     const src = prefixStripWrapperSource('hello');
     expect(src).toContain("const PREFIX = '/m/hello'");
     expect(src).toContain("url.pathname = url.pathname.slice(PREFIX.length)");
-    expect(src).toContain("import worker from './worker.js'");
+    expect(src).toContain("import worker from './app.js'");
+  });
+});
+
+describe('migrationWranglerConfig（②迁移专用最小配置）', () => {
+  it('真实 database_id + binding + 相对 migrations_dir，字段原样内嵌', () => {
+    const cfg = JSON.parse(migrationWranglerConfig({
+      binding: 'CORE_DB',
+      databaseName: 'unself-core',
+      databaseId: 'cfe45429-f564-46c5-87bb-2b3dc5e95a1e',
+      migrationsDir: '../../../services/core-api/migrations/core',
+    })) as { d1_databases: Array<{ binding: string; database_name: string; database_id: string; migrations_dir: string }> };
+    expect(cfg.d1_databases[0]).toMatchObject({
+      binding: 'CORE_DB',
+      database_name: 'unself-core',
+      database_id: 'cfe45429-f564-46c5-87bb-2b3dc5e95a1e',
+      migrations_dir: '../../../services/core-api/migrations/core',
+    });
   });
 });
 
 describe('coreWorkerEntrySource', () => {
   it('入口 re-export core-api app（相对路径到 services）', () => {
-    const src = coreWorkerEntrySource();
-    expect(src).toContain("from '../../../services/core-api/src/index.ts'");
+    const src = coreWorkerEntrySource('/repo/.deploy/cloudflare', '/repo');
+    expect(src).toContain("from '../../services/core-api/src/index.ts'");
     expect(src).toContain('SPDX-License-Identifier');
   });
 });
