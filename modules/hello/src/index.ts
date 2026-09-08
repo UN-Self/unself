@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
-import { jwtVerify, createRemoteJWKSet } from 'jose';
 import type { ModuleTokenClaims } from '@unself/contracts';
-import { createD1Storage, type D1MinimalDatabase } from '@unself/module-sdk';
+import { createD1Storage, verifyModuleToken, type D1MinimalDatabase } from '@unself/module-sdk';
 
 /**
  * hello 模块（#13，M0 垂直切片验收载体）：
- * - verifyModuleToken 中间件：jose + Core JWKS 验签 + aud=hello（§5.2）
+ * - verifyModuleToken 中间件：SDK 本地 JWKS 验签（部署期注入 CORE_JWKS_JSON，§5.2 B 方案零运行时网络）+ aud=hello
  * - GET /api/count：经 SDK 存储接口读写 hello_counter（#9 前缀守卫）
  * - GET /life/export、POST /life/purge：模块生命周期骨架（§5.4 契约）
  * - 页面：身份行（claims 姓名/邮箱）+ 计数 + [+1] 并排（≤50 行样式，tokens 化）
@@ -14,8 +13,8 @@ import { createD1Storage, type D1MinimalDatabase } from '@unself/module-sdk';
 
 export interface Bindings {
   MODULES_DB: D1Database;
-  /** Core 实例 JWKS 端点（验签公钥真值来源，§5.2）。 */
-  CORE_JWKS_URL?: string;
+  /** Core 公钥 JWKS 的 JSON 序列化（部署期注入，§5.2 B 方案：模块本地验签，零运行时网络）。 */
+  CORE_JWKS_JSON?: string;
   /** Core issuer（可选校验；M0 以 aud 锁定为主）。 */
   CORE_ISSUER?: string;
 }
@@ -23,19 +22,23 @@ export interface Bindings {
 /** 模块 id：aud 锁定 + SDK 存储子域 + 表前缀三处一致。 */
 const MODULE_ID = 'hello';
 
-/** Bearer 提取 + JWKS 验签 + claims 校验（aud=hello）；失败回 401 人话。 */
-export function createAuthMiddleware(jwksUrl: string): MiddlewareHandler<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }> {
-  const JWKS = createRemoteJWKSet(new URL(jwksUrl));
+/** Bearer 提取 + SDK 本地 JWKS 验签 + claims 校验（aud=hello）；失败回 401 人话。 */
+export function createAuthMiddleware(): MiddlewareHandler<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }> {
   return async (c, next) => {
     const auth = c.req.header('authorization');
     if (!auth?.startsWith('Bearer ')) {
       return c.json({ error: 'missing bearer token', requestId: c.req.header('x-request-id') }, 401);
     }
+    const coreJwksJson = c.env.CORE_JWKS_JSON;
+    if (!coreJwksJson) {
+      return c.json({ error: 'jwks not provisioned', requestId: c.req.header('x-request-id') }, 503);
+    }
     try {
-      const { payload } = await jwtVerify(auth.slice(7), JWKS, { audience: MODULE_ID });
-      // claims 形状契约校验（ModuleTokenClaimsSchema），SDK 侧 decodeContext 同规
-      const { ModuleTokenClaimsSchema } = await import('@unself/contracts');
-      c.set('claims', ModuleTokenClaimsSchema.parse(payload));
+      const claims = await verifyModuleToken(auth.slice(7), {
+        coreJwksJson,
+        audience: MODULE_ID,
+      });
+      c.set('claims', claims);
       await next();
     } catch {
       // §6.5 人话 + request id：不回 jose 原始错误
@@ -71,7 +74,6 @@ const app = new Hono<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaim
  *  页面内 fetch/import 全部用相对路径（不帶前导 /）：同一路径制下模块同时挂载在
  *  /m/<id>/（部署）与开发期根路径，根相对路径只在后者成立——相对路径两处皆可（#14）。 */
 app.get('/', (c) => {
-  const jwksUrl = c.env?.CORE_JWKS_URL ?? '/.well-known/jwks.json';
   return c.html(`<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -187,7 +189,7 @@ app.post('/api/count', async (c) => {
   return c.json({ count: next });
 });
 
-/** 用请求内 Bearer 做一次性验签（测试可注入 fake JWKS；运行时与中间件同规）。 */
+/** 用请求内 Bearer 做一次性验签（运行时与中间件同规：本地 JWKS，零运行时网络）。 */
 async function requireAuth(
   c: Context<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }>,
 ): Promise<Response | null> {
@@ -195,16 +197,16 @@ async function requireAuth(
   if (!auth?.startsWith('Bearer ')) {
     return c.json({ error: 'missing bearer token', requestId: c.req.header('x-request-id') }, 401);
   }
-  const jwksUrl = c.env.CORE_JWKS_URL;
-  if (!jwksUrl) {
-    return c.json({ error: 'jwks not configured', requestId: c.req.header('x-request-id') }, 503);
+  const coreJwksJson = c.env.CORE_JWKS_JSON;
+  if (!coreJwksJson) {
+    return c.json({ error: 'jwks not provisioned', requestId: c.req.header('x-request-id') }, 503);
   }
   try {
-    const { payload } = await jwtVerify(auth.slice(7), createRemoteJWKSet(new URL(jwksUrl)), {
+    const claims = await verifyModuleToken(auth.slice(7), {
+      coreJwksJson,
       audience: MODULE_ID,
     });
-    const { ModuleTokenClaimsSchema } = await import('@unself/contracts');
-    c.set('claims', ModuleTokenClaimsSchema.parse(payload));
+    c.set('claims', claims);
     return null;
   } catch {
     return c.json({ error: 'token invalid or expired', requestId: c.req.header('x-request-id') }, 401);
