@@ -1,135 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { createD1Storage, type D1MinimalDatabase } from '../src/storage';
+import { createD1Storage } from '../src/storage';
+import { createModuleDb, type ModuleTestDb } from './test-factory';
 
 /**
- * 内存假 D1：Map 后备，实现 prepare/bind/first/all/run 最小面。
- * 只解释 createD1Storage 发出的固定 SQL 形态，不追求通用 SQL 引擎。
+ * #9 / 审核 T8（#60）：手搓假 D1 换成真 SQLite（node:sqlite + 真 module_kv 迁移）。
+ * 假替身（MemoryStatement/MemoryDatabase）只按字符串 includes 解释 createD1Storage
+ * 发出的固定 SQL 形态——SQL 漏 WHERE module_id 过滤、LIKE/ESCAPE 写偏都能全绿。
+ * 真库裁决后：LIKE/ESCAPE 语义由 SQLite 给出真值，并新增 T8 守护用例
+ * （漏 module_id 过滤即红，见「T8 守护」组）。
  */
-type Row = { module_id: string; key: string; value: string };
+describe('createD1Storage（真 SQLite）', () => {
+  const OPEN: ModuleTestDb[] = [];
+  const makeDb = (): ModuleTestDb => {
+    const db = createModuleDb();
+    OPEN.push(db);
+    return db;
+  };
+  afterEach(() => {
+    for (const db of OPEN) db.close();
+    OPEN.length = 0;
+  });
 
-const LIKE_ESCAPE = '\\';
-
-function escapeRegex(ch: string): string {
-  return ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/** 把 LIKE 模式（支持 ESCAPE '\'、% 与 _）编译成正则源码。 */
-function likeToSource(pattern: string): string {
-  let out = '';
-  for (let i = 0; i < pattern.length; i += 1) {
-    const ch = pattern[i]!;
-    if (ch === LIKE_ESCAPE) {
-      const next = pattern[i + 1];
-      if (next === undefined) {
-        out += escapeRegex(LIKE_ESCAPE);
-      } else {
-        out += escapeRegex(next);
-        i += 1;
-      }
-    } else if (ch === '%') {
-      out += '.*';
-    } else if (ch === '_') {
-      out += '.';
-    } else {
-      out += escapeRegex(ch);
-    }
-  }
-  return out;
-}
-
-class MemoryStatement {
-  private params: unknown[] = [];
-
-  constructor(
-    private readonly db: MemoryDatabase,
-    private readonly sql: string,
-  ) {}
-
-  bind(...values: unknown[]): MemoryStatement {
-    this.params = values;
-    return this;
-  }
-
-  async first<T>(): Promise<T | null> {
-    const rows = this.select();
-    if (this.sql.startsWith('SELECT value FROM')) {
-      const row = rows[0];
-      return row ? ({ value: row.value } as T) : null;
-    }
-    return (rows[0] ?? null) as T | null;
-  }
-
-  async all<T>(): Promise<{ results: T[] }> {
-    const rows = this.select();
-    const results = this.sql.startsWith('SELECT key FROM')
-      ? rows.map((row) => ({ key: row.key }) as T)
-      : (rows as unknown as T[]);
-    return { results };
-  }
-
-  async run(): Promise<{ success: boolean }> {
-    const [moduleId, key, value] = this.params as [string, string, string | undefined];
-    if (this.sql.startsWith('INSERT INTO')) {
-      this.db.upsert(moduleId, key, value ?? '');
-    } else if (this.sql.startsWith('DELETE FROM')) {
-      this.db.remove(moduleId, key);
-    }
-    return { success: true };
-  }
-
-  private select(): Row[] {
-    const [moduleId, firstParam] = this.params as [string, string | undefined];
-    const rows = this.db.rowsOf(moduleId);
-    if (this.sql.includes('key = ?') && !this.sql.includes('LIKE')) {
-      return rows.filter((row) => row.key === firstParam);
-    }
-    if (this.sql.includes('LIKE')) {
-      // list(prefix) 绑定两个参数：(moduleId, 已转义的模式+%)。
-      const regex = new RegExp(`^${likeToSource(firstParam ?? '')}$`);
-      return rows.filter((row) => regex.test(row.key));
-    }
-    return rows;
-  }
-}
-
-/** Map 后备的 moduleId → key → value。 */
-class MemoryDatabase implements D1MinimalDatabase {
-  private readonly data = new Map<string, Map<string, string>>();
-
-  prepare(sql: string): MemoryStatement {
-    return new MemoryStatement(this, sql);
-  }
-
-  rowsOf(moduleId: string): Row[] {
-    const keys = this.data.get(moduleId);
-    if (!keys) {
-      return [];
-    }
-    return [...keys]
-      .map(([key, value]) => ({ module_id: moduleId, key, value }))
-      // 与 D1 的 ORDER BY key 对齐（ASCII 键下同序）。
-      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  }
-
-  upsert(moduleId: string, key: string, value: string): void {
-    let keys = this.data.get(moduleId);
-    if (!keys) {
-      keys = new Map();
-      this.data.set(moduleId, keys);
-    }
-    keys.set(key, value);
-  }
-
-  remove(moduleId: string, key: string): void {
-    this.data.get(moduleId)?.delete(key);
-  }
-}
-
-describe('createD1Storage', () => {
-  const makeDb = (): MemoryDatabase => new MemoryDatabase();
-  const hello = (db: MemoryDatabase) => createD1Storage({ db, moduleId: 'hello' });
+  const hello = (db: ModuleTestDb) => createD1Storage({ db: db.d1, moduleId: 'hello' });
 
   it('get 在键不存在时返回 null', async () => {
     await expect(hello(makeDb()).get('counter')).resolves.toBeNull();
@@ -146,7 +40,7 @@ describe('createD1Storage', () => {
     await expect(storage.list()).resolves.toEqual([]);
   });
 
-  it('put 覆盖写', async () => {
+  it('put 覆盖写（真 PK 上的 upsert：ON CONFLICT 命中才覆盖）', async () => {
     const storage = hello(makeDb());
     await storage.put('counter', '1');
     await storage.put('counter', '2');
@@ -173,12 +67,14 @@ describe('createD1Storage', () => {
     await expect(storage.list('none')).resolves.toEqual([]);
   });
 
-  it('list 的前缀 LIKE 按字面处理通配符（% 与 _ 不生效）', async () => {
+  it('list 的前缀 LIKE 按字面处理通配符（% 与 _ 不生效）——真 SQLite 裁决', async () => {
     const storage = hello(makeDb());
     await storage.put('v%', 'pct');
     await storage.put('v_', 'under');
     await storage.put('vx', 'plain');
+    // ORDER BY key 下 'v%'(0x25) < 'v_'(0x5F) < 'vx'，与 ASCII 排序一致
     await expect(storage.list('v')).resolves.toEqual(['v%', 'v_', 'vx']);
+    // ESCAPE '\'：% 与 _ 在任意位置都只匹配字面量（含前缀 '%'、'_' 字面查询）
     await expect(storage.list('v%')).resolves.toEqual(['v%']);
     await expect(storage.list('v_')).resolves.toEqual(['v_']);
   });
@@ -203,8 +99,8 @@ describe('createD1Storage', () => {
 
   it('不同 moduleId 互不可见（同库并存）', async () => {
     const db = makeDb();
-    const a = createD1Storage({ db, moduleId: 'mod-a' });
-    const b = createD1Storage({ db, moduleId: 'mod-b' });
+    const a = createD1Storage({ db: db.d1, moduleId: 'mod-a' });
+    const b = createD1Storage({ db: db.d1, moduleId: 'mod-b' });
     await a.put('shared', 'a-value');
     await b.put('shared', 'b-value');
     await expect(a.get('shared')).resolves.toBe('a-value');
@@ -217,20 +113,63 @@ describe('createD1Storage', () => {
   });
 
   it('非法 moduleId / 表名在创建时抛错', () => {
-    expect(() => createD1Storage({ db: makeDb(), moduleId: '' })).toThrow('非法 moduleId');
-    expect(() => createD1Storage({ db: makeDb(), moduleId: 'has space' })).toThrow('非法 moduleId');
+    expect(() => createD1Storage({ db: makeDb().d1, moduleId: '' })).toThrow('非法 moduleId');
+    expect(() => createD1Storage({ db: makeDb().d1, moduleId: 'has space' })).toThrow('非法 moduleId');
     expect(() =>
-      createD1Storage({ db: makeDb(), moduleId: 'hello', table: 'x; DROP TABLE module_kv' }),
+      createD1Storage({ db: makeDb().d1, moduleId: 'hello', table: 'x; DROP TABLE module_kv' }),
     ).toThrow('非法表名');
-    expect(() => createD1Storage({ db: makeDb(), moduleId: 'hello', table: 'module-kv' })).toThrow(
-      '非法表名',
-    );
+    expect(() =>
+      createD1Storage({ db: makeDb().d1, moduleId: 'hello', table: 'module-kv' }),
+    ).toThrow('非法表名');
   });
 
-  it('自定义表名可用', async () => {
+  it('自定义表名可用（先在建真库建表再经 SDK 使用）', async () => {
     const db = makeDb();
-    const storage = createD1Storage({ db, moduleId: 'hello', table: 'mod_kv_2' });
+    db.run(
+      'CREATE TABLE mod_kv_2 (module_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(module_id, key))',
+    );
+    const storage = createD1Storage({ db: db.d1, moduleId: 'hello', table: 'mod_kv_2' });
     await storage.put('k', 'v');
     await expect(storage.get('k')).resolves.toBe('v');
+    await expect(storage.list()).resolves.toEqual(['k']);
+  });
+
+  describe('T8 守护：真库裁决 SDK SQL（漏 WHERE module_id 即红）', () => {
+    it('同 key 两模块直插后：list 只回本模块 key、get 只回本模块值', async () => {
+      const db = makeDb();
+      // 直插两模块同 key 行（不经 SDK，绕开子域收口，模拟真库共存数据）
+      db.run(
+        "INSERT INTO module_kv (module_id, key, value) VALUES ('mod-a','k','a'),('mod-b','k','b')",
+      );
+      const a = createD1Storage({ db: db.d1, moduleId: 'mod-a' });
+      // listSql 若漏 WHERE module_id → 两行都回（['k','k']），此断言必红
+      await expect(a.list()).resolves.toEqual(['k']);
+      // selectSql（get）若漏 WHERE module_id → 命中 mod-b 行（'b'），此断言必红
+      await expect(a.get('k')).resolves.toBe('a');
+    });
+
+    it("真建表列：columns()==['module_id','key','value']，SELECT * 行结构与之一致", async () => {
+      const db = makeDb();
+      expect(db.columns('module_kv')).toEqual(['module_id', 'key', 'value']);
+      db.run("INSERT INTO module_kv (module_id, key, value) VALUES ('mod-a','k','a')");
+      const row = db.first('SELECT * FROM module_kv');
+      expect(Object.keys(row ?? {})).toEqual(db.columns('module_kv'));
+    });
+
+    it('真 PK 约束：同 (module_id,key) 二次裸 INSERT 抛错（upsert 才允许覆盖）', async () => {
+      const db = makeDb();
+      db.run("INSERT INTO module_kv (module_id, key, value) VALUES ('mod-a','k','a')");
+      expect(() =>
+        db.run("INSERT INTO module_kv (module_id, key, value) VALUES ('mod-a','k','dup')"),
+      ).toThrow();
+      // 首次写入的行未被破坏
+      expect(
+        db.first<{ value: string }>(
+          'SELECT value FROM module_kv WHERE module_id = ? AND key = ?',
+          'mod-a',
+          'k',
+        )?.value,
+      ).toBe('a');
+    });
   });
 });
