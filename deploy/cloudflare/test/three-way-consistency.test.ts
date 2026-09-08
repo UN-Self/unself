@@ -19,6 +19,19 @@ const CONFIG = {
 
 const MANIFEST = 'id: hello\nversion: 0.1.0\n';
 
+/** 合法公钥 JWKS 字符串（模块 vars.CORE_JWKS_JSON 注入值；测试只关心路由三方一致，不做验签）。 */
+const JWKS_JSON = JSON.stringify({
+  keys: [{
+    kty: 'EC',
+    crv: 'P-256',
+    x: '2zYTVcy0bDXQ7qqeNDB38zsPVvwUkKZ6-m3xA1zwA2U',
+    y: 'j8zUPxAyGRUAaHRNYwdU3IW7TSBI1kSrg7RmUhb8lZk',
+    kid: 'RDB_5KqpPvLCvU7V6n8r6-xxpSJutKJCWNmyZWesNSg',
+    use: 'sig',
+    alg: 'ES256',
+  }],
+});
+
 /** 路由 pattern → 归一化 {host, prefix}：`demo.handywote.top/m/hello/*` → {demo.handywote.top, /m/hello/}。 */
 function normalizeRoutePattern(pattern: string): { host: string; prefix: string } {
   const url = new URL(`https://${pattern.replace(/\*$/, '')}`);
@@ -33,7 +46,7 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
       config: CONFIG,
       dbIds: { modules: 'modules-uuid' },
       mod: { id: 'hello' },
-      jwksPath: '/.well-known/jwks.json',
+      jwksJson: JWKS_JSON,
       zoneName: 'handywote.top',
     })) as { routes: Array<{ pattern: string; custom_domain?: boolean; zone_name?: string }> };
 
@@ -74,7 +87,7 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
       config: CONFIG,
       dbIds: { modules: 'modules-uuid' },
       mod: { id: 'hello' },
-      jwksPath: '/.well-known/jwks.json',
+      jwksJson: JWKS_JSON,
       zoneName: 'handywote.top',
     })) as { routes: unknown };
 

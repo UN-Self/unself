@@ -20,7 +20,7 @@ import {
   type Provisioned,
 } from './assemble';
 import { loadUnselfConfig, type ModuleRef, type UnselfConfig } from './config';
-import { createKeypair, detectExistingSecret, putSecret, JWT_SECRET_NAME } from './keypair';
+import { createKeypair, detectExistingSecret, publicJwksJson, putSecret, JWT_SECRET_NAME } from './keypair';
 import { ensureTotalTls, ensureZoneRecord, findAccountId, findZone, removeLegacyCustomDomains } from './dns';
 import { ensureDatabases, ensureR2Bucket, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
 import { registryCommands, sqlString } from './registry';
@@ -101,6 +101,11 @@ export async function runNineSteps(input: {
   configOverride?: UnselfConfig;
   /** 测试注入口：拦截 secret put（默认走真实 spawn）。 */
   putSecret?: (workerName: string, value: string) => Promise<void>;
+  /**
+   * @internal 仅供测试注入（steps.test.ts）：跳过公网 JWKS 抓取（fake wrangler 无真实部署）。
+   * 生产路径一律走 defaultFetchJwks（真实 fetch GET <baseUrl>/.well-known/jwks.json）。
+   */
+  fetchJwks?: (baseUrl: string) => Promise<string>;
 }): Promise<Summary> {
   const { rootDir, wrangler } = input;
   const rep = input.reporter ?? consoleReporter();
@@ -250,6 +255,25 @@ export async function runNineSteps(input: {
 
   // ④ 模块构建/上传/路由绑定
   rep.step(4, '构建上传模块 Worker，绑 <domain>/m/<id>/* 路由（zone 路径）与存储绑定');
+  // 签名公钥：部署期一次性解析，注入各模块 vars.CORE_JWKS_JSON（模块本地验签，零运行时网络）。
+  // 两级取钥（#71 根因①）：本运行刚生成 keypair（首部署）→ 用内存公钥，绝不抓取公网；
+  // 已有 secret → 公网抓取 core JWKS（部署器在公网，无 CF 同 zone 禁令问题），抓取失败即硬报错。
+  let jwksJson: string;
+  if (freshPair) {
+    jwksJson = publicJwksJson(freshPair);
+    rep.log('首部署：使用本运行生成的公钥');
+  } else {
+    const fetchJwks = input.fetchJwks ?? defaultFetchJwks;
+    try {
+      jwksJson = await fetchJwks(baseUrl);
+    } catch (err) {
+      throw new Error(
+        `无法获取 Core 公钥（${baseUrl}${JWKS_PATH}）：${err instanceof Error ? err.message : String(err)}；` +
+          'DNS/路由可能尚未就绪，可重跑部署（幂等）',
+      );
+    }
+    rep.log('已获取 Core 公钥 JWKS（部署期注入模块 vars）');
+  }
   for (const mod of provisioned.modules) {
     await writeConfig(
       join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`),
@@ -257,8 +281,7 @@ export async function runNineSteps(input: {
         config,
         dbIds: { modules: dbIds.modules },
         mod,
-        jwksPath: JWKS_PATH,
-        jwksUrl: `${baseUrl}${JWKS_PATH}`,
+        jwksJson,
         zoneName: resolvedZone?.name,
       }),
     );
@@ -354,6 +377,20 @@ async function resolveBaseUrl(
     throw new Error('无法从 wrangler 输出解析 workers.dev 域名；请在 unself.config.jsonc 配置 domain');
   }
   return url;
+}
+
+/** 公网抓取 core JWKS（部署器在公网，无 CF 同 zone 禁令）；非 2xx 或形状非法（无 keys 数组/空）→ 抛错。 */
+async function defaultFetchJwks(baseUrl: string): Promise<string> {
+  const url = `${baseUrl}${JWKS_PATH}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`GET ${url} → HTTP ${res.status}`);
+  }
+  const body = (await res.json()) as { keys?: unknown };
+  if (!Array.isArray(body.keys) || body.keys.length === 0) {
+    throw new Error(`GET ${url} → JWKS 形状非法（无 keys 数组或为空）`);
+  }
+  return JSON.stringify(body);
 }
 
 /** secret put（stdin 喂值）：正式部署路径；测试以注入 fake Wrangler 时不会走到此处之外的真实 spawn——

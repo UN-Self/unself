@@ -40,6 +40,17 @@ export function createKeypair(): Promise<InstanceKeyPair> {
 }
 
 /**
+ * 公钥 JWKS JSON 字符串（与 core keys.ts 的 toPublicJwks 同形状）：
+ * `{ keys: [ { kty:'EC', crv:'P-256', x, y, kid, use:'sig', alg:'ES256' } ] }`。
+ * 部署期注入各模块 vars.CORE_JWKS_JSON；私钥材料（d 等）永不出现。
+ */
+export function publicJwksJson(pair: InstanceKeyPair): string {
+  return JSON.stringify({
+    keys: [{ ...pair.publicJwk, kid: pair.kid, use: 'sig', alg: 'ES256' }],
+  });
+}
+
+/**
  * wrangler secret put（值经 stdin 管道喂入：不出现在 argv/日志/落盘）。
  * 返回 secret 的 sha256 指纹前 16 位（部署输出备查，不含密钥本体）。
  */

@@ -54,6 +54,36 @@ core 与模块全部 zone 路径路由：core = `<domain>/*`，模块 = `<domain
 （无需 config zone 字段）。多级子域不在 Universal SSL 覆盖内，脚本自动开启 Total TLS
 逐个签发证书（签发秒级延迟，冒烟前已触发）。
 
+## 模块验签公钥（CORE_JWKS_JSON，部署期注入）
+
+模块与 core 同 zone 时，模块 Worker 运行时跨 Worker 拉 core 的 `/.well-known/jwks.json`
+会被 CF 同 zone 禁令拦截 → 恒 401（#71 根因①）。B 方案：部署期把 core 公钥以
+`vars.CORE_JWKS_JSON` 注入各模块——内容是 `{ keys: [ { kty:'EC', crv:'P-256', x, y, kid,
+use:'sig', alg:'ES256' } ] }`（与 core `GET /.well-known/jwks.json` 响应体同形状），
+模块本地验签，零运行时网络。
+
+取钥两级（均在步骤④模块循环前）：
+
+| 情形 | 取钥方式 |
+|------|----------|
+| 首部署（本运行刚生成 JWT_PRIVATE_KEY） | 直接用内存里的新公钥（不抓公网，部署器对刚 deploy 的域名抓取会因 DNS/路由未就绪失败） |
+| 已有 secret（重跑） | 部署器在公网 `GET <baseUrl>/.well-known/jwks.json`（无 CF 同 zone 禁令）；失败即硬报错，提示 DNS/路由可能尚未就绪，可重跑部署（幂等） |
+
+## 换钥流程（轮换 JWT 签名密钥）
+
+1. `wrangler secret put JWT_PRIVATE_KEY --name unself-core-api`（新 PKCS8 PEM）
+   ——core 的签名密钥由 secret 派生，替换后立即生效（secret put 会触发重新部署）；
+2. 重跑部署脚本：核心迁移/模块部署幂等收敛，步骤④会重新抓取 `/.well-known/jwks.json`
+   （现在已是新公钥）并把新 JWKS 注入各模块 `vars.CORE_JWKS_JSON`；
+3. 旧 token 由新 kid 拒绝，系统自然失效——存量会话需重新登录。
+
+## Docker 等价注记
+
+`docker/` 目录目前为空壳，本次改动只在 CF 装配器（`deploy/cloudflare`）落地。
+容器化部署的等价做法：同一环境变量 `CORE_JWKS_JSON` 写入 compose 的模块服务
+environment（值由生成脚本在启动时从 core 侧导出），模块行为与 CF 一致——本地验签、
+零运行时网络取钥。待 docker/ 落地时按此注记实现。
+
 ## 产物
 
 所有生成的部署配置与 shell 构建副本落在 `.deploy/cloudflare/`（已 gitignore）：
