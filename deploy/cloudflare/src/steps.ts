@@ -21,7 +21,7 @@ import {
 } from './assemble';
 import { loadUnselfConfig, type ModuleRef, type UnselfConfig } from './config';
 import { createKeypair, detectExistingSecret, putSecret, JWT_SECRET_NAME } from './keypair';
-import { ensureZoneRecord, findZone } from './dns';
+import { ensureZoneRecord, findAccountId, findZone, removeLegacyCustomDomains } from './dns';
 import { ensureDatabases, ensureR2Bucket, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
 import { registryCommands, sqlString } from './registry';
 import { fetchSetupToken, parseWorkersDevFromDeployOutput, smokeCheck } from './smoke';
@@ -88,6 +88,8 @@ export async function runNineSteps(input: {
   ensureDns?: (domain: string) => Promise<void>;
   /** 测试注入口：拦截 zone 上溯探测（默认真实 findZone，读 CLOUDFLARE_API_TOKEN）。 */
   resolveZone?: (domain: string) => Promise<{ id: string; name: string } | null>;
+  /** 测试注入口：拦截遗留 Custom Domain 清理（默认真实 removeLegacyCustomDomains）。 */
+  cleanupCustomDomains?: () => Promise<void>;
   /** 测试注入口：覆盖 unself.config.jsonc（默认 loadUnselfConfig(rootDir)）。 */
   configOverride?: UnselfConfig;
   /** 测试注入口：拦截 secret put（默认走真实 spawn）。 */
@@ -165,6 +167,18 @@ export async function runNineSteps(input: {
     }
     resolvedZone = zone;
     rep.log(`zone 解析：${config.domain} ∈ ${zone.name}`);
+    // 旧部署的 Custom Domain 必须显式解绑（wrangler 改路由形态不会自动解绑；
+    // 同 host 上 Custom Domain 优先于路径路由，不清理模块路由永远被吞）
+    const cleanup = input.cleanupCustomDomains ?? (async () => {
+      const token = process.env.CLOUDFLARE_API_TOKEN ?? '';
+      const accountId = await findAccountId(token);
+      if (!accountId) {
+        rep.log('跳过 Custom Domain 清理：无法发现账户（GET /accounts）');
+        return;
+      }
+      await removeLegacyCustomDomains({ accountId, domain: config.domain, apiToken: token, log: rep.log });
+    });
+    await cleanup();
   }
   await writeConfig(
     join(provisioned.outDir, 'core.wrangler.jsonc'),
