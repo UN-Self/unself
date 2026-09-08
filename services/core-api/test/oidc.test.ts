@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach, beforeAll } from 'vitest';
+import { SignJWT, exportJWK, generateKeyPair, type JWK } from 'jose';
 
 import {
   buildAuthorizationRequest,
   discover,
   exchangeAuthorizationCode,
+  resetOidcCaches,
   type DiscoveredMetadata,
   type OidcClientConfig,
 } from '../src/oidc';
@@ -13,6 +15,7 @@ const ISSUER = 'https://idp.example.com';
 const CLIENT_ID = 'unself-dev';
 const CLIENT_SECRET = 'unself-dev-secret';
 const REDIRECT = 'https://team.example.com/api/auth/callback';
+const JWKS_URI = `${ISSUER}/jwks`;
 
 const config: OidcClientConfig = {
   issuer: ISSUER,
@@ -26,7 +29,23 @@ const metadata: DiscoveredMetadata = {
   issuer: ISSUER,
   authorization_endpoint: `${ISSUER}/authorize`,
   token_endpoint: `${ISSUER}/token`,
+  jwks_uri: JWKS_URI,
 };
+
+// 真 RS256 密钥：JWKS 公开签名密钥 + 签发侧私钥（id_token 验签不再用伪签名）
+let signingPrivateKey: CryptoKey;
+let signingJwk: JWK;
+
+beforeAll(async () => {
+  const pair = await generateKeyPair('RS256', { extractable: true });
+  signingPrivateKey = pair.privateKey;
+  signingJwk = await exportJWK(pair.publicKey);
+});
+
+beforeEach(() => {
+  // 清空发现文档 + JWKS 集合缓存（键按 issuer 存，跨测试防串）
+  resetOidcCaches();
+});
 
 describe('buildAuthorizationRequest（授权码 + PKCE S256）', () => {
   it('生成含全部必要参数的授权 URL', async () => {
@@ -74,10 +93,9 @@ describe('buildAuthorizationRequest（授权码 + PKCE S256）', () => {
 
 let idTokenIssued: string;
 
-function makeIdToken(overrides: Record<string, unknown> = {}): string {
-  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o), 'utf8').toString('base64url');
-  const header = b64({ alg: 'RS256', kid: 'k1' });
-  const payload = b64({
+/** 用真实 RS256 签名签发 id_token（替代伪签名 '.sig'）。 */
+async function makeIdToken(overrides: Record<string, unknown> = {}): Promise<string> {
+  return new SignJWT({
     iss: ISSUER,
     aud: CLIENT_ID,
     sub: 'u-123',
@@ -85,8 +103,13 @@ function makeIdToken(overrides: Record<string, unknown> = {}): string {
     nonce: 'nonce-x',
     exp: Math.floor(Date.now() / 1000) + 600,
     ...overrides,
-  });
-  return `${header}.${payload}.sig`;
+  })
+    .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
+    .sign(signingPrivateKey);
+}
+
+function fakeJwksBody(): string {
+  return JSON.stringify({ keys: [{ ...signingJwk, kid: 'k1', alg: 'RS256', use: 'sig' }] });
 }
 
 function installFakeIdp(metadataOverride: Partial<DiscoveredMetadata> = {}) {
@@ -99,6 +122,9 @@ function installFakeIdp(metadataOverride: Partial<DiscoveredMetadata> = {}) {
         JSON.stringify({ ...metadata, scopes_supported: ['openid'], ...metadataOverride }),
         { status: 200 },
       );
+    }
+    if (url === JWKS_URI) {
+      return new Response(fakeJwksBody(), { status: 200 });
     }
     if (url === metadata.token_endpoint) {
       const body = new URLSearchParams(String(init?.body ?? ''));
@@ -146,8 +172,8 @@ describe('discover', () => {
 });
 
 describe('exchangeAuthorizationCode（callback：state/PKCE/nonce 校验 + 换 token）', () => {
-  it('合法 callback 完成换 token 并校验 claims', async () => {
-    idTokenIssued = makeIdToken({ nonce: 'nonce-ok' });
+  it('合法 callback 完成换 token 并校验 claims（真 RS256 验签）', async () => {
+    idTokenIssued = await makeIdToken({ nonce: 'nonce-ok' });
     const fake = installFakeIdp();
     try {
       const result = await exchangeAuthorizationCode(
@@ -168,6 +194,83 @@ describe('exchangeAuthorizationCode（callback：state/PKCE/nonce 校验 + 换 t
       expect(body?.get('redirect_uri')).toBe(REDIRECT);
     } finally {
       fake.restore();
+    }
+  });
+
+  it('坏签名拒绝：JWKS 上的公钥与签名私钥不匹配', async () => {
+    const attacker = await generateKeyPair('RS256', { extractable: true });
+    idTokenIssued = await new SignJWT({
+      iss: ISSUER,
+      aud: CLIENT_ID,
+      sub: 'u-evil',
+      nonce: 'n',
+      exp: Math.floor(Date.now() / 1000) + 600,
+    })
+      .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
+      .sign(attacker.privateKey);
+    const fake = installFakeIdp();
+    try {
+      await expect(
+        exchangeAuthorizationCode(config, metadata, `${REDIRECT}?code=abc&state=s`, {
+          state: 's',
+          nonce: 'n',
+          codeVerifier: 'v',
+        }),
+      ).rejects.toThrow(/signature verification failed/);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it('元数据缺 jwks_uri 时拒绝（fail-closed）', async () => {
+    idTokenIssued = await makeIdToken({ nonce: 'n' });
+    const fake = installFakeIdp();
+    try {
+      const { jwks_uri: _omit, ...noJwks } = metadata;
+      await expect(
+        exchangeAuthorizationCode(config, noJwks, `${REDIRECT}?code=abc&state=s`, {
+          state: 's',
+          nonce: 'n',
+          codeVerifier: 'v',
+        }),
+      ).rejects.toThrow(/jwks_uri/);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it('JWKS 拉取失败时拒绝登录（fail-closed）', async () => {
+    idTokenIssued = await makeIdToken({ nonce: 'n' });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === JWKS_URI) {
+        return new Response('server error', { status: 500 });
+      }
+      if (url.includes('/.well-known/openid-configuration')) {
+        return new Response(
+          JSON.stringify({ ...metadata, scopes_supported: ['openid'] }),
+          { status: 200 },
+        );
+      }
+      if (url === metadata.token_endpoint) {
+        return new Response(
+          JSON.stringify({ access_token: 'at-1', token_type: 'Bearer', id_token: idTokenIssued }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`fake idp: unexpected fetch ${url}`);
+    }) as typeof fetch;
+    try {
+      await expect(
+        exchangeAuthorizationCode(config, metadata, `${REDIRECT}?code=abc&state=s`, {
+          state: 's',
+          nonce: 'n',
+          codeVerifier: 'v',
+        }),
+      ).rejects.toThrow();
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 
@@ -202,7 +305,7 @@ describe('exchangeAuthorizationCode（callback：state/PKCE/nonce 校验 + 换 t
   });
 
   it('id_token nonce 不匹配拒绝', async () => {
-    idTokenIssued = makeIdToken({ nonce: 'wrong' });
+    idTokenIssued = await makeIdToken({ nonce: 'wrong' });
     const fake = installFakeIdp();
     try {
       await expect(
@@ -218,7 +321,7 @@ describe('exchangeAuthorizationCode（callback：state/PKCE/nonce 校验 + 换 t
   });
 
   it('id_token iss 不匹配拒绝', async () => {
-    idTokenIssued = makeIdToken({ nonce: 'n', iss: 'https://evil.example.com' });
+    idTokenIssued = await makeIdToken({ nonce: 'n', iss: 'https://evil.example.com' });
     const fake = installFakeIdp();
     try {
       await expect(
@@ -234,7 +337,7 @@ describe('exchangeAuthorizationCode（callback：state/PKCE/nonce 校验 + 换 t
   });
 
   it('id_token 过期拒绝', async () => {
-    idTokenIssued = makeIdToken({ nonce: 'n', exp: Math.floor(Date.now() / 1000) - 10 });
+    idTokenIssued = await makeIdToken({ nonce: 'n', exp: Math.floor(Date.now() / 1000) - 10 });
     const fake = installFakeIdp();
     try {
       await expect(
@@ -250,7 +353,7 @@ describe('exchangeAuthorizationCode（callback：state/PKCE/nonce 校验 + 换 t
   });
 
   it('id_token aud 不匹配拒绝', async () => {
-    idTokenIssued = makeIdToken({ nonce: 'n', aud: 'other-client' });
+    idTokenIssued = await makeIdToken({ nonce: 'n', aud: 'other-client' });
     const fake = installFakeIdp();
     try {
       await expect(
