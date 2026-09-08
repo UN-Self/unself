@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { coreWranglerConfig, moduleWranglerConfig, prefixStripWrapperSource } from '../src/assemble';
+import { buildModuleSdkAssets, coreWranglerConfig, moduleWranglerConfig, prefixStripWrapperSource } from '../src/assemble';
 import { migrationWranglerConfig } from '../src/assemble';
 import { coreWorkerEntrySource } from '../src/steps';
 import type { UnselfConfig } from '../src/config';
+
+/** 仓库根（测试进程从 deploy/cloudflare/test 起算）。 */
+const REPO_ROOT = new URL('../../..', import.meta.url).pathname;
 
 describe('coreWranglerConfig（③生成的部署配置）', () => {
   const base = {
@@ -52,16 +59,25 @@ describe('moduleWranglerConfig（④生成的部署配置）', () => {
     jwksPath: '/.well-known/jwks.json',
   };
 
-  it('route 绑定 /m/<id>/* + MODULES_DB 真实 id + CORE_JWKS_URL 绝对地址', () => {
+  it('route 绑定 zone 路径 <domain>/m/<id>/*（无 custom_domain）+ MODULES_DB 真实 id + CORE_JWKS_URL 绝对地址', () => {
     const cfg = JSON.parse(moduleWranglerConfig(input)) as {
-      routes: Array<{ pattern: string; custom_domain: boolean }>;
+      routes: Array<{ pattern: string; custom_domain?: boolean }>;
       d1_databases: Array<{ binding: string; database_id: string }>;
       vars: { CORE_JWKS_URL: string; MODULE_ID: string };
     };
-    expect(cfg.routes).toEqual([{ pattern: 'hello.team.example.com', custom_domain: true }]);
+    // 整对象断言：zone 路径 pattern 且无 custom_domain 键（Custom Domain 子域形态已废弃）
+    expect(cfg.routes).toEqual([{ pattern: 'team.example.com/m/hello/*' }]);
     expect(cfg.d1_databases[0]?.database_id).toBe('modules-uuid');
     expect(cfg.vars.CORE_JWKS_URL).toBe('https://team.example.com/.well-known/jwks.json');
     expect(cfg.vars.MODULE_ID).toBe('hello');
+  });
+
+  it('domain 空 → 无 routes（workers.dev 回退）', () => {
+    const cfg = JSON.parse(moduleWranglerConfig({
+      ...input,
+      config: { ...input.config, domain: '' },
+    })) as { routes?: unknown };
+    expect(cfg.routes).toBeUndefined();
   });
 });
 
@@ -96,5 +112,38 @@ describe('coreWorkerEntrySource', () => {
     const src = coreWorkerEntrySource('/repo/.deploy/cloudflare', '/repo');
     expect(src).toContain("from '../../services/core-api/src/index.ts'");
     expect(src).toContain('SPDX-License-Identifier');
+  });
+});
+
+describe('buildModuleSdkAssets（T3 页面 SDK 装载契约）', () => {
+  it('ESM 产物可具名 import；IIFE 产物无顶层 export（页面引 .js 即 SyntaxError）', { timeout: 60_000 }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'unself-sdk-assets-'));
+    try {
+      await buildModuleSdkAssets(join(REPO_ROOT, 'packages/module-sdk/src/index.ts'), dir);
+
+      const esmPath = join(dir, 'module-sdk.esm.js');
+      const esm = await readFile(esmPath, 'utf8');
+      const iife = await readFile(join(dir, 'module-sdk.js'), 'utf8');
+      expect(/^export\b/m.test(esm)).toBe(true);
+      expect(/^export\b/m.test(iife)).toBe(false);
+
+      // 行为断言：ESM 产物真实可 import，且暴露页面用到的具名符号
+      const mod = (await import(pathToFileURL(esmPath).href)) as Record<string, unknown>;
+      expect(typeof mod.createModuleSDK).toBe('function');
+      expect(Object.keys(mod).sort()).toEqual([
+        'createD1Storage',
+        'createModuleSDK',
+        'decodeJwtPayload',
+        'verifyModuleToken',
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('hello 页面 import 的资产名 == 装配生成的 ESM 资产名', async () => {
+    const page = await readFile(join(REPO_ROOT, 'modules/hello/src/index.ts'), 'utf8');
+    const specifier = /from '\.\/sdk\/([^']+)'/.exec(page)?.[1];
+    expect(specifier).toBe('module-sdk.esm.js');
   });
 });
