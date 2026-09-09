@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, ref, useId } from 'vue'
+import { computed, ref, useId, watch } from 'vue'
 
 /**
  * 输入框基元：label + 可选错误行（稳定占位不跳动）+ 左侧图标插槽。
@@ -39,10 +39,19 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
 // #83：useId 替代 Math.random——SSR/客户端 id 稳定、可读无随机（表单契约）
 const inputId = useId()
+
+// 错误抖动（beUI 语义）：错误从无到有的瞬间置 true 触发一次 u-shake，
+// @animationend 复位；错误清除立即复位，保证下次错误仍能重新触发。
+// （旧实现 shaking 恒为 false——无任何赋值时机，抖动画死变量的残留。）
 const shaking = ref(false)
 
 const hasError = computed(() => Boolean(props.error))
 const errorMessage = computed(() => (typeof props.error === 'string' ? props.error : null))
+
+watch(hasError, (now, was) => {
+  if (now && !was) shaking.value = true
+  else if (!now) shaking.value = false
+})
 
 function onInput(event: Event) {
   emit('update:modelValue', (event.target as HTMLInputElement).value)
