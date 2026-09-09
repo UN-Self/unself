@@ -33,18 +33,18 @@ withDefaults(defineProps<SkeletonProps>(), {
 .u-skeleton {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--unself-space-3);
   width: 100%;
 }
 .u-skeleton-line {
   display: block;
   height: 14px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--unself-radius-sm);
   background: linear-gradient(
     90deg,
-    var(--color-surface) 25%,
-    var(--color-surface-hover) 50%,
-    var(--color-surface) 75%
+    var(--unself-color-surface) 25%,
+    var(--unself-color-surface-hover) 50%,
+    var(--unself-color-surface) 75%
   );
   background-size: 200% 100%;
   animation: u-shimmer 1.4s ease infinite;

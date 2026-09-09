@@ -86,16 +86,16 @@ const errorTitle = computed(() =>
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  gap: var(--space-3);
-  background: var(--color-bg);
+  gap: var(--unself-space-3);
+  background: var(--unself-color-bg);
 }
 .mh-frame-skeleton-lines {
   width: min(320px, 80%);
 }
 .mh-frame-skeleton-hint {
   margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-tertiary);
 }
 .mh-frame-error {
   position: absolute;
@@ -103,8 +103,8 @@ const errorTitle = computed(() =>
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-6);
-  background: var(--color-bg);
+  padding: var(--unself-space-6);
+  background: var(--unself-color-bg);
 }
 .mh-error-card {
   max-width: 440px;

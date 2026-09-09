@@ -256,8 +256,8 @@ async function onSaveAndActivate() {
   min-height: 100vh;
   align-items: center;
   justify-content: center;
-  padding: var(--space-4);
-  background: var(--color-surface);
+  padding: var(--unself-space-4);
+  background: var(--unself-color-surface);
 }
 .setup-card {
   width: 100%;
@@ -267,47 +267,47 @@ async function onSaveAndActivate() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--unself-space-3);
   text-align: center;
-  padding: var(--space-6) 0;
+  padding: var(--unself-space-6) 0;
 }
 .setup-tokenless-icon {
-  color: var(--color-text-tertiary);
+  color: var(--unself-color-text-tertiary);
 }
 .setup-title {
   margin: 0;
-  font-size: var(--font-size-xl);
+  font-size: var(--unself-font-size-xl);
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--unself-color-text);
 }
 .setup-desc {
   margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
 }
 .setup-error {
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--unself-space-4);
 }
 .setup-form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
+  gap: var(--unself-space-3);
+  margin-top: var(--unself-space-4);
 }
 .setup-test {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--unself-space-3);
   flex-wrap: wrap;
 }
 .setup-test-result {
-  font-size: var(--font-size-sm);
+  font-size: var(--unself-font-size-sm);
 }
 .setup-test-ok {
-  color: var(--color-success);
+  color: var(--unself-color-success);
 }
 .setup-test-fail {
-  color: var(--color-danger);
+  color: var(--unself-color-danger);
 }
 .setup-submit {
   width: 100%;
@@ -323,8 +323,8 @@ async function onSaveAndActivate() {
 }
 .setup-note {
   margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
+  font-size: var(--unself-font-size-xs);
+  color: var(--unself-color-text-tertiary);
   text-align: center;
 }
 </style>

@@ -235,7 +235,7 @@ function onTabClick(item: NavItem) {
 .shell {
   display: flex;
   height: 100vh;
-  background: var(--color-bg);
+  background: var(--unself-color-bg);
 }
 
 /* ---------- 桌面左栏（220px） ---------- */
@@ -244,25 +244,25 @@ function onTabClick(item: NavItem) {
   flex-direction: column;
   width: 220px;
   flex-shrink: 0;
-  border-right: 1px solid var(--color-border);
-  background: var(--color-surface);
+  border-right: 1px solid var(--unself-color-border);
+  background: var(--unself-color-surface);
 }
 .shell-sidebar-header {
   display: flex;
   align-items: center;
   height: 56px;
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--color-border);
+  padding: 0 var(--unself-space-4);
+  border-bottom: 1px solid var(--unself-color-border);
 }
 .shell-instance-name {
-  font-size: var(--font-size-base);
+  font-size: var(--unself-font-size-base);
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--unself-color-text);
 }
 .shell-nav {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-2);
+  padding: var(--unself-space-2);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -270,28 +270,28 @@ function onTabClick(item: NavItem) {
 .shell-nav-item {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--unself-space-2);
   width: 100%;
   height: 36px;
-  padding: 0 var(--space-3);
+  padding: 0 var(--unself-space-3);
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--unself-radius-md);
   background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-base);
+  color: var(--unself-color-text-secondary);
+  font-size: var(--unself-font-size-base);
   text-align: left;
   cursor: pointer;
   transition:
-    background-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out);
+    background-color var(--unself-duration-fast) var(--unself-ease-out),
+    color var(--unself-duration-fast) var(--unself-ease-out);
 }
 .shell-nav-item:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text);
+  background: var(--unself-color-surface-hover);
+  color: var(--unself-color-text);
 }
 .shell-nav-item-active {
-  background: var(--color-surface-active);
-  color: var(--color-text);
+  background: var(--unself-color-surface-active);
+  color: var(--unself-color-text);
   font-weight: 500;
 }
 .shell-nav-initial,
@@ -303,10 +303,10 @@ function onTabClick(item: NavItem) {
   width: 20px;
   height: 20px;
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
-  font-size: var(--font-size-xs);
+  border-radius: var(--unself-radius-sm);
+  background: var(--unself-color-primary-soft);
+  color: var(--unself-color-primary);
+  font-size: var(--unself-font-size-xs);
   font-weight: 600;
 }
 .shell-nav-label {
@@ -319,22 +319,22 @@ function onTabClick(item: NavItem) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--color-border);
+  gap: var(--unself-space-2);
+  padding: var(--unself-space-3) var(--unself-space-4);
+  border-top: 1px solid var(--unself-color-border);
 }
 .shell-user {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--unself-space-2);
   min-width: 0;
 }
 .shell-user-avatar {
-  border-radius: var(--radius-full);
+  border-radius: var(--unself-radius-full);
 }
 .shell-user-name {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -342,24 +342,24 @@ function onTabClick(item: NavItem) {
 .shell-logout {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--unself-space-1);
   /* #75：长用户名挤压 footer 时，退出按钮不得被 flex-shrink 压窄，
      否则「退出」按 CJK min-content 逐字换行变竖排。压力交给用户名省略号。 */
   flex-shrink: 0;
   white-space: nowrap;
   height: 30px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--unself-space-2);
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--unself-radius-md);
   background: transparent;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
+  color: var(--unself-color-text-tertiary);
+  font-size: var(--unself-font-size-sm);
   cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-out);
+  transition: background-color var(--unself-duration-fast) var(--unself-ease-out);
 }
 .shell-logout:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-danger);
+  background: var(--unself-color-surface-hover);
+  color: var(--unself-color-danger);
 }
 
 /* ---------- 主区 ---------- */
@@ -368,14 +368,14 @@ function onTabClick(item: NavItem) {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--color-bg);
+  background: var(--unself-color-bg);
 }
 .shell-center {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-6);
+  padding: var(--unself-space-6);
 }
 .shell-error-card {
   max-width: 440px;
@@ -384,18 +384,18 @@ function onTabClick(item: NavItem) {
   text-align: center;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--unself-space-2);
 }
 .shell-empty-title {
   margin: 0;
-  font-size: var(--font-size-xl);
+  font-size: var(--unself-font-size-xl);
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--unself-color-text);
 }
 .shell-empty-desc {
   margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
 }
 
 /* 引导阶段骨架：宽度约束交给壳，线条样式由 USkeleton 提供 */
@@ -422,8 +422,8 @@ function onTabClick(item: NavItem) {
     display: flex;
     height: 56px;
     flex-shrink: 0;
-    border-top: 1px solid var(--color-border);
-    background: var(--color-surface);
+    border-top: 1px solid var(--unself-color-border);
+    background: var(--unself-color-surface);
     overflow-x: auto;
   }
   .shell-tab {
@@ -436,13 +436,13 @@ function onTabClick(item: NavItem) {
     flex: 1;
     border: none;
     background: transparent;
-    color: var(--color-text-tertiary);
-    font-size: var(--font-size-xs);
+    color: var(--unself-color-text-tertiary);
+    font-size: var(--unself-font-size-xs);
     cursor: pointer;
-    transition: color var(--duration-fast) var(--ease-out);
+    transition: color var(--unself-duration-fast) var(--unself-ease-out);
   }
   .shell-tab-active {
-    color: var(--color-primary);
+    color: var(--unself-color-primary);
   }
   .shell-tab-initial {
     width: 18px;
@@ -458,37 +458,37 @@ function onTabClick(item: NavItem) {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  background: var(--color-scrim);
+  background: var(--unself-color-scrim);
 }
 .shell-sheet {
   width: 100%;
   max-width: 480px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-2) var(--space-4) var(--space-8);
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  animation: shell-sheet-in var(--duration-normal) var(--ease-out);
+  gap: var(--unself-space-4);
+  padding: var(--unself-space-2) var(--unself-space-4) var(--unself-space-8);
+  background: var(--unself-color-surface);
+  border-top: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-lg) var(--unself-radius-lg) 0 0;
+  animation: shell-sheet-in var(--unself-duration-normal) var(--unself-ease-out);
 }
 .shell-sheet-handle {
   width: 36px;
   height: 4px;
   margin: 0 auto;
-  border-radius: var(--radius-full);
-  background: var(--color-border);
+  border-radius: var(--unself-radius-full);
+  background: var(--unself-color-border);
 }
 .shell-sheet-user {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2);
+  gap: var(--unself-space-2);
+  padding: var(--unself-space-2);
 }
 .shell-sheet-username {
-  font-size: var(--font-size-base);
+  font-size: var(--unself-font-size-base);
   font-weight: 500;
-  color: var(--color-text);
+  color: var(--unself-color-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

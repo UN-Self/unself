@@ -91,54 +91,54 @@ function onInput(event: Event) {
 .u-field {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--unself-space-1);
 }
 .u-field-label {
-  padding: 0 var(--space-1);
-  font-size: var(--font-size-sm);
+  padding: 0 var(--unself-space-1);
+  font-size: var(--unself-font-size-sm);
   font-weight: 500;
-  color: var(--color-text);
+  color: var(--unself-color-text);
 }
 .u-field-required {
   margin-left: 2px;
-  color: var(--color-danger);
+  color: var(--unself-color-danger);
 }
 
 .u-input {
   height: 40px;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-size: var(--font-size-base);
+  padding: 0 var(--unself-space-3);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-bg);
+  color: var(--unself-color-text);
+  font-size: var(--unself-font-size-base);
   transition:
-    border-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
+    border-color var(--unself-duration-fast) var(--unself-ease-out),
+    box-shadow var(--unself-duration-fast) var(--unself-ease-out);
 }
 .u-input::placeholder {
-  color: var(--color-text-tertiary);
+  color: var(--unself-color-text-tertiary);
 }
 .u-input:focus {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px var(--color-primary-soft);
+  border-color: var(--unself-color-primary);
+  box-shadow: 0 0 0 3px var(--unself-color-primary-soft);
 }
 .u-input:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
 .u-input-error {
-  border-color: var(--color-danger);
+  border-color: var(--unself-color-danger);
 }
 .u-input-error:focus {
-  border-color: var(--color-danger);
-  box-shadow: 0 0 0 3px var(--color-danger-soft);
+  border-color: var(--unself-color-danger);
+  box-shadow: 0 0 0 3px var(--unself-color-danger-soft);
 }
 
 /* beUI input 的错误抖动：0.45s，位移序列照抄 */
 .u-input-shake {
-  animation: u-shake 0.45s var(--ease-out);
+  animation: u-shake 0.45s var(--unself-ease-out);
 }
 @keyframes u-shake {
   0% { transform: translateX(0); }
@@ -158,8 +158,8 @@ function onInput(event: Event) {
   min-height: 16px;
 }
 .u-field-error {
-  padding: 0 var(--space-1);
-  font-size: var(--font-size-xs);
-  color: var(--color-danger);
+  padding: 0 var(--unself-space-1);
+  font-size: var(--unself-font-size-xs);
+  color: var(--unself-color-danger);
 }
 </style>

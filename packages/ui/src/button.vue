@@ -65,19 +65,19 @@ const sizeClass = computed(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-base);
+  gap: var(--unself-space-2);
+  border-radius: var(--unself-radius-md);
+  font-size: var(--unself-font-size-base);
   font-weight: 500;
   line-height: 1;
   border: 1px solid transparent;
   cursor: pointer;
   user-select: none;
   transition:
-    background-color var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
+    background-color var(--unself-duration-fast) var(--unself-ease-out),
+    border-color var(--unself-duration-fast) var(--unself-ease-out),
+    color var(--unself-duration-fast) var(--unself-ease-out),
+    transform var(--unself-duration-fast) var(--unself-ease-out);
 }
 .u-btn:active:not(:disabled) {
   transform: scale(0.97);
@@ -87,48 +87,48 @@ const sizeClass = computed(() => {
   cursor: not-allowed;
 }
 .u-btn:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--unself-color-primary);
   outline-offset: 2px;
 }
 
 .u-btn-primary {
-  background: var(--color-primary);
-  color: var(--color-bg);
+  background: var(--unself-color-primary);
+  color: var(--unself-color-bg);
 }
 .u-btn-primary:hover:not(:disabled) {
-  background: var(--color-primary-hover);
+  background: var(--unself-color-primary-hover);
 }
 
 .u-btn-outline {
-  background: var(--color-bg);
-  color: var(--color-text);
-  border-color: var(--color-border);
+  background: var(--unself-color-bg);
+  color: var(--unself-color-text);
+  border-color: var(--unself-color-border);
 }
 .u-btn-outline:hover:not(:disabled) {
-  background: var(--color-surface);
+  background: var(--unself-color-surface);
 }
 
 .u-btn-ghost {
   background: transparent;
-  color: var(--color-text-secondary);
+  color: var(--unself-color-text-secondary);
 }
 .u-btn-ghost:hover:not(:disabled) {
-  background: var(--color-surface);
-  color: var(--color-text);
+  background: var(--unself-color-surface);
+  color: var(--unself-color-text);
 }
 
 .u-btn-sm {
   height: 32px;
-  padding: 0 var(--space-3);
+  padding: 0 var(--unself-space-3);
 }
 .u-btn-md {
   height: 40px;
-  padding: 0 var(--space-4);
+  padding: 0 var(--unself-space-4);
 }
 .u-btn-lg {
   height: 48px;
-  padding: 0 var(--space-6);
-  font-size: var(--font-size-lg);
+  padding: 0 var(--unself-space-6);
+  font-size: var(--unself-font-size-lg);
 }
 
 .u-btn-spinner {
@@ -136,7 +136,7 @@ const sizeClass = computed(() => {
   height: 14px;
   border: 2px solid currentColor;
   border-right-color: transparent;
-  border-radius: var(--radius-full);
+  border-radius: var(--unself-radius-full);
   animation: u-spin 0.8s linear infinite;
 }
 @keyframes u-spin {

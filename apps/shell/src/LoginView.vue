@@ -72,8 +72,8 @@ void (async () => {
   min-height: 100vh;
   align-items: center;
   justify-content: center;
-  padding: var(--space-4);
-  background: var(--color-surface);
+  padding: var(--unself-space-4);
+  background: var(--unself-color-surface);
 }
 .login-card {
   width: 100%;
@@ -83,19 +83,19 @@ void (async () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--unself-space-4);
   text-align: center;
 }
 .login-title {
   margin: 0;
-  font-size: var(--font-size-2xl);
+  font-size: var(--unself-font-size-2xl);
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--unself-color-text);
 }
 .login-subtitle {
   margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
 }
 .login-error {
   width: 100%;

@@ -66,81 +66,81 @@ const hasDetail = computed(() => Boolean(props.detail))
 .u-error {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  background: var(--color-danger-soft);
-  border: 1px solid var(--color-danger);
-  border-radius: var(--radius-lg);
+  gap: var(--unself-space-3);
+  padding: var(--unself-space-4);
+  background: var(--unself-color-danger-soft);
+  border: 1px solid var(--unself-color-danger);
+  border-radius: var(--unself-radius-lg);
 }
 .u-error-head {
   display: flex;
-  gap: var(--space-3);
+  gap: var(--unself-space-3);
   align-items: flex-start;
 }
 .u-error-icon {
   flex-shrink: 0;
   margin-top: 2px;
-  color: var(--color-danger);
+  color: var(--unself-color-danger);
 }
 .u-error-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--unself-space-1);
 }
 .u-error-title {
-  font-size: var(--font-size-base);
+  font-size: var(--unself-font-size-base);
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--unself-color-text);
 }
 .u-error-message {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
 }
 .u-error-request {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
+  font-size: var(--unself-font-size-xs);
+  color: var(--unself-color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 .u-error-actions {
   display: flex;
-  gap: var(--space-3);
+  gap: var(--unself-space-3);
   align-items: center;
 }
 .u-error-retry,
 .u-error-toggle {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--unself-space-1);
   height: 28px;
-  padding: 0 var(--space-2);
+  padding: 0 var(--unself-space-2);
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--unself-radius-sm);
   background: transparent;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
   cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-out);
+  transition: background-color var(--unself-duration-fast) var(--unself-ease-out);
 }
 .u-error-retry:hover,
 .u-error-toggle:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text);
+  background: var(--unself-color-surface-hover);
+  color: var(--unself-color-text);
 }
 .u-error-chevron {
-  transition: transform var(--duration-fast) var(--ease-out);
+  transition: transform var(--unself-duration-fast) var(--unself-ease-out);
 }
 .u-error-chevron-open {
   transform: rotate(180deg);
 }
 .u-error-detail {
   margin: 0;
-  padding: var(--space-3);
+  padding: var(--unself-space-3);
   max-height: 200px;
   overflow: auto;
-  background: var(--color-surface);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
+  background: var(--unself-color-surface);
+  border-radius: var(--unself-radius-md);
+  font-size: var(--unself-font-size-xs);
+  color: var(--unself-color-text-secondary);
   white-space: pre-wrap;
   word-break: break-all;
 }
