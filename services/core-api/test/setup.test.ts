@@ -253,6 +253,36 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     expect(db.first<{ role: string }>('SELECT role FROM users WHERE id = ?', 'u_1')).toEqual({ role: 'admin' });
   });
 
+  it('并发双激活同一 token：仅一次成功（consumeSetupToken 原子化）', async () => {
+    const { env, db, cookie } = await envFor();
+
+    const gen = (await (
+      await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env)
+    ).json()) as { token: string };
+
+    const activate = () =>
+      app.request(
+        `https://team.example.com/api/setup/activate?token=${gen.token}`,
+        { method: 'POST', headers: { cookie } },
+        env,
+      );
+    const [a, b] = await Promise.all([activate(), activate()]);
+    const statuses = [a.status, b.status];
+
+    // 契约：同一 token 并发双激活只有一次成功；另一次被拒（403 已使用 / 409 已封死）
+    expect(statuses.filter((s) => s === 200)).toHaveLength(1);
+    expect(statuses.filter((s) => s === 403 || s === 409)).toHaveLength(1);
+
+    // 真库：只有一次激活落痕——setup_done 置位、升管理员、审计仅一条 setup_activated
+    expect(
+      db.query<{ value: string }>("SELECT value FROM instance_config WHERE key = 'setup_done'"),
+    ).toEqual([{ value: '1' }]);
+    expect(db.first<{ role: string }>('SELECT role FROM users WHERE id = ?', 'u_1')).toEqual({ role: 'admin' });
+    expect(
+      db.query<{ action: string }>("SELECT action FROM audit_log WHERE action = 'setup_activated'"),
+    ).toHaveLength(1);
+  });
+
   // --- 守护用例（审核 T1：查询列 ↔ 建表列错位即红） ------------------------
 
   it('守护：setup 相关表列与迁移建表一致（幻影列/漏列即红）', async () => {

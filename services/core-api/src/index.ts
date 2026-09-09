@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { Hono } from 'hono';
 
-import { generateInstanceKeyPair } from './keys';
 import { requireAdmin } from './middleware/admin';
 import { registerAuthRoutes } from './routes/auth';
 import { registerModuleRoutes } from './routes/modules';
 import { registerSetupRoutes } from './routes/setup';
+import { getUserRole } from './services/users';
 import { readSession } from './session';
 
 export { getSigningRuntime } from './keys';
@@ -37,25 +37,16 @@ app.use('*', async (c, next) => {
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'core-api' }));
 
-// 部署/首启自检：生成新 ES256 密钥对打印给部署者（privateKeyPem → wrangler secret）。
-// 进程自身不持 CF 凭证、不落盘（§5.5：装配只在部署时执行）。
-app.post('/api/admin/bootstrap-keygen', async (c) => {
-  const pair = await generateInstanceKeyPair();
-  return c.json({
-    hint: '把 privateKeyPem 写入 wrangler secret JWT_PRIVATE_KEY 后重部署；publicKeyPem 备查',
-    ...pair,
-  });
-});
-
-/** 当前会话用户（shell 判断登录态 / #10-13 前端用）。 */
+/** 当前会话用户（shell 判断登录态 / #10-13 前端用；role 供前端能力判断，真值以服务端为准）。 */
 app.get('/api/me', async (c) => {
   const session = await readSession(c);
   if (!session) {
     return c.json({ authenticated: false }, 401);
   }
+  const role = await getUserRole(c.env.CORE_DB, session.uid);
   return c.json({
     authenticated: true,
-    user: { id: session.uid, name: session.name, issuer: session.iss, sub: session.sub },
+    user: { id: session.uid, name: session.name, issuer: session.iss, sub: session.sub, role },
   });
 });
 

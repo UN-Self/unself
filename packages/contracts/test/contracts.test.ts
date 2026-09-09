@@ -91,23 +91,24 @@ describe('ModuleManifestSchema', () => {
 });
 
 describe('ModuleTokenClaimsSchema', () => {
-  it('parses claims without act/caps', () => {
+  it('parses claims without act/caps（语义对齐实现：sub=核心用户 uid、aud=模块 id）', () => {
     const claims = ModuleTokenClaimsSchema.parse({
-      iss: 'https://core.unself.example',
-      sub: 'mod-a',
-      aud: 'core-api',
+      iss: 'unself-core',
+      sub: 'u_1a2b3c4d',
+      aud: 'mod-a',
       iat: 1_700_000_000,
       exp: 1_800_000_000,
     });
-    expect(claims.sub).toBe('mod-a');
+    expect(claims.sub).toBe('u_1a2b3c4d');
+    expect(claims.aud).toBe('mod-a');
     expect(claims.act).toBeUndefined();
   });
 
-  it('parses claims containing act', () => {
+  it('parses claims containing act（保留契约字段，Core 未签发过）', () => {
     const claims = ModuleTokenClaimsSchema.parse({
-      iss: 'https://core.unself.example',
-      sub: 'mod-a',
-      aud: 'core-api',
+      iss: 'unself-core',
+      sub: 'u_1a2b3c4d',
+      aud: 'mod-a',
       iat: 1_700_000_000,
       exp: 1_800_000_000,
       act: { sub: 'mod-b' },
@@ -115,6 +116,18 @@ describe('ModuleTokenClaimsSchema', () => {
     });
     expect(claims.act?.sub).toBe('mod-b');
     expect(claims.caps).toEqual(['notify', 'navigate']);
+  });
+
+  it('accepts optional name（会话展示名；旧 token 无此字段向后兼容）', () => {
+    const claims = ModuleTokenClaimsSchema.parse({
+      iss: 'unself-core',
+      sub: 'u_1a2b3c4d',
+      aud: 'mod-a',
+      iat: 1_700_000_000,
+      exp: 1_800_000_000,
+      name: '黄一',
+    });
+    expect(claims.name).toBe('黄一');
   });
 });
 
