@@ -3,7 +3,7 @@ import { createSSRApp, h } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import { describe, expect, it } from 'vitest';
 
-import { UButton, UCard, UErrorCard, UInput } from '../src/index';
+import { UButton, UCard, UErrorCard, UInput, USkeleton } from '../src/index';
 
 /**
  * 基元行为断言（G1 清理：原「导出存在性 + UI_VERSION 恒真」已删）：
@@ -67,6 +67,37 @@ describe('@unself/ui 基元 SSR 行为', () => {
     expect(html).toContain('placeholder="搜点东西"');
     expect(html).toContain('u-input-error');
     expect(html).toContain('不能为空');
+  });
+
+  it('UButton：loading 时按钮带 aria-busy（#83 无障碍补齐）', async () => {
+    const html = await renderToString(
+      createSSRApp({ render: () => h(UButton, { loading: true }, () => '提交中') }),
+    );
+    expect(html).toContain('aria-busy="true"');
+  });
+
+  it('UInput：type=email 透传；label for 与 input id 一致（#83 useId 替代随机数）', async () => {
+    const html = await renderToString(
+      createSSRApp({ render: () => h(UInput, { label: '邮箱', type: 'email' }) }),
+    );
+    expect(html).toContain('type="email"');
+    const forMatch = /<label[^>]*\bfor="([^"]+)"/.exec(html);
+    expect(forMatch).not.toBeNull();
+    expect(html).toContain(`id="${forMatch![1]}"`);
+  });
+
+  it('USkeleton：行数与末行缩短按 props 生效（#83 收编壳内两处手写骨架）', async () => {
+    const three = await renderToString(
+      createSSRApp({ render: () => h(USkeleton, { lines: 3 }) }),
+    );
+    expect(three.match(/u-skeleton-line/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(three).toContain('u-skeleton-line-short');
+    expect(three).toContain('aria-busy="true"');
+
+    const noShort = await renderToString(
+      createSSRApp({ render: () => h(USkeleton, { lines: 2, shortenLast: false }) }),
+    );
+    expect(noShort).not.toContain('u-skeleton-line-short');
   });
 
   it('UCard：默认 padding=md 输出 u-card u-card-md 且 slot 内容呈现', async () => {

@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, useId } from 'vue'
 
 /**
  * 输入框基元：label + 可选错误行（稳定占位不跳动）+ 左侧图标插槽。
@@ -10,7 +10,7 @@ import { computed, ref } from 'vue'
 export interface InputProps {
   modelValue?: string
   label?: string
-  type?: 'text' | 'password' | 'url'
+  type?: 'text' | 'password' | 'url' | 'email'
   placeholder?: string
   required?: boolean
   autocomplete?: string
@@ -37,9 +37,9 @@ const props = withDefaults(defineProps<InputProps>(), {
 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
-const inputId = `u-input-${Math.random().toString(36).slice(2, 9)}`
+// #83：useId 替代 Math.random——SSR/客户端 id 稳定、可读无随机（表单契约）
+const inputId = useId()
 const shaking = ref(false)
-let shakeTimer: ReturnType<typeof setTimeout> | undefined
 
 const hasError = computed(() => Boolean(props.error))
 const errorMessage = computed(() => (typeof props.error === 'string' ? props.error : null))

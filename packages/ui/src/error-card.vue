@@ -123,7 +123,7 @@ const hasDetail = computed(() => Boolean(props.detail))
 }
 .u-error-retry:hover,
 .u-error-toggle:hover {
-  background: rgb(0 0 0 / 0.05);
+  background: var(--color-surface-hover);
   color: var(--color-text);
 }
 .u-error-chevron {
