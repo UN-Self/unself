@@ -6,7 +6,6 @@ import { KeyRound, PlugZap } from 'lucide-vue-next'
 import { UButton, UInput, UCard, UErrorCard } from '@unself/ui'
 import {
   activateOrLogin,
-  getSetupStatus,
   testOidcConnection,
   type ApiError,
 } from './lib/setup-api'
@@ -16,19 +15,22 @@ import {
  * - 仅携带部署输出的一次性令牌才可配置；无令牌只提示
  * - 三字段（issuer / client id / client secret）+ 测试连接
  * - [保存并激活] → 整页跳 OIDC → 回来自动成管理员 → 直接进工作台
- * - 已激活后本页不存在：已登录→工作台，未登录→登录页
+ * - 已激活后本页不存在：已登录→工作台，未登录→登录页（#83：只信路由守卫，
+ *   页面不再自行判定 getSetupStatus + /api/me + router.replace）
  */
 
 const route = useRoute()
 const router = useRouter()
 
-type Phase = 'checking' | 'sealed' | 'no-token' | 'ready' | 'redirecting'
+type Phase = 'no-token' | 'ready'
 
-const phase = ref<Phase>('checking')
 const token = computed(() => {
   const raw = route.query.token
   return typeof raw === 'string' && raw.length > 0 ? raw : null
 })
+
+// #83：激活态由守卫决断（已完成 → 重定向离场），本页只按 token 分派文案
+const phase = ref<Phase>(token.value ? 'ready' : 'no-token')
 
 // 表单三字段（§6.5）
 const issuer = ref('')
@@ -39,42 +41,11 @@ const testing = ref(false)
 const testResult = ref<{ ok: boolean; text: string } | null>(null)
 const activating = ref(false)
 const activateError = ref<ApiError | null>(null)
-// 侧记到 sessionStorage：登录回来若 setup 已封死直接进工作台
-const ACTIVATED_KEY = 'unself_setup_done'
 // 跳登录前把表单（不含 secret）侧记到 sessionStorage，登录回来字段为空时恢复
 const OIDC_DRAFT_KEY = 'unself_setup_oidc'
 
-onMounted(async () => {
-  let status: Awaited<ReturnType<typeof getSetupStatus>>
-  try {
-    status = await getSetupStatus(token.value ?? undefined)
-  } catch {
-    phase.value = 'ready'
-    restoreOidcDraft()
-    return
-  }
-  if (status.done) {
-    // 已激活：本页不复存在。已登录→工作台；未登录→登录页（守卫补一刀）
-    sessionStorage.removeItem(OIDC_DRAFT_KEY)
-    if (sessionStorage.getItem(ACTIVATED_KEY) === '1') {
-      sessionStorage.removeItem(ACTIVATED_KEY)
-      await router.replace('/')
-    } else {
-      phase.value = 'sealed'
-      try {
-        const me = await fetch('/api/me', { credentials: 'same-origin' })
-        await router.replace(me.ok ? '/' : '/login')
-      } catch {
-        await router.replace('/login')
-      }
-    }
-    return
-  }
-  if (!token.value) {
-    phase.value = 'no-token'
-    return
-  }
-  phase.value = 'ready'
+onMounted(() => {
+  // 激活态判定已上移路由守卫（#83）：此处只恢复表单草稿
   restoreOidcDraft()
 })
 
@@ -135,9 +106,8 @@ async function onSaveAndActivate() {
   try {
     const result = await activateOrLogin(token.value, oidc)
     if ('needLogin' in result) {
-      // 未登录：整页跳 OIDC，next 已带回 token；回来时激活在守卫里续跑
+      // 未登录：整页跳 OIDC，next 已带回 token；回来时激活态由路由守卫续判
       // 表单（除 secret）侧记到 sessionStorage，登录回来字段为空时恢复
-      sessionStorage.setItem(ACTIVATED_KEY, '1')
       sessionStorage.setItem(
         OIDC_DRAFT_KEY,
         JSON.stringify({ issuer: oidc.issuer, clientId: oidc.clientId }),
@@ -158,11 +128,7 @@ async function onSaveAndActivate() {
 
 <template>
   <main class="setup-page">
-    <div v-if="phase === 'checking'" class="setup-hint">正在检查实例状态…</div>
-
-    <div v-else-if="phase === 'sealed'" class="setup-hint">实例已完成配置，正在进入工作台…</div>
-
-    <UCard v-else-if="phase === 'no-token'" padding="lg" class="setup-card">
+    <UCard v-if="phase === 'no-token'" padding="lg" class="setup-card">
       <div class="setup-tokenless">
         <KeyRound :size="28" aria-hidden="true" class="setup-tokenless-icon" />
         <h1 class="setup-title">需要激活链接</h1>
@@ -257,10 +223,6 @@ async function onSaveAndActivate() {
   justify-content: center;
   padding: var(--space-4);
   background: var(--color-surface);
-}
-.setup-hint {
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-base);
 }
 .setup-card {
   width: 100%;
