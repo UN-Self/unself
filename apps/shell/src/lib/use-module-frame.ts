@@ -9,6 +9,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 
 import { attachModuleBridge, frameOriginFor, type BridgeHandle } from './module-bridge'
+import { attachFrameTokens } from './frame-tokens'
+import { currentThemeTokens } from './theme'
 import { moduleFrameSrc, type RegistryModule } from './registry-api'
 import type { ApiError } from './token-api'
 
@@ -43,11 +45,18 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
   const frameKey = computed(() => `${module.value?.id ?? 'none'}#${frameReload.value}`)
 
   let bridge: BridgeHandle | null = null
+  /** 通道 A（§6.5.5）直注句柄：与桥同生命周期，detach 拆掉旧 iframe 的 load 监听。 */
+  let frameTokens: { detach: () => void } | null = null
   let handshakeTimer: ReturnType<typeof setTimeout> | undefined
 
   function detachBridge() {
     bridge?.detach()
     bridge = null
+  }
+
+  function detachFrameTokens() {
+    frameTokens?.detach()
+    frameTokens = null
   }
 
   function clearHandshakeTimer() {
@@ -65,6 +74,7 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
     module,
     async (mod) => {
       detachBridge()
+      detachFrameTokens()
       clearHandshakeTimer()
       frameError.value = null
       if (!mod) {
@@ -113,10 +123,13 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
     // 等待期间用户可能已切换模块：交给新模块的 watch 处理
     if (module.value !== mod) return
     detachBridge()
+    detachFrameTokens()
+    const tokens = currentThemeTokens()
     bridge = attachModuleBridge({
       iframe,
       moduleId: mod.id,
       frameOrigin: origin,
+      tokens,
       onToken: () => {
         frameState.value = 'ready'
       },
@@ -125,6 +138,8 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
         frameState.value = 'failed'
       },
     })
+    // 通道 A（§6.5.5）：同源模块直注 style#unself-tokens；跨域返回 null 走通道 B，不记句柄
+    frameTokens = attachFrameTokens(iframe, tokens)
   }
 
   // 15s 握手超时（§6.5 异常卡：加载中骨架 → 失败卡）
@@ -150,6 +165,7 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
     frameError.value = null
     frameState.value = 'handshaking'
     detachBridge()
+    detachFrameTokens()
     frameReload.value += 1
     await nextTick()
     await attachBridgeFor(mod)
@@ -157,6 +173,7 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
 
   onBeforeUnmount(() => {
     detachBridge()
+    detachFrameTokens()
     clearHandshakeTimer()
   })
 
