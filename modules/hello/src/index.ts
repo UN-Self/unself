@@ -56,26 +56,23 @@ app.get('/', (c) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hello</title>
   <style>
-    /* 令牌单一来源 = apps/shell/src/tokens.css（§6.5）：此处仅为同名副本，
-     * 模块页在壳 iframe 独立文档中，CSS 自定义属性不跨文档，必须自带值；
-     * 值与 tokens.css 同值（以 rgb() 表达——与十六进制等价且源内零裸 hex），换肤时同步此副本。 */
-    :root { --color-bg: rgb(255 255 255); --color-border: rgb(228 228 225); --color-text: rgb(28 25 23);
-            --color-text-secondary: rgb(120 113 108); --color-primary: rgb(37 99 235);
-            --color-primary-soft: rgb(219 234 254); --color-danger: rgb(220 38 38); }
+    /* 令牌唯一来源 = 壳注入 style#unself-tokens（§6.5.5 通道 A：同源 iframe 直注）
+     * 与 SDK 通道 B（ready 握手 postMessage 下发 tokens）——页面只引用 --unself- 前缀
+     * 的 CSS 变量，不持有任何值副本（§6.5.5 禁内联值；更换主题不重部署即可全站生效）。 */
     * { box-sizing: border-box; }
-    body { margin:0; font:var(--font-size-base)/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;
-           color:var(--color-text); background:var(--color-bg); }
-    main { display:flex; min-height:100vh; align-items:center; justify-content:center; padding:var(--space-4); }
-    .card { display:flex; align-items:center; gap:var(--space-6); flex-wrap:wrap; justify-content:center;
-            padding:var(--space-6) var(--space-8); border:1px solid var(--color-border); border-radius:var(--radius-lg); }
-    .identity { display:flex; flex-direction:column; gap:var(--space-1); }
-    .identity .name { font-size:var(--font-size-lg); font-weight:600; }
-    .identity .email { font-size:var(--font-size-sm); color:var(--color-text-secondary); }
-    button { height:48px; padding:0 var(--space-6); border:none; border-radius:var(--radius-md);
-             background:var(--color-primary); color:var(--color-bg); font-size:var(--font-size-base); font-weight:500; cursor:pointer; }
+    body { margin:0; font:var(--unself-font-size-base)/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;
+           color:var(--unself-color-text); background:var(--unself-color-bg); }
+    main { display:flex; min-height:100vh; align-items:center; justify-content:center; padding:var(--unself-space-4); }
+    .card { display:flex; align-items:center; gap:var(--unself-space-6); flex-wrap:wrap; justify-content:center;
+            padding:var(--unself-space-6) var(--unself-space-8); border:1px solid var(--unself-color-border); border-radius:var(--unself-radius-lg); }
+    .identity { display:flex; flex-direction:column; gap:var(--unself-space-1); }
+    .identity .name { font-size:var(--unself-font-size-lg); font-weight:600; }
+    .identity .email { font-size:var(--unself-font-size-sm); color:var(--unself-color-text-secondary); }
+    button { height:48px; padding:0 var(--unself-space-6); border:none; border-radius:var(--unself-radius-md);
+             background:var(--unself-color-primary); color:var(--unself-color-bg); font-size:var(--unself-font-size-base); font-weight:500; cursor:pointer; }
     button:disabled { opacity:.6; cursor:wait; }
-    .count { font-size:var(--font-size-xl); font-variant-numeric:tabular-nums; min-width:var(--space-8); text-align:center; }
-    .err { width:100%; text-align:center; color:var(--color-danger); font-size:var(--font-size-sm); }
+    .count { font-size:var(--unself-font-size-xl); font-variant-numeric:tabular-nums; min-width:var(--unself-space-8); text-align:center; }
+    .err { width:100%; text-align:center; color:var(--unself-color-danger); font-size:var(--unself-font-size-sm); }
   </style>
 </head>
 <body>
