@@ -37,7 +37,7 @@ Workers Routes 按路径绑定；Docker 用 openresty 按 location 分发，两�
 
 ## 状态
 
-设计期。M0 尚未交付，**当前不可部署**；部署文档与一键部署模板随 M0 交付。
+**最小可用（v0.1.0）**。M0 垂直切片交付：Cloudflare 实例可部署、首个管理员经 OIDC 登录、hello 模块全链路（网页桥接/握手/token 验签/数据读写）、模块运行时启停、移除模块重部署后路由消失。实机验收通过（https://unself.handywote.top）。后续迭代见 PRODUCT_SPEC/requirements 与 issues。
 
 ## 开发
 
