@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { buildModuleSdkAssets, coreWranglerConfig, moduleWranglerConfig, prefixStripWrapperSource } from '../src/assemble';
+import { buildModuleSdkAssets, coreWranglerConfig, moduleWranglerConfig, prefixStripWrapperSource, provisionAll } from '../src/assemble';
 import { migrationWranglerConfig } from '../src/assemble';
 import { coreWorkerEntrySource } from '../src/steps';
 import type { UnselfConfig } from '../src/config';
+import type { Wrangler } from '../src/wrangler';
 
 /** 仓库根（测试进程从 deploy/cloudflare/test 起算）。 */
 const REPO_ROOT = new URL('../../..', import.meta.url).pathname;
@@ -176,5 +178,57 @@ describe('buildModuleSdkAssets（T3 页面 SDK 装载契约）', () => {
     const page = await readFile(join(REPO_ROOT, 'modules/hello/src/index.ts'), 'utf8');
     const specifier = /from '\.\/sdk\/([^']+)'/.exec(page)?.[1];
     expect(specifier).toBe('module-sdk.esm.js');
+  });
+});
+
+describe('provisionAll（③ shell 每次部署重建，#73）', () => {
+  it('dist 已存在也强制重建：新产物入 assets/shell，陈旧标记与旧内容不残留', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'unself-provision-'));
+    try {
+      // 预置陈旧 dist（模拟上次部署残留：过期产物 + 陈旧标记）
+      const staleDist = join(rootDir, 'apps/shell/dist');
+      await mkdir(join(staleDist, 'assets'), { recursive: true });
+      await writeFile(join(staleDist, 'stale.marker'), 'stale');
+      await writeFile(join(staleDist, 'index.html'), '<html><body>OLD BUILD</body></html>');
+      await writeFile(join(staleDist, 'assets/index-OLD.js'), 'console.log("old")');
+
+      // fake 构建：模拟真实重建——清空 dist 后写当前源码产物（删陈旧标记）
+      let buildCalled = false;
+      const buildShell = async (dir: string) => {
+        expect(dir).toBe(rootDir);
+        buildCalled = true;
+        await rm(staleDist, { recursive: true, force: true });
+        await mkdir(join(staleDist, 'assets'), { recursive: true });
+        await writeFile(join(staleDist, 'index.html'), '<html><body>NEW BUILD</body></html>');
+        await writeFile(join(staleDist, 'assets/index-NEW.js'), 'console.log("new")');
+      };
+
+      const provisioned = await provisionAll({
+        rootDir,
+        // 最小合法配置（类型断言沿用本文件现有风格）；modules 传空数组：跳过 esbuild，聚焦 shell 重建
+        config: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } } as UnselfConfig,
+        modules: [],
+        dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
+        keypair: { existing: true },
+        wrangler: {} as unknown as Wrangler,
+        log: () => {},
+        buildShell,
+      });
+
+      // dist 已存在但构建仍被调用 → 旧产物被真实重建覆盖
+      expect(buildCalled).toBe(true);
+      const shellAssets = join(rootDir, '.deploy/cloudflare/assets/shell');
+      // 新产物已搬运进部署目录
+      expect(await readFile(join(shellAssets, 'index.html'), 'utf8')).toContain('NEW BUILD');
+      expect(await readFile(join(shellAssets, 'assets/index-NEW.js'), 'utf8')).toBe('console.log("new")');
+      // 陈旧残留零容忍：标记与旧资产/旧内容不得出现
+      expect(existsSync(join(shellAssets, 'stale.marker'))).toBe(false);
+      expect(existsSync(join(shellAssets, 'assets/index-OLD.js'))).toBe(false);
+      expect(await readFile(join(shellAssets, 'index.html'), 'utf8')).not.toContain('OLD BUILD');
+      // 返回契约未破坏（outDir 落位 .deploy/cloudflare）
+      expect(provisioned.outDir).toBe(join(rootDir, '.deploy/cloudflare'));
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
   });
 });
