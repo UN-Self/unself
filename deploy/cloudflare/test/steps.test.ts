@@ -241,6 +241,74 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     expect(idxOf(/^__ensureDns/)).toBeLessThan(idxOf(/module_registry/));
   });
 
+  it('未选模块（modules: []）→ 删除其 zone 路由，注册表 disable 照旧（#77）', { timeout: 120_000 }, async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    const routeCalls: Array<{ zoneId: string; domain: string; moduleIds: string[]; apiToken: string; hasLog: boolean }> = [];
+    await runSteps({
+      rootDir: ROOT,
+      wrangler: fake.wrangler,
+      // 零模块：modules/hello 存在但未选中 → 必须删其 zone 路由（§6.5 全停用空态可表达）
+      configOverride: { domain: 'demo.handywote.top', modules: [], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      http: SMOKE_OK,
+      resolveZone: async () => ({ id: 'zone-1', name: 'handywote.top' }),
+      cleanupCustomDomains: async () => {
+        fake.state.commands.push('__cleanupCustomDomains');
+      },
+      ensureTotalTls: async () => {
+        fake.state.commands.push('__ensureTotalTls');
+      },
+      cleanupModuleRoutes: async (info) => {
+        routeCalls.push({
+          zoneId: info.zoneId,
+          domain: info.domain,
+          moduleIds: info.moduleIds,
+          apiToken: info.apiToken,
+          hasLog: typeof info.log === 'function',
+        });
+        fake.state.commands.push('__cleanupModuleRoutes');
+      },
+      resolveBaseUrl: async () => 'https://demo.handywote.top',
+      fetchJwks: async () => FIXED_JWKS,
+      ensureDns: async (domain) => {
+        fake.state.commands.push(`__ensureDns:${domain}`);
+      },
+    });
+    // 删除动作：未选 hello、zone/domain 与部署期解析一致
+    expect(routeCalls).toHaveLength(1);
+    expect(routeCalls[0]).toMatchObject({
+      zoneId: 'zone-1',
+      domain: 'demo.handywote.top',
+      moduleIds: ['hello'],
+      hasLog: true,
+    });
+    const cmds = fake.state.commands;
+    const idxOf = (re: RegExp) => cmds.findIndex((c) => re.test(c));
+    // 注册表翻转照旧（not_deployed），且删除在步骤⑤之前（步骤④′）
+    expect(cmds.some((c) => c.includes("UPDATE module_registry SET enabled = 0 WHERE id = 'hello'"))).toBe(true);
+    expect(idxOf(/^__cleanupModuleRoutes/)).toBeLessThan(idxOf(/module_registry/));
+    // 只删路由：未选模块不部署 Worker（不删 Worker/D1，也不重新上传）
+    expect(cmds.some((c) => c.includes('modules/hello.wrangler.jsonc'))).toBe(false);
+  });
+
+  it('未配置 domain（workers.dev）→ 未选模块跳过路由删除（无 zone 路由）', { timeout: 120_000 }, async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    let routeCalls = 0;
+    await runSteps({
+      rootDir: ROOT,
+      wrangler: fake.wrangler,
+      configOverride: { domain: '', modules: [], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      http: SMOKE_OK,
+      cleanupModuleRoutes: async () => {
+        routeCalls++;
+      },
+      resolveBaseUrl: async () => 'https://x.example',
+      fetchJwks: async () => FIXED_JWKS,
+    });
+    expect(routeCalls).toBe(0);
+    // 注册表 disable 仍照旧
+    expect(fake.state.commands.some((c) => c.includes("UPDATE module_registry SET enabled = 0 WHERE id = 'hello'"))).toBe(true);
+  });
+
   it('冒烟失败 → 明确报错非零语义', async () => {
     const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
     await expect(

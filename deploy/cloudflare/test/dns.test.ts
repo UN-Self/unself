@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ensureTotalTls, ensureZoneRecord, findAccountId, findZone, removeLegacyCustomDomains } from '../src/dns';
+import { ensureTotalTls, ensureZoneRecord, findAccountId, findZone, removeLegacyCustomDomains, removeModuleRoutes } from '../src/dns';
 
 /** 记录 fetch 请求并回放预设响应（按 URL 前缀匹配）。 */
 function stubCf(routes: Array<{ match: RegExp; respond: unknown }>) {
@@ -185,5 +185,105 @@ describe('ensureZoneRecord（幂等 DNS 自愈）', () => {
       ttl: 1,
     });
     expect(logs[0]).toContain('已创建');
+  });
+});
+
+describe('removeModuleRoutes（未选模块路由删除，幂等）', () => {
+  it('命中删除：只删 moduleIds 中模块的精确路由，其余路由不动', async () => {
+    const calls = stubCf([
+      {
+        match: /workers\/routes$/,
+        respond: {
+          success: true,
+          result: [
+            { id: 'r-hello', pattern: 'demo.handywote.top/m/hello/*' },
+            { id: 'r-chat', pattern: 'demo.handywote.top/m/chat/*' },
+          ],
+        },
+      },
+      { match: /workers\/routes\/r-hello$/, respond: { success: true, result: { id: 'r-hello' } } },
+    ]);
+    const logs: string[] = [];
+    await removeModuleRoutes({
+      zoneId: 'zone-1',
+      domain: 'demo.handywote.top',
+      moduleIds: ['hello'],
+      apiToken: 'tok',
+      log: (m) => logs.push(m),
+    });
+    const deleted = calls.filter((c) => c.method === 'DELETE').map((c) => c.url);
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]).toContain('/zones/zone-1/workers/routes/r-hello');
+    expect(logs.filter((l) => l.includes('已删除'))).toHaveLength(1);
+    expect(deleted.some((u) => u.includes('r-chat'))).toBe(false);
+  });
+
+  it('路由不存在（幂等）：零 DELETE，记「无需删除」日志', async () => {
+    const calls = stubCf([{ match: /workers\/routes$/, respond: { success: true, result: [] } }]);
+    const logs: string[] = [];
+    await removeModuleRoutes({
+      zoneId: 'zone-1',
+      domain: 'demo.handywote.top',
+      moduleIds: ['hello'],
+      apiToken: 'tok',
+      log: (m) => logs.push(m),
+    });
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    expect(logs.some((l) => l.includes('无需删除'))).toBe(true);
+  });
+
+  it('空 moduleIds → 零 fetch', async () => {
+    const calls = stubCf([]);
+    await removeModuleRoutes({
+      zoneId: 'zone-1',
+      domain: 'demo.handywote.top',
+      moduleIds: [],
+      apiToken: 'tok',
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('zone 路由查询失败（success:false）→ 不抛错，记「查询失败」日志，零 DELETE', async () => {
+    const calls = stubCf([
+      { match: /workers\/routes$/, respond: { success: false, errors: [{ code: 10000, message: 'Authentication error' }] } },
+    ]);
+    const logs: string[] = [];
+    await expect(
+      removeModuleRoutes({
+        zoneId: 'zone-1',
+        domain: 'demo.handywote.top',
+        moduleIds: ['hello', 'chat'],
+        apiToken: 'tok',
+        log: (m) => logs.push(m),
+      }),
+    ).resolves.toBeUndefined();
+    expect(logs.some((l) => l.includes('查询失败'))).toBe(true);
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('精确匹配不误删：相似 pattern（近似 id / 他域 / 无通配）均不动', async () => {
+    const calls = stubCf([
+      {
+        match: /workers\/routes$/,
+        respond: {
+          success: true,
+          result: [
+            { id: 'r-1', pattern: 'demo.handywote.top/m/helloworld/*' },
+            { id: 'r-2', pattern: 'other.example.com/m/hello/*' },
+            { id: 'r-3', pattern: 'demo.handywote.top/m/hello' },
+          ],
+        },
+      },
+    ]);
+    const logs: string[] = [];
+    await removeModuleRoutes({
+      zoneId: 'zone-1',
+      domain: 'demo.handywote.top',
+      moduleIds: ['hello'],
+      apiToken: 'tok',
+      log: (m) => logs.push(m),
+    });
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    expect(logs.some((l) => l.includes('无需删除'))).toBe(true);
   });
 });

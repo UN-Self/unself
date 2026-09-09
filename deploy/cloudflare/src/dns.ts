@@ -99,6 +99,47 @@ export async function removeLegacyCustomDomains(input: {
 }
 
 /**
+ * 删除未选模块的 zone 路由 `/m/<id>/*`（M0 验收：移除模块重部署后路由消失，requirements L207）。
+ * 幂等：路由不存在不报错、无副作用；只删路由，不删模块 Worker、不动模块 D1（数据保留，完整卸载剧本 M1）。
+ */
+export async function removeModuleRoutes(input: {
+  zoneId: string;
+  domain: string;
+  moduleIds: string[];
+  apiToken: string;
+  log?: DnsLog;
+}): Promise<void> {
+  const { zoneId, domain, moduleIds, apiToken, log = () => {} } = input;
+  if (moduleIds.length === 0) return;
+  const res = await cfGet(
+    `https://api.cloudflare.com/client/v4/zones/${zoneId}/workers/routes`,
+    apiToken,
+  );
+  if (!res.success) {
+    log(`zone 路由查询失败：${JSON.stringify(res.errors)}`);
+    return;
+  }
+  const routes = (res.result ?? []) as Array<{ id: string; pattern: string; script?: string }>;
+  for (const id of moduleIds) {
+    const pattern = `${domain}/m/${id}/*`;
+    const item = routes.find((r) => r.pattern === pattern);
+    if (!item) {
+      log(`未选模块 ${id} 无 zone 路由（无需删除）`);
+      continue;
+    }
+    const del = await cfDelete(
+      `https://api.cloudflare.com/client/v4/zones/${zoneId}/workers/routes/${item.id}`,
+      apiToken,
+    );
+    log(
+      del.success
+        ? `已删除未选模块路由 ${pattern}（模块 ${id}，Worker 与数据保留）`
+        : `未选模块路由删除失败 ${pattern}：${JSON.stringify(del.errors)}`,
+    );
+  }
+}
+
+/**
  * 开启 Total TLS（幂等）：Universal SSL 只覆盖 apex + 一级通配（*.handywote.top），
  * 多级子域（unself.demo.handywote.top）的代理记录没有证书 → TLS handshake failure。
  * Total TLS 为全部代理主机名逐个签发证书（签发有秒级延迟，冒烟前已触发）。
