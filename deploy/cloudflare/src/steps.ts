@@ -8,7 +8,6 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { execFile } from 'node:child_process';
 import {
   DEPLOY_DIR,
   coreWranglerConfig,
@@ -34,8 +33,6 @@ import { registryCommands, sqlString } from './registry';
 import { fetchSetupToken, parseWorkersDevFromDeployOutput, smokeCheck } from './smoke';
 import type { Wrangler } from './wrangler';
 
-/** 迁移目录（相对各包根）。 */
-const CORE_MIGRATIONS_DIR = 'services/core-api/migrations/core';
 /** JWKS 端点路径（core-api 契约）。 */
 export const JWKS_PATH = '/.well-known/jwks.json';
 
