@@ -9,7 +9,8 @@
  * 亮色单主题（M0）；暗色主题 = 未来换一份值，零组件改动。
  * 动效令牌（duration/ease）为平台内部默认值，不属契约（§6.5.2 拍板
  * 2026-09-09：动效归模块作者自治，平台不评审、不统一、不体检），勿加进任何契约文件。
- * Tailwind v4 通过 @theme 映射为工具类（见 @theme 块）。
+ * #95：@theme inline Tailwind 工具类映射已删——shell 全部走语义类 + var(--unself-*)，
+ * 无人使用该映射（tailwindcss() 插件仍在 vite 流程，扫描不受影响）。
  */
 
 :root {
@@ -67,22 +68,4 @@
   --unself-duration-fast: 150ms;
   --unself-duration-normal: 250ms;
   --unself-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@theme inline {
-  --color-bg: var(--unself-color-bg);
-  --color-surface: var(--unself-color-surface);
-  --color-surface-hover: var(--unself-color-surface-hover);
-  --color-surface-active: var(--unself-color-surface-active);
-  --color-border: var(--unself-color-border);
-  --color-text: var(--unself-color-text);
-  --color-text-secondary: var(--unself-color-text-secondary);
-  --color-text-tertiary: var(--unself-color-text-tertiary);
-  --color-primary: var(--unself-color-primary);
-  --color-primary-hover: var(--unself-color-primary-hover);
-  --color-primary-soft: var(--unself-color-primary-soft);
-  --color-danger: var(--unself-color-danger);
-  --color-danger-soft: var(--unself-color-danger-soft);
-  --color-success: var(--unself-color-success);
-  --color-scrim: var(--unself-color-scrim);
 }
