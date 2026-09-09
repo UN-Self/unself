@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { z } from 'zod';
 
+import { ThemeTokensSchema } from './theme';
+
 /**
  * SDK ↔ Core（shell/embedding 页）window.postMessage 消息协议契约。
  * 按 type 判别的 union，客户端与服务端共用同一 schema 校验。
@@ -10,6 +12,8 @@ export const SdkMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready') }),
   /** Core 下发模块认证 token。 */
   z.object({ type: z.literal('token'), token: z.string() }),
+  /** Core 下发主题令牌（通道 B，§6.5.5）：ready 握手时随 token 一并交付。 */
+  z.object({ type: z.literal('tokens'), tokens: ThemeTokensSchema }),
   /** 请求 Core 导航到指定路径。 */
   z.object({ type: z.literal('navigate'), path: z.string() }),
   /** 发送通知（标题必填，正文可选）。 */

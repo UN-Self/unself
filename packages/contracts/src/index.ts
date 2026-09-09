@@ -6,6 +6,7 @@ export * from './token';
 export * from './messages';
 export * from './lifecycle';
 export * from './lifecycle-schema';
+export * from './theme';
 
 /** 健康检查结果（Core API `/healthz` 等端点）。 */
 export const HealthSchema = z.object({
