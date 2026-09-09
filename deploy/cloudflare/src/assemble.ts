@@ -5,6 +5,7 @@
  * - module：<id>.worker.js（esbuild ESM 打包）+ sdk/module-sdk.esm.js（浏览器 ESM 具名导出）
  *   + sdk/module-sdk.js（浏览器 IIFE，历史兼容）+ D1/vars/zone 路径 route。
  * 一切文件写进 <root>/.deploy/cloudflare/（gitignore），重跑整体重建 → 幂等。
+ * shell 每次部署都重建（vite build），不复用 apps/shell/dist 旧产物（#73）：部署器职责=始终搬运当前源码树。
  */
 import { spawn } from 'node:child_process';
 import { cp, mkdir, writeFile } from 'node:fs/promises';
@@ -60,7 +61,7 @@ function runTool(cmd: string, args: string[], cwd: string): Promise<void> {
 
 /**
  * 装配（步骤③④的构建与生成部分；上传在 steps.deploy*）：
- * 1. vite build shell（若 dist 缺失或 FORCE_BUILD）→ 拷贝到 outDir/assets/shell；
+ * 1. vite build shell（每次部署无条件重建，杜绝 dist 陈旧复用，#73）→ 拷贝到 outDir/assets/shell；
  * 2. esbuild 打包每个选中模块 Worker（platform=node_modules 外置 → 无；unself 模块自包含）；
  * 3. esbuild 打包 @unself/module-sdk 为浏览器 ESM（页面具名 import）+ IIFE（兼容）→ assets/<id>/sdk/；
  * 4. 生成 core 与各模块 wrangler jsonc。
@@ -73,20 +74,23 @@ export async function provisionAll(options: {
   keypair: InstanceKeyPair | { existing: true };
   wrangler: Wrangler;
   log?: (msg: string) => void;
+  /**
+   * 测试注入口：拦截 shell 构建（默认真实跑 pnpm --filter @unself/shell build）。
+   * 签名只吃 rootDir：构建产物约定落 apps/shell/dist，由随后 cp 搬运。
+   */
+  buildShell?: (rootDir: string) => Promise<void>;
 }): Promise<Provisioned> {
   const { rootDir, config, modules, dbIds, wrangler } = options;
   const log = options.log ?? console.log;
+  const buildShell =
+    options.buildShell ?? ((dir) => runTool('pnpm', ['--filter', '@unself/shell', 'build'], dir));
   const outDir = join(rootDir, DEPLOY_DIR);
   await mkdir(outDir, { recursive: true });
 
-  // ---- 步骤③ 构建侧：shell ----
+  // ---- 步骤③ 构建侧：shell（每次部署无条件重建，#73）----
   const shellDist = join(rootDir, 'apps/shell/dist');
-  if (!existsSync(shellDist)) {
-    log('构建 shell（vite build）…');
-    await runTool('pnpm', ['--filter', '@unself/shell', 'build'], rootDir);
-  } else {
-    log('shell dist 已存在，直接复用（幂等；需强制重建请删除 apps/shell/dist）');
-  }
+  log('构建 shell（vite build）…');
+  await buildShell(rootDir);
   const shellAssets = join(outDir, 'assets/shell');
   await rm(shellAssets);
   await cp(shellDist, shellAssets, { recursive: true });
