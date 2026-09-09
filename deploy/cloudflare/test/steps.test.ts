@@ -1,9 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { needsTotalTls, runNineSteps } from '../src/steps';
 import type { Wrangler } from '../src/wrangler';
+
+/** 测试注入口：拦截 shell 构建（真实 vite build 约 4.4s/次，#73 每次部署都重建 → 套件必超时；写最小产物即可）。 */
+async function fakeBuildShell(rootDir: string): Promise<void> {
+  const dist = join(rootDir, 'apps/shell/dist');
+  await mkdir(join(dist, 'assets'), { recursive: true });
+  await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
+}
+
+/** runNineSteps 带测试默认值的小包装（默认注入 fakeBuildShell）。 */
+function runSteps(input: Parameters<typeof runNineSteps>[0]) {
+  return runNineSteps({ buildShell: fakeBuildShell, ...input });
+}
 
 /**
  * 录制型 fake wrangler：以「账户状态」模拟 D1/R2/secret 的存在性，
@@ -130,7 +142,7 @@ describe('needsTotalTls（Universal SSL 覆盖边界）', () => {
 describe('runNineSteps（九步编排 · 幂等收敛）', () => {
   it('空账号首跑：命令序列覆盖九步；二跑零 create/put（收敛）', { timeout: 120_000 }, async () => {
     const first = makeFakeWrangler();
-    const summary1 = await runNineSteps({
+    const summary1 = await runSteps({
       rootDir: ROOT,
       configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: first.wrangler,
@@ -155,7 +167,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       existingBuckets: ['unself-storage'],
       hasSecret: true,
     });
-    const summary2 = await runNineSteps({
+    const summary2 = await runSteps({
       rootDir: ROOT,
       configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: second.wrangler,
@@ -178,7 +190,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       existingD1: ['unself-core', 'unself-modules'],
       hasSecret: true,
     });
-    await runNineSteps({
+    await runSteps({
       rootDir: ROOT,
       configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: fake.wrangler,
@@ -199,7 +211,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
 
   it('domain 设定时：core 部署后立即 ensureDns（先于 registry 与冒烟）', { timeout: 120_000 }, async () => {
     const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
-    await runNineSteps({
+    await runSteps({
       rootDir: ROOT,
       wrangler: fake.wrangler,
       configOverride: { domain: 'demo.handywote.top', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
@@ -232,7 +244,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
   it('冒烟失败 → 明确报错非零语义', async () => {
     const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
     await expect(
-      runNineSteps({
+      runSteps({
         rootDir: ROOT,
       configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
         wrangler: fake.wrangler,
@@ -248,7 +260,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
 
   it('setup 已封死（409）→ 摘要记录 sealed 且不失败', async () => {
     const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
-    const summary = await runNineSteps({
+    const summary = await runSteps({
       rootDir: ROOT,
       configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: fake.wrangler,
@@ -262,7 +274,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
   it('分支 A：首部署（无 secret）→ vars.CORE_JWKS_JSON 用本运行公钥，不调用 fetchJwks', { timeout: 120_000 }, async () => {
     const fake = makeFakeWrangler();
     let fetchCalls = 0;
-    await runNineSteps({
+    await runSteps({
       rootDir: ROOT,
       configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: fake.wrangler,
@@ -295,7 +307,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
   it('分支 B：已有 secret → 公网抓取 JWKS 注入 vars.CORE_JWKS_JSON（fetchJwks 收到 baseUrl）', { timeout: 120_000 }, async () => {
     const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
     const received: string[] = [];
-    await runNineSteps({
+    await runSteps({
       rootDir: ROOT,
       configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: fake.wrangler,
@@ -316,7 +328,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
   it('分支 C：公网抓取失败 → 硬报错（含「无法获取 Core 公钥」与重跑提示）', async () => {
     const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
     await expect(
-      runNineSteps({
+      runSteps({
         rootDir: ROOT,
         configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
         wrangler: fake.wrangler,
@@ -328,7 +340,7 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       }),
     ).rejects.toThrow(/无法获取 Core 公钥/);
     await expect(
-      runNineSteps({
+      runSteps({
         rootDir: ROOT,
         configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
         wrangler: fake.wrangler,

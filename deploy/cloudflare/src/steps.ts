@@ -101,6 +101,8 @@ export async function runNineSteps(input: {
   configOverride?: UnselfConfig;
   /** 测试注入口：拦截 secret put（默认走真实 spawn）。 */
   putSecret?: (workerName: string, value: string) => Promise<void>;
+  /** 测试注入口：拦截 shell 构建（默认真实 pnpm --filter @unself/shell build；#73 每次部署重建）。 */
+  buildShell?: (rootDir: string) => Promise<void>;
   /**
    * @internal 仅供测试注入（steps.test.ts）：跳过公网 JWKS 抓取（fake wrangler 无真实部署）。
    * 生产路径一律走 defaultFetchJwks（真实 fetch GET <baseUrl>/.well-known/jwks.json）。
@@ -152,6 +154,7 @@ export async function runNineSteps(input: {
     dbIds,
     keypair: { existing: true } as const,
     wrangler,
+    buildShell: input.buildShell,
   };
   const provisioned: Provisioned = await provisionAll(provisionInput);
 
