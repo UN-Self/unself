@@ -23,6 +23,8 @@
   --color-danger: #dc2626;
   --color-danger-soft: #fee2e2;
   --color-success: #16a34a;
+  /* 遮罩（动作单/弹层背板） */
+  --color-scrim: rgb(0 0 0 / 0.35);
 
   /* 间距（4px 栅格） */
   --space-1: 4px;
@@ -71,4 +73,5 @@
   --color-danger: var(--color-danger);
   --color-danger-soft: var(--color-danger-soft);
   --color-success: var(--color-success);
+  --color-scrim: var(--color-scrim);
 }

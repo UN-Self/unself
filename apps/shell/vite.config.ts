@@ -7,8 +7,6 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [vue(), tailwindcss()],
   test: {
-    // #75：组件级布局回归需要 getComputedStyle 能级联到 SFC scoped CSS
-    // （jsdom 不做布局，getBoundingClientRect 恒为 0，故以计算样式契约断言）。
-    css: true,
+    // #83：行为断言化后不再需要 css 级联（#75 getComputedStyle 类断言已退场）
   },
 })

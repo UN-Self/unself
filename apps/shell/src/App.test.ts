@@ -4,7 +4,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import App from './App.vue'
-import { fetchMe } from './lib/session-api'
+import { fetchMe, logout } from './lib/session-api'
 import { fetchEnabledModules } from './lib/registry-api'
 import { fetchModuleToken } from './lib/token-api'
 
@@ -37,10 +37,14 @@ const { TOKEN, MODULE, REJECTED } = vi.hoisted(() => {
   return { TOKEN, MODULE, REJECTED }
 })
 
-vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
-  useRouter: () => ({ push: vi.fn() }),
-}))
+// 登出动作的可见结果是整页跳 /login：以 stub location 断言行为（jsdom 不可真实导航）。
+const ORIGIN = window.location.origin
+const assignMock = vi.fn()
+Object.defineProperty(window, 'location', {
+  value: { assign: assignMock, pathname: '/', search: '', origin: ORIGIN },
+  writable: true,
+  configurable: true,
+})
 
 vi.mock('./lib/session-api', () => ({
   fetchMe: vi.fn().mockResolvedValue({
@@ -65,6 +69,7 @@ vi.mock('./lib/token-api', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  assignMock.mockClear()
 })
 
 /** 冲刷挂载 → 拉注册表 → 选模块 → post-flush 挂桥整条异步链。 */
@@ -105,7 +110,7 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     expect(iframeEl.exists()).toBe(true)
     // 落地规则：直访 / 落第一个启用模块 → hello 进入握手期（骨架可见、帧隐藏）
     expect(iframeEl.attributes('src')).toBe('/m/hello/')
-    expect(iframeEl.classes()).toContain('shell-frame-hidden')
+    expect(iframeEl.classes()).toContain('mh-frame-hidden')
     expect(wrapper.text()).not.toContain('模块入口配置无效')
 
     dispatchReady(iframeEl.element as HTMLIFrameElement)
@@ -114,7 +119,7 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     // 行为断言：真实桥收到了 ready → 以 'hello' 请求 token → 下发 → 帧就位
     expect(fetchModuleToken).toHaveBeenCalledTimes(1)
     expect(fetchModuleToken).toHaveBeenCalledWith('hello')
-    expect(wrapper.find('iframe').classes()).not.toContain('shell-frame-hidden')
+    expect(wrapper.find('iframe').classes()).not.toContain('mh-frame-hidden')
     expect(wrapper.text()).not.toContain('模块加载失败')
     expect(wrapper.text()).not.toContain('模块入口配置无效')
 
@@ -158,7 +163,28 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     await settle()
     expect(fetchModuleToken).toHaveBeenCalledTimes(2)
     expect(fetchModuleToken).toHaveBeenNthCalledWith(2, 'hello')
-    expect(wrapper.find('iframe').classes()).not.toContain('shell-frame-hidden')
+    expect(wrapper.find('iframe').classes()).not.toContain('mh-frame-hidden')
+    expect(wrapper.text()).not.toContain('模块加载失败')
+
+    wrapper.unmount()
+  })
+
+  it('token 接口 403 时异常卡以「此模块已停用」示人（#83 状态判定，非字符串嗅探）', async () => {
+    const DISABLED = Object.assign(new Error('此模块已停用'), { status: 403 })
+    vi.mocked(fetchModuleToken).mockRejectedValue(DISABLED)
+    vi.mocked(fetchMe).mockResolvedValue({
+      authenticated: true,
+      user: { id: 'u1', name: '黄一', issuer: 'unself', sub: 'u1' },
+    })
+    vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
+
+    const wrapper = mount(App)
+    await settle()
+
+    dispatchReady(wrapper.find('iframe').element as HTMLIFrameElement)
+    await settle()
+
+    expect(wrapper.text()).toContain('此模块已停用')
     expect(wrapper.text()).not.toContain('模块加载失败')
 
     wrapper.unmount()
@@ -166,17 +192,13 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
 })
 
 /**
- * #75：侧栏 footer 的退出按钮在长用户名下被 flex-shrink 压窄，
- * 「退出」按 CJK min-content 逐字换行 → 竖排。
- * 契约：按钮永不收缩（flex-shrink:0）、文案单行（white-space:nowrap），
- * 挤压压力按设计转嫁给用户名的 ellipsis 截断。
+ * 退出登录（#83 摘录 #75：getComputedStyle 类布局断言不迁移不扩散，
+ * 本文件被触碰后改为行为断言——契约是「无论用户名多长，退出都可点且触发登出流程」）。
  */
-describe('App.vue 侧栏退出按钮不被长用户名压窄（#75）', () => {
-  /** 真机复现用的长邮箱名（118 + 8 + 64 > 220 - padding 的 footer 可用宽）。 */
+describe('App.vue 退出登录行为', () => {
   const LONG_NAME = 'handy@unself.demo.example'
   const SHORT_NAME = '黄一'
 
-  /** 以指定用户名挂载（会话真值来自服务端 /api/me）；空模块清单避免 iframe 干扰。 */
   async function mountAs(name: string) {
     vi.mocked(fetchMe).mockResolvedValue({
       authenticated: true,
@@ -188,36 +210,63 @@ describe('App.vue 侧栏退出按钮不被长用户名压窄（#75）', () => {
     return wrapper
   }
 
-  function computedOf(wrapper: ReturnType<typeof mount>, selector: string) {
-    const el = wrapper.find(selector).element as HTMLElement
-    return getComputedStyle(el)
-  }
-
-  /** 断言退出按钮的「不收缩 + 单行」契约，以及挤压压力的去处。 */
-  function expectLogoutContract(wrapper: ReturnType<typeof mount>) {
-    const box = computedOf(wrapper, '.shell-logout')
-    expect(box.flexShrink).toBe('0')
-    expect(box.whiteSpace).toBe('nowrap')
-    expect(box.height).toBe('30px')
-    expect(wrapper.find('.shell-logout').text()).toBe('退出')
-
-    // 长名挤压时压力落在用户名截断（设计意图），而不是把按钮压窄
-    const nameBox = computedOf(wrapper, '.shell-user-name')
-    expect(nameBox.overflow).toBe('hidden')
-    expect(nameBox.textOverflow).toBe('ellipsis')
-  }
-
-  it('长用户名：退出按钮保持内容宽度、文案单行（不竖排）', async () => {
+  it('长用户名：桌面侧栏「退出」可点，点击触发 logout 并跳 /login', async () => {
     const wrapper = await mountAs(LONG_NAME)
     expect(wrapper.find('.shell-user-name').text()).toBe(LONG_NAME)
-    expectLogoutContract(wrapper)
+
+    const btn = wrapper.find('.shell-logout')
+    expect(btn.text()).toBe('退出')
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(logout).toHaveBeenCalledTimes(1)
+    expect(assignMock).toHaveBeenCalledWith('/login')
     wrapper.unmount()
   })
 
-  it('短用户名回归：同一契约不被破坏（正常场景无副作用）', async () => {
+  it('短用户名回归：同一登出契约不被破坏', async () => {
     const wrapper = await mountAs(SHORT_NAME)
     expect(wrapper.find('.shell-user-name').text()).toBe(SHORT_NAME)
-    expectLogoutContract(wrapper)
+
+    const btn = wrapper.find('.shell-logout')
+    await btn.trigger('click')
+    await flushPromises()
+
+    expect(logout).toHaveBeenCalledTimes(1)
+    expect(assignMock).toHaveBeenCalledWith('/login')
+    wrapper.unmount()
+  })
+
+  it('移动端：底部标签栏「我的」→ 动作单显示用户名与退出，退出即登出跳 /login', async () => {
+    const wrapper = await mountAs(SHORT_NAME)
+
+    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')
+    expect(meTab).toBeTruthy()
+    await meTab!.trigger('click')
+
+    // 动作单展示用户名 + 退出按钮（可点击性 = 行为契约）
+    const sheet = wrapper.find('.shell-sheet')
+    expect(sheet.exists()).toBe(true)
+    expect(sheet.text()).toContain(SHORT_NAME)
+    expect(sheet.text()).toContain('退出登录')
+
+    await wrapper.find('.shell-sheet-logout').trigger('click')
+    await flushPromises()
+    expect(logout).toHaveBeenCalledTimes(1)
+    expect(assignMock).toHaveBeenCalledWith('/login')
+    wrapper.unmount()
+  })
+
+  it('移动端动作单：点遮罩关闭（不触发登出）', async () => {
+    const wrapper = await mountAs(SHORT_NAME)
+
+    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')
+    await meTab!.trigger('click')
+    expect(wrapper.find('.shell-sheet').exists()).toBe(true)
+
+    await wrapper.find('.shell-sheet-backdrop').trigger('click')
+    expect(wrapper.find('.shell-sheet').exists()).toBe(false)
+    expect(logout).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })
