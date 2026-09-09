@@ -108,9 +108,12 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
 
     const iframeEl = wrapper.find('iframe')
     expect(iframeEl.exists()).toBe(true)
-    // 落地规则：直访 / 落第一个启用模块 → hello 进入握手期（骨架可见、帧隐藏）
+    // 落地规则：直访 / 落第一个启用模块 → hello 进入握手期（骨架可见）
     expect(iframeEl.attributes('src')).toBe('/m/hello/')
-    expect(iframeEl.classes()).toContain('mh-frame-hidden')
+    // 用户可见行为：握手期用户看到的是「正在连接模块…」加载骨架（aria-busy），
+    // 这是用户可感知的「加载中」姿态——而非加不加 mh-frame-hidden 类（渲染细节，用户看不到）
+    expect(wrapper.find('[aria-busy="true"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-busy="true"]').text()).toContain('正在连接模块…')
     expect(wrapper.text()).not.toContain('模块入口配置无效')
 
     dispatchReady(iframeEl.element as HTMLIFrameElement)
@@ -119,7 +122,9 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     // 行为断言：真实桥收到了 ready → 以 'hello' 请求 token → 下发 → 帧就位
     expect(fetchModuleToken).toHaveBeenCalledTimes(1)
     expect(fetchModuleToken).toHaveBeenCalledWith('hello')
-    expect(wrapper.find('iframe').classes()).not.toContain('mh-frame-hidden')
+    // 用户可见行为：ready 后加载骨架退场——用户看到的是模块内容而非「加载中」，
+    // 而非断言 mh-frame-hidden 类（隐藏 iframe 的渲染细节，不代表用户感知状态）
+    expect(wrapper.find('[aria-busy="true"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('模块加载失败')
     expect(wrapper.text()).not.toContain('模块入口配置无效')
 
@@ -163,7 +168,9 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     await settle()
     expect(fetchModuleToken).toHaveBeenCalledTimes(2)
     expect(fetchModuleToken).toHaveBeenNthCalledWith(2, 'hello')
-    expect(wrapper.find('iframe').classes()).not.toContain('mh-frame-hidden')
+    // 用户可见行为：重挂后就位，加载骨架退场（用户看到模块内容而非加载中）——
+    // 与 ready 状态是用户可感知对应，mh-frame-hidden 类只是实现细节
+    expect(wrapper.find('[aria-busy="true"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('模块加载失败')
 
     wrapper.unmount()
