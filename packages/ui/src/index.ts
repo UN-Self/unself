@@ -13,3 +13,4 @@ export { default as UButton } from './button.vue';
 export { default as UInput } from './input.vue';
 export { default as UCard } from './card.vue';
 export { default as UErrorCard } from './error-card.vue';
+export { default as USkeleton } from './skeleton.vue';

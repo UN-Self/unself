@@ -53,6 +53,7 @@ const sizeClass = computed(() => {
     :disabled="disabled || loading"
     class="u-btn"
     :class="[variantClass, sizeClass]"
+    :aria-busy="loading || undefined"
   >
     <span v-if="loading" class="u-btn-spinner" aria-hidden="true" />
     <slot />
