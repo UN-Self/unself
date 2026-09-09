@@ -5,18 +5,19 @@ import { useRoute, useRouter } from 'vue-router'
 import { KeyRound, PlugZap } from 'lucide-vue-next'
 import { UButton, UInput, UCard, UErrorCard } from '@unself/ui'
 import {
-  activateOrLogin,
+  activateSetup,
+  saveOidcConfig,
   testOidcConnection,
   type ApiError,
 } from './lib/setup-api'
 
 /**
- * setup 向导页（#10，§6.5 动线）：
+ * setup 向导页（#10，直线流程 #55，§6.5 动线）：
  * - 仅携带部署输出的一次性令牌才可配置；无令牌只提示
  * - 三字段（issuer / client id / client secret）+ 测试连接
- * - [保存并激活] → 整页跳 OIDC → 回来自动成管理员 → 直接进工作台
- * - 已激活后本页不存在：已登录→工作台，未登录→登录页（#83：只信路由守卫，
- *   页面不再自行判定 getSetupStatus + /api/me + router.replace）
+ * - [保存并激活] → 配置落库后整页跳 OIDC → 回来自动提权成首个管理员 → 直接进工作台
+ * - 回跳时 onMounted 先探 /api/me：已登录 → 自动调 activateSetup 提权
+ *   （成功 router.replace('/')，403/409 等失败落错误卡）；未登录 → 静默停在表单
  */
 
 const route = useRoute()
@@ -41,24 +42,32 @@ const testing = ref(false)
 const testResult = ref<{ ok: boolean; text: string } | null>(null)
 const activating = ref(false)
 const activateError = ref<ApiError | null>(null)
-// 跳登录前把表单（不含 secret）侧记到 sessionStorage，登录回来字段为空时恢复
-const OIDC_DRAFT_KEY = 'unself_setup_oidc'
 
 onMounted(() => {
-  // 激活态判定已上移路由守卫（#83）：此处只恢复表单草稿
-  restoreOidcDraft()
+  const t = token.value
+  if (t) void autoActivateIfAuthed(t)
 })
 
-/** 恢复跳登录前侧记的 issuer/clientId（secret 从不持久化）。 */
-function restoreOidcDraft() {
+/**
+ * 直线流程收尾：登录回跳（next=/setup?token=…）后探测会话；
+ * 已登录 → 自动提权：成功进工作台，403/409 等失败落错误卡；未登录/网络异常 → 静默停在表单。
+ */
+async function autoActivateIfAuthed(t: string) {
+  let me: Response
   try {
-    const raw = sessionStorage.getItem(OIDC_DRAFT_KEY)
-    if (!raw) return
-    const draft = JSON.parse(raw) as { issuer?: unknown; clientId?: unknown }
-    if (issuer.value === '' && typeof draft.issuer === 'string') issuer.value = draft.issuer
-    if (clientId.value === '' && typeof draft.clientId === 'string') clientId.value = draft.clientId
+    me = await fetch('/api/me', { credentials: 'same-origin' })
   } catch {
-    // 侧记数据损坏：忽略，用户重填
+    return // 网络异常：不打扰，用户仍可填写提交
+  }
+  if (!me.ok) return // 未登录：等用户提交后走登录
+  activating.value = true
+  try {
+    await activateSetup(t)
+    await router.replace('/')
+  } catch (err) {
+    activateError.value = err as ApiError
+  } finally {
+    activating.value = false
   }
 }
 
@@ -94,30 +103,18 @@ async function onTestConnection() {
 async function onSaveAndActivate() {
   activateError.value = null
   if (!validate() || !token.value) return
-  // 向导三字段（issuer/client id/secret + scope）随激活请求发给后端（#44）：
-  // 后端持久化到 instance_config，登录链路不再退回 env 注入回退，此前缺发已落空修复。
+  // 直线流程（#55）：三字段先落库（oidc-config），不带 scope；成功后整页跳 IdP 登录
   const oidc = {
     issuer: issuer.value.trim(),
     clientId: clientId.value.trim(),
     clientSecret: clientSecret.value,
-    scope: 'openid profile email',
   }
   activating.value = true
   try {
-    const result = await activateOrLogin(token.value, oidc)
-    if ('needLogin' in result) {
-      // 未登录：整页跳 OIDC，next 已带回 token；回来时激活态由路由守卫续判
-      // 表单（除 secret）侧记到 sessionStorage，登录回来字段为空时恢复
-      sessionStorage.setItem(
-        OIDC_DRAFT_KEY,
-        JSON.stringify({ issuer: oidc.issuer, clientId: oidc.clientId }),
-      )
-      window.location.assign(result.needLogin)
-      return
-    }
-    // 激活成功：直接进工作台（不停留，§6.5），侧记的字段不再需要
-    sessionStorage.removeItem(OIDC_DRAFT_KEY)
-    await router.replace('/')
+    const result = await saveOidcConfig(token.value, oidc)
+    // 配置已在服务端落库：跳 IdP 登录，next 带回 token，回来自动提权（onMounted）
+    window.location.assign(result.loginUrl)
+    return
   } catch (err) {
     activateError.value = err as ApiError
   } finally {
