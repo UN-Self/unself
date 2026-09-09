@@ -467,6 +467,10 @@ void fetchModuleToken
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
+  /* #75：长用户名挤压 footer 时，退出按钮不得被 flex-shrink 压窄，
+     否则「退出」按 CJK min-content 逐字换行变竖排。压力交给用户名省略号。 */
+  flex-shrink: 0;
+  white-space: nowrap;
   height: 30px;
   padding: 0 var(--space-2);
   border: none;
