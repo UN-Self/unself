@@ -97,6 +97,25 @@ export async function discover(issuer: string): Promise<DiscoveredMetadata> {
   return metadata;
 }
 
+/** 授权 scope 允许集：向导与默认配置只覆盖这三种（M0 不消费其余 claims）。 */
+const SCOPE_ALLOWED = ['openid', 'profile', 'email'] as const;
+
+/**
+ * 按发现文档 scopes_supported 过滤授权 scope（#55 附带修复）：
+ * - 只保留 [openid, profile, email] 与 IdP 声明支持的集合的交集；
+ * - 交集为空 → 只发 openid（PKCE 登录最低要求）；
+ * - scopes_supported 字段缺失 → 维持三件（旧 IdP 不拦）。
+ */
+export function pickScope(configured: string, metadata: DiscoveredMetadata): string {
+  if (!metadata.scopes_supported || metadata.scopes_supported.length === 0) {
+    return 'openid profile email';
+  }
+  const supported = new Set(metadata.scopes_supported);
+  const requested = new Set(configured.split(/\s+/).filter(Boolean));
+  const picked = SCOPE_ALLOWED.filter((s) => supported.has(s) && requested.has(s));
+  return picked.length > 0 ? picked.join(' ') : 'openid';
+}
+
 /** 授权请求要携带的临时参数（每轮登录唯一，进 HttpOnly Cookie）。 */
 export interface AuthorizationRequest {
   /** 跳转 IdP 的完整 URL（含 client_id/state/nonce/PKCE）。 */

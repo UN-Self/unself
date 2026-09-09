@@ -7,6 +7,7 @@ import {
   buildAuthorizationRequest,
   discover,
   exchangeAuthorizationCode,
+  pickScope,
   type AuthorizationRequest,
   type CallbackResult,
 } from '../oidc';
@@ -28,7 +29,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       return c.json({ error: 'OIDC not configured (run setup first)' }, 503);
     }
     const metadata = await discover(config.issuer);
-    const flow = await buildAuthorizationRequest(config, metadata);
+    // #55：scope 按 discovery scopes_supported 过滤（向导默认三件；Stalwart 只支持 openid 时降级只发 openid）
+    const flow = await buildAuthorizationRequest(
+      { ...config, scope: pickScope(config.scope, metadata) },
+      metadata,
+    );
     setCookie(c, FLOW_COOKIE, JSON.stringify(flow), {
       path: '/',
       httpOnly: true,
