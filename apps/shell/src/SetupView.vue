@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { KeyRound, PlugZap } from 'lucide-vue-next'
+import { Check, KeyRound, PlugZap } from 'lucide-vue-next'
 import { UButton, UInput, UCard, UErrorCard } from '@unself/ui'
 import {
   activateSetup,
@@ -211,38 +211,46 @@ async function onSaveAndActivate() {
           reserve-error-line
         />
 
-        <!-- #92：单按钮三态机——同一位置两态互斥，Vue <Transition> 默认淡入淡出过渡（§6.5 动效归模块自治，不移植 beUI StatefulButton） -->
+        <!-- #95 按钮合规收口：单按钮三态机（#92）同位置互斥 + beUI 弹簧换位动效；
+             两态按钮同宽 width:100% 居中，测试结果文字移到按钮下方居中。
+             换位动效照抄 beUI StatefulButton（SPRING_SWAP 弹簧 + 图标弹性缩放滑入 +
+             outline→primary 颜色随两态换位平滑过渡），参数见 <style> 注释；
+             保留三态机语义（改字段回退/提交失败回退/竞态守卫，#93 已验收）。 -->
         <div class="setup-test">
-          <Transition name="setup-swap" mode="out-in">
-            <UButton
-              v-if="!verified"
-              key="setup-test-connection"
-              variant="outline"
-              :loading="testing"
-              @click="onTestConnection"
-            >
-              <PlugZap :size="16" aria-hidden="true" />
-              测试连接
-            </UButton>
-            <UButton
-              v-else
-              key="setup-save-activate"
-              type="submit"
-              size="lg"
-              class="setup-submit"
-              :loading="activating"
-            >
-              保存并激活
-            </UButton>
-          </Transition>
-          <span
+          <div class="setup-test-stage">
+            <Transition name="setup-swap" mode="out-in">
+              <UButton
+                v-if="!verified"
+                key="setup-test-connection"
+                variant="outline"
+                class="setup-action"
+                :loading="testing"
+                @click="onTestConnection"
+              >
+                <PlugZap :size="16" aria-hidden="true" />
+                测试连接
+              </UButton>
+              <UButton
+                v-else
+                key="setup-save-activate"
+                type="submit"
+                size="lg"
+                class="setup-action setup-action-submit"
+                :loading="activating"
+              >
+                <Check :size="16" aria-hidden="true" class="setup-check-icon" />
+                保存并激活
+              </UButton>
+            </Transition>
+          </div>
+          <p
             v-if="testResult"
             class="setup-test-result"
             :class="testResult.ok ? 'setup-test-ok' : 'setup-test-fail'"
             role="status"
           >
             {{ testResult.text }}
-          </span>
+          </p>
         </div>
         <p class="setup-note">激活需要用工作账号登录；登录页面由你的身份源提供。</p>
       </form>
@@ -296,12 +304,23 @@ async function onSaveAndActivate() {
 }
 .setup-test {
   display: flex;
+  flex-direction: column; /* #95：按钮行 + 结果行纵向排布，结果文字在按钮下方 */
   align-items: center;
   gap: var(--unself-space-3);
-  flex-wrap: wrap;
+}
+/* #95 同宽收口：两态按钮都 width:100% 居中（初始态「测试连接」不再内容宽度居左） */
+.setup-test-stage {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+.setup-action {
+  width: 100%;
 }
 .setup-test-result {
+  margin: 0;
   font-size: var(--unself-font-size-sm);
+  text-align: center;
 }
 .setup-test-ok {
   color: var(--unself-color-success);
@@ -309,17 +328,116 @@ async function onSaveAndActivate() {
 .setup-test-fail {
   color: var(--unself-color-danger);
 }
-.setup-submit {
-  width: 100%;
+/*
+ * #95 换位动效：参数照抄 beUI StatefulButton
+ * （github.com/starc007/ui-components · lib/ease.ts · SPRING_SWAP）。
+ *
+ * SPRING_SWAP = { type: "spring", stiffness: 460, damping: 30, mass: 0.55 }
+ * 无 React 动效库，弹簧以 CSS linear() 等价采样（framer-motion 同参数解析式
+ * x(t) = 1 − e^(−ζω₀t)·(cos ω_d·t + (ζω₀/ω_d)·sin ω_d·t)，ζω₀ = c/2m = 27.273，
+ * ω_d = √(k/m − (c/2m)²) = 9.621；约 210ms 内入 1% 带内，非欠阻尼无回弹）。
+ * 时长取 tokens --duration-normal（250ms，覆盖弹簧整段），
+ * 缓动 = SPRING_SWAP 采样曲线（动效不属契约 §6.5.2，不新增语义令牌）。
+ */
+.setup-swap-enter-active {
+  transition:
+    opacity var(--unself-duration-fast) var(--unself-ease-out),
+    transform var(--unself-duration-normal) linear(
+      0, 0.035 4%, 0.117 8%, 0.221 12%, 0.331 16%, 0.438 20%, 0.536 24%,
+      0.622 28%, 0.696 32%, 0.759 36%, 0.811 40%, 0.853 44%, 0.886 48%,
+      0.913 52%, 0.934 56%, 0.951 60%, 0.964 64%, 0.973 68%, 0.981 72%,
+      0.986 76%, 0.99 80%, 0.993 84%, 0.995 88%, 0.997 92%, 0.998 96%, 1
+    );
 }
-/* #92 同位置替换过渡：时长/缓动取 tokens（§6.5 无外部动效库） */
-.setup-swap-enter-active,
 .setup-swap-leave-active {
-  transition: opacity var(--unself-duration-fast) var(--unself-ease-out);
+  transition:
+    opacity var(--unself-duration-fast) var(--unself-ease-out),
+    transform var(--unself-duration-fast) var(--unself-ease-out);
 }
 .setup-swap-enter-from,
 .setup-swap-leave-to {
   opacity: 0;
+  transform: translateY(14px); /* beUI TextSlot：入从下 14px，出向上离场 */
+}
+.setup-swap-leave-to {
+  transform: translateY(-14px);
+}
+/*
+ * outline→primary 平滑变色（#95 克制版）：换位瞬间底色互滑——
+ * 提交按钮从 outline 底色（--color-bg）弹入 primary；反向回退时对称滑回。
+ * 时长/缓动同 SPRING_SWAP；keyframe 动画不依赖选择器优先级，不侵入 UButton 契约层。
+ */
+.setup-swap-enter-active.setup-action-submit {
+  animation: setup-swap-to-primary var(--unself-duration-normal) linear(
+    0, 0.035 4%, 0.117 8%, 0.221 12%, 0.331 16%, 0.438 20%, 0.536 24%,
+    0.622 28%, 0.696 32%, 0.759 36%, 0.811 40%, 0.853 44%, 0.886 48%,
+    0.913 52%, 0.934 56%, 0.951 60%, 0.964 64%, 0.973 68%, 0.981 72%,
+    0.986 76%, 0.99 80%, 0.993 84%, 0.995 88%, 0.997 92%, 0.998 96%, 1
+  ) both;
+}
+.setup-swap-enter-active:not(.setup-action-submit) {
+  animation: setup-swap-to-outline var(--unself-duration-normal) linear(
+    0, 0.035 4%, 0.117 8%, 0.221 12%, 0.331 16%, 0.438 20%, 0.536 24%,
+    0.622 28%, 0.696 32%, 0.759 36%, 0.811 40%, 0.853 44%, 0.886 48%,
+    0.913 52%, 0.934 56%, 0.951 60%, 0.964 64%, 0.973 68%, 0.981 72%,
+    0.986 76%, 0.99 80%, 0.993 84%, 0.995 88%, 0.997 92%, 0.998 96%, 1
+  ) both;
+}
+@keyframes setup-swap-to-primary {
+  from {
+    background-color: var(--unself-color-bg);
+  }
+  to {
+    background-color: var(--unself-color-primary);
+  }
+}
+@keyframes setup-swap-to-outline {
+  from {
+    background-color: var(--unself-color-primary);
+  }
+  to {
+    background-color: var(--unself-color-bg);
+  }
+}
+/*
+ * 图标弹性缩放滑入（照抄 beUI ICON_VARIANTS：scale 0.7→1 + 淡入），
+ * 弹簧参数同 SPRING_SWAP；「保存并激活」挂载时 Check 弹性出现。
+ * prefers-reduced-motion：动效全部退化为纯淡入（beUI useReducedMotion 同语义）。
+ */
+.setup-check-icon {
+  animation: setup-icon-spring var(--unself-duration-normal) linear(
+    0, 0.035 4%, 0.117 8%, 0.221 12%, 0.331 16%, 0.438 20%, 0.536 24%,
+    0.622 28%, 0.696 32%, 0.759 36%, 0.811 40%, 0.853 44%, 0.886 48%,
+    0.913 52%, 0.934 56%, 0.951 60%, 0.964 64%, 0.973 68%, 0.981 72%,
+    0.986 76%, 0.99 80%, 0.993 84%, 0.995 88%, 0.997 92%, 0.998 96%, 1
+  ) both;
+}
+@keyframes setup-icon-spring {
+  from {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .setup-swap-enter-active,
+  .setup-swap-leave-active {
+    transition: opacity var(--unself-duration-fast) linear;
+  }
+  .setup-swap-enter-from,
+  .setup-swap-leave-to {
+    transform: none;
+  }
+  .setup-check-icon {
+    animation: none;
+  }
+  .setup-swap-enter-active.setup-action-submit,
+  .setup-swap-enter-active:not(.setup-action-submit) {
+    animation: none;
+  }
 }
 .setup-note {
   margin: 0;

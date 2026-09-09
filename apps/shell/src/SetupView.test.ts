@@ -4,6 +4,9 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import SetupView from './SetupView.vue'
+// 源级样式守卫用：jsdom 环境下 import.meta.url 是 http:，不能走 fileURLToPath，
+// 改用 Vite ?raw 直读 SFC 源文本（vitest 原生支持，零运行时 IO）。
+import setupSource from './SetupView.vue?raw'
 import { saveOidcConfig, testOidcConnection } from './lib/setup-api'
 
 /**
@@ -74,12 +77,89 @@ async function clickTest(wrapper: VueWrapper) {
   await btn!.trigger('click')
 }
 
+/** #95：舞台容器（同位置两态互斥的按钮行，同宽 width:100% 由 .setup-action 承载）。 */
+function actionStage(wrapper: VueWrapper) {
+  return wrapper.find('.setup-test-stage')
+}
+
+/**
+ * #95 同宽/居中的样式源级守卫：jsdom 无 CSS 级联（#83 退场 getComputedStyle），
+ * 样式回归只能在源级断言（先例：contracts theme.test.ts 对 tokens.css 的源级测试）。
+ */
+function setupStyleBlock() {
+  return setupSource.match(/<style[\s\S]*<\/style>/)?.[0] ?? ''
+}
+
+/**
+ * #95 换位动效移植守卫（源级）：beUI StatefulButton 参数必须照抄在场。
+ * jsdom 无法验证动画视觉，只能在源级断言关键参数集不丢（beUI 出处注释 + linear() 采样）。
+ */
+function assertSpringSwapPorted(css: string) {
+  // 出处注释（starc007/ui-components · SPRING_SWAP）与采样曲线都在场
+  expect(css).toMatch(/SPRING_SWAP/)
+  expect(css).toMatch(/stiffness:\s*460/)
+  expect(css).toMatch(/damping:\s*30/)
+  expect(css).toMatch(/mass:\s*0\.55/)
+  // 图标弹性缩放（beUI ICON_VARIANTS scale 0.7→1）与 outline→primary 变色 keyframe
+  expect(css).toMatch(/scale\(0\.7\)/)
+  expect(css).toMatch(/@keyframes setup-swap-to-primary/)
+  // reduced-motion 退化在场（beUI useReducedMotion 同语义）
+  expect(css).toMatch(/prefers-reduced-motion: reduce/)
+}
+
 describe('SetupView 三态机（#92）', () => {
   it('初始态：只有「测试连接」，无「保存并激活」', () => {
     const wrapper = mount(SetupView)
     expect(testButton(wrapper)).toBeDefined()
     expect(submitButton(wrapper).exists()).toBe(false)
     expect(actionButtons(wrapper).length).toBe(1)
+  })
+
+  it('#95 同宽：两态按钮共用同宽接口类（.setup-action = width:100%），不随文案内容宽变化', async () => {
+    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER })
+    const wrapper = mount(SetupView)
+    await fillForm(wrapper)
+
+    // 初始态：「测试连接」挂同宽接口类（不再内容宽度 ~114px 居左）
+    expect(testButton(wrapper)!.classes()).toContain('setup-action')
+
+    // 通过态：「保存并激活」挂同一个同宽接口类（两态宽度对称）
+    await clickTest(wrapper)
+    await settle()
+    expect(submitButton(wrapper).classes()).toContain('setup-action')
+
+    // 源级守卫：同宽规则本身存在且拉满（防类名在、规则丢）
+    const css = setupStyleBlock()
+    expect(css).toMatch(/\.setup-action\s*\{[^}]*width:\s*100%/)
+  })
+
+  it('#95 结果文字在按钮下方：结果行是按钮行的后继兄弟且居中（纵向排布）', async () => {
+    const reason = '无法访问该 Issuer'
+    vi.mocked(testOidcConnection).mockResolvedValue({ ok: false, reason })
+    const wrapper = mount(SetupView)
+    await fillForm(wrapper)
+
+    await clickTest(wrapper)
+    await settle()
+
+    // 用户可见：结果文字在按钮下方（DOM 序 = 阅读序：舞台行在前、结果行在后）
+    const container = wrapper.find('.setup-test')
+    expect(container.exists()).toBe(true)
+    const result = container.find('[role="status"]')
+    expect(result.exists()).toBe(true)
+    expect(result.text()).toContain(reason)
+    const children = Array.from(container.element.children)
+    expect(children[children.length - 1]).toBe(result.element)
+    expect(actionStage(wrapper).exists()).toBe(true)
+
+    // 源级守卫：纵向排布 + 结果居中规则存在（防退回横排并排）
+    const css = setupStyleBlock()
+    expect(css).toMatch(/\.setup-test\s*\{[^}]*flex-direction:\s*column/)
+    expect(css).toMatch(/\.setup-test-result\s*\{[^}]*text-align:\s*center/)
+  })
+
+  it('#95 动效参数照抄：beUI SPRING_SWAP/图标缩放/变色都在场，reduced-motion 退化在场', () => {
+    assertSpringSwapPorted(setupStyleBlock())
   })
 
   it('测试通过：同位置替换为「保存并激活」，并报「连接成功」', async () => {
