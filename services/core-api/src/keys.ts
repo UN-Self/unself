@@ -91,3 +91,20 @@ export async function deriveSigningRuntime(privateKeyPem: string): Promise<Signi
   const kid = await calculateJwkThumbprint({ ...publicJwk } as Parameters<typeof calculateJwkThumbprint>[0]);
   return { signingKey, jwks: toPublicJwks(publicJwk, kid), kid };
 }
+
+/** 进程内缓存：同一 PEM 只派生一次（Workers isolate 生命周期内有效）。 */
+const runtimeCache = new Map<string, SigningRuntime>();
+
+/** 取当前实例签名运行时；未配置 secret 时返回 null（JWKS 端点回 503）。 */
+export async function getSigningRuntime(jwtPrivateKey: string | undefined): Promise<SigningRuntime | null> {
+  if (!jwtPrivateKey) {
+    return null;
+  }
+  const cached = runtimeCache.get(jwtPrivateKey);
+  if (cached) {
+    return cached;
+  }
+  const runtime = await deriveSigningRuntime(jwtPrivateKey);
+  runtimeCache.set(jwtPrivateKey, runtime);
+  return runtime;
+}

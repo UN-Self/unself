@@ -7,6 +7,9 @@ import type { SigningRuntime } from './keys';
 /** 模块 token 有效期（秒）：§5.2 拍板 10 分钟 + 静默续期。 */
 export const MODULE_TOKEN_TTL_SECONDS = 10 * 60;
 
+/** 模块 token 的 iss 标识（Core 自称；模块侧只验签不检查 iss 值）。 */
+export const MODULE_TOKEN_ISSUER = 'unself-core';
+
 /** token 签发结果（响应体）。 */
 export interface IssuedModuleToken {
   /** 签好的 ES256 JWT。 */
