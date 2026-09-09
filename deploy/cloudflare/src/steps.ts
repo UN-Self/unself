@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * 幂等九步编排（PRODUCT_SPEC §5.5，#14）：
- * ① 两 D1 → ② 迁移 → ③ Shell Worker → ④ 模块构建/上传/路由绑定 → ⑤ registry
- * → ⑥ R2 → ⑦ OIDC（无操作，setup 向导录入）→ ⑧ setup token → ⑨ 冒烟。
+ * ① 两 D1 → ② 迁移 → ③ Shell Worker → ④ 模块构建/上传/路由绑定（含未选模块路由删除）
+ * → ⑤ registry → ⑥ R2 → ⑦ OIDC（无操作，setup 向导录入）→ ⑧ setup token → ⑨ 冒烟。
  * 所有资源查漏后补建：连跑两次收敛（#14 验收）。
  */
 import { readFile } from 'node:fs/promises';
@@ -21,7 +21,14 @@ import {
 } from './assemble';
 import { loadUnselfConfig, type ModuleRef, type UnselfConfig } from './config';
 import { createKeypair, detectExistingSecret, publicJwksJson, putSecret, JWT_SECRET_NAME } from './keypair';
-import { ensureTotalTls, ensureZoneRecord, findAccountId, findZone, removeLegacyCustomDomains } from './dns';
+import {
+  ensureTotalTls,
+  ensureZoneRecord,
+  findAccountId,
+  findZone,
+  removeLegacyCustomDomains,
+  removeModuleRoutes,
+} from './dns';
 import { ensureDatabases, ensureR2Bucket, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
 import { registryCommands, sqlString } from './registry';
 import { fetchSetupToken, parseWorkersDevFromDeployOutput, smokeCheck } from './smoke';
@@ -95,6 +102,14 @@ export async function runNineSteps(input: {
   resolveZone?: (domain: string) => Promise<{ id: string; name: string } | null>;
   /** 测试注入口：拦截遗留 Custom Domain 清理（默认真实 removeLegacyCustomDomains）。 */
   cleanupCustomDomains?: () => Promise<void>;
+  /** 测试注入口：拦截未选模块 zone 路由删除（默认真实 removeModuleRoutes）。 */
+  cleanupModuleRoutes?: (input: {
+    zoneId: string;
+    domain: string;
+    moduleIds: string[];
+    apiToken: string;
+    log: (msg: string) => void;
+  }) => Promise<void>;
   /** 测试注入口：拦截 Total TLS 开启（默认真实 ensureTotalTls）。 */
   ensureTotalTls?: () => Promise<void>;
   /** 测试注入口：覆盖 unself.config.jsonc（默认 loadUnselfConfig(rootDir)）。 */
@@ -295,6 +310,26 @@ export async function runNineSteps(input: {
     );
     await wrangler.run(['deploy', '--config', join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`)]);
     rep.log(`模块 ${mod.id} 已部署（zone 路径路由 /m/${mod.id}/*）`);
+  }
+
+  // ④′ 未选模块（config.modules 未列出但已存在）：删除其 zone 路由 /m/<id>/*。
+  // M0 验收（requirements L207）「移除模块重部署后路由消失」：只删路由——不删模块 Worker、
+  // 不动模块 D1（数据保留；完整卸载剧本见 §5.4，属 M1）。注册表翻转 enabled=0 在步骤⑤。
+  const unselected = modules.filter((m) => !m.selected);
+  if (unselected.length > 0) {
+    const unselectedIds = unselected.map((m) => m.id);
+    if (!config.domain || !resolvedZone) {
+      rep.log(`跳过未选模块路由删除（未配置 domain，无 zone 路由）：${unselectedIds.join('、')}`);
+    } else {
+      const cleanupRoutes = input.cleanupModuleRoutes ?? removeModuleRoutes;
+      await cleanupRoutes({
+        zoneId: resolvedZone.id,
+        domain: config.domain,
+        moduleIds: unselectedIds,
+        apiToken: process.env.CLOUDFLARE_API_TOKEN ?? '',
+        log: rep.log,
+      });
+    }
   }
 
   // ⑤ registry 写入
