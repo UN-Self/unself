@@ -164,3 +164,60 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     wrapper.unmount()
   })
 })
+
+/**
+ * #75：侧栏 footer 的退出按钮在长用户名下被 flex-shrink 压窄，
+ * 「退出」按 CJK min-content 逐字换行 → 竖排。
+ * 契约：按钮永不收缩（flex-shrink:0）、文案单行（white-space:nowrap），
+ * 挤压压力按设计转嫁给用户名的 ellipsis 截断。
+ */
+describe('App.vue 侧栏退出按钮不被长用户名压窄（#75）', () => {
+  /** 真机复现用的长邮箱名（118 + 8 + 64 > 220 - padding 的 footer 可用宽）。 */
+  const LONG_NAME = 'handy@unself.demo.example'
+  const SHORT_NAME = '黄一'
+
+  /** 以指定用户名挂载（会话真值来自服务端 /api/me）；空模块清单避免 iframe 干扰。 */
+  async function mountAs(name: string) {
+    vi.mocked(fetchMe).mockResolvedValue({
+      authenticated: true,
+      user: { id: 'u1', name, issuer: 'unself', sub: 'u1' },
+    })
+    vi.mocked(fetchEnabledModules).mockResolvedValue([])
+    const wrapper = mount(App)
+    await settle()
+    return wrapper
+  }
+
+  function computedOf(wrapper: ReturnType<typeof mount>, selector: string) {
+    const el = wrapper.find(selector).element as HTMLElement
+    return getComputedStyle(el)
+  }
+
+  /** 断言退出按钮的「不收缩 + 单行」契约，以及挤压压力的去处。 */
+  function expectLogoutContract(wrapper: ReturnType<typeof mount>) {
+    const box = computedOf(wrapper, '.shell-logout')
+    expect(box.flexShrink).toBe('0')
+    expect(box.whiteSpace).toBe('nowrap')
+    expect(box.height).toBe('30px')
+    expect(wrapper.find('.shell-logout').text()).toBe('退出')
+
+    // 长名挤压时压力落在用户名截断（设计意图），而不是把按钮压窄
+    const nameBox = computedOf(wrapper, '.shell-user-name')
+    expect(nameBox.overflow).toBe('hidden')
+    expect(nameBox.textOverflow).toBe('ellipsis')
+  }
+
+  it('长用户名：退出按钮保持内容宽度、文案单行（不竖排）', async () => {
+    const wrapper = await mountAs(LONG_NAME)
+    expect(wrapper.find('.shell-user-name').text()).toBe(LONG_NAME)
+    expectLogoutContract(wrapper)
+    wrapper.unmount()
+  })
+
+  it('短用户名回归：同一契约不被破坏（正常场景无副作用）', async () => {
+    const wrapper = await mountAs(SHORT_NAME)
+    expect(wrapper.find('.shell-user-name').text()).toBe(SHORT_NAME)
+    expectLogoutContract(wrapper)
+    wrapper.unmount()
+  })
+})
