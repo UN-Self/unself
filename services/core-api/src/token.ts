@@ -24,6 +24,7 @@ export interface IssuedModuleToken {
     iat: number;
     exp: number;
     caps?: string[];
+    name?: string;
   };
 }
 
@@ -33,6 +34,8 @@ export interface TokenRequestContext {
   userId: string;
   /** 模块 id（路由参数）。 */
   moduleId: string;
+  /** 会话展示名（写进 claims.name，模块身份行直接用；§2 契约）。 */
+  name?: string;
 }
 
 /**
@@ -56,6 +59,9 @@ export async function issueModuleToken(
     iat: now,
     exp,
   };
+  if (ctx.name !== undefined) {
+    payload.name = ctx.name;
+  }
   if (options.caps && options.caps.length > 0) {
     payload.caps = options.caps;
   }

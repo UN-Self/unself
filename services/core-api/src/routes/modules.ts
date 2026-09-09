@@ -46,7 +46,7 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
     }
     const issued = await issueModuleToken(
       runtime,
-      { userId: session.uid, moduleId },
+      { userId: session.uid, moduleId, name: session.name },
       { issuer: MODULE_TOKEN_ISSUER, caps: capsFromManifest(gate.manifest!.manifest_json) },
     );
     return c.json(issued);

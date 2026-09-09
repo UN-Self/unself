@@ -186,7 +186,7 @@ describe('registry CRUD 与启停语义（#7）', () => {
     expect(db.columns('module_registry')).toEqual(['id', 'enabled', 'version', 'manifest_json']);
     await register(env, cookie, { id: 'hello', manifest: helloManifest });
 
-    // 真库全字段行：列集合必须与建表一致（#56 的 registered_at 幻影列会在此暴露）
+    // 真库全字段行：列集合必须与建表一致（历史幻影列会在此暴露）
     const row = db.first<Record<string, unknown>>('SELECT * FROM module_registry WHERE id = ?', 'hello');
     expect(Object.keys(row ?? {}).sort()).toEqual([...db.columns('module_registry')].sort());
 
@@ -198,7 +198,6 @@ describe('registry CRUD 与启停语义（#7）', () => {
       'enabled',
       'id',
       'manifest',
-      'registeredAt',
       'version',
     ]);
   });

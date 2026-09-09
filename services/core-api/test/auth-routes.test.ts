@@ -226,6 +226,35 @@ describe('OIDC 登录路由', () => {
     expect(res.status).toBe(401);
   });
 
+  it('/api/me 带 role（admin 升格后真值来自 users 表服务端会话）', async () => {
+    const { generateInstanceKeyPair } = await import('../src/keys');
+    const pair = await generateInstanceKeyPair();
+    const { e, db } = env();
+    db.run(
+      'INSERT INTO users (id, issuer, sub, display_name, role) VALUES (?, ?, ?, ?, ?)',
+      'u_admin',
+      ISSUER,
+      'a-1',
+      '管理',
+      'admin',
+    );
+    const { createSessionToken } = await import('../src/session');
+    const token = await createSessionToken(
+      { uid: 'u_admin', iss: ISSUER, sub: 'a-1', name: '管理' },
+      pair.privateKeyPem,
+    );
+    const res = await app.request(
+      'https://team.example.com/api/me',
+      { headers: { cookie: `unself_session=${token}` } },
+      { ...e, JWT_PRIVATE_KEY: pair.privateKeyPem },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      authenticated: true,
+      user: { id: 'u_admin', name: '管理', issuer: ISSUER, sub: 'a-1', role: 'admin' },
+    });
+  });
+
   // --- 守护用例（审核 T1：查询列 ↔ 建表列错位即红） ------------------------
 
   it('守护：users 表列与 JIT 行结构 == 迁移建表列（幻影列/漏列即红）', async () => {

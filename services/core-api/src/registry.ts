@@ -27,8 +27,6 @@ export interface RegistryEntry {
   enabled: boolean;
   version: string | null;
   manifest: unknown;
-  /** 注册时间（ISO），审计用。 */
-  registeredAt: string;
 }
 
 /** 启停响应。 */
@@ -38,7 +36,7 @@ export interface ToggleResult {
 }
 
 /** D1 行 → API 条目。 */
-export function rowToEntry(row: { id: string; enabled: number; version: string | null; manifest_json: string; registered_at?: string }): RegistryEntry {
+export function rowToEntry(row: { id: string; enabled: number; version: string | null; manifest_json: string }): RegistryEntry {
   let manifest: unknown;
   try {
     manifest = JSON.parse(row.manifest_json);
@@ -50,7 +48,6 @@ export function rowToEntry(row: { id: string; enabled: number; version: string |
     enabled: row.enabled === 1,
     version: row.version,
     manifest,
-    registeredAt: row.registered_at ?? '',
   };
 }
 
@@ -69,7 +66,6 @@ export async function upsertModule(db: D1Database, reg: ModuleRegistration): Pro
     enabled: reg.enabled,
     version: reg.manifest.version,
     manifest: reg.manifest,
-    registeredAt: new Date().toISOString(),
   };
 }
 
@@ -87,8 +83,8 @@ export async function toggleModule(db: D1Database, id: string, enabled: boolean)
 
 /** 列出全部模块（管理端；成员侧由 shell 过滤 enabled）。 */
 export async function listModules(db: D1Database): Promise<RegistryEntry[]> {
-  // 列集合与迁移 0001 建表严格一致（registered_at 列从未存在——旧实现线上 D1 报
-  // no such column → /api/modules、/api/admin/modules 全 500；测试库 DDL 与迁移两张皮掩盖了它）
+  // 列集合与迁移 0001 建表严格一致（旧版 RegistryEntry 带不存在于 DB 的注册时间幻影字段，
+  // 响应恒返空串——已删；真列 SELECT 可暴露查询列 ↔ 建表列错位）。
   const result = await db
     .prepare('SELECT id, enabled, version, manifest_json FROM module_registry ORDER BY id')
     .all<{ id: string; enabled: number; version: string | null; manifest_json: string }>();

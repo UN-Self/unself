@@ -185,6 +185,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^4.0.0
         version: 4.20260702.1
+      '@unself/module-sdk':
+        specifier: workspace:*
+        version: link:../../packages/module-sdk
       typescript:
         specifier: ^5.9.0
         version: 5.9.3

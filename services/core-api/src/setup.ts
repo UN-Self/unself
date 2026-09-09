@@ -34,18 +34,12 @@ export async function storeSetupToken(db: D1Database, token: string): Promise<vo
     .run();
 }
 
-/** 消费一次性 token：命中未使用则标记已用并返回 true；否则 false（用后即封死）。 */
+/** 消费一次性 token：单条 UPDATE 原子完成（WHERE used_at IS NULL + meta.changes 判定），
+ *  并发双激活只有一次能命中（changes=1），另一次 changes=0 → false。 */
 export async function consumeSetupToken(db: D1Database, token: string): Promise<boolean> {
-  const row = await db
-    .prepare('SELECT used_at FROM setup_tokens WHERE token = ?')
-    .bind(token)
-    .first<{ used_at: string | null }>();
-  if (!row || row.used_at) {
-    return false; // 不存在或已使用 → 拒绝
-  }
-  await db
+  const result = await db
     .prepare("UPDATE setup_tokens SET used_at = datetime('now') WHERE token = ? AND used_at IS NULL")
     .bind(token)
     .run();
-  return true;
+  return result.meta.changes > 0;
 }
