@@ -3,11 +3,13 @@
 /**
  * setup 向导 API 客户端（#10）：
  * - GET /api/setup/status：实例是否已激活 / token 是否有效（路由守卫用）
- * - POST /api/setup/activate：一次性 token + 可选 OIDC 字段 → 首个管理员 + 永久封死
+ * - POST /api/setup/oidc-config：三字段配置落库（只验 token 不消费，可重复提交改填）
+ * - POST /api/setup/activate：消费 token → 首个管理员 + 永久封死（无 body，配置已先落库）
  * - POST /api/oidc/test-connection：服务端代理探测 OIDC Provider（#44，避开浏览器直连 CORS）
  * - GET /api/auth/login：整页跳转 OIDC（密码永远发生在 IdP 页面，§6.5）
  *
- * 后端契约见 services/core-api（#5/#6）。异常三层透传（§6.5）：
+ * 直线流程（#55）：提交配置落库 → 整页跳登录 → 回来自动提权成首个管理员 → 进工作台。
+ * 后端契约见 services/core-api（#5/#55）。异常三层透传（§6.5）：
  * 成员/部署者只见人话 + request id，技术详情折叠。
  */
 
@@ -90,50 +92,36 @@ export interface OidcSetup {
 }
 
 /**
- * POST /api/setup/activate：一次性 token +（可选）OIDC 字段 → 首个管理员 + 永久封死。
- * oidc 缺省时发空对象 {}（服务端回退 env 注入的 OIDC_ISSUER 等）。
+ * POST /api/setup/oidc-config：三字段（issuer/clientId/clientSecret）落库；
+ * 只验 token 不消费，可重复提交改填。成功返回整页登录地址（next 已带回 token）。
+ * body 严格三字段，不带 scope（契约无此字段）。
  */
-export function activateSetup(token: string, oidc?: OidcSetup): Promise<ActivateResult> {
+export function saveOidcConfig(
+  token: string,
+  oidc: OidcSetup,
+): Promise<{ ok: boolean; loginUrl: string }> {
+  return request<{ ok: boolean; loginUrl: string }>(
+    `/api/setup/oidc-config?token=${encodeURIComponent(token)}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        issuer: oidc.issuer,
+        clientId: oidc.clientId,
+        clientSecret: oidc.clientSecret,
+      }),
+    },
+  )
+}
+
+/**
+ * POST /api/setup/activate：消费 token → 首个管理员 + 永久封死（直线流程收尾）。
+ * 不再携带 body（配置由 oidc-config 先行落库）；无会话 401 由调用方经 /api/me 预判。
+ */
+export function activateSetup(token: string): Promise<ActivateResult> {
   return request<ActivateResult>(`/api/setup/activate?token=${encodeURIComponent(token)}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(oidc ?? {}),
   })
-}
-
-/** 未登录激活时后端返回的登录跳转地址。 */
-export interface ActivateNeedLogin extends ApiError {
-  loginUrl: string
-}
-
-/** 发起激活（携带可选 OIDC 字段）；401 时带出 loginUrl 供整页跳转。 */
-export async function activateOrLogin(
-  token: string,
-  oidc?: OidcSetup,
-): Promise<ActivateResult | { needLogin: string }> {
-  try {
-    return await activateSetup(token, oidc)
-  } catch (err) {
-    const apiErr = err as ApiError & { body?: unknown }
-    if (apiErr.status === 401) {
-      // 重新拿一次原始响应里的 loginUrl：request() 只回人话，这里走原始 fetch
-      let loginUrl = `/api/auth/login?next=${encodeURIComponent(`/setup?token=${encodeURIComponent(token)}`)}`
-      try {
-        const res = await fetch(`/api/setup/activate?token=${encodeURIComponent(token)}`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(oidc ?? {}),
-          credentials: 'same-origin',
-        })
-        const body = (await res.json().catch(() => null)) as { loginUrl?: string } | null
-        if (body?.loginUrl) loginUrl = body.loginUrl
-      } catch {
-        // 保底用拼接的 loginUrl
-      }
-      return { needLogin: loginUrl }
-    }
-    throw apiErr
-  }
 }
 
 /**

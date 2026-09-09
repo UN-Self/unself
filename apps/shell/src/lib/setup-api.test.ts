@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { activateOrLogin, activateSetup, testOidcConnection } from './setup-api'
+import { activateSetup, saveOidcConfig, testOidcConnection } from './setup-api'
 
 /** 默认 fetch 桩：测试中任何未经 mock 的请求都视为失败（不允许真实网络）。 */
 let baseFetchMock: ReturnType<typeof vi.fn>
@@ -40,8 +40,64 @@ function callArgs(fetchMock: ReturnType<typeof vi.fn>): [RequestInfo | URL, Requ
   return call as [RequestInfo | URL, RequestInit?]
 }
 
+describe('saveOidcConfig（POST /api/setup/oidc-config）', () => {
+  it('POST JSON body 严格三字段 + content-type，成功解析 loginUrl', async () => {
+    const fetchMock = mockFetchOnce(
+      jsonResponse({
+        ok: true,
+        status: 200,
+        body: {
+          ok: true,
+          loginUrl: 'https://idp.example.com/api/auth/login?next=%2Fsetup%3Ftoken%3Dtok-1',
+        },
+      }),
+    )
+
+    const result = await saveOidcConfig('tok-1', {
+      issuer: 'https://idp.example.com',
+      clientId: 'c1',
+      clientSecret: 's3cret',
+      scope: 'openid profile email',
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      loginUrl: 'https://idp.example.com/api/auth/login?next=%2Fsetup%3Ftoken%3Dtok-1',
+    })
+    const [url, init] = callArgs(fetchMock)
+    expect(String(url)).toBe('/api/setup/oidc-config?token=tok-1')
+    expect(init?.method).toBe('POST')
+    expect(init?.headers).toMatchObject({ 'content-type': 'application/json' })
+    // 契约：三字段必填、无 scope 字段（即使调用方传入 scope 也不发）
+    expect(JSON.parse(init?.body as string)).toEqual({
+      issuer: 'https://idp.example.com',
+      clientId: 'c1',
+      clientSecret: 's3cret',
+    })
+  })
+
+  it('token 经 encodeURIComponent 进 query', async () => {
+    const fetchMock = mockFetchOnce(
+      jsonResponse({ ok: true, status: 200, body: { ok: true, loginUrl: '/api/auth/login' } }),
+    )
+
+    await saveOidcConfig('tok 1/x', { issuer: 'https://idp.example.com', clientId: 'c1', clientSecret: 's' })
+
+    const [url] = callArgs(fetchMock)
+    expect(String(url)).toBe('/api/setup/oidc-config?token=tok%201%2Fx')
+  })
+
+  it('非 200 抛 ApiError（人话 + 状态码）', async () => {
+    mockFetchOnce(jsonResponse({ ok: false, status: 403, body: { error: 'invalid or already-used setup token' } }))
+
+    await expect(
+      saveOidcConfig('tok-1', { issuer: 'https://idp.example.com', clientId: 'c1', clientSecret: 's' }),
+    ).rejects.toMatchObject({ status: 403, message: expect.stringContaining('无效或已被使用') })
+  })
+})
+
 describe('activateSetup（POST /api/setup/activate）', () => {
-  it('带 OIDC 字段时 POST JSON body 与 content-type', async () => {
+  it('POST 无 body，token 进 query，成功返回首个管理员', async () => {
     const fetchMock = mockFetchOnce(
       jsonResponse({
         ok: true,
@@ -50,66 +106,13 @@ describe('activateSetup（POST /api/setup/activate）', () => {
       }),
     )
 
-    const result = await activateSetup('tok-1', {
-      issuer: 'https://idp.example.com',
-      clientId: 'c1',
-      clientSecret: 's3cret',
-      scope: 'openid profile email',
-    })
+    const result = await activateSetup('tok-1')
 
-    expect(result.ok).toBe(true)
+    expect(result).toEqual({ ok: true, user: { id: 'u1', name: '管理员', role: 'admin' } })
     const [url, init] = callArgs(fetchMock)
     expect(String(url)).toBe('/api/setup/activate?token=tok-1')
     expect(init?.method).toBe('POST')
-    expect(init?.headers).toMatchObject({ 'content-type': 'application/json' })
-    expect(JSON.parse(init?.body as string)).toEqual({
-      issuer: 'https://idp.example.com',
-      clientId: 'c1',
-      clientSecret: 's3cret',
-      scope: 'openid profile email',
-    })
-  })
-
-  it('不带 OIDC 字段时发送空对象 body', async () => {
-    const fetchMock = mockFetchOnce(
-      jsonResponse({
-        ok: true,
-        status: 200,
-        body: { ok: true, user: { id: 'u1', name: '管理员', role: 'admin' } },
-      }),
-    )
-
-    await activateSetup('tok-2')
-
-    const [, init] = callArgs(fetchMock)
-    expect(init?.body).toBe('{}')
-  })
-
-  it('后端 401 时由 activateOrLogin 携带 body 与 content-type 取 loginUrl', async () => {
-    const fetchMock = mockFetchOnce(
-      jsonResponse({
-        ok: false,
-        status: 401,
-        body: { loginUrl: '/api/auth/login?next=%2Fsetup' },
-      }),
-    )
-
-    const result = await activateOrLogin('tok-3', {
-      issuer: 'https://idp.example.com',
-      clientId: 'c1',
-      clientSecret: 's3cret',
-    })
-
-    expect(result).toEqual({ needLogin: '/api/auth/login?next=%2Fsetup' })
-    const [url, init] = callArgs(fetchMock)
-    expect(String(url)).toBe('/api/setup/activate?token=tok-3')
-    expect(init?.method).toBe('POST')
-    expect(init?.headers).toMatchObject({ 'content-type': 'application/json' })
-    expect(JSON.parse(init?.body as string)).toEqual({
-      issuer: 'https://idp.example.com',
-      clientId: 'c1',
-      clientSecret: 's3cret',
-    })
+    expect(init?.body).toBeUndefined()
   })
 })
 
