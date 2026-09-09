@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SignJWT, calculateJwkThumbprint, exportJWK, generateKeyPair } from 'jose';
 
+import { ExportBundleSchema } from '@unself/contracts';
+
 import app from '../src/index';
 import { createModuleDb, type ModuleTestDb } from '../../../packages/module-sdk/test/test-factory';
 
@@ -156,22 +158,32 @@ describe('module-hello（#13 垂直切片载体）', () => {
     expect(forgedRes.status).toBe(401);
   });
 
-  it('GET /life/export 返回契约形状 ExportBundle', async () => {
+  it('GET /life/export 带有效 token → 200 且形状过 ExportBundleSchema 解析（喂活 lifecycle-schema.ts）', async () => {
     const env = await envFor();
     const token = await makeToken();
-    await app.request('https://m.example/api/count', { method: 'POST', headers: { authorization: `Bearer ${token}` } }, env);
-    const res = await app.request('https://m.example/life/export', {}, env);
+    const headers = { authorization: `Bearer ${token}` };
+    await app.request('https://m.example/api/count', { method: 'POST', headers }, env);
+    const res = await app.request('https://m.example/life/export', { headers }, env);
     expect(res.status).toBe(200);
-    const bundle = (await res.json()) as {
-      version: number;
-      moduleId: string;
-      tables: Record<string, { schemaVersion: number; rows: unknown[] }>;
-      files: unknown[];
-    };
+    // 形状以机器校验契约为准（§5.4）：parse 即校验（version/moduleId/exportedAt/tables/files）
+    const bundle = ExportBundleSchema.parse(await res.json());
     expect(bundle.version).toBe(1);
     expect(bundle.moduleId).toBe('hello');
     expect(bundle.tables.hello_counter?.rows).toEqual([{ scope: 'global', n: 1 }]);
     expect(bundle.files).toEqual([]);
+  });
+
+  it('匿名调 /life/export、/life/purge → 401 人话（#45 遗留项②，与 count 路由同规）', async () => {
+    const env = await envFor();
+    for (const [method, path] of [
+      ['GET', '/life/export'],
+      ['POST', '/life/purge'],
+    ] as const) {
+      const res = await app.request(`https://m.example${path}`, { method }, env);
+      expect(res.status).toBe(401);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).not.toMatch(/jose|jwt/i);
+    }
   });
 
   it('POST /life/purge 清空模块子域数据', async () => {
@@ -179,7 +191,7 @@ describe('module-hello（#13 垂直切片载体）', () => {
     const token = await makeToken();
     const headers = { authorization: `Bearer ${token}` };
     await app.request('https://m.example/api/count', { method: 'POST', headers }, env);
-    const purge = await app.request('https://m.example/life/purge', { method: 'POST' }, env);
+    const purge = await app.request('https://m.example/life/purge', { method: 'POST', headers }, env);
     expect(await purge.json()).toEqual({ ok: true });
     const after = await app.request('https://m.example/api/count', { headers }, env);
     expect(await after.json()).toEqual({ count: 0 });

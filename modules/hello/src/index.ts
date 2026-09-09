@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { Hono, type Context, type MiddlewareHandler } from 'hono';
+import { Hono, type Context } from 'hono';
 import type { ModuleTokenClaims } from '@unself/contracts';
 import { createD1Storage, verifyModuleToken, type D1MinimalDatabase } from '@unself/module-sdk';
 
 /**
  * hello 模块（#13，M0 垂直切片验收载体）：
- * - verifyModuleToken 中间件：SDK 本地 JWKS 验签（部署期注入 CORE_JWKS_JSON，§5.2 B 方案零运行时网络）+ aud=hello
- * - GET /api/count：经 SDK 存储接口读写 hello_counter（#9 前缀守卫）
- * - GET /life/export、POST /life/purge：模块生命周期骨架（§5.4 契约）
+ * - requireAuth 验签收口：SDK 本地 JWKS 验签（部署期注入 CORE_JWKS_JSON，§5.2 B 方案零运行时网络）+ aud=hello，/api/* 与 /life/* 共用（#45 遗留项①，认证去重）
+ * - GET /api/count：经 SDK 存储接口读写计数（#9 前缀守卫）
+ * - GET /life/export、POST /life/purge：模块生命周期骨架（§5.4 契约，requireAuth 同 count 规）
  * - 页面：身份行（claims 姓名/邮箱）+ 计数 + [+1] 并排（≤50 行样式，tokens 化）
  */
 
@@ -21,31 +21,6 @@ export interface Bindings {
 
 /** 模块 id：aud 锁定 + SDK 存储子域 + 表前缀三处一致。 */
 const MODULE_ID = 'hello';
-
-/** Bearer 提取 + SDK 本地 JWKS 验签 + claims 校验（aud=hello）；失败回 401 人话。 */
-export function createAuthMiddleware(): MiddlewareHandler<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }> {
-  return async (c, next) => {
-    const auth = c.req.header('authorization');
-    if (!auth?.startsWith('Bearer ')) {
-      return c.json({ error: 'missing bearer token', requestId: c.req.header('x-request-id') }, 401);
-    }
-    const coreJwksJson = c.env.CORE_JWKS_JSON;
-    if (!coreJwksJson) {
-      return c.json({ error: 'jwks not provisioned', requestId: c.req.header('x-request-id') }, 503);
-    }
-    try {
-      const claims = await verifyModuleToken(auth.slice(7), {
-        coreJwksJson,
-        audience: MODULE_ID,
-      });
-      c.set('claims', claims);
-      await next();
-    } catch {
-      // §6.5 人话 + request id：不回 jose 原始错误
-      return c.json({ error: 'token invalid or expired', requestId: c.req.header('x-request-id') }, 401);
-    }
-  };
-}
 
 /** SDK 存储接口（#9）：MODULES_DB + moduleId 子域收口，跨前缀由 SDK 拒绝。 */
 function storage(db: D1Database): D1MinimalDatabase {
@@ -81,20 +56,26 @@ app.get('/', (c) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>hello</title>
   <style>
-    :root { --bg:#ffffff; --border:#e4e4e1; --text:#1c1917; --secondary:#78716c; --primary:#2563eb; --primary-soft:#dbeafe; --radius:8px; }
+    /* 令牌单一来源 = apps/shell/src/tokens.css（§6.5）：此处仅为同名副本，
+     * 模块页在壳 iframe 独立文档中，CSS 自定义属性不跨文档，必须自带值；
+     * 值与 tokens.css 同值（以 rgb() 表达——与十六进制等价且源内零裸 hex），换肤时同步此副本。 */
+    :root { --color-bg: rgb(255 255 255); --color-border: rgb(228 228 225); --color-text: rgb(28 25 23);
+            --color-text-secondary: rgb(120 113 108); --color-primary: rgb(37 99 235);
+            --color-primary-soft: rgb(219 234 254); --color-danger: rgb(220 38 38); }
     * { box-sizing: border-box; }
-    body { margin:0; font:14px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif; color:var(--text); background:var(--bg); }
-    main { display:flex; min-height:100vh; align-items:center; justify-content:center; padding:16px; }
-    .card { display:flex; align-items:center; gap:24px; flex-wrap:wrap; justify-content:center;
-            padding:24px 32px; border:1px solid var(--border); border-radius:12px; }
-    .identity { display:flex; flex-direction:column; gap:4px; }
-    .identity .name { font-size:16px; font-weight:600; }
-    .identity .email { font-size:13px; color:var(--secondary); }
-    button { height:48px; padding:0 24px; border:none; border-radius:var(--radius);
-             background:var(--primary); color:#fff; font-size:14px; font-weight:500; cursor:pointer; }
+    body { margin:0; font:var(--font-size-base)/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;
+           color:var(--color-text); background:var(--color-bg); }
+    main { display:flex; min-height:100vh; align-items:center; justify-content:center; padding:var(--space-4); }
+    .card { display:flex; align-items:center; gap:var(--space-6); flex-wrap:wrap; justify-content:center;
+            padding:var(--space-6) var(--space-8); border:1px solid var(--color-border); border-radius:var(--radius-lg); }
+    .identity { display:flex; flex-direction:column; gap:var(--space-1); }
+    .identity .name { font-size:var(--font-size-lg); font-weight:600; }
+    .identity .email { font-size:var(--font-size-sm); color:var(--color-text-secondary); }
+    button { height:48px; padding:0 var(--space-6); border:none; border-radius:var(--radius-md);
+             background:var(--color-primary); color:var(--color-bg); font-size:var(--font-size-base); font-weight:500; cursor:pointer; }
     button:disabled { opacity:.6; cursor:wait; }
-    .count { font-size:20px; font-variant-numeric:tabular-nums; min-width:32px; text-align:center; }
-    .err { width:100%; text-align:center; color:#dc2626; font-size:13px; }
+    .count { font-size:var(--font-size-xl); font-variant-numeric:tabular-nums; min-width:var(--space-8); text-align:center; }
+    .err { width:100%; text-align:center; color:var(--color-danger); font-size:var(--font-size-sm); }
   </style>
 </head>
 <body>
@@ -189,7 +170,7 @@ app.post('/api/count', async (c) => {
   return c.json({ count: next });
 });
 
-/** 用请求内 Bearer 做一次性验签（运行时与中间件同规：本地 JWKS，零运行时网络）。 */
+/** 用请求内 Bearer 做一次性验签（全模块认证唯一收口：本地 JWKS，零运行时网络）。 */
 async function requireAuth(
   c: Context<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }>,
 ): Promise<Response | null> {
@@ -213,10 +194,15 @@ async function requireAuth(
   }
 }
 
-/** 生命周期骨架（§5.4 契约；M0 返回契约形状，全量实现随 M1 卸载剧本）。 */
+/** 生命周期骨架（§5.4 契约；M0 返回契约形状，全量实现随 M1 卸载剧本）。
+ * 认证与 /api/count 同规（#45 遗留项②）：storage 缺绑定 503，验签不过 401。 */
 app.get('/life/export', async (c) => {
-  const db = c.env.MODULES_DB;
-  const count = db ? await readCount(db) : 0;
+  if (!c.env.MODULES_DB) {
+    return c.json({ error: 'storage binding missing' }, 503);
+  }
+  const authError = await requireAuth(c);
+  if (authError) return authError;
+  const count = await readCount(c.env.MODULES_DB);
   return c.json({
     version: 1,
     moduleId: MODULE_ID,
@@ -232,6 +218,8 @@ app.post('/life/purge', async (c) => {
   if (!c.env.MODULES_DB) {
     return c.json({ error: 'storage binding missing' }, 503);
   }
+  const authError = await requireAuth(c);
+  if (authError) return authError;
   const store = createD1Storage({ db: storage(c.env.MODULES_DB), moduleId: MODULE_ID });
   for (const key of await store.list()) {
     await store.delete(key);
