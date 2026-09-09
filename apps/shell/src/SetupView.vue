@@ -315,7 +315,7 @@ async function onSaveAndActivate() {
 /* #92 同位置替换过渡：时长/缓动取 tokens（§6.5 无外部动效库） */
 .setup-swap-enter-active,
 .setup-swap-leave-active {
-  transition: opacity var(--duration-fast) var(--ease-out);
+  transition: opacity var(--unself-duration-fast) var(--unself-ease-out);
 }
 .setup-swap-enter-from,
 .setup-swap-leave-to {
