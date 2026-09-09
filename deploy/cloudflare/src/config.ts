@@ -3,7 +3,8 @@
  * unself.config.jsonc 解析（PRODUCT_SPEC §5.5）：
  * - 零依赖 JSONC 剥离（注释 + 尾逗号）→ JSON.parse → zod 校验；
  * - domain 空/省略 → null（脚本回退 workers.dev 临时域，#15 验收路径）；
- * - storage.provider = r2（脚本建桶）| s3（外部 S3/MinIO 参数，§5.5 ⑥）。
+ * - storage.provider = r2（脚本建桶）| s3（外部 S3/MinIO 参数，§5.5 ⑥）；
+ * - modules 空数组合法 = 全停用（未列出的已存在模块 → 注册表 not_deployed、其 zone 路由删除）。
  */
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
@@ -26,8 +27,8 @@ export const StorageSchema = z.discriminatedUnion('provider', [R2StorageSchema, 
 export const UnselfConfigSchema = z.object({
   /** 实例对外域名（如 team.example.com）；空/省略 → workers.dev 临时域。 */
   domain: z.string().trim().default(''),
-  /** 选中启用的模块 id（未列出的已存在模块 → 注册表 not_deployed）。 */
-  modules: z.array(z.string().regex(/^[a-z][a-z0-9-]+$/)).min(1),
+  /** 选中启用的模块 id；空数组 = 全停用（未列出的已存在模块 → 注册表 not_deployed、其 zone 路由删除）。 */
+  modules: z.array(z.string().regex(/^[a-z][a-z0-9-]+$/)),
   storage: StorageSchema.default({ provider: 'r2', bucket: 'unself-storage' }),
 });
 

@@ -37,10 +37,15 @@ describe('parseUnselfConfigText', () => {
     expect(cfg.domain).toBe('team.example.com');
   });
 
-  it('拒绝空 modules、坏模块 id、坏 storage provider', () => {
-    expect(() => parseUnselfConfigText('{"modules":[]}')).toThrow();
+  it('拒绝坏模块 id、坏 storage provider', () => {
     expect(() => parseUnselfConfigText('{"modules":["Bad_ID"]}')).toThrow();
     expect(() => parseUnselfConfigText('{"modules":["a"],"storage":{"provider":"dropbox"}}')).toThrow();
+  });
+
+  it('空 modules 通过校验（全停用：storage 默认 r2/unself-storage）', () => {
+    const cfg = parseUnselfConfigText('{"domain":"","modules":[]}');
+    expect(cfg.modules).toEqual([]);
+    expect(cfg.storage).toEqual({ provider: 'r2', bucket: 'unself-storage' });
   });
 });
 
