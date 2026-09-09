@@ -36,11 +36,6 @@ export function buildNav(modules: ModuleMeta[]): NavItem[] {
   ]
 }
 
-/** 第一个启用模块 id（登录落地规则 #11 消费）；全部停用返回 null。 */
-export function firstEnabledModule(modules: ModuleMeta[]): string | null {
-  return modules.find((m) => m.enabled)?.id ?? null
-}
-
 /** nav 项是否为壳内固定视图（工作台/空态），不装载 iframe。 */
 export function isHostView(navId: string): boolean {
   return navId === 'workspace'
