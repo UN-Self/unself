@@ -2,7 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SignJWT, calculateJwkThumbprint, exportJWK, generateKeyPair, type CryptoKey } from 'jose';
 
-import { createModuleSDK, decodeJwtPayload, verifyModuleToken } from '../src/index';
+import { DEFAULT_THEME, SdkMessageSchema, THEME_TOKEN_KEYS } from '@unself/contracts';
+
+import {
+  createModuleSDK,
+  decodeJwtPayload,
+  verifyModuleToken,
+  type ThemeTokens,
+} from '../src/index';
 
 /**
  * 手造 JWT：header / payload / signature 均为 base64url。
@@ -81,6 +88,15 @@ function installFakeWindow(): {
       }
     },
   };
+}
+
+/** 最小 document stub（通道 B 只在写 :root 时用到 setProperty）。 */
+function installFakeDocument(): { setProperty: ReturnType<typeof vi.fn> } {
+  const setProperty = vi.fn();
+  vi.stubGlobal('document', {
+    documentElement: { style: { setProperty } },
+  });
+  return { setProperty };
 }
 
 describe('outbound messages（ready / navigate / notify / theme）', () => {
@@ -418,5 +434,142 @@ describe('verifyModuleToken', () => {
     await expect(verifyModuleToken(token, { coreJwksJson, audience: 'core-api' })).resolves.toEqual(
       expect.objectContaining({ sub: 'mod-a', aud: 'core-api' }),
     );
+  });
+});
+
+describe('主题通道 B（tokens 消息 / getTokens / applyTheme，§6.5.5-6.5.7）', () => {
+  const MESSAGE = {
+    type: 'tokens',
+    tokens: { 'unself.color.primary': '#0f62fe' },
+  } as const;
+
+  it('getTokens resolves the default theme before any tokens message（全契约键兜底）', async () => {
+    const sdk = createModuleSDK({ moduleId: 'mod-a', coreOrigin: CORE_ORIGIN });
+    const tokens = await sdk.getTokens();
+    // 不必逐键：抽 2-3 个代表键 + 键数全量对齐契约白名单。
+    expect(tokens['unself.color.primary']).toBe(DEFAULT_THEME['unself.color.primary']);
+    expect(tokens['unself.space.4']).toBe(DEFAULT_THEME['unself.space.4']);
+    expect(tokens['unself.shadow.card']).toBe(DEFAULT_THEME['unself.shadow.card']);
+    expect(Object.keys(tokens)).toHaveLength(THEME_TOKEN_KEYS.length);
+  });
+
+  it('merges a trusted partial tokens message over the default theme', async () => {
+    const fake = installFakeWindow();
+    const sdk = createModuleSDK({ moduleId: 'mod-a', coreOrigin: CORE_ORIGIN });
+    await sdk.getTokens(); // 首次调用：惰性注册 tokens 监听器。
+
+    fake.dispatch({ origin: CORE_ORIGIN, data: MESSAGE });
+    const tokens = await sdk.getTokens();
+    expect(tokens['unself.color.primary']).toBe('#0f62fe');
+    // 未覆盖的键走平台默认（§6.5.4 部分覆盖合法）。
+    expect(tokens['unself.space.4']).toBe(DEFAULT_THEME['unself.space.4']);
+    expect(Object.keys(tokens)).toHaveLength(THEME_TOKEN_KEYS.length);
+  });
+
+  it('writes received tokens into :root automatically（标准件自动跟随，零配置）', async () => {
+    const fake = installFakeWindow();
+    const { setProperty } = installFakeDocument();
+    const sdk = createModuleSDK({ moduleId: 'mod-a', coreOrigin: CORE_ORIGIN });
+    await sdk.getTokens(); // 注册监听，但未收到消息前不写 :root。
+    expect(setProperty).not.toHaveBeenCalled();
+
+    fake.dispatch({ origin: CORE_ORIGIN, data: MESSAGE });
+    expect(setProperty).toHaveBeenCalledWith('--unself-color-primary', '#0f62fe');
+    // 生效集是全量（默认兜底逐键写入），模块页 var() 全部可解析（§6.5.8 体检口径）。
+    expect(setProperty).toHaveBeenCalledWith('--unself-space-4', DEFAULT_THEME['unself.space.4']);
+  });
+
+  it('ignores tokens messages from untrusted origins', async () => {
+    const fake = installFakeWindow();
+    const { setProperty } = installFakeDocument();
+    const sdk = createModuleSDK({ moduleId: 'mod-a', coreOrigin: CORE_ORIGIN });
+    await sdk.getTokens();
+
+    fake.dispatch({
+      origin: 'https://evil.example',
+      data: { type: 'tokens', tokens: { 'unself.color.primary': '#ff0000' } },
+    });
+    const tokens = await sdk.getTokens();
+    expect(tokens['unself.color.primary']).toBe(DEFAULT_THEME['unself.color.primary']);
+    expect(setProperty).not.toHaveBeenCalledWith('--unself-color-primary', '#ff0000');
+  });
+
+  it('ignores invalid tokens payloads（未知名 / 非字符串 / 空串：不写入、不覆盖）', async () => {
+    const fake = installFakeWindow();
+    const { setProperty } = installFakeDocument();
+    const sdk = createModuleSDK({ moduleId: 'mod-a', coreOrigin: CORE_ORIGIN });
+    await sdk.getTokens();
+
+    fake.dispatch({
+      origin: CORE_ORIGIN,
+      data: { type: 'tokens', tokens: { 'unself.color.nope': '#000000' } },
+    });
+    fake.dispatch({
+      origin: CORE_ORIGIN,
+      data: { type: 'tokens', tokens: { 'unself.color.primary': 42 } },
+    });
+    fake.dispatch({
+      origin: CORE_ORIGIN,
+      data: { type: 'tokens', tokens: { 'unself.color.primary': '' } },
+    });
+
+    const tokens = await sdk.getTokens();
+    expect(tokens['unself.color.primary']).toBe(DEFAULT_THEME['unself.color.primary']);
+    expect(setProperty).not.toHaveBeenCalledWith('--unself-color-primary', '#0f62fe');
+    expect(setProperty).not.toHaveBeenCalledWith('--unself-color-primary', '#000000');
+  });
+
+  it('applyTheme writes :root and wins over shell-delivered values（模块内覆盖 > 壳下发，§6.5.6）', async () => {
+    const fake = installFakeWindow();
+    const { setProperty } = installFakeDocument();
+    const sdk = createModuleSDK({ moduleId: 'mod-a', coreOrigin: CORE_ORIGIN });
+    await sdk.getTokens(); // 确保监听就位，再收壳下发的实例主题。
+
+    fake.dispatch({
+      origin: CORE_ORIGIN,
+      data: { type: 'tokens', tokens: { 'unself.space.4': '24px', 'unself.color.primary': '#0f62fe' } },
+    });
+
+    sdk.applyTheme({ 'unself.space.4': '20px' });
+    expect(setProperty).toHaveBeenCalledWith('--unself-space-4', '20px');
+
+    const tokens = await sdk.getTokens();
+    expect(tokens['unself.space.4']).toBe('20px'); // 模块内覆盖胜出。
+    expect(tokens['unself.color.primary']).toBe('#0f62fe'); // 未覆盖的键仍随壳下发。
+  });
+
+  it('applyTheme throws on unknown keys and non-string/empty values', () => {
+    const sdk = createModuleSDK({ moduleId: 'mod-a', coreOrigin: CORE_ORIGIN });
+    expect(() => sdk.applyTheme({ 'unself.color.nope': '#000000' })).toThrow(/unknown theme token/);
+    expect(() =>
+      sdk.applyTheme({ 'unself.color.primary': 42 } as unknown as ThemeTokens),
+    ).toThrow(/module-sdk: invalid theme tokens/);
+    expect(() => sdk.applyTheme({ 'unself.color.primary': '' })).toThrow(
+      /module-sdk: invalid theme tokens/,
+    );
+  });
+
+  it('does not throw without document（runtime 守卫生效：只跳过 :root 写入）', async () => {
+    const fake = installFakeWindow(); // window 在、document 不在：Node 侧 / 测试场景。
+    const sdk = createModuleSDK({ moduleId: 'mod-a', coreOrigin: CORE_ORIGIN });
+
+    expect(() => sdk.applyTheme({ 'unself.space.4': '20px' })).not.toThrow();
+    expect(() =>
+      fake.dispatch({ origin: CORE_ORIGIN, data: MESSAGE }),
+    ).not.toThrow();
+
+    // 状态合并不受影响，只是不写 :root。
+    const tokens = await sdk.getTokens();
+    expect(tokens['unself.space.4']).toBe('20px');
+    expect(tokens['unself.color.primary']).toBe('#0f62fe');
+  });
+
+  it('tokens message contract shape（SdkMessageSchema：tokens 必填、tokens 须为映射）', () => {
+    expect(
+      SdkMessageSchema.safeParse({ type: 'tokens', tokens: { 'unself.color.primary': '#0f62fe' } })
+        .success,
+    ).toBe(true);
+    expect(SdkMessageSchema.safeParse({ type: 'tokens' }).success).toBe(false);
+    expect(SdkMessageSchema.safeParse({ type: 'tokens', tokens: 'not-a-map' }).success).toBe(false);
   });
 });

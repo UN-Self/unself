@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { ModuleTokenClaimsSchema, type ModuleTokenClaims } from '@unself/contracts';
+import {
+  DEFAULT_THEME,
+  ModuleTokenClaimsSchema,
+  ThemeTokensSchema,
+  tokenCssName,
+  type ModuleTokenClaims,
+  type ThemeTokens,
+} from '@unself/contracts';
 
 /**
  * window 最小访问面（不引入 DOM lib：包可运行在 Node 侧，测试用 stub window）。
@@ -19,7 +26,20 @@ interface MessageLikeEvent {
   data: unknown;
 }
 
+/**
+ * document 最小访问面（不引入 DOM lib，与 window/atob 声明同风格）：
+ * 通道 B（§6.5.5）只需把令牌写入 :root 的 style 属性。
+ */
+interface StyleLike {
+  setProperty(name: string, value: string): void;
+}
+
+interface DocumentLike {
+  documentElement: { style: StyleLike };
+}
+
 declare const window: WindowLike;
+declare const document: DocumentLike;
 declare const atob: (data: string) => string;
 declare const TextDecoder: new () => { decode(input: Uint8Array): string };
 
@@ -69,6 +89,19 @@ export interface ModuleSDK {
   theme(mode: 'light' | 'dark'): void;
   /** 解码模块 token payload（不验签，仅展示用）。 */
   decodeContext(token: string): ModuleTokenClaims;
+  /**
+   * 读当前生效主题（§6.5.7「读当前值」）：
+   * 合并序 = 模块内覆盖（applyTheme）> 壳下发（实例主题）> 平台默认（§6.5.6）。
+   * 壳消息未到时也有默认兜底；消息到达后读到实例值。
+   * JSDoc 注：模块自己写样式时用语义名（var(--unself-color-primary)），不内联值（§6.5.5）。
+   */
+  getTokens(): Promise<ThemeTokens>;
+  /**
+   * 本模块文档内覆盖主题（§6.5.7）：只影响本模块文档，绝不泄进壳。
+   * partial 必须通过 ThemeTokensSchema（白名单键 + 非空字符串），非法立即抛错
+   * （给模块作者明确报错，不静默吞）；覆盖合并进现有覆盖（非整体替换），随后重写 :root。
+   */
+  applyTheme(partial: ThemeTokens): void;
 }
 
 /**
@@ -128,6 +161,67 @@ export function createModuleSDK(options: CreateModuleSDKOptions): ModuleSDK {
     );
   };
 
+  /**
+   * 入站 tokens 消息判定（通道 B，§6.5.5）：与 token 同源校验口径——
+   * origin 严格等于 coreOrigin 且形状为 {type:'tokens'}（细部校验交给 schema）。
+   */
+  const isTrustedTokensEvent = (event: MessageLikeEvent): boolean => {
+    if (coreOrigin === undefined || event.origin !== coreOrigin) {
+      return false;
+    }
+    const data = event.data as { type?: unknown } | null;
+    return data !== null && typeof data === 'object' && data.type === 'tokens';
+  };
+
+  /** 生效令牌（§6.5.6 优先级：模块内覆盖 > 壳下发 > 平台默认）。 */
+  const effectiveTokens = (): ThemeTokens => ({
+    ...DEFAULT_THEME,
+    ...(received ?? {}),
+    ...localOverrides,
+  });
+
+  /**
+   * 写入 :root（通道 B，§6.5.5 标准件自动跟随）：逐键 tokenCssName 转 CSS 变量名
+   * 后 setProperty；无 document（Node 侧/测试）则跳过——runtime 守卫，不抛。
+   */
+  const applyTokensToRoot = (): void => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const style = document.documentElement.style;
+    for (const [key, value] of Object.entries(effectiveTokens())) {
+      style.setProperty(tokenCssName(key), value);
+    }
+  };
+
+  const handleTokensMessage = (event: MessageLikeEvent): void => {
+    if (!isTrustedTokensEvent(event)) {
+      return;
+    }
+    // 非法令牌（未知名/非字符串/空串等）静默忽略：与现有消息判定口径一致；
+    // 「非法值拒绝」的显式报错只面向模块作者的 applyTheme 入口。
+    const parsed = ThemeTokensSchema.safeParse((event.data as { tokens: unknown }).tokens);
+    if (!parsed.success) {
+      return;
+    }
+    received = parsed.data;
+    applyTokensToRoot();
+  };
+
+  /** 幂等惰性注册：ready()/getTokens()/applyTheme() 首次调用时确保监听器就位。 */
+  const ensureTokensListener = (): void => {
+    if (tokensListener !== null || typeof window === 'undefined') {
+      return;
+    }
+    tokensListener = handleTokensMessage;
+    window.addEventListener('message', tokensListener);
+  };
+
+  // ---- 通道 B 主题状态（§6.5.5：ready 握手时壳经 postMessage 下发 {type:'tokens'}）----
+  let received: ThemeTokens | null = null;
+  let localOverrides: ThemeTokens = {};
+  let tokensListener: ((event: MessageLikeEvent) => void) | null = null;
+
   // ---- 静默续期循环状态（闭包私有） ----
   let renewalTimer: ReturnType<typeof setTimeout> | null = null;
   let loopListener: ((event: MessageLikeEvent) => void) | null = null;
@@ -173,6 +267,8 @@ export function createModuleSDK(options: CreateModuleSDKOptions): ModuleSDK {
 
   return {
     ready(): void {
+      // 通道 B（§6.5.5）：ready 握手同时把 tokens 消息监听就位，壳回发 {type:'tokens'} 即被接住。
+      ensureTokensListener();
       sendReady();
     },
     waitForToken(): Promise<string> {
@@ -264,6 +360,21 @@ export function createModuleSDK(options: CreateModuleSDKOptions): ModuleSDK {
     },
     decodeContext(token: string): ModuleTokenClaims {
       return decodeContextSafe(token);
+    },
+    getTokens(): Promise<ThemeTokens> {
+      ensureTokensListener();
+      return Promise.resolve(effectiveTokens());
+    },
+    applyTheme(partial: ThemeTokens): void {
+      ensureTokensListener();
+      const parsed = ThemeTokensSchema.safeParse(partial);
+      if (!parsed.success) {
+        const details = parsed.error.issues.map((issue) => issue.message).join('; ');
+        throw new Error(`module-sdk: invalid theme tokens: ${details}`);
+      }
+      // 覆盖合并（非整体替换）：同一键重复调用按最后一次值生效（§6.5.7 本模块内覆盖）。
+      Object.assign(localOverrides, parsed.data);
+      applyTokensToRoot();
     },
   };
 }
