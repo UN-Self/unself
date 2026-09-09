@@ -58,3 +58,35 @@ capabilities:
     expect(manifest.capabilities).toEqual(['counter', 'notify']);
   });
 });
+
+describe('flow 式 list 防御（#64：静默丢 → 当场报错）', () => {
+  it('requires: [identity] flow 式直接抛错，不静默丢 capabilities', () => {
+    expect(() =>
+      buildManifestSnapshot({
+        manifestText: `id: demo-mod
+route: /m/demo
+entry: https://x.example/m/demo/
+runtime: worker
+requires: [identity]
+capabilities: [messaging]
+version: 1.0.0
+`,
+        moduleId: 'demo-mod',
+        baseUrl: 'https://x.example',
+      }),
+    ).toThrow(/flow 式/);
+  });
+
+  it('报错信息指明违规字段，引导改 block 式', () => {
+    try {
+      buildManifestSnapshot({
+        manifestText: 'capabilities: [messaging]\n',
+        moduleId: 'demo-mod',
+        baseUrl: 'https://x.example',
+      });
+      expect.unreachable('应已抛错');
+    } catch (err) {
+      expect((err as Error).message).toContain('capabilities');
+    }
+  });
+});
