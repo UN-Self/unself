@@ -2,7 +2,7 @@
 /**
  * 幂等九步编排（PRODUCT_SPEC §5.5，#14）：
  * ① 两 D1 → ② 迁移 → ③ Shell Worker → ④ 模块构建/上传/路由绑定（含未选模块路由删除）
- * → ⑤ registry → ⑥ R2 → ⑦ OIDC（无操作，setup 向导录入）→ ⑧ setup token → ⑨ 冒烟。
+ * → ⑤ registry → ⑥ R2 → ⑦ OIDC（无操作，setup 向导录入）→ ⑧ setup token → ⑨ 冒烟 + 主题体检。
  * 所有资源查漏后补建：连跑两次收敛（#14 验收）。
  */
 import { readFile } from 'node:fs/promises';
@@ -30,7 +30,8 @@ import {
 } from './dns';
 import { ensureDatabases, ensureR2Bucket, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
 import { registryCommands, sqlString } from './registry';
-import { fetchSetupToken, parseWorkersDevFromDeployOutput, smokeCheck } from './smoke';
+import { checkModuleThemes, fetchSetupToken, parseWorkersDevFromDeployOutput, smokeCheck } from './smoke';
+import type { ThemeCheckResult } from './smoke';
 import type { Wrangler } from './wrangler';
 
 /** JWKS 端点路径（core-api 契约）。 */
@@ -84,12 +85,14 @@ export async function runNineSteps(input: {
   wrangler: Wrangler;
   reporter?: StepReporter;
   /**
-   * @internal 仅供测试注入（steps.test.ts）：跳过真实 HTTP（冒烟/setup token）。
-   * 生产路径一律走 smoke.ts 的真实实现；smokeCheck 由 smoke.test.ts 直测。
+   * @internal 仅供测试注入（steps.test.ts）：跳过真实 HTTP（冒烟/setup token/主题体检）。
+   * 生产路径一律走 smoke.ts 的真实实现；smokeCheck/checkModuleThemes 由 smoke.test.ts 直测。
    */
   http?: {
     setupToken(baseUrl: string): Promise<{ token: string; setupUrl: string } | { sealed: true }>;
     smoke(baseUrl: string, moduleIds: string[]): Promise<Array<{ name: string; url: string; ok: boolean; status: number; detail?: string }>>;
+    /** 可选：主题体检注入（§6.5.8）。缺省 = 跳过（保持既有测试语义，不请求网络）。 */
+    themeCheck?: (baseUrl: string, moduleIds: string[]) => Promise<ThemeCheckResult[]>;
   };
   /** 测试注入口：跳过 workers.dev URL 解析（fake wrangler 无真实输出）。 */
   resolveBaseUrl?: (domain: string, workerName: string) => Promise<string>;
@@ -364,8 +367,8 @@ export async function runNineSteps(input: {
     ? await input.http.setupToken(baseUrl)
     : await fetchSetupToken({ baseUrl, log: rep.log });
 
-  // ⑨ 冒烟
-  rep.step(9, '冒烟检查 /api/health 与各模块 health');
+  // ⑨ 冒烟 + 主题体检（§6.5.8 验产物）
+  rep.step(9, '冒烟检查 /api/health 与各模块 health + 主题体检');
   const smoke = input.http
     ? await input.http.smoke(baseUrl, selected.map((m) => m.id))
     : await smokeCheck({
@@ -380,6 +383,31 @@ export async function runNineSteps(input: {
     throw new Error(`冒烟失败：${failed.map((f) => f.name).join('、')}（详情见上方）`);
   }
 
+  // ⑨′ 主题体检（§6.5.8 验产物）：冒烟之后抓模块页根路径，查 --unself-* 引用是否全部在契约白名单。
+  // 未解析 = 平台链路坏了 → 当场红；零引用（独立皮肤）→ 标注不红。
+  const themeChecks = input.http
+    ? input.http.themeCheck
+      ? await input.http.themeCheck(baseUrl, selected.map((m) => m.id))
+      : []
+    : await checkModuleThemes({
+        baseUrl,
+        moduleIds: selected.map((m) => m.id),
+      });
+  for (const r of themeChecks) {
+    const mark = r.ok ? (r.skinned ? 'ⓘ（独立皮肤）' : '✓') : '✗';
+    const unknownPart = r.unknown.length > 0 ? `（未知令牌：${r.unknown.join('、')}）` : '';
+    const detailPart = r.detail ? `（${r.detail}）` : '';
+    rep.log(`${mark} 主题 ${r.name} → ${r.url}${unknownPart}${detailPart}`);
+  }
+  const themeFailed = themeChecks.filter((r) => !r.ok);
+  if (themeFailed.length > 0) {
+    throw new Error(
+      `主题体检失败：${themeFailed
+        .map((f) => `${f.name}(${f.url}): ${f.unknown.length > 0 ? `未知令牌 ${f.unknown.join('、')}` : (f.detail ?? '未知原因')}`)
+        .join('；')}`,
+    );
+  }
+
   return {
     baseUrl,
     core: { name: provisioned.coreName, config: provisioned.coreConfig },
@@ -388,6 +416,7 @@ export async function runNineSteps(input: {
     r2Bucket: provisioned.r2Bucket,
     setup: 'sealed' in setup ? { sealed: true as const } : { setupUrl: setup.setupUrl },
     keypairAction: freshPair ? 'created' : 'existing',
+    themeChecks,
   };
 }
 
@@ -498,6 +527,8 @@ export interface Summary {
   r2Bucket?: string;
   setup: { sealed: true } | { setupUrl: string };
   keypairAction: 'created' | 'existing';
+  /** 部署期主题体检结果（§6.5.8）；测试注入无 themeCheck 时为 []。 */
+  themeChecks: ThemeCheckResult[];
 }
 
 export { CORE_DB_NAME, MODULES_DB_NAME, DEPLOY_DIR };

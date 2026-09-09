@@ -167,6 +167,8 @@ describe('buildModuleSdkAssets（T3 页面 SDK 装载契约）', () => {
         'createD1Storage',
         'createModuleSDK',
         'decodeJwtPayload',
+        // #91 通道 B：主题语义名 → CSS 变量名单点转换（模块作者写样式用）
+        'tokenCssName',
         'verifyModuleToken',
       ]);
     } finally {

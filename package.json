@@ -8,6 +8,7 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "verify:tokens": "node scripts/verify-tokens.mjs"
   }
 }

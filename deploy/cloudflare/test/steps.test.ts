@@ -420,4 +420,57 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       }),
     ).rejects.toThrow(/可重跑部署（幂等）/);
   });
+
+  it('主题体检失败（模块页未解析令牌）→ 明确报错（§6.5.8 当场红）', async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    await expect(
+      runSteps({
+        rootDir: ROOT,
+        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        wrangler: fake.wrangler,
+        http: {
+          ...SMOKE_OK,
+          themeCheck: async () => [
+            { name: 'module:hello', url: 'https://x.example/m/hello/', ok: false, skinned: false, unknown: ['--color-primary', '--unself-space4'] },
+          ],
+        },
+        resolveBaseUrl: async () => 'https://x.example',
+        fetchJwks: async () => FIXED_JWKS,
+      }),
+    ).rejects.toThrow(
+      /主题体检失败：module:hello\(https:\/\/x\.example\/m\/hello\/\): 未知令牌 --color-primary、--unself-space4/,
+    );
+  });
+
+  it('主题体检通过（含独立皮肤 skinned:true）→ resolve 且 summary.themeChecks 透传', async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    const themeChecks = [
+      { name: 'module:hello', url: 'https://x.example/m/hello/', ok: true, skinned: true, unknown: [] },
+    ];
+    const summary = await runSteps({
+      rootDir: ROOT,
+      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      wrangler: fake.wrangler,
+      http: {
+        ...SMOKE_OK,
+        themeCheck: async () => themeChecks,
+      },
+      resolveBaseUrl: async () => 'https://x.example',
+      fetchJwks: async () => FIXED_JWKS,
+    });
+    expect(summary.themeChecks).toEqual(themeChecks);
+  });
+
+  it('http 存在但无 themeCheck → 跳过主题体检（summary.themeChecks=[]，不触发网络）', async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    const summary = await runSteps({
+      rootDir: ROOT,
+      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      wrangler: fake.wrangler,
+      http: SMOKE_OK,
+      resolveBaseUrl: async () => 'https://x.example',
+      fetchJwks: async () => FIXED_JWKS,
+    });
+    expect(summary.themeChecks).toEqual([]);
+  });
 });
