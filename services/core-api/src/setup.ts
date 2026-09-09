@@ -43,3 +43,12 @@ export async function consumeSetupToken(db: D1Database, token: string): Promise<
     .run();
   return result.meta.changes > 0;
 }
+
+/** 只验不消费：token 存在且未使用（oidc-config 端点门禁；可重复提交改填，不消耗）。 */
+export async function isSetupTokenValid(db: D1Database, token: string): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT 1 AS ok FROM setup_tokens WHERE token = ? AND used_at IS NULL')
+    .bind(token)
+    .first();
+  return Boolean(row);
+}
