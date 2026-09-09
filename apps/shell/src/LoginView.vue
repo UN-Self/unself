@@ -1,9 +1,10 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { LogIn } from 'lucide-vue-next'
 import { UButton, UCard, UErrorCard } from '@unself/ui'
+import { humanizeLoginError } from './lib/login-error'
 
 /**
  * 登录页（#11，§6.5 动线）：
@@ -17,17 +18,8 @@ const router = useRouter()
 
 const instanceName = 'Unself 工作台'
 const redirecting = ref(false)
-// OIDC 回跳失败（callback 带错误参数）时展示人话；不暴露原始报错
-const loginBroken = ref(false)
-
-onMounted(() => {
-  // core-api callback 失败时不会回本页（服务端直接报错），
-  // 这里兜底处理路由携带 error 参数的形态（如 IdP 端直接回跳）。
-  const err = route.query.error
-  if (typeof err === 'string' && err.length > 0) {
-    loginBroken.value = true
-  }
-})
+// OIDC 回跳失败（callback 带错误参数）时展示人话；不暴露原始报错（#83 按错误码分档）
+const loginError = computed(() => humanizeLoginError(route.query.error))
 
 function startLogin() {
   redirecting.value = true
@@ -57,10 +49,10 @@ void (async () => {
         <p class="login-subtitle">使用团队统一账号登录，密码在身份源页面输入。</p>
 
         <UErrorCard
-          v-if="loginBroken"
+          v-if="loginError"
           class="login-error"
-          title="登录暂时不可用"
-          message="登录校验失败，请联系管理员检查身份源配置。"
+          :title="loginError.title"
+          :message="loginError.message"
           retry-label="重新登录"
           @retry="startLogin"
         />
