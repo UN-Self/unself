@@ -80,7 +80,7 @@ export async function provisionAll(options: {
    */
   buildShell?: (rootDir: string) => Promise<void>;
 }): Promise<Provisioned> {
-  const { rootDir, config, modules, dbIds, wrangler } = options;
+  const { rootDir, config, modules } = options;
   const log = options.log ?? console.log;
   const buildShell =
     options.buildShell ?? ((dir) => runTool('pnpm', ['--filter', '@unself/shell', 'build'], dir));
