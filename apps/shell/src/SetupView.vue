@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { KeyRound, PlugZap } from 'lucide-vue-next'
 import { UButton, UInput, UCard, UErrorCard } from '@unself/ui'
@@ -42,6 +42,17 @@ const testing = ref(false)
 const testResult = ref<{ ok: boolean; text: string } | null>(null)
 const activating = ref(false)
 const activateError = ref<ApiError | null>(null)
+
+// #92 三态机：测试通过才显示「保存并激活」（同位置替换，不并排）
+const verified = ref(false)
+
+// 边界语义 1：测试通过后改任意字段 → 测试结果失效 → 按钮回「测试连接」
+watch([issuer, clientId, clientSecret], () => {
+  if (verified.value) {
+    verified.value = false
+    testResult.value = null
+  }
+})
 
 onMounted(() => {
   const t = token.value
@@ -92,9 +103,23 @@ async function onTestConnection() {
     fieldErrors.value = { ...fieldErrors.value, issuer: '需要完整的 Issuer 地址（https://…）' }
     return
   }
+  const tested = {
+    issuer: issuer.value.trim(),
+    clientId: clientId.value.trim(),
+    clientSecret: clientSecret.value,
+  }
   testing.value = true
-  const result = await testOidcConnection(issuer.value.trim())
+  const result = await testOidcConnection(tested.issuer)
   testing.value = false
+  // 竞态面（边界语义 1）：测试在途时用户改任意字段 → 结果作废，不回「保存并激活」
+  if (
+    issuer.value.trim() !== tested.issuer ||
+    clientId.value.trim() !== tested.clientId ||
+    clientSecret.value !== tested.clientSecret
+  ) {
+    return
+  }
+  verified.value = result.ok
   testResult.value = result.ok
     ? { ok: true, text: `连接成功：${result.issuer}` }
     : { ok: false, text: result.reason }
@@ -117,6 +142,9 @@ async function onSaveAndActivate() {
     return
   } catch (err) {
     activateError.value = err as ApiError
+    // 边界语义 2：提交失败（网络/落库）→ 回「测试连接」可重测，不僵在 loading
+    verified.value = false
+    testResult.value = null
   } finally {
     activating.value = false
   }
@@ -183,11 +211,30 @@ async function onSaveAndActivate() {
           reserve-error-line
         />
 
+        <!-- #92：单按钮三态机——同一位置两态互斥，Vue <Transition> 默认淡入淡出过渡（§6.5 动效归模块自治，不移植 beUI StatefulButton） -->
         <div class="setup-test">
-          <UButton variant="outline" :loading="testing" @click="onTestConnection">
-            <PlugZap :size="16" aria-hidden="true" />
-            测试连接
-          </UButton>
+          <Transition name="setup-swap" mode="out-in">
+            <UButton
+              v-if="!verified"
+              key="setup-test-connection"
+              variant="outline"
+              :loading="testing"
+              @click="onTestConnection"
+            >
+              <PlugZap :size="16" aria-hidden="true" />
+              测试连接
+            </UButton>
+            <UButton
+              v-else
+              key="setup-save-activate"
+              type="submit"
+              size="lg"
+              class="setup-submit"
+              :loading="activating"
+            >
+              保存并激活
+            </UButton>
+          </Transition>
           <span
             v-if="testResult"
             class="setup-test-result"
@@ -197,15 +244,6 @@ async function onSaveAndActivate() {
             {{ testResult.text }}
           </span>
         </div>
-
-        <UButton
-          type="submit"
-          size="lg"
-          class="setup-submit"
-          :loading="activating"
-        >
-          保存并激活
-        </UButton>
         <p class="setup-note">激活需要用工作账号登录；登录页面由你的身份源提供。</p>
       </form>
     </UCard>
@@ -273,6 +311,15 @@ async function onSaveAndActivate() {
 }
 .setup-submit {
   width: 100%;
+}
+/* #92 同位置替换过渡：时长/缓动取 tokens（§6.5 无外部动效库） */
+.setup-swap-enter-active,
+.setup-swap-leave-active {
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+.setup-swap-enter-from,
+.setup-swap-leave-to {
+  opacity: 0;
 }
 .setup-note {
   margin: 0;
