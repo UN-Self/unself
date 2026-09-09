@@ -345,6 +345,34 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 
 **已知缺口**：setup 向导录入的 OIDC client secret 存于 core D1（无字段级加密），审计记录读取行为；字段级加密为远期选项。
 
+#### 5.5.1 第三方模块发布契约（用户拍板，2026-09-09）
+
+模块作者**不部署，只发布**；部署永远是实例侧动作。
+
+```text
+模块作者（独立仓库）            实例侧（部署器 · 九步脚本）          运行时
+┌─────────────────────┐      ┌────────────────────────────┐      ┌─────────────┐
+│ 写代码               │      │ 读 config：modules:[{id,     │      │ 壳 + 模块页 │
+│ 产出「模块包」       │──发布─▶│  source, version}]          │      │ 同实例共存   │
+│ (manifest + 产物)    │ npm/  │ 拉包 → 构建 → 绑 /m/<id>/*  │      └─────────────┘
+└─────────────────────┘  git  │ 注册表 upsert → 冒烟         │
+                               └────────────────────────────┘
+```
+
+**模块包内容**：
+
+```
+mail-1.2.0.tar.gz
+├─ manifest.json     id、requires、capabilities、entry、构建说明（已有 schema）
+├─ worker.js         构建产物（或源码 + build 脚本）
+├─ assets/           模块页静态文件（只含 var() 名字，不含值）
+└─ theme.json        可选：模块自己皮肤（默认跟随实例主题）
+```
+
+**信任无分级（拍板）**：不区分官方/认证/任意。写部署脚本的人 = 信任决策者——他选择装哪个包，就已经做出了选择。官方模块直接显示官方；其他来源不做任何标注，不引入额外机制。
+
+**主题与部署解耦**：模块产物里只有语义令牌名字（`var(--unself-*)`），没有值。部署时零令牌；值只在运行时由壳统一下发（见 §6.5 注入双通道）。换主题不重部署模块。
+
 ### 5.6 跨模块协作三原语（已拍板，2026-09-06）
 
 会议记录压测沉淀的三条通用机制，所有模块同规适用：
@@ -437,13 +465,107 @@ unself/
 2. **边界标注**：根 `LICENSE` = AGPL-3.0 全文（核心/SDK/自研模块/文档）；`modules/chat-edgechat/` 下 GPL-3.0 模块级 LICENSE（上游继承，注明含本仓库修改）；MiroTalk 相关件 AGPL-3.0；根 `NOTICE` 记录上游归属；`third_party/components.yaml` 登记每个外部件的版本/来源/SPDX/接入方式；新代码文件头 `// SPDX-License-Identifier: AGPL-3.0-only`（脚手架自动带上）。
 3. **合并判定铁律**：代码进同一构建产物才是“合并”；独立 Worker + HTTP 边界 + 标准协议 ≠ 合并；从 GPL 上游重构进核心时必须按规格重写、不复制代码；fork 过的件必须登记。魔改 EdgeChat 后端自用不分发二进制则无公开义务，但源码照常在仓库中。
 
-## 6.5 前端约定（用户拍板，2026-09-07）
+## 6.5 前端约定：主题系统（用户拍板，2026-09-09，替换 2026-09-07 版）
 
-适用于 apps/shell、apps/admin、apps/portal 及一切自研模块前端。四条铁律：
+适用于 apps/shell、apps/admin、apps/portal 及一切模块前端（含第三方）。
 
-**1. 设计令牌单一来源**：全部颜色/间距/圆角/阴影/字号定义在 `tokens.css`（CSS 自定义属性），Tailwind v4 `@theme` 映射为工具类；组件内禁止出现裸 hex、魔法数、散落样式值。暗色主题 = 未来换一份 tokens 值，零组件改动（M0 只做亮色单主题）。
+**总纲：统一「名字」和「默认值」，开放「值」。管契约，不管设计。**
 
-**2. 组件查找序**：实现任何组件前按序查——
+### 6.5.1 令牌三层结构
+
+```
+primitive 层   品牌自己的值（brand-600、space-4、#2563eb…）→ 主题包里的实物
+semantic 层   平台定义的契约名（color-primary、radius-md、space-6…）→ 模块只引这层
+component 层  组件接口令牌（button-bg、card-radius…）→ packages/ui 内部用
+```
+
+模块永远只写 `var(--unself-color-primary)`，手里没有值。
+
+### 6.5.2 语义令牌清单（锁死「只增不改」）
+
+| 类别 | 令牌 |
+|---|---|
+| 颜色 | bg / surface / surface-hover / surface-active / border / text / text-secondary / text-tertiary / primary / primary-hover / primary-soft / danger / danger-soft / success / info / warning / scrim |
+| 间距 | space-1 / 2 / 3 / 4 / 5 / 6 / 8 |
+| 圆角 | radius-sm / md / lg / full |
+| 字号 | font-size-xs / sm / base / lg / xl / 2xl |
+| 阴影 | shadow-card / shadow-pop |
+| 其他 | focus-ring |
+
+规则：**清单发布后只增不改名、不删项**。模块引用它，永远不碎。
+
+> **动效不在契约内（拍板 2026-09-09）**：动效归模块作者自治，平台不评审、不统一、不体检。平台组件自带 Vue `<Transition>` 默认过渡即可；动效令牌（duration/ease）仅为平台内部默认值，不构成对外契约。**平台只保证静态视觉一致——圆角、颜色、字体、间距。**
+
+### 6.5.3 命名空间
+
+全部语义令牌前缀 `--unself-`：`--unself-color-primary` 而非 `--color-primary`。独立文档内模块自己的 CSS 与令牌不打架；体检/审计可一条规则全查。
+
+### 6.5.4 主题包协议
+
+主题包 = 一份「语义名→值」的 JSON 映射，配 JSON Schema（机器可校验）：
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "handywote-brand",
+  "tokens": { "unself.color.primary": "#0f62fe", "unself.radius.md": "6px" }
+}
+```
+
+规则：
+- **部分覆盖合法**：只写自己的键，其余走默认。写主题门槛降到最低。
+- **非法值拒绝**：schema 校验不过 → 部署时红，不静默吞。
+- **带 schemaVersion**，向前兼容。
+- 默认主题包 = 平台内置（今天 tokens.css 的值就是它的内容），是兜底。
+
+### 6.5.5 注入双通道（值怎么进模块页）
+
+```
+通道 A（同源直注）  模块挂 /m/<id>/* 同域 → 壳在 iframe 加载后直接向
+                   contentDocument 注入 <style id="unself-tokens">
+                   手写页（不用 SDK）也自动有值
+通道 B（SDK 握手）  模块用 @unself/module-sdk → ready 握手时壳经
+                   postMessage 下发 {type:'tokens', tokens} → SDK 写入 :root
+                   标准件自动跟随，模块作者零配置
+```
+
+模块页里禁止任何内联值（hello 抄写副本是反面教材），只留 var()。
+
+### 6.5.6 作用域、优先级、生效时机
+
+```
+优先级：模块内覆盖 > 实例主题 > 平台默认
+边界：模块主题只在模块文档内生效，绝不泄进壳
+```
+
+**生效时机**：主题值存 D1 的 instance_config，壳按短 TTL 缓存读取、模块握手时下发当前值。管理员换皮 = 改一条配置 = 实例内模块随下次握手/刷新生效，**不重部署**。
+
+### 6.5.7 SDK 主题 API（模块作者权限面）
+
+| 能力 | 形式 |
+|---|---|
+| 自动跟随 | SDK 标准件默认行为，零配置 |
+| 读当前值 | sdk.getTokens()（模块自己写样式时用语义名） |
+| 本模块内覆盖 | sdk.applyTheme(partial)——只影响自己文档 |
+| 完全独立皮肤 | 不引 SDK 标准件、自写一套 → 允许，体检标注「独立皮肤」 |
+
+### 6.5.8 部署期视觉体检（验产物，不验源码）
+
+- 部署后加载模块页，检查 `--unself-*` 引用是否全部解析成非空值。未解析 = 平台链路坏了，部署时当场红（hello 类 bug 一生一次）。
+- 模块零主题引用（独立皮肤）→ 标注「独立皮肤」，不红。
+- 不做像素 diff（脆、跨平台字体差异）。标注结果进部署报告。
+
+### 6.5.9 职责边界（管什么，不管什么）
+
+| | 平台管 | 平台不管 |
+|---|---|---|
+| 令牌 | 契约名 + 默认主题 + 注入通道 | 模块布局/美学 |
+| 主题 | 实例主题入口 + 校验 | 模块自定义 skin |
+| 体检 | 契约生效标注 | 模块是否跟随（标注即可） |
+
+### 6.5.10 既有铁律（保留）
+
+**1. 组件查找序**：实现任何组件前按序查——
 
 ```text
 ① beUI（github.com/starc007/ui-components，beui.dev/r/{slug}.json
@@ -453,9 +575,9 @@ unself/
 ③ 都没有 → 手写，样式只取自 tokens
 ```
 
-**3. 基元内聚**：共享基元（Button/Input/Card/ErrorCard/Skeleton/Icon…）住 `packages/ui`，自包含、无外部样式依赖；页面不写一次性样式碎片。
+**2. 基元内聚**：共享基元（Button/Input/Card/ErrorCard/Skeleton/Icon…）住 `packages/ui`，自包含、无外部样式依赖；页面不写一次性样式碎片。
 
-**4. 图标规范**：只用 Lucide（lucide-vue-next，ISC 许可）。manifest `icon` 存图标名，壳白名单映射渲染；界面内禁止 emoji 作图标（用户明确拒绝）。
+**3. 图标规范**：只用 Lucide（lucide-vue-next，ISC 许可）。manifest `icon` 存图标名，壳白名单映射渲染；界面内禁止 emoji 作图标（用户明确拒绝）。
 
 **界面动线**（shell，M0 范围）：
 
