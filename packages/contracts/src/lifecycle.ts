@@ -4,12 +4,18 @@
  * 模块生命周期契约（PRODUCT_SPEC §5.4）：
  * manifest 之外每模块必须实现的生命周期接口与导出/清除数据形状。
  * 类型仅供模块与 Core 共同引用；M0 由 hello 模块提供第一份实现。
+ *
+ * M0/M1 阶段的真值是 HTTP 端点（§5.4 现有实现）：GET /life/export、POST /life/purge
+ * （模块路由下，路径逻辑同 Hello 的 /life/*）。
+ * 下方的 ModuleLifecycle 对象接口是 M6 卸载编排（Core 直接调模块内对象）时接入的
+ * 演进形态——届时才需要模块在自身入口导出该对象；此前它只是形状约定，不要按它实现。
  */
 
 /**
  * 模块生命周期接口。
  * 模块在自身入口导出一个实现（如 `export const lifecycle: ModuleLifecycle`），
  * Core 卸载/备份/离职流程按接口调用，不进入模块内部实现。
+ * ⚠ 注意：截至 M1，此对象接口尚未在运行时接入——当前真值见文件头注（HTTP 端点）。
  */
 export interface ModuleLifecycle {
   /** 按表前缀全量导出：JSON + 文件引用（§5.4 管理员「导出并删除」与备份剧本用）。 */
