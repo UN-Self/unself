@@ -13,9 +13,9 @@ export const ModuleManifestSchema = z.object({
   entry: z.url(),
   /** 运行时类型：worker（workerd）、docker 容器、external（自托管外部服务）。 */
   runtime: z.enum(['worker', 'docker', 'external']),
-  /** 模块声明的平台能力需求，至少包含一项（当前必为 identity）。 */
+  /** 模块声明的平台能力需求，至少包含一项（当前必为 identity）。仅支持 block 式 YAML（flow 式 `[a,b]` 由部署器拒绝，#64）。 */
   requires: z.array(z.enum(['identity'])).min(1),
-  /** 模块请求的能力列表（对应 Core 能力授牌粒度）。 */
+  /** 模块请求的能力列表（对应 Core 能力授牌粒度）。仅支持 block 式 YAML（同上）。 */
   capabilities: z.array(z.string()),
   /** semver 版本号（x.y.z）。 */
   version: z.string().regex(/^\d+\.\d+\.\d+$/),

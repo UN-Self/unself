@@ -219,8 +219,10 @@ id: chat.edgechat
 route: /m/chat
 entry: https://team.example.com/m/chat/   # 完整 URL，第一方默认同域路径
 runtime: worker            # worker | docker | external
-requires: [identity]       # 接受核心签发的模块 token
-capabilities: [messaging]
+requires:                  # 依赖的核心能力；仅支持 block 式 list（flow 式 `[a,b]` 解析器报错）
+  - identity
+capabilities:
+  - messaging
 version: 1.0.0
 icon: inbox                # 可选，Lucide 图标名（[a-z0-9-]）；
                            # 缺省/未知时壳回退模块名首字

@@ -20,7 +20,8 @@ ON CONFLICT(id) DO UPDATE SET
 /**
  * 最小 manifest.yaml 读取（§5.5 快照所需子集，不引入完整 YAML 解析）：
  * - 顶层标量 `key: value` 行（id/route/version/icon/description 等）；
- * - 缩进 list 项 `  - item`（requires/capabilities），归属最近一个「key: 空值」的顶层 key（行尾注释剥除）。
+ * - 缩进 list 项 `  - item`（requires/capabilities），归属最近一个「key: 空值」的顶层 key（行尾注释剥除）；
+ * - flow 式 `key: [a, b]` 不支持——直接报错而非静默丢（#64：静默丢会致 token 授牌错误）。
  */
 function manifestTopLevelFields(
   text: string,
@@ -32,6 +33,11 @@ function manifestTopLevelFields(
     const scalar = /^([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*(?:#.*)?$/.exec(line);
     if (scalar) {
       const value = scalar[2]!;
+      if (value.startsWith('[')) {
+        throw new Error(
+          `manifest: 不支持 flow 式 list「${scalar[1]}: ${value}」——改用 block 式多行（SPEC §5.4，#64）`,
+        );
+      }
       if (value !== '') {
         scalars[scalar[1]!] = value;
         currentListKey = null;
