@@ -6,6 +6,7 @@ import {
   buildAuthorizationRequest,
   discover,
   exchangeAuthorizationCode,
+  pickScope,
   resetOidcCaches,
   type DiscoveredMetadata,
   type OidcClientConfig,
@@ -84,6 +85,28 @@ describe('buildAuthorizationRequest（授权码 + PKCE S256）', () => {
     const b = await buildAuthorizationRequest(config, metadata);
     expect(a.state).not.toBe(b.state);
     expect(a.codeVerifier).not.toBe(b.codeVerifier);
+  });
+});
+
+describe('pickScope（#55：#55 scope 按 discovery scopes_supported 过滤）', () => {
+  const three = 'openid profile email';
+
+  it('交集 = [openid,profile,email] ∩ scopes_supported，顺序固定', () => {
+    expect(pickScope(three, { ...metadata, scopes_supported: ['email', 'profile', 'openid'] })).toBe(three);
+    expect(pickScope(three, { ...metadata, scopes_supported: ['openid', 'offline_access', 'mail', 'contacts', 'calendars'] })).toBe('openid');
+    expect(pickScope(three, { ...metadata, scopes_supported: ['profile'] })).toBe('profile');
+  });
+
+  it('交集空只发 openid（PKCE 登录最低要求）', () => {
+    expect(pickScope(three, { ...metadata, scopes_supported: ['offline_access', 'mail'] })).toBe('openid');
+  });
+
+  it('scopes_supported 字段缺失维持三件', () => {
+    expect(pickScope(three, metadata)).toBe(three);
+  });
+
+  it('尊重已配置 scope（配置里没请求的项不发）', () => {
+    expect(pickScope('openid', { ...metadata, scopes_supported: ['openid', 'profile', 'email'] })).toBe('openid');
   });
 });
 
