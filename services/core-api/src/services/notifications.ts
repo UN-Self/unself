@@ -21,11 +21,12 @@ import {
 
 import { audit } from './audit';
 
-/** 站内/邮件收件人口径：已建档用户 / 待建档受邀邮箱 / 全员广播。 */
+/** 站内/邮件收件人口径：已建档用户 / 待建档受邀邮箱 / 全员广播 / 全体管理员。 */
 export type NotificationRecipient =
   | { userId: string; email?: string }
   | { invitedEmail: string }
-  | { broadcast: true };
+  | { broadcast: true }
+  | { admins: true };
 
 /** 邮件渠道结果：未装配或渠道关闭 → skipped；全部成功 → sent；任一失败 → failed。 */
 export type MailOutcome = 'sent' | 'skipped' | 'failed';
@@ -65,7 +66,8 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 解析收件人：broadcast 查全体 active（含操作者本人）；invitedEmail 悬挂；userId 取传入或库中邮箱。 */
+/** 解析收件人：broadcast 查全体 active（含操作者本人）；admins 查 active 管理员；
+ *  invitedEmail 悬挂；userId 取传入或库中邮箱。 */
 async function resolveRecipients(
   db: D1Database,
   recipient: NotificationRecipient,
@@ -73,6 +75,16 @@ async function resolveRecipients(
   if ('broadcast' in recipient) {
     const rows = await db
       .prepare("SELECT id, email FROM users WHERE status = 'active'")
+      .all<{ id: string; email: string | null }>();
+    return rows.results.map((row) => ({
+      userId: row.id,
+      invitedEmail: null,
+      email: row.email,
+    }));
+  }
+  if ('admins' in recipient) {
+    const rows = await db
+      .prepare("SELECT id, email FROM users WHERE status = 'active' AND role = 'admin'")
       .all<{ id: string; email: string | null }>();
     return rows.results.map((row) => ({
       userId: row.id,
@@ -180,11 +192,17 @@ export async function deliverNotification(
   return { inApp, email: failed ? 'failed' : 'sent' };
 }
 
+/** SMTP 装配注入面（#18 测试口）：外部边界替身只在此层；缺省 = 真 SMTP。 */
+export type CreateMailSender = (mailConfig: Record<string, unknown>) => MailSender | null;
+
 /**
  * 从 instance_config 的 mail 段装配发信口：无段/JSON 非法 → null（弱化实例静默降级）。
  * 字段不完整由 createMailSenderFromConfig 判定，同样回 null。
  */
-export async function configuredMailSender(db: D1Database): Promise<MailSender | null> {
+export async function configuredMailSender(
+  db: D1Database,
+  createMailSender: CreateMailSender = createMailSenderFromConfig,
+): Promise<MailSender | null> {
   const row = await db
     .prepare("SELECT value FROM instance_config WHERE key = 'mail'")
     .bind()
@@ -197,7 +215,7 @@ export async function configuredMailSender(db: D1Database): Promise<MailSender |
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return null;
     }
-    return createMailSenderFromConfig(parsed as Record<string, unknown>);
+    return createMailSender(parsed as Record<string, unknown>);
   } catch {
     return null;
   }

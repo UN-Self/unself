@@ -2,14 +2,17 @@
 import { Hono } from 'hono';
 
 import { requireAdmin } from './middleware/admin';
+import { registerActivateRoutes } from './routes/activate';
 import { registerAuditRoutes } from './routes/audit';
 import { registerAuthRoutes } from './routes/auth';
+import { registerInviteRoutes } from './routes/invites';
 import { registerMemberRoutes } from './routes/members';
 import { registerModuleRoutes } from './routes/modules';
 import { registerNotificationRoutes } from './routes/notifications';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerSetupRoutes } from './routes/setup';
 import { getMemberAccess, type CreateMailProvisioner } from './services/members';
+import type { CreateMailSender } from './services/notifications';
 import { readSession } from './session';
 
 export { getSigningRuntime } from './keys';
@@ -28,6 +31,8 @@ export interface Bindings {
 
 export interface CoreApiDependencies {
   createMailProvisioner?: CreateMailProvisioner;
+  /** SMTP 是外部边界：单测注入假 sender 断言开通邮件，缺省 = 真 SMTP 装配（#18）。 */
+  createMailSender?: CreateMailSender;
 }
 
 export function createApp(dependencies: CoreApiDependencies = {}) {
@@ -76,6 +81,10 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   registerAuthRoutes(app);
   registerSetupRoutes(app);
   registerMemberRoutes(app, dependencies.createMailProvisioner);
+  // 邀请域：管理端 /api/admin/invites* + 公开填表 /api/invite/<token>（#18）
+  registerInviteRoutes(app, dependencies);
+  // 激活域：公开 /api/activate/<token>（#18；登录态无关，链接双证之一）
+  registerActivateRoutes(app, dependencies);
   registerModuleRoutes(app);
   registerNotificationRoutes(app);
   registerAuditRoutes(app);

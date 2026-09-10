@@ -1,7 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["@cloudflare/workers-types"]
+    "types": ["@cloudflare/workers-types"],
+    // stalwart-provisioner（#20）包内用 './x.ts' 显式扩展名导入（其自身 tsconfig 开启本项）；
+    // core-api 直接组装该适配器（#18 接线）后，程序里必须一并开启，否则 TS5097。
+    "allowImportingTsExtensions": true
   },
   // mail-smtp（#24）用包内 sockets.d.ts 声明 cloudflare:sockets 边界（其自身 types: []）。
   // core-api 引入该包后，程序里必须一并加载这份声明，否则 @cloudflare/workers-types 的

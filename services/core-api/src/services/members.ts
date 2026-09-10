@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { MailProvisioner } from '@unself/contracts';
+import {
+  createStalwartMailProvisioner,
+  type StalwartProvisionerConfig,
+} from '@unself/stalwart-provisioner';
 
 /** 管理端成员列表的数据库行。 */
 export interface Member {
@@ -20,8 +24,12 @@ export interface MemberAccess {
   status: MemberStatus;
 }
 
-/** 已配置 mail 段时按其内容构建 provisioner；实现由 #20 接入。 */
+/** 已配置 mail 段时按其内容构建 provisioner（#49 注入口）。 */
 export type CreateMailProvisioner = (mailConfig: unknown) => MailProvisioner;
+
+/** 生产唯一实现：mail 段 → Stalwart JMAP 适配器（#18 接线，不留第二道 DI）。 */
+const defaultCreateMailProvisioner: CreateMailProvisioner = (mailConfig) =>
+  createStalwartMailProvisioner(mailConfig as StalwartProvisionerConfig);
 
 /** 列出实例全部成员；M1 团队规模不分页。 */
 export async function listMembers(db: D1Database): Promise<Member[]> {
@@ -51,16 +59,19 @@ export async function setMemberStatus(
     .first<Pick<Member, 'id' | 'email' | 'status'>>();
 }
 
-/** 配置有 mail 段才惰性构建 provisioner；无段即弱化实例。 */
+/**
+ * 配置有 mail 段才惰性构建 provisioner；无段即弱化实例（null，静默降级）。
+ * 生产走 defaultCreateMailProvisioner；单测在外部边界注入假实现（#20 fake，routing 断言用）。
+ */
 export async function configuredMailProvisioner(
   db: D1Database,
-  createMailProvisioner: CreateMailProvisioner | undefined,
+  createMailProvisioner: CreateMailProvisioner = defaultCreateMailProvisioner,
 ): Promise<MailProvisioner | null> {
   const config = await db
     .prepare('SELECT value FROM instance_config WHERE key = ?')
     .bind('mail')
     .first<{ value: string }>();
-  if (!config || !createMailProvisioner) {
+  if (!config) {
     return null;
   }
   return createMailProvisioner(JSON.parse(config.value));

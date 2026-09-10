@@ -12,6 +12,7 @@ describe('core D1 migration', () => {
       expect(() => applyMigrations(db.sqlite, dir)).not.toThrow();
       expect(db.query<{ type: string }>('SELECT type FROM notification_types ORDER BY type')).toEqual([
         { type: 'account_ready' },
+        { type: 'invite_pending' },
         { type: 'invite_result' },
         { type: 'module_toggled' },
       ]);
