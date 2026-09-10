@@ -8,21 +8,30 @@ import SetupView from './SetupView.vue'
 // 改用 Vite ?raw 直读 SFC 源文本（vitest 原生支持，零运行时 IO）。
 import setupSource from './SetupView.vue?raw'
 import { saveOidcConfig, testOidcConnection } from './lib/setup-api'
+import { createBuiltinAdmin, loginWithPassword } from './lib/builtin-auth-api'
 
 /**
  * #92 验收：单按钮三态机（测试连接 ↔ 保存并激活）——测用户可见行为，不测结构/类名。
  * 行为断言口径：页面上有没有「保存并激活」按钮（submit）、当前是哪个按钮、用户能否重测。
  */
 
+const routerReplace = vi.fn()
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: { token: 'tok-92' } }),
-  useRouter: () => ({ replace: vi.fn() }),
+  useRouter: () => ({ replace: routerReplace }),
 }))
 
 vi.mock('./lib/setup-api', () => ({
   testOidcConnection: vi.fn(),
   saveOidcConfig: vi.fn(),
   activateSetup: vi.fn(),
+}))
+
+vi.mock('./lib/builtin-auth-api', () => ({
+  createBuiltinAdmin: vi.fn(),
+  loginWithPassword: vi.fn(),
+  getAuthMethods: vi.fn(),
+  resetMemberPassword: vi.fn(),
 }))
 
 const TEST_ISSUER = 'https://idp.example.com'
@@ -61,7 +70,9 @@ function testButton(wrapper: VueWrapper) {
 }
 
 function submitButton(wrapper: VueWrapper) {
-  return wrapper.find('button[type="submit"]')
+  // issue-A：OIDC 分支收进 details 折叠项，内置分支的提交按钮在折叠外。
+  // 本文件三态机用例全部针对 OIDC 分支：锁定 details 内的 submit 按钮。
+  return wrapper.find('details button[type="submit"]')
 }
 
 /** 当前可见的「动作按钮」：测试连接 / 保存并激活 二选一（同位置互斥，不并排）。 */
@@ -107,9 +118,11 @@ function assertSpringSwapPorted(css: string) {
   expect(css).toMatch(/prefers-reduced-motion: reduce/)
 }
 
-describe('SetupView 三态机（#92）', () => {
+describe('SetupView 三态机（#92，OIDC 折叠分支内）', () => {
   it('初始态：只有「测试连接」，无「保存并激活」', () => {
     const wrapper = mount(SetupView)
+    // OIDC 分支收进折叠项：三态机按钮都在 details 里，互斥关系不变
+    expect(wrapper.find('details.setup-oidc-toggle').exists()).toBe(true)
     expect(testButton(wrapper)).toBeDefined()
     expect(submitButton(wrapper).exists()).toBe(false)
     expect(actionButtons(wrapper).length).toBe(1)
@@ -176,6 +189,9 @@ describe('SetupView 三态机（#92）', () => {
     expect(submitButton(wrapper).text()).toContain('保存并激活')
     expect(actionButtons(wrapper).length).toBe(1)
     expect(wrapper.find('[role="status"]').text()).toContain('连接成功')
+
+    // 内置分支在场：三态机收进折叠后，内置提交按钮仍是独立用户路径
+    expect(wrapper.find('button[type="submit"]').text()).toContain('创建并进入工作台')
   })
 
   it('测试失败：留在「测试连接」+ 错误提示，不出提交按钮', async () => {
@@ -241,11 +257,13 @@ describe('SetupView 三态机（#92）', () => {
     await clickTest(wrapper)
     await settle()
 
-    await wrapper.find('form').trigger('submit')
+    // issue-A：表单域内现在有两个 form（内置分支 + 折叠 OIDC 分支），定位 OIDC 表单提交
+    await wrapper.find('details form').trigger('submit')
     await settle()
 
     // 提交失败的用户可见结果：错误卡 + 回到「测试连接」（不僵在 loading）
-    expect(wrapper.find('[role="alert"]').text()).toContain('激活没有成功')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('激活没有成功')
     expect(submitButton(wrapper).exists()).toBe(false)
     expect(testButton(wrapper)).toBeDefined()
     const btn = testButton(wrapper)!
@@ -256,5 +274,74 @@ describe('SetupView 三态机（#92）', () => {
     await clickTest(wrapper)
     await settle()
     expect(submitButton(wrapper).exists()).toBe(true)
+  })
+})
+
+describe('SetupView 内置管理员分支（issue-A）', () => {
+  async function fillAdminForm(wrapper: VueWrapper, password2 = 'password123') {
+    await wrapper.find('input[name="username"]').setValue('boss')
+    await wrapper.find('input[name="password"]').setValue('password123')
+    await wrapper.find('input[name="password_confirm"]').setValue(password2)
+  }
+
+  it('默认渲染「设置管理员账号」表单（用户名/密码/重复），无需折叠', async () => {
+    const wrapper = mount(SetupView)
+    expect(wrapper.find('input[name="username"]').exists()).toBe(true)
+    expect(wrapper.find('input[name="password"]').exists()).toBe(true)
+    expect(wrapper.find('input[name="password_confirm"]').exists()).toBe(true)
+    const buttons = wrapper.findAll('button')
+    expect(buttons.some((b) => b.text().includes('创建并进入工作台'))).toBe(true)
+  })
+
+  it('合法提交：先建号封箱再登录，进工作台', async () => {
+    vi.mocked(createBuiltinAdmin).mockResolvedValue({
+      ok: true,
+      user: { id: 'u_1', name: 'boss', role: 'admin' },
+    })
+    vi.mocked(loginWithPassword).mockResolvedValue(undefined)
+    const wrapper = mount(SetupView)
+    await fillAdminForm(wrapper)
+    await wrapper.findAll('form')[0]!.trigger('submit')
+    await settle()
+
+    expect(createBuiltinAdmin).toHaveBeenCalledWith('boss', 'password123')
+    expect(loginWithPassword).toHaveBeenCalledWith('boss', 'password123')
+    expect(routerReplace).toHaveBeenCalledWith('/')
+  })
+
+  it('两次密码不一致：不发请求，行内提示可见', async () => {
+    const wrapper = mount(SetupView)
+    await fillAdminForm(wrapper, 'different123')
+    await wrapper.findAll('form')[0]!.trigger('submit')
+    await settle()
+
+    expect(createBuiltinAdmin).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('两次输入的密码不一致')
+  })
+
+  it('用户名格式不符：不发请求，行内提示可见', async () => {
+    const wrapper = mount(SetupView)
+    await wrapper.find('input[name="username"]').setValue('a')
+    await wrapper.find('input[name="password"]').setValue('password123')
+    await wrapper.find('input[name="password_confirm"]').setValue('password123')
+    await wrapper.findAll('form')[0]!.trigger('submit')
+    await settle()
+
+    expect(createBuiltinAdmin).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('用户名需为 3-32 位字母/数字/_/-')
+  })
+
+  it('建号失败（用户名被占用人话）：错误可见且不跳转', async () => {
+    vi.mocked(createBuiltinAdmin).mockRejectedValue(
+      Object.assign(new Error('该用户名已被占用'), { status: 409 }),
+    )
+    const wrapper = mount(SetupView)
+    await fillAdminForm(wrapper)
+    await wrapper.findAll('form')[0]!.trigger('submit')
+    await settle()
+
+    expect(loginWithPassword).not.toHaveBeenCalled()
+    expect(routerReplace).not.toHaveBeenCalled()
+    expect(wrapper.find('[role="alert"]').text()).toContain('该用户名已被占用')
   })
 })
