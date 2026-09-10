@@ -216,3 +216,85 @@ describe('registry CRUD 与启停语义（#7）', () => {
     expect(() => db.run('INSERT INTO module_registry (id, enabled) VALUES (?, ?)', 'bad', 1)).toThrow(); // manifest_json NOT NULL
   });
 });
+
+describe('模块启停写端点 POST /toggle（#49）', () => {
+  function toggle(
+    env: { JWT_PRIVATE_KEY: string; CORE_DB: D1Database },
+    cookie: string,
+    id: string,
+    body: unknown,
+  ) {
+    return app.request(
+      `${REG_URL}/${id}/toggle`,
+      {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: typeof body === 'string' ? body : JSON.stringify(body),
+      },
+      env,
+    );
+  }
+
+  it('POST /toggle 翻转 enabled 并留痕（真库行 + 真 audit_log）', async () => {
+    const { env, db, cookie } = await envFor('admin');
+    await register(env, cookie, { id: 'hello', enabled: true, manifest: helloManifest });
+
+    const off = await toggle(env, cookie, 'hello', { enabled: false });
+    expect(off.status).toBe(200);
+    expect(await off.json()).toEqual({ id: 'hello', enabled: false });
+    expect(db.first<{ enabled: number }>('SELECT enabled FROM module_registry WHERE id = ?', 'hello')).toEqual({
+      enabled: 0,
+    });
+
+    const on = await toggle(env, cookie, 'hello', { enabled: true });
+    expect(on.status).toBe(200);
+    expect(await on.json()).toEqual({ id: 'hello', enabled: true });
+    expect(db.first<{ enabled: number }>('SELECT enabled FROM module_registry WHERE id = ?', 'hello')).toEqual({
+      enabled: 1,
+    });
+
+    expect(db.query('SELECT actor, action, target FROM audit_log ORDER BY id')).toEqual([
+      { actor: 'u_admin', action: 'module_upserted', target: 'hello' },
+      { actor: 'u_admin', action: 'module_disabled', target: 'hello' },
+      { actor: 'u_admin', action: 'module_enabled', target: 'hello' },
+    ]);
+  });
+
+  it('不存在的模块 404 且不写审计（失败不伪造留痕）', async () => {
+    const { env, db, cookie } = await envFor('admin');
+    const res = await toggle(env, cookie, 'ghost', { enabled: false });
+    expect(res.status).toBe(404);
+    expect(db.query('SELECT id FROM audit_log')).toEqual([]);
+  });
+
+  it('坏 body 400 且状态不变（缺字段/非布尔/非 JSON 三态）', async () => {
+    const { env, db, cookie } = await envFor('admin');
+    await register(env, cookie, { id: 'hello', enabled: true, manifest: helloManifest });
+    for (const body of ['{}', '{"enabled":"yes"}', 'not json']) {
+      expect((await toggle(env, cookie, 'hello', body)).status).toBe(400);
+    }
+    expect(db.first<{ enabled: number }>('SELECT enabled FROM module_registry WHERE id = ?', 'hello')).toEqual({
+      enabled: 1,
+    });
+  });
+
+  it('授权沿用管理守卫：无会话 401、普通成员 403（模块状态与审计均不受影响）', async () => {
+    const { env, db, cookie } = await envFor('user');
+    db.run(
+      "INSERT INTO module_registry (id, enabled, version, manifest_json) VALUES ('hello', 1, '1.0.0', '{}')",
+    );
+
+    const anon = await app.request(
+      `${REG_URL}/hello/toggle`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"enabled":false}' },
+      env,
+    );
+    expect(anon.status).toBe(401);
+
+    expect((await toggle(env, cookie, 'hello', { enabled: false })).status).toBe(403);
+    expect(db.first<{ enabled: number }>('SELECT enabled FROM module_registry WHERE id = ?', 'hello')).toEqual({
+      enabled: 1,
+    });
+    expect(db.query('SELECT id FROM audit_log')).toEqual([]);
+  });
+});

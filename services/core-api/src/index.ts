@@ -3,9 +3,10 @@ import { Hono } from 'hono';
 
 import { requireAdmin } from './middleware/admin';
 import { registerAuthRoutes } from './routes/auth';
+import { registerMemberRoutes } from './routes/members';
 import { registerModuleRoutes } from './routes/modules';
 import { registerSetupRoutes } from './routes/setup';
-import { getUserRole } from './services/users';
+import { getMemberAccess, type CreateMailProvisioner } from './services/members';
 import { readSession } from './session';
 
 export { getSigningRuntime } from './keys';
@@ -22,41 +23,60 @@ export interface Bindings {
   OIDC_SCOPE?: string;
 }
 
-const app = new Hono<{ Bindings: Bindings }>();
+export interface CoreApiDependencies {
+  createMailProvisioner?: CreateMailProvisioner;
+}
 
-/**
- * 全局请求 ID（#60 T3）：每个请求生成唯一 `req-` + 16 位 hex，
- * 回写所有响应（含 401/403/503/错误）的 x-request-id，排障对账用。
- * 必须在所有路由之前注册，且最后设置头部以覆盖错误/404 等非 c.* 构造的响应。
- */
-app.use('*', async (c, next) => {
-  const requestId = `req-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-  await next();
-  c.header('x-request-id', requestId);
-});
+export function createApp(dependencies: CoreApiDependencies = {}) {
+  const app = new Hono<{ Bindings: Bindings }>();
 
-app.get('/api/health', (c) => c.json({ ok: true, service: 'core-api' }));
-
-/** 当前会话用户（shell 判断登录态 / #10-13 前端用；role 供前端能力判断，真值以服务端为准）。 */
-app.get('/api/me', async (c) => {
-  const session = await readSession(c);
-  if (!session) {
-    return c.json({ authenticated: false }, 401);
-  }
-  const role = await getUserRole(c.env.CORE_DB, session.uid);
-  return c.json({
-    authenticated: true,
-    user: { id: session.uid, name: session.name, issuer: session.iss, sub: session.sub, role },
+  /**
+   * 全局请求 ID（#60 T3）：每个请求生成唯一 `req-` + 16 位 hex，
+   * 回写所有响应（含 401/403/503/错误）的 x-request-id，排障对账用。
+   * 必须在所有路由之前注册，且最后设置头部以覆盖错误/404 等非 c.* 构造的响应。
+   */
+  app.use('*', async (c, next) => {
+    const requestId = `req-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    await next();
+    c.header('x-request-id', requestId);
   });
-});
 
-// ---------------------------------------------------------------------------
-// 路由域挂载（一域一文件；组合根只做组装，不写业务）
-// ---------------------------------------------------------------------------
-registerAuthRoutes(app);
-registerSetupRoutes(app);
-// 注册表写操作与全量列表仅限 admin（§2 角色）；路径级挂载，一挂一域。
-app.use('/api/admin/modules*', requireAdmin());
-registerModuleRoutes(app);
+  app.get('/api/health', (c) => c.json({ ok: true, service: 'core-api' }));
 
+  /** 当前会话用户（shell 判断登录态 / #10-13 前端用；role 供前端能力判断，真值以服务端为准）。 */
+  app.get('/api/me', async (c) => {
+    const session = await readSession(c);
+    if (!session) {
+      return c.json({ authenticated: false }, 401);
+    }
+    const member = await getMemberAccess(c.env.CORE_DB, session.uid);
+    if (member?.status === 'disabled') {
+      return c.json({ error: 'account disabled' }, 403);
+    }
+    return c.json({
+      authenticated: true,
+      user: { id: session.uid, name: session.name, issuer: session.iss, sub: session.sub, role: member?.role ?? 'user' },
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 路由域挂载（一域一文件；组合根只做组装，不写业务）
+  // ---------------------------------------------------------------------------
+  const adminGuard = requireAdmin();
+  app.use('/api/admin/*', async (c, next) => {
+    if (c.req.path === '/api/admin/setup-token') {
+      await next();
+      return;
+    }
+    return adminGuard(c, next);
+  });
+  registerAuthRoutes(app);
+  registerSetupRoutes(app);
+  registerMemberRoutes(app, dependencies.createMailProvisioner);
+  registerModuleRoutes(app);
+
+  return app;
+}
+
+const app = createApp();
 export default app;
