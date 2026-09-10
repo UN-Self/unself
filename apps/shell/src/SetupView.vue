@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Check, KeyRound, PlugZap } from 'lucide-vue-next'
+import { Check, KeyRound, PlugZap, UserPlus } from 'lucide-vue-next'
 import { UButton, UInput, UCard, UErrorCard } from '@unself/ui'
 import {
   activateSetup,
@@ -10,14 +10,15 @@ import {
   testOidcConnection,
   type ApiError,
 } from './lib/setup-api'
+import { createBuiltinAdmin, loginWithPassword, type AuthError } from './lib/builtin-auth-api'
 
 /**
- * setup 向导页（#10，直线流程 #55，§6.5 动线）：
+ * setup 向导页（#10，直线流程 #55，§6.5 动线；issue-A 内置身份为默认分支）：
  * - 仅携带部署输出的一次性令牌才可配置；无令牌只提示
- * - 三字段（issuer / client id / client secret）+ 测试连接
- * - [保存并激活] → 配置落库后整页跳 OIDC → 回来自动提权成首个管理员 → 直接进工作台
- * - 回跳时 onMounted 先探 /api/me：已登录 → 自动调 activateSetup 提权
- *   （成功 router.replace('/')，403/409 等失败落错误卡）；未登录 → 静默停在表单
+ * - 默认分支「设置管理员账号」：用户名+密码+重复 → 建号封箱 → 直接登录进工作台
+ *   （SPEC 决策 21：激活即成管理员并直接进工作台）
+ * - OIDC 分支收进折叠项：三字段 + 测试连接 + [保存并激活] 整页跳 OIDC →
+ *   回来自动提权成首个管理员 → 直接进工作台
  */
 
 const route = useRoute()
@@ -42,6 +43,14 @@ const testing = ref(false)
 const testResult = ref<{ ok: boolean; text: string } | null>(null)
 const activating = ref(false)
 const activateError = ref<ApiError | null>(null)
+
+// 内置管理员表单（issue-A 默认分支）
+const adminUsername = ref('')
+const adminPassword = ref('')
+const adminPasswordConfirm = ref('')
+const adminFieldErrors = ref<{ username?: string; password?: string; passwordConfirm?: string }>({})
+const creatingAdmin = ref(false)
+const adminError = ref('')
 
 // #92 三态机：测试通过才显示「保存并激活」（同位置替换，不并排）
 const verified = ref(false)
@@ -149,6 +158,42 @@ async function onSaveAndActivate() {
     activating.value = false
   }
 }
+
+/** 内置管理员表单校验（issue-A）：只做前端自查，格式与后端同口径。 */
+function validateAdmin(): boolean {
+  const errors: typeof adminFieldErrors.value = {}
+  const username = adminUsername.value.trim()
+  if (username.length === 0) {
+    errors.username = '请填写用户名'
+  } else if (!/^[a-zA-Z0-9_-]{3,32}$/.test(username)) {
+    errors.username = '用户名需为 3-32 位字母/数字/_/-'
+  }
+  if (adminPassword.value.length < 8) {
+    errors.password = '密码长度至少 8 位'
+  }
+  if (adminPasswordConfirm.value !== adminPassword.value || adminPasswordConfirm.value.length === 0) {
+    errors.passwordConfirm = '两次输入的密码不一致'
+  }
+  adminFieldErrors.value = errors
+  return Object.keys(errors).length === 0
+}
+
+/** 内置分支提交：建号封箱 → 直接登录拿会话 → 进工作台。 */
+async function onCreateAdmin() {
+  adminError.value = ''
+  if (!validateAdmin()) return
+  const username = adminUsername.value.trim()
+  creatingAdmin.value = true
+  try {
+    await createBuiltinAdmin(username, adminPassword.value)
+    await loginWithPassword(username, adminPassword.value)
+    await router.replace('/')
+  } catch (err) {
+    adminError.value = (err as AuthError).message
+  } finally {
+    creatingAdmin.value = false
+  }
+}
 </script>
 
 <template>
@@ -166,12 +211,12 @@ async function onSaveAndActivate() {
 
     <UCard v-else padding="lg" class="setup-card">
       <h1 class="setup-title">配置你的工作台</h1>
-      <p class="setup-desc">三步完成：填写身份源 → 测试连接 → 用工作账号登录激活。</p>
+      <p class="setup-desc">设置管理员账号，完成后直接进入工作台。</p>
 
       <UErrorCard
         v-if="activateError"
         class="setup-error"
-        title="激活没有成功"
+        title="OIDC 激活没有成功"
         :message="activateError.message"
         :request-id="activateError.requestId"
         :detail="activateError.detail"
@@ -179,7 +224,53 @@ async function onSaveAndActivate() {
         @retry="onSaveAndActivate"
       />
 
-      <form class="setup-form" @submit.prevent="onSaveAndActivate">
+      <!-- 内置分支（issue-A 默认）：管理员账号三字段 -->
+      <form class="setup-form" @submit.prevent="onCreateAdmin">
+        <div class="setup-branch-head">
+          <UserPlus :size="18" aria-hidden="true" class="setup-branch-icon" />
+          <span class="setup-branch-title">设置管理员账号</span>
+        </div>
+        <p v-if="adminError" class="setup-inline-error" role="alert">{{ adminError }}</p>
+        <UInput
+          v-model="adminUsername"
+          label="用户名"
+          name="username"
+          autocomplete="username"
+          placeholder="3-32 位字母/数字/_/-"
+          required
+          :error="adminFieldErrors.username ?? false"
+          reserve-error-line
+        />
+        <UInput
+          v-model="adminPassword"
+          label="密码"
+          type="password"
+          name="password"
+          autocomplete="new-password"
+          required
+          :error="adminFieldErrors.password ?? false"
+          reserve-error-line
+        />
+        <UInput
+          v-model="adminPasswordConfirm"
+          label="重复密码"
+          type="password"
+          name="password_confirm"
+          autocomplete="new-password"
+          required
+          :error="adminFieldErrors.passwordConfirm ?? false"
+          reserve-error-line
+        />
+        <UButton type="submit" size="lg" class="setup-action" :loading="creatingAdmin">
+          <KeyRound :size="16" aria-hidden="true" />
+          创建并进入工作台
+        </UButton>
+      </form>
+
+      <!-- OIDC 分支收进折叠项（可选增强，SPEC 决策 20） -->
+      <details class="setup-oidc-toggle">
+        <summary class="setup-oidc-summary">使用外部 OIDC 身份源（可选）</summary>
+        <form class="setup-form" @submit.prevent="onSaveAndActivate">
         <UInput
           v-model="issuer"
           label="OIDC Issuer 地址"
@@ -253,7 +344,8 @@ async function onSaveAndActivate() {
           </p>
         </div>
         <p class="setup-note">激活需要用工作账号登录；登录页面由你的身份源提供。</p>
-      </form>
+        </form>
+      </details>
     </UCard>
   </main>
 </template>
@@ -295,6 +387,35 @@ async function onSaveAndActivate() {
 }
 .setup-error {
   margin-bottom: var(--unself-space-4);
+}
+.setup-branch-head {
+  display: flex;
+  align-items: center;
+  gap: var(--unself-space-2);
+}
+.setup-branch-icon {
+  color: var(--unself-color-primary);
+}
+.setup-branch-title {
+  font-size: var(--unself-font-size-base);
+  font-weight: 600;
+  color: var(--unself-color-text);
+}
+.setup-inline-error {
+  margin: 0;
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-danger);
+}
+.setup-oidc-toggle {
+  margin-top: var(--unself-space-5);
+  border-top: 1px solid var(--unself-color-border);
+  padding-top: var(--unself-space-4);
+}
+.setup-oidc-summary {
+  cursor: pointer;
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
+  user-select: none;
 }
 .setup-form {
   display: flex;
