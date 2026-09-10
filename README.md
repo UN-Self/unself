@@ -27,7 +27,7 @@ Workers Routes 按路径绑定；Docker 用 openresty 按 location 分发，两�
 
 | 模块 | 默认实现 | 状态 |
 |---|---|---|
-| 身份 | 通用 OIDC | 必选基础能力，Provider 可替换 |
+| 登录与身份 | 核心内建：内置账号默认 + OIDC 可选 | 必选核心能力，非模块 |
 | IM | EdgeChat（Worker + DO） | 可选 |
 | 日历 | CalDAV/iCalendar 适配器 | 可选 |
 | 会议 | Worker + DO 信令，WebRTC P2P 媒体 | 可选 |
