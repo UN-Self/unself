@@ -210,7 +210,7 @@ describe('SetupView 三态机（#92）', () => {
   })
 
   it('测试在途时改字段：迟到的测试结果作废，不回「保存并激活」', async () => {
-    let resolveTest!: (v: { ok: true; issuer: string }) => void
+    let resolveTest!: (v: { ok: true; issuer: string; warnings: string[] }) => void
     vi.mocked(testOidcConnection).mockImplementationOnce(
       () => new Promise((resolve) => {
         resolveTest = resolve
@@ -223,7 +223,7 @@ describe('SetupView 三态机（#92）', () => {
     await flushPromises()
     // 测试在途：用户改了 issuer
     await wrapper.find('input[name="issuer"]').setValue('https://changed.example.com')
-    resolveTest({ ok: true, issuer: TEST_ISSUER })
+    resolveTest({ ok: true, issuer: TEST_ISSUER, warnings: [] })
     await settle()
 
     expect(submitButton(wrapper).exists()).toBe(false)
