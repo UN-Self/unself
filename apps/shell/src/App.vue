@@ -5,6 +5,7 @@ import { LogOut, LayoutDashboard, User } from 'lucide-vue-next'
 import { UButton, UErrorCard, USkeleton } from '@unself/ui'
 
 import ModuleHost from './ModuleHost.vue'
+import NotificationBell from './NotificationBell.vue'
 import { resolveLanding } from './lib/landing'
 import { buildNav, isHostView, type NavItem } from './lib/nav'
 import { fetchEnabledModules, type ApiError, type RegistryModule } from './lib/registry-api'
@@ -114,6 +115,8 @@ function onTabClick(item: NavItem) {
     <aside class="shell-sidebar">
       <div class="shell-sidebar-header">
         <span class="shell-instance-name">{{ instanceName }}</span>
+        <!-- 工作台头部铃铛（#19）：桌面在左栏头部，窄屏切到顶部栏 -->
+        <NotificationBell />
       </div>
 
       <nav class="shell-nav" aria-label="模块导航">
@@ -147,6 +150,12 @@ function onTabClick(item: NavItem) {
         </button>
       </div>
     </aside>
+
+    <!-- 窄屏顶部栏（#19）：铃铛进顶部栏；桌面隐藏（铃铛在左栏头部） -->
+    <header class="shell-topbar">
+      <span class="shell-topbar-name">{{ instanceName }}</span>
+      <NotificationBell />
+    </header>
 
     <!-- 主区 -->
     <main class="shell-main">
@@ -250,11 +259,31 @@ function onTabClick(item: NavItem) {
 .shell-sidebar-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--unself-space-2);
   height: 56px;
   padding: 0 var(--unself-space-4);
   border-bottom: 1px solid var(--unself-color-border);
 }
 .shell-instance-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--unself-font-size-base);
+  font-weight: 600;
+  color: var(--unself-color-text);
+}
+
+/* 窄屏顶部栏（#19）：仅窄屏显示，高度与 NotificationBell 下拉的 top 偏移一致 */
+.shell-topbar {
+  display: none;
+}
+.shell-topbar-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--unself-font-size-base);
   font-weight: 600;
   color: var(--unself-color-text);
@@ -414,6 +443,17 @@ function onTabClick(item: NavItem) {
   }
   .shell-sidebar {
     display: none;
+  }
+  .shell-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--unself-space-2);
+    height: 48px;
+    flex-shrink: 0;
+    padding: 0 var(--unself-space-4);
+    border-bottom: 1px solid var(--unself-color-border);
+    background: var(--unself-color-surface);
   }
   .shell-main {
     flex: 1;
