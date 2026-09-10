@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRouter } from 'vue-router'
-import { ArrowLeft, Blocks, LayoutDashboard, ScrollText, Settings, Users } from 'lucide-vue-next'
+import { ArrowLeft, Blocks, LayoutDashboard, MailPlus, ScrollText, Settings, Users } from 'lucide-vue-next'
 
 import { fetchMe } from './lib/session-api'
 
@@ -20,6 +20,7 @@ const allowed = ref(false)
 
 const NAV = [
   { to: '/admin/members', label: '成员', icon: Users },
+  { to: '/admin/invites', label: '邀请', icon: MailPlus },
   { to: '/admin/modules', label: '模块', icon: Blocks },
   { to: '/admin/audit', label: '审计', icon: ScrollText },
   { to: '/admin/settings', label: '设置', icon: Settings },

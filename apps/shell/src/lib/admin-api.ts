@@ -153,3 +153,48 @@ export function saveSettings(update: SettingsUpdate): Promise<{ ok: boolean }> {
     body: JSON.stringify(update),
   })
 }
+
+// ---------------------------------------------------------------------------
+// 邀请域（#18 契约；令牌明文只在 createInvite 响应里出现一次）
+// ---------------------------------------------------------------------------
+
+export type AdminInviteStatus = 'pending' | 'approved' | 'rejected' | 'consumed' | 'expired'
+
+export interface AdminInvite {
+  token_hash: string
+  status: AdminInviteStatus
+  personal_email: string
+  email_prefix: string
+  display_name: string
+  created_at: string
+  expires_at: string
+}
+
+/** 邀请列表（后端倒序，惰性过期已判）。 */
+export function fetchInvites(): Promise<AdminInvite[]> {
+  return request<AdminInvite[]>('/api/admin/invites')
+}
+
+/** 生成邀请链接（完整 URL 只在本响应出现，请立即复制）。 */
+export function createInvite(expiresInDays: number): Promise<{ inviteUrl: string }> {
+  return request<{ inviteUrl: string }>('/api/admin/invites', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ expiresInDays }),
+  })
+}
+
+/** 批准申请：email 非空 = 已开户并发出激活链接；null = 弱化实例（首登按个人邮箱匹配）。 */
+export function approveInvite(id: string): Promise<{ status: string; email: string | null }> {
+  return request<{ status: string; email: string | null }>(
+    `/api/admin/invites/${encodeURIComponent(id)}/approve`,
+    { method: 'POST' },
+  )
+}
+
+/** 拒绝申请（终态）。 */
+export function rejectInvite(id: string): Promise<{ status: string }> {
+  return request<{ status: string }>(`/api/admin/invites/${encodeURIComponent(id)}/reject`, {
+    method: 'POST',
+  })
+}

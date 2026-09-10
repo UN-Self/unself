@@ -1,0 +1,195 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<script setup lang="ts">
+import { onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
+import { MailCheck, Send, UserPlus } from 'lucide-vue-next'
+import { UButton, UCard, UErrorCard, UInput } from '@unself/ui'
+import { fetchInvite, submitInvite, type InviteApplication } from './lib/invite-api'
+
+/**
+ * 公开邀请填表页（#18，/invite/:token；无侧栏独立壳，不登登录）：
+ * - 挂载即读链接：GET /api/invite/<token>；失败 → 错误卡（标题固定，人话来自服务端，无重试）
+ * - 提交仅做三字段非空检查（缺 → 行内人话），随后 POST；在途 loading/禁用防重复提交
+ * - 成功 → 同卡切「申请已提交，等待管理员审批」（链接一次性，不重复提交）
+ */
+
+const route = useRoute()
+const token = String(route.params.token)
+
+type Phase = 'loading' | 'form' | 'error' | 'submitted'
+
+const phase = ref<Phase>('loading')
+const loadError = ref('')
+const submitting = ref(false)
+const submitError = ref('')
+
+const application = reactive<InviteApplication>({
+  displayName: '',
+  emailPrefix: '',
+  personalEmail: '',
+})
+
+const fieldErrors = ref<{ displayName?: string; emailPrefix?: string; personalEmail?: string }>({})
+
+onMounted(async () => {
+  try {
+    const invite = await fetchInvite(token)
+    application.displayName = invite.displayName ?? ''
+    application.emailPrefix = invite.emailPrefix ?? ''
+    application.personalEmail = invite.personalEmail ?? ''
+    phase.value = 'form'
+  } catch (err) {
+    loadError.value = (err as Error).message
+    phase.value = 'error'
+  }
+})
+
+/** 本地校验只查非空（格式/唯一性归服务端，前端不重复防御）。 */
+function validate(): boolean {
+  const errors: typeof fieldErrors.value = {}
+  if (application.displayName.trim().length === 0) errors.displayName = '请填写显示名'
+  if (application.emailPrefix.trim().length === 0) errors.emailPrefix = '请填写邮箱前缀'
+  if (application.personalEmail.trim().length === 0) errors.personalEmail = '请填写个人邮箱'
+  fieldErrors.value = errors
+  return Object.keys(errors).length === 0
+}
+
+async function onSubmit() {
+  submitError.value = ''
+  if (!validate()) return
+  submitting.value = true
+  try {
+    await submitInvite(token, {
+      displayName: application.displayName.trim(),
+      emailPrefix: application.emailPrefix.trim(),
+      personalEmail: application.personalEmail.trim(),
+    })
+    phase.value = 'submitted'
+  } catch (err) {
+    submitError.value = (err as Error).message
+  } finally {
+    submitting.value = false
+  }
+}
+</script>
+
+<template>
+  <main class="invite-page">
+    <UCard padding="lg" class="invite-card">
+      <p v-if="phase === 'loading'" class="invite-loading" role="status">正在加载邀请链接…</p>
+
+      <UErrorCard v-else-if="phase === 'error'" title="邀请链接不可用" :message="loadError" />
+
+      <div v-else-if="phase === 'submitted'" class="invite-done" role="status">
+        <MailCheck class="invite-done-icon" :size="28" aria-hidden="true" />
+        <h1 class="invite-title">申请已提交，等待管理员审批</h1>
+        <p class="invite-desc">审批结果会通过邮件与站内通知告知，链接一次性有效，请勿重复提交。</p>
+      </div>
+
+      <form v-else class="invite-form" @submit.prevent="onSubmit">
+        <div class="invite-head">
+          <UserPlus class="invite-head-icon" :size="24" aria-hidden="true" />
+          <h1 class="invite-title">填写你的申请信息</h1>
+        </div>
+        <p class="invite-desc">请确认以下信息真实有效，管理员将据此为你开通账号。</p>
+
+        <UErrorCard v-if="submitError" title="提交没有成功" :message="submitError" />
+
+        <UInput
+          v-model="application.displayName"
+          label="显示名"
+          name="display_name"
+          autocomplete="name"
+          required
+          :error="fieldErrors.displayName ?? false"
+          reserve-error-line
+        />
+        <UInput
+          v-model="application.emailPrefix"
+          label="邮箱前缀"
+          name="email_prefix"
+          autocomplete="off"
+          required
+          :error="fieldErrors.emailPrefix ?? false"
+          reserve-error-line
+        />
+        <UInput
+          v-model="application.personalEmail"
+          label="个人邮箱"
+          type="email"
+          name="personal_email"
+          autocomplete="email"
+          required
+          :error="fieldErrors.personalEmail ?? false"
+          reserve-error-line
+        />
+
+        <UButton type="submit" size="lg" class="invite-submit" :loading="submitting">
+          <Send :size="16" aria-hidden="true" />
+          提交申请
+        </UButton>
+      </form>
+    </UCard>
+  </main>
+</template>
+
+<style scoped>
+.invite-page {
+  display: flex;
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  padding: var(--unself-space-4);
+  background: var(--unself-color-surface);
+}
+.invite-card {
+  width: 100%;
+  max-width: 420px;
+}
+.invite-loading {
+  margin: 0;
+  text-align: center;
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
+}
+.invite-head {
+  display: flex;
+  align-items: center;
+  gap: var(--unself-space-2);
+}
+.invite-head-icon {
+  flex-shrink: 0;
+  color: var(--unself-color-primary);
+}
+.invite-title {
+  margin: 0;
+  font-size: var(--unself-font-size-xl);
+  font-weight: 600;
+  color: var(--unself-color-text);
+}
+.invite-desc {
+  margin: 0;
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
+}
+.invite-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--unself-space-3);
+}
+.invite-submit {
+  width: 100%;
+  margin-top: var(--unself-space-1);
+}
+.invite-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--unself-space-3);
+  text-align: center;
+  padding: var(--unself-space-6) 0;
+}
+.invite-done-icon {
+  color: var(--unself-color-success);
+}
+</style>
