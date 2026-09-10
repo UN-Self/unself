@@ -464,7 +464,17 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     const { db } = await envFor();
     expect(db.columns('instance_config')).toEqual(['key', 'value', 'updated_at']);
     expect(db.columns('setup_tokens')).toEqual(['token', 'created_at', 'used_at', 'used_by']);
-    expect(db.columns('users')).toEqual(['id', 'issuer', 'sub', 'display_name', 'role', 'created_at']);
+    expect(db.columns('users')).toEqual([
+      'id',
+      'issuer',
+      'sub',
+      'display_name',
+      'email',
+      'personal_email',
+      'role',
+      'status',
+      'created_at',
+    ]);
   });
 
   it('守护：激活全链路跑完后各行 SELECT * 列集合 == columns()', async () => {

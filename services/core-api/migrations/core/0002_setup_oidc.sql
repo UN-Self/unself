@@ -15,11 +15,3 @@ CREATE TABLE IF NOT EXISTS setup_tokens (
   used_at TEXT,
   used_by TEXT
 );
-
--- 登录流程临时参数（state/nonce/code_verifier，HttpOnly Cookie 之外的兜底存储）
--- M0：暂存 KV 风格行，TTL 由读取时过期判断
-CREATE TABLE IF NOT EXISTS oidc_flows (
-  state TEXT PRIMARY KEY,
-  payload_json TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);

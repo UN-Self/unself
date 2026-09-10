@@ -7,6 +7,7 @@ import { z } from 'zod';
  * - aud = 模块 id（token 不能跨模块重放）；
  * - sub = 核心内部用户 id（users.id，模块侧据此识别「谁」）；
  * - name = 会话展示名（可选，旧 token 无此字段；hello 等模块用作身份行）。
+ * - #49 将消费 OIDC userinfo 补齐缺失的身份声明。
  */
 export const ModuleTokenClaimsSchema = z.object({
   /** 签发方：Core 的 iss 标识。 */

@@ -261,7 +261,17 @@ describe('OIDC 登录路由', () => {
     const { generateInstanceKeyPair } = await import('../src/keys');
     const pair = await generateInstanceKeyPair();
     const { e: baseEnv, db } = env();
-    expect(db.columns('users')).toEqual(['id', 'issuer', 'sub', 'display_name', 'role', 'created_at']);
+    expect(db.columns('users')).toEqual([
+      'id',
+      'issuer',
+      'sub',
+      'display_name',
+      'email',
+      'personal_email',
+      'role',
+      'status',
+      'created_at',
+    ]);
     const e = { ...oidcEnv(baseEnv), JWT_PRIVATE_KEY: pair.privateKeyPem };
 
     const restoreLogin = installFakeIdp('unused');
