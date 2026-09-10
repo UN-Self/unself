@@ -16,6 +16,7 @@ import {
 import { createSessionToken, SESSION_COOKIE, sessionCookieOptions } from '../session';
 import { getOidcConfig } from '../services/instance-config';
 import { consumeApprovedInviteByEmail } from '../services/invites';
+import { bindPendingNotifications } from '../services/notifications';
 import { pickDisplayName, pickEmail, pickNameOrNull, upsertUser } from '../services/users';
 import type { Bindings } from '../index';
 
@@ -112,6 +113,8 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
     // 弱化实例首登：email claim 匹配已批准邀请 → 消费（大小写不敏感；三分支见 services/invites）
     if (created && email) {
       await consumeApprovedInviteByEmail(c.env.CORE_DB, uid, email);
+      // #19 补投（2026-09-10 拍板）：建档后把按 invited_email 悬挂的站内通知归属到该用户
+      await bindPendingNotifications(c.env.CORE_DB, uid, email);
     }
 
     // 回原目标（直访落工作台由 shell 处理；这里只接受站内路径）

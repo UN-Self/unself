@@ -241,6 +241,52 @@ describe('OIDC 登录路由', () => {
     }
   });
 
+  it('callback JIT 建档后把 invited_email 悬挂通知补投给新用户（#19）', async () => {
+    const { generateInstanceKeyPair } = await import('../src/keys');
+    const pair = await generateInstanceKeyPair();
+    const { e: baseEnv, db } = env();
+    const e = { ...oidcEnv(baseEnv), JWT_PRIVATE_KEY: pair.privateKeyPem };
+    // 批准时被邀请人尚无档案：站内通知暂存悬挂收件人（大小写不同也应补投）
+    db.run(
+      "INSERT INTO notifications (id, user_id, invited_email, type, payload) VALUES (?, NULL, ?, 'invite_result', '{}')",
+      'n_hanging',
+      'Huang@Example.com',
+    );
+
+    const restoreLogin = installFakeIdp('unused');
+    const login = await app.request('https://team.example.com/api/auth/login', {}, e);
+    const rawCookie = (login.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+    const flow = JSON.parse(decodeURIComponent(rawCookie.replace('unself_oidc_flow=', ''))) as {
+      state: string;
+      nonce: string;
+    };
+    restoreLogin();
+
+    const restore = installFakeIdp(await issueIdToken(flow.nonce));
+    try {
+      const callback = await app.request(
+        `https://team.example.com/api/auth/callback?code=abc&state=${encodeURIComponent(flow.state)}`,
+        { headers: { cookie: `unself_oidc_flow=${encodeURIComponent(JSON.stringify(flow))}` }, redirect: 'manual' },
+        e,
+      );
+      expect(callback.status).toBe(302);
+
+      const user = db.first<{ id: string }>(
+        'SELECT id FROM users WHERE issuer = ? AND sub = ?',
+        ISSUER,
+        'u-123',
+      );
+      expect(user).not.toBeNull();
+      const bound = db.first<{ user_id: string | null; invited_email: string | null }>(
+        'SELECT user_id, invited_email FROM notifications WHERE id = ?',
+        'n_hanging',
+      );
+      expect(bound!.user_id).toBe(user!.id);
+    } finally {
+      restore();
+    }
+  });
+
   it('未认证 /api/me 回 401', async () => {
     const { e } = env();
     const res = await app.request('https://team.example.com/api/me', {}, e);

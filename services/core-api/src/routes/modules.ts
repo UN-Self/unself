@@ -18,6 +18,7 @@ import {
 } from '../registry';
 import { audit } from '../services/audit';
 import { getMemberAccess } from '../services/members';
+import { configuredMailSender, deliverNotification } from '../services/notifications';
 import { readSession } from '../session';
 import type { Bindings } from '../index';
 
@@ -43,7 +44,15 @@ async function handleModuleToggle(
     body.enabled ? 'module_enabled' : 'module_disabled',
     moduleId,
   );
-  // TODO(#19): module_toggled 通知占位——通知域接线后在此触发（收件人/载荷由 #19 定）。
+  // #19：module_toggled 广播——全员 active 成员站内通知（渠道位由 notification_types 定，
+  // module_toggled 只站内）；投递只依赖 db，邮件失败在通知域内落审计，不影响启停响应。
+  await deliverNotification(
+    c.env.CORE_DB,
+    await configuredMailSender(c.env.CORE_DB),
+    'module_toggled',
+    { moduleId, enabled: body.enabled },
+    { broadcast: true },
+  );
   return c.json(result);
 }
 

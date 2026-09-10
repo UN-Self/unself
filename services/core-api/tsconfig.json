@@ -2,5 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "types": ["@cloudflare/workers-types"]
-  }
+  },
+  // mail-smtp（#24）用包内 sockets.d.ts 声明 cloudflare:sockets 边界（其自身 types: []）。
+  // core-api 引入该包后，程序里必须一并加载这份声明，否则 @cloudflare/workers-types 的
+  // 全局声明与 mail-smtp 的用法冲突（Socket 未导出 / SocketAddress 无 secureTransport，#19）。
+  "include": ["src/**/*", "test/**/*", "../../adapters/mail-smtp/src/sockets.d.ts"]
 }

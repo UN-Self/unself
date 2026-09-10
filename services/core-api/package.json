@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@unself/contracts": "workspace:*",
+    "@unself/mail-smtp": "workspace:*",
     "hono": "^4.10.0",
     "jose": "^6.1.0",
     "zod": "^4.1.0"

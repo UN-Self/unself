@@ -6,6 +6,7 @@ import { registerAuditRoutes } from './routes/audit';
 import { registerAuthRoutes } from './routes/auth';
 import { registerMemberRoutes } from './routes/members';
 import { registerModuleRoutes } from './routes/modules';
+import { registerNotificationRoutes } from './routes/notifications';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerSetupRoutes } from './routes/setup';
 import { getMemberAccess, type CreateMailProvisioner } from './services/members';
@@ -76,6 +77,7 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   registerSetupRoutes(app);
   registerMemberRoutes(app, dependencies.createMailProvisioner);
   registerModuleRoutes(app);
+  registerNotificationRoutes(app);
   registerAuditRoutes(app);
   registerSettingsRoutes(app);
 
