@@ -37,6 +37,8 @@ export interface DiscoveredMetadata {
   revocation_endpoint?: string;
   code_challenge_methods_supported?: string[];
   scopes_supported?: string[];
+  /** id_token 可携带的 claim 集合（向导黄牌用：#17）；旧 IdP 可能缺省。 */
+  claims_supported?: string[];
 }
 
 /** 发现缓存条目：元数据 + 拉取时间（15 分钟 TTL）。 */

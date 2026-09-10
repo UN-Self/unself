@@ -163,12 +163,32 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
         issuer: metadata.issuer,
         authorization_endpoint: metadata.authorization_endpoint,
         token_endpoint: metadata.token_endpoint,
+        warnings: connectionWarnings(metadata),
       });
     } catch {
       // 匿名调用方不透传内部错误（discover 错误可能含 fetch 详情/内网地址）
       return c.json({ ok: false, error: 'discovery failed' }, 502);
     }
   });
+}
+
+/**
+ * test-connection 黄牌（#17 加深）：连通成功、但发现文档暴露了登录/建档链路的已知缺口。
+ * 两条独立检查，都只在 IdP 明确声明不兼容能力时才提示；字段缺失一律宽容不警告
+ * （与 scopes_supported 同哲学，避免误报吓退搭建者）。
+ */
+function connectionWarnings(metadata: DiscoveredMetadata): string[] {
+  const warnings: string[] = [];
+  // 空数组等同缺失：IdP 没声明能力，不做有罪推定
+  const claims = metadata.claims_supported?.length ? metadata.claims_supported : undefined;
+  const emailClaims = ['email', 'mail'];
+  if (claims && !claims.includes('nonce')) {
+    warnings.push('该 IdP 可能无法完成登录（不回显 nonce）');
+  }
+  if (!metadata.userinfo_endpoint && !claims?.some((claim) => emailClaims.includes(claim))) {
+    warnings.push('拿不到邮箱，邀请/通知功能受限');
+  }
+  return warnings;
 }
 
 /**

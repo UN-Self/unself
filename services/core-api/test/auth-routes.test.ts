@@ -325,8 +325,47 @@ describe('OIDC 登录路由', () => {
 });
 
 describe('POST /api/oidc/test-connection（服务端代理探测，#44）', () => {
+  /** 按定制的发现文档起桩（#17：黄牌规则只看 discovery，不碰 token/jwks）。 */
+  function stubDiscovery(metadata: Record<string, unknown>): () => void {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/.well-known/openid-configuration')) {
+        return new Response(JSON.stringify(metadata), { status: 200 });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+    return () => {
+      globalThis.fetch = original;
+    };
+  }
+
+  /** 起桩 + 打点 test-connection，回 warnings（同步清理 fetch，防用例间串刺）。 */
+  async function probeWarnings(metadata: Record<string, unknown>): Promise<string[]> {
+    const restore = stubDiscovery(metadata);
+    try {
+      const { e } = env();
+      const res = await app.request(
+        'https://team.example.com/api/oidc/test-connection',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ issuer: ISSUER }),
+        },
+        e,
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean; warnings: string[] };
+      expect(body.ok).toBe(true);
+      return body.warnings;
+    } finally {
+      restore();
+    }
+  }
+
   it('合法 https issuer：回文档 issuer + 授权/令牌端点', async () => {
-    const restore = installFakeIdp('unused');
+    // 完整 IdP（带 userinfo_endpoint）→ 无黄牌
+    const restore = installFakeIdp('unused', { endpoint: `${ISSUER}/userinfo`, body: {} });
     try {
       const { e } = env();
       const res = await app.request(
@@ -344,10 +383,45 @@ describe('POST /api/oidc/test-connection（服务端代理探测，#44）', () =
         issuer: ISSUER,
         authorization_endpoint: `${ISSUER}/authorize`,
         token_endpoint: `${ISSUER}/token`,
+        warnings: [],
       });
     } finally {
       restore();
     }
+  });
+
+  it('claims_supported 声明不含 nonce → 黄牌提醒登录可能失败（#17）', async () => {
+    const warnings = await probeWarnings({
+      issuer: ISSUER,
+      authorization_endpoint: `${ISSUER}/authorize`,
+      token_endpoint: `${ISSUER}/token`,
+      jwks_uri: JWKS_URI,
+      userinfo_endpoint: `${ISSUER}/userinfo`,
+      claims_supported: ['sub', 'email', 'name'],
+    });
+    expect(warnings).toContain('该 IdP 可能无法完成登录（不回显 nonce）');
+  });
+
+  it('无 userinfo_endpoint 且 claims_supported 无邮箱 claim → 黄牌提醒邮箱拿不到（#17）', async () => {
+    const warnings = await probeWarnings({
+      issuer: ISSUER,
+      authorization_endpoint: `${ISSUER}/authorize`,
+      token_endpoint: `${ISSUER}/token`,
+      jwks_uri: JWKS_URI,
+      claims_supported: ['sub', 'nonce', 'name'],
+    });
+    expect(warnings).toContain('拿不到邮箱，邀请/通知功能受限');
+  });
+
+  it('无 userinfo_endpoint 但 claims_supported 含 email → 不出邮箱黄牌（可从 id_token 拿）（#17）', async () => {
+    const warnings = await probeWarnings({
+      issuer: ISSUER,
+      authorization_endpoint: `${ISSUER}/authorize`,
+      token_endpoint: `${ISSUER}/token`,
+      jwks_uri: JWKS_URI,
+      claims_supported: ['sub', 'nonce', 'email'],
+    });
+    expect(warnings).not.toContain('拿不到邮箱，邀请/通知功能受限');
   });
 
   it('发现文档缺失 jwks_uri → 502 discovery failed（不透传内部错误）', async () => {
