@@ -54,6 +54,20 @@ class SqliteD1Statement {
     return this;
   }
 
+  /** 语句执行核心（run 的实体；batch 复用，事务归属由调用方决定）。 */
+  async execute<T = unknown>(): Promise<D1Result<T>> {
+    if (READ_ONLY_SQL.test(this.sql)) {
+      this.sqlite.prepare(this.sql).all(...this.params);
+      return { results: [] as T[], success: true, meta: d1Meta(0, 0) };
+    }
+    const info = this.sqlite.prepare(this.sql).run(...this.params);
+    return {
+      results: [] as T[],
+      success: true,
+      meta: d1Meta(Number(info.changes), Number(info.lastInsertRowid)),
+    };
+  }
+
   async first<T = unknown>(colName?: string): Promise<T | null> {
     const row = this.sqlite.prepare(this.sql).get(...this.params);
     if (row === undefined) {
@@ -74,16 +88,7 @@ class SqliteD1Statement {
   }
 
   async run<T = unknown>(): Promise<D1Result<T>> {
-    if (READ_ONLY_SQL.test(this.sql)) {
-      this.sqlite.prepare(this.sql).all(...this.params);
-      return { results: [] as T[], success: true, meta: d1Meta(0, 0) };
-    }
-    const info = this.sqlite.prepare(this.sql).run(...this.params);
-    return {
-      results: [] as T[],
-      success: true,
-      meta: d1Meta(Number(info.changes), Number(info.lastInsertRowid)),
-    };
+    return this.execute<T>();
   }
 }
 
@@ -91,6 +96,25 @@ class SqliteD1Statement {
 export function createD1Adapter(sqlite: DatabaseSync): D1Database {
   return {
     prepare: (sql: string) => new SqliteD1Statement(sqlite, sql),
+    /**
+     * D1 batch：原子事务——任一语句失败全部回滚并抛错（真 D1 语义）。
+     * issue-A 硬闸依赖：users+credentials 双 INSERT 撞 UNIQUE 时整体回滚，
+     * 不留孤儿行。node:sqlite 无并发写者，串行执行即等价语义。
+     */
+    batch: async <T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> => {
+      const results: D1Result<T>[] = [];
+      sqlite.exec('BEGIN');
+      try {
+        for (const statement of statements) {
+          results.push(await (statement as SqliteD1Statement).execute<T>());
+        }
+        sqlite.exec('COMMIT');
+      } catch (error) {
+        sqlite.exec('ROLLBACK');
+        throw error;
+      }
+      return results;
+    },
   } as unknown as D1Database;
 }
 
