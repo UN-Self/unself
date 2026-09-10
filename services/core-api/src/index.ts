@@ -2,9 +2,11 @@
 import { Hono } from 'hono';
 
 import { requireAdmin } from './middleware/admin';
+import { registerAuditRoutes } from './routes/audit';
 import { registerAuthRoutes } from './routes/auth';
 import { registerMemberRoutes } from './routes/members';
 import { registerModuleRoutes } from './routes/modules';
+import { registerSettingsRoutes } from './routes/settings';
 import { registerSetupRoutes } from './routes/setup';
 import { getMemberAccess, type CreateMailProvisioner } from './services/members';
 import { readSession } from './session';
@@ -74,6 +76,8 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   registerSetupRoutes(app);
   registerMemberRoutes(app, dependencies.createMailProvisioner);
   registerModuleRoutes(app);
+  registerAuditRoutes(app);
+  registerSettingsRoutes(app);
 
   return app;
 }
