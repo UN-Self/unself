@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { z } from 'zod';
 
 /**
  * OIDC 会话配置（PRODUCT_SPEC §5.2 / requirements #4）：
@@ -254,6 +255,35 @@ export async function exchangeAuthorizationCode(
     accessToken: token.access_token,
     refreshToken: token.refresh_token,
   };
+}
+
+/** userinfo 松校验：M1 只消费 email/name（可选字段），其余字段忽略。 */
+const UserInfoSchema = z.object({
+  email: z.string().optional(),
+  name: z.string().optional(),
+});
+
+export type UserInfoClaims = z.infer<typeof UserInfoSchema>;
+
+/**
+ * userinfo 兜底（#49）：id_token 缺 email/name 时用 access_token 补齐再建档。
+ * access_token 只在此步用（不落库、不透传前端）；外部边界失败（网络/非 2xx/不合形）
+ * 返回 null——id_token 已是登录真值，兜底失败不阻断建档。
+ */
+export async function fetchUserInfo(
+  userinfoEndpoint: string,
+  accessToken: string,
+): Promise<UserInfoClaims | null> {
+  try {
+    const res = await fetch(userinfoEndpoint, {
+      headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const parsed = UserInfoSchema.safeParse(await res.json());
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

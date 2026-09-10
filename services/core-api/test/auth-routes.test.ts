@@ -29,8 +29,12 @@ beforeEach(async () => {
   kid = 'test-key';
 });
 
-async function issueIdToken(nonce: string, sub = 'u-123'): Promise<string> {
-  return new SignJWT({ name: '黄一', email: 'huang@example.com', nonce })
+async function issueIdToken(
+  nonce: string,
+  sub = 'u-123',
+  claims: Record<string, unknown> = { name: '黄一', email: 'huang@example.com' },
+): Promise<string> {
+  return new SignJWT({ ...claims, nonce })
     .setProtectedHeader({ alg: 'RS256', kid })
     .setIssuer(ISSUER)
     .setAudience('unself-dev')
@@ -40,7 +44,16 @@ async function issueIdToken(nonce: string, sub = 'u-123'): Promise<string> {
     .sign(privateKey);
 }
 
-function installFakeIdp(idToken: string) {
+/** 可选 userinfo 端点桩：发现文档带 userinfo_endpoint，请求时回 body 并记录 Authorization。 */
+interface FakeUserInfo {
+  endpoint: string;
+  body: Record<string, unknown>;
+  onRequest?: (authorization: string | null) => void;
+  /** 并发用例的会合点：两个回调都到 userinfo 才放行（暴露消费段 TOCTOU）。 */
+  beforeRespond?: () => Promise<void>;
+}
+
+function installFakeIdp(idToken: string, userinfo?: FakeUserInfo, idTokenByCode?: Map<string, string>) {
   const original = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -52,6 +65,7 @@ function installFakeIdp(idToken: string) {
           token_endpoint: `${ISSUER}/token`,
           jwks_uri: JWKS_URI,
           scopes_supported: ['openid'],
+          ...(userinfo ? { userinfo_endpoint: userinfo.endpoint } : {}),
         }),
         { status: 200 },
       );
@@ -63,10 +77,17 @@ function installFakeIdp(idToken: string) {
       );
     }
     if (url === `${ISSUER}/token`) {
+      // 并发用例：按授权码发各自 sub 的 id_token；否则发固定 idToken
+      const code = new URLSearchParams(String(init?.body ?? '')).get('code') ?? '';
       return new Response(
-        JSON.stringify({ access_token: 'at', token_type: 'Bearer', id_token: idToken }),
+        JSON.stringify({ access_token: 'at', token_type: 'Bearer', id_token: idTokenByCode?.get(code) ?? idToken }),
         { status: 200 },
       );
+    }
+    if (userinfo && url === userinfo.endpoint) {
+      userinfo.onRequest?.(new Headers(init?.headers).get('authorization'));
+      await userinfo.beforeRespond?.();
+      return new Response(JSON.stringify(userinfo.body), { status: 200 });
     }
     throw new Error(`unexpected fetch ${url}`);
   }) as typeof fetch;
@@ -411,5 +432,252 @@ describe('POST /api/oidc/test-connection（服务端代理探测，#44）', () =
       e,
     );
     expect(res.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #49 弱化实例首登：userinfo 兜底 + email 匹配消费邀请（认证路由级行为）
+// ---------------------------------------------------------------------------
+
+/** 登录可用环境：真 SQLite + 真实例签名私钥（回调要签会话 Cookie）。 */
+async function loginEnv(): Promise<{ e: Record<string, unknown>; db: CoreTestDb }> {
+  const { generateInstanceKeyPair } = await import('../src/keys');
+  const pair = await generateInstanceKeyPair();
+  const { e: baseEnv, db } = env();
+  return { e: { ...oidcEnv(baseEnv), JWT_PRIVATE_KEY: pair.privateKeyPem }, db };
+}
+
+/** 发起一次登录拿流程 Cookie（发现文档请求需假 IdP 在位）。 */
+async function acquireFlow(e: Record<string, unknown>): Promise<{ state: string; nonce: string }> {
+  const login = await app.request('https://team.example.com/api/auth/login', {}, e);
+  expect(login.status).toBe(302);
+  const rawCookie = (login.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+  return JSON.parse(decodeURIComponent(rawCookie.replace('unself_oidc_flow=', ''))) as {
+    state: string;
+    nonce: string;
+  };
+}
+
+/**
+ * 走一遍完整登录回跳：先拿流程 Cookie，再按其中 nonce 签发 id_token 调 callback。
+ * claims = id_token 载荷；userinfo 传入时发现文档带 userinfo_endpoint 并拦截其请求。
+ */
+async function runLogin(
+  e: Record<string, unknown>,
+  claims: Record<string, unknown>,
+  opts: { sub?: string; userinfo?: FakeUserInfo } = {},
+): Promise<Response> {
+  const restoreLogin = installFakeIdp('unused', opts.userinfo);
+  const login = await app.request('https://team.example.com/api/auth/login', {}, e);
+  expect(login.status).toBe(302);
+  const rawCookie = (login.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+  const flow = JSON.parse(decodeURIComponent(rawCookie.replace('unself_oidc_flow=', ''))) as {
+    state: string;
+    nonce: string;
+  };
+  restoreLogin();
+  const restore = installFakeIdp(await issueIdToken(flow.nonce, opts.sub, claims), opts.userinfo);
+  try {
+    return await app.request(
+      `https://team.example.com/api/auth/callback?code=abc&state=${encodeURIComponent(flow.state)}`,
+      {
+        headers: { cookie: `unself_oidc_flow=${encodeURIComponent(JSON.stringify(flow))}` },
+        redirect: 'manual',
+      },
+      e,
+    );
+  } finally {
+    restore();
+  }
+}
+
+describe('弱化实例首登：#49 userinfo 兜底 + email 匹配消费邀请', () => {
+  const USERINFO: FakeUserInfo = {
+    endpoint: `${ISSUER}/userinfo`,
+    body: { name: '爱丽丝', email: 'alice@personal.example' },
+  };
+
+  it('id_token 缺 email/name → 用 access_token 调 userinfo 补齐后建档', async () => {
+    const { e, db } = await loginEnv();
+    let authorization: string | null = null;
+    const res = await runLogin(e, {}, {
+      userinfo: { ...USERINFO, onRequest: (h) => { authorization = h; } },
+    });
+    expect(res.status).toBe(302);
+    // 用 token 端点发的 access_token（仅此步用，不落库）
+    expect(authorization).toBe('Bearer at');
+    expect(
+      db.first<{ display_name: string; email: string }>(
+        'SELECT display_name, email FROM users WHERE issuer = ? AND sub = ?',
+        ISSUER,
+        'u-123',
+      ),
+    ).toEqual({ display_name: '爱丽丝', email: 'alice@personal.example' });
+  });
+
+  it('id_token 齐备 → 不调 userinfo，以 id_token 为准', async () => {
+    const { e, db } = await loginEnv();
+    let calls = 0;
+    const res = await runLogin(e, { name: '黄一', email: 'huang@example.com' }, {
+      userinfo: { ...USERINFO, onRequest: () => { calls += 1; } },
+    });
+    expect(res.status).toBe(302);
+    expect(calls).toBe(0);
+    expect(
+      db.first<{ display_name: string; email: string }>(
+        'SELECT display_name, email FROM users WHERE issuer = ? AND sub = ?',
+        ISSUER,
+        'u-123',
+      ),
+    ).toEqual({ display_name: '黄一', email: 'huang@example.com' });
+  });
+
+  it('id_token 仅有 email、无 name → 也调 userinfo 补名字，email 仍以 id_token 为准', async () => {
+    const { e, db } = await loginEnv();
+    let authorization: string | null = null;
+    const res = await runLogin(e, { email: 'huang@example.com' }, {
+      userinfo: {
+        endpoint: `${ISSUER}/userinfo`,
+        body: { name: '爱丽丝', email: 'alice@personal.example' }, // userinfo 邮箱与 id_token 不同
+        onRequest: (h) => { authorization = h; },
+      },
+    });
+    expect(res.status).toBe(302);
+    expect(authorization).toBe('Bearer at');
+    expect(
+      db.first<{ display_name: string; email: string }>(
+        'SELECT display_name, email FROM users WHERE issuer = ? AND sub = ?',
+        ISSUER,
+        'u-123',
+      ),
+    ).toEqual({ display_name: '爱丽丝', email: 'huang@example.com' });
+  });
+
+  it('id_token 空 email/name → 按缺失处理并由 userinfo 补齐', async () => {
+    const { e, db } = await loginEnv();
+    const res = await runLogin(e, { email: '', name: '' }, { userinfo: USERINFO });
+    expect(res.status).toBe(302);
+    expect(
+      db.first<{ display_name: string; email: string }>(
+        'SELECT display_name, email FROM users WHERE issuer = ? AND sub = ?',
+        ISSUER,
+        'u-123',
+      ),
+    ).toEqual({ display_name: '爱丽丝', email: 'alice@personal.example' });
+  });
+
+  it('approved 邀请命中（大小写不敏感）→ 置 consumed + 回填 personal_email', async () => {
+    const { e, db } = await loginEnv();
+    db.run(
+      "INSERT INTO invites (token_hash, status, personal_email, email_prefix, display_name, expires_at) VALUES ('h1', 'approved', 'Alice@Personal.Example', 'alice', 'Alice', '2027-01-01 00:00:00')",
+    );
+    const res = await runLogin(e, { name: '爱丽丝', email: 'alice@personal.example' });
+    expect(res.status).toBe(302);
+    expect(db.first('SELECT status FROM invites WHERE token_hash = ?', 'h1')).toEqual({
+      status: 'consumed',
+    });
+    expect(
+      db.first<{ email: string; personal_email: string }>(
+        'SELECT email, personal_email FROM users WHERE issuer = ? AND sub = ?',
+        ISSUER,
+        'u-123',
+      ),
+    ).toEqual({ email: 'alice@personal.example', personal_email: 'Alice@Personal.Example' });
+  });
+
+  it('无该邮箱邀请 → 正常建档（email 落库），他人邀请不动', async () => {
+    const { e, db } = await loginEnv();
+    db.run(
+      "INSERT INTO invites (token_hash, status, personal_email, email_prefix, display_name, expires_at) VALUES ('h2', 'approved', 'bob@personal.example', 'bob', 'Bob', '2027-01-01 00:00:00')",
+    );
+    const res = await runLogin(e, { name: '爱丽丝', email: 'alice@personal.example' });
+    expect(res.status).toBe(302);
+    expect(db.first('SELECT status FROM invites WHERE token_hash = ?', 'h2')).toEqual({
+      status: 'approved',
+    });
+    expect(
+      db.first<{ email: string; personal_email: string | null }>(
+        'SELECT email, personal_email FROM users WHERE issuer = ? AND sub = ?',
+        ISSUER,
+        'u-123',
+      ),
+    ).toEqual({ email: 'alice@personal.example', personal_email: null });
+  });
+
+  it('邀请已消费 → 不重复消费、不覆盖档案，用户照常建档', async () => {
+    const { e, db } = await loginEnv();
+    db.run(
+      "INSERT INTO invites (token_hash, status, personal_email, email_prefix, display_name, expires_at) VALUES ('h3', 'consumed', 'alice@personal.example', 'alice', 'Alice', '2027-01-01 00:00:00')",
+    );
+    const res = await runLogin(e, { name: '爱丽丝', email: 'alice@personal.example' });
+    expect(res.status).toBe(302);
+    expect(db.query('SELECT status FROM invites')).toEqual([{ status: 'consumed' }]);
+    expect(
+      db.first<{ email: string; personal_email: string | null }>(
+        'SELECT email, personal_email FROM users WHERE issuer = ? AND sub = ?',
+        ISSUER,
+        'u-123',
+      ),
+    ).toEqual({ email: 'alice@personal.example', personal_email: null });
+  });
+
+  it('同邮箱并发首登（不同 sub）→ approved 邀请只消费一次（原子消费）', async () => {
+    const { e, db } = await loginEnv();
+    db.run(
+      "INSERT INTO invites (token_hash, status, personal_email, email_prefix, display_name, expires_at) VALUES ('h4', 'approved', 'Alice@Personal.Example', 'alice', 'Alice', '2027-01-01 00:00:00')",
+    );
+
+    // userinfo 会合点：两回调都到 userinfo 才放行，保证两请求同时进入消费段（暴露 TOCTOU）
+    let arrived = 0;
+    let release!: () => void;
+    const bothArrived = new Promise<void>((resolve) => { release = resolve; });
+    const userinfo: FakeUserInfo = {
+      endpoint: `${ISSUER}/userinfo`,
+      body: { name: '爱丽丝', email: 'alice@personal.example' },
+      beforeRespond: async () => {
+        arrived += 1;
+        if (arrived === 2) release();
+        await bothArrived;
+      },
+    };
+
+    // 两条流程 Cookie（只需发现文档，带 userinfo_endpoint 进缓存）
+    const restoreDiscovery = installFakeIdp('unused', userinfo);
+    const flowA = await acquireFlow(e);
+    const flowB = await acquireFlow(e);
+    restoreDiscovery();
+
+    // id_token 缺 email/name → 两回调都走 userinfo 兜底；按授权码发各自 sub 的 id_token
+    const idTokens = new Map([
+      ['c-a', await issueIdToken(flowA.nonce, 'sub-a', {})],
+      ['c-b', await issueIdToken(flowB.nonce, 'sub-b', {})],
+    ]);
+    const restore = installFakeIdp('', userinfo, idTokens);
+    try {
+      const callback = (code: string, flow: { state: string; nonce: string }) =>
+        app.request(
+          `https://team.example.com/api/auth/callback?code=${code}&state=${encodeURIComponent(flow.state)}`,
+          {
+            headers: { cookie: `unself_oidc_flow=${encodeURIComponent(JSON.stringify(flow))}` },
+            redirect: 'manual',
+          },
+          e,
+        );
+      const [a, b] = await Promise.all([callback('c-a', flowA), callback('c-b', flowB)]);
+      expect(a.status).toBe(302);
+      expect(b.status).toBe(302);
+    } finally {
+      restore();
+    }
+
+    // 并发双登录只消费一次：邀请单条 consumed，personal_email 只绑到一个档案
+    expect(db.query('SELECT status FROM invites')).toEqual([{ status: 'consumed' }]);
+    expect(
+      db.query(
+        'SELECT personal_email FROM users WHERE issuer = ? AND personal_email IS NOT NULL',
+        ISSUER,
+      ),
+    ).toHaveLength(1);
+    expect(db.query('SELECT id FROM users WHERE issuer = ?', ISSUER)).toHaveLength(2);
   });
 });

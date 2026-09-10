@@ -7,13 +7,16 @@ import {
   buildAuthorizationRequest,
   discover,
   exchangeAuthorizationCode,
+  fetchUserInfo,
   pickScope,
   type AuthorizationRequest,
   type CallbackResult,
+  type DiscoveredMetadata,
 } from '../oidc';
 import { createSessionToken, SESSION_COOKIE, sessionCookieOptions } from '../session';
 import { getOidcConfig } from '../services/instance-config';
-import { pickDisplayName, upsertUser } from '../services/users';
+import { consumeApprovedInviteByEmail } from '../services/invites';
+import { pickDisplayName, pickEmail, pickNameOrNull, upsertUser } from '../services/users';
 import type { Bindings } from '../index';
 
 /** 登录流程 Cookie：HttpOnly，10 分钟有效，仅 /api/auth 路径可见。 */
@@ -81,8 +84,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
     }
     // 换 token/验签失败态：不抛未捕获异常（避免 500），统一 302 回登录页（§6.5）。
     let result: CallbackResult;
+    let metadata: DiscoveredMetadata;
     try {
-      const metadata = await discover(config.issuer);
+      metadata = await discover(config.issuer);
       result = await exchangeAuthorizationCode(config, metadata, c.req.url, {
         state: flow.state,
         nonce: flow.nonce,
@@ -93,12 +97,22 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
     }
     deleteCookie(c, FLOW_COOKIE, { path: '/' });
 
+    // 身份字段：id_token 优先，缺 email/name 时用 access_token 调 userinfo 兜底（#49）
+    const claims = await resolveClaims(metadata, result);
+    const email = pickEmail(claims);
+    const name = pickDisplayName(claims);
+
     // JIT 建档（requirements #20：OIDC 首登自动建档复用；issuer+sub 映射只存核心）
-    const uid = await upsertUser(c.env.CORE_DB, {
+    const { id: uid, created } = await upsertUser(c.env.CORE_DB, {
       issuer: config.issuer,
       sub: String(result.claims.sub),
-      name: pickDisplayName(result.claims),
+      name,
+      email,
     });
+    // 弱化实例首登：email claim 匹配已批准邀请 → 消费（大小写不敏感；三分支见 services/invites）
+    if (created && email) {
+      await consumeApprovedInviteByEmail(c.env.CORE_DB, uid, email);
+    }
 
     // 回原目标（直访落工作台由 shell 处理；这里只接受站内路径）
     const next = sanitizeNext(new URL(c.req.url).searchParams.get('next'));
@@ -108,7 +122,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       return c.json({ error: 'signing key not provisioned (run deploy bootstrap)' }, 503);
     }
     const token = await createSessionToken(
-      { uid, iss: config.issuer, sub: String(result.claims.sub), name: pickDisplayName(result.claims) },
+      { uid, iss: config.issuer, sub: String(result.claims.sub), name },
       secret,
     );
     setCookie(c, SESSION_COOKIE, token, sessionCookieOptions());
@@ -155,6 +169,26 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       return c.json({ ok: false, error: 'discovery failed' }, 502);
     }
   });
+}
+
+/**
+ * 登录身份字段（#49）：id_token claims 为真值；id_token 缺 email 或 name（name/
+ * preferred_username，email 不算名字）且发现文档有 userinfo_endpoint 时用 access_token 补齐
+ * （宽松合并，id_token 已有字段优先）。
+ */
+async function resolveClaims(
+  metadata: DiscoveredMetadata,
+  result: CallbackResult,
+): Promise<Record<string, unknown>> {
+  const missing = !pickEmail(result.claims) || !pickNameOrNull(result.claims);
+  if (!missing || !metadata.userinfo_endpoint || !result.accessToken) return result.claims;
+  const info = await fetchUserInfo(metadata.userinfo_endpoint, result.accessToken);
+  if (!info) return result.claims;
+  return {
+    ...result.claims,
+    ...(pickEmail(result.claims) ? {} : { email: info.email }),
+    ...(pickNameOrNull(result.claims) ? {} : { name: info.name }),
+  };
 }
 
 /** 站内回跳白名单：仅允许本站绝对路径。 */
