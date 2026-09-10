@@ -20,7 +20,7 @@
 ## 第一步：拿 Cloudflare API Token
 
 ```sh
-git clone <仓库地址> && cd unself
+git clone https://github.com/UN-Self/unself.git && cd unself
 pnpm install
 node deploy/cloudflare/bin.ts
 ```
