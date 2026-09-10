@@ -8,6 +8,22 @@ importers:
 
   .: {}
 
+  adapters/provisioning/stalwart:
+    dependencies:
+      '@unself/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
+
   apps/shell:
     dependencies:
       '@unself/contracts':
