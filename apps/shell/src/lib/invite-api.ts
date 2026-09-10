@@ -18,11 +18,13 @@ export interface InviteApiError extends Error {
   status: number
 }
 
-/** 邀请链接读取结果 + 申请提交字段（前后端同形）。 */
+/** 邀请链接读取结果 + 申请提交字段（前后端同形；issue-A 增加内置注册 username/password，两者必须同时传）。 */
 export interface InviteApplication {
   displayName: string
   emailPrefix: string
   personalEmail: string
+  username?: string
+  password?: string
 }
 
 function makeError(status: number, message: string): InviteApiError {
