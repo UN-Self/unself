@@ -8,6 +8,21 @@ importers:
 
   .: {}
 
+  adapters/mail-smtp:
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.0.0
+        version: 4.20260702.1
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
+      wrangler:
+        specifier: ^4.0.0
+        version: 4.129.0(@cloudflare/workers-types@4.20260702.1)
+
   adapters/provisioning/stalwart:
     dependencies:
       '@unself/contracts':
