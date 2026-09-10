@@ -22,6 +22,7 @@ import {
   SECRET_MASK,
 } from './lib/admin-api'
 import { testOidcConnection } from './lib/setup-api'
+import { resetMemberPassword } from './lib/builtin-auth-api'
 
 /**
  * 管理台行为测试（#17，docs/testing.md 两问检验）：
@@ -56,6 +57,13 @@ vi.mock('./lib/admin-api', () => ({
 
 vi.mock('./lib/setup-api', () => ({
   testOidcConnection: vi.fn(),
+}))
+
+vi.mock('./lib/builtin-auth-api', () => ({
+  resetMemberPassword: vi.fn(),
+  getAuthMethods: vi.fn(),
+  loginWithPassword: vi.fn(),
+  createBuiltinAdmin: vi.fn(),
 }))
 
 const adminMember = {
@@ -111,6 +119,7 @@ describe('MembersPage 停用/启用（#17）', () => {
     // 每例新对象：用例内的状态翻转不得泄漏到下一例
     vi.mocked(fetchMembers).mockResolvedValue([{ ...adminMember }])
     vi.mocked(setMemberStatus).mockResolvedValue({})
+    vi.mocked(resetMemberPassword).mockResolvedValue(undefined)
     vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
@@ -153,6 +162,48 @@ describe('MembersPage 停用/启用（#17）', () => {
     expect(window.confirm).not.toHaveBeenCalled()
     expect(setMemberStatus).toHaveBeenCalledWith('u1', 'active')
     expect(wrapper.text()).toContain('正常')
+  })
+
+  it('重置密码：prompt 输入新密码 → resetMemberPassword 被调 → 成功提示可见', async () => {
+    vi.spyOn(window, 'prompt').mockReturnValue('new-password-9')
+    const wrapper = mount(MembersPage)
+    await flushPromises()
+
+    const resetBtn = wrapper.findAll('button').find((b) => b.text().includes('重置密码'))
+    expect(resetBtn).toBeDefined()
+    await resetBtn!.trigger('click')
+    await flushPromises()
+
+    expect(resetMemberPassword).toHaveBeenCalledWith('u1', 'new-password-9')
+    expect(wrapper.find('[role="status"]').text()).toContain('已重置')
+  })
+
+  it('重置密码取消（prompt 空返回）：不发请求', async () => {
+    vi.mocked(resetMemberPassword).mockClear()
+    vi.spyOn(window, 'prompt').mockReturnValue(null)
+    const wrapper = mount(MembersPage)
+    await flushPromises()
+
+    const resetBtn = wrapper.findAll('button').find((b) => b.text().includes('重置密码'))
+    await resetBtn!.trigger('click')
+    await flushPromises()
+
+    expect(resetMemberPassword).not.toHaveBeenCalled()
+  })
+
+  it('重置密码 409（OIDC 用户）：后端人话行内可见', async () => {
+    vi.spyOn(window, 'prompt').mockReturnValue('new-password-9')
+    vi.mocked(resetMemberPassword).mockRejectedValue(
+      Object.assign(new Error('该成员无内置登录'), { status: 409 }),
+    )
+    const wrapper = mount(MembersPage)
+    await flushPromises()
+
+    const resetBtn = wrapper.findAll('button').find((b) => b.text().includes('重置密码'))
+    await resetBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[role="alert"]').text()).toContain('该成员无内置登录')
   })
 })
 

@@ -7,9 +7,9 @@ import { UButton, UCard, UErrorCard, UInput } from '@unself/ui'
 import { fetchInvite, submitInvite, type InviteApplication } from './lib/invite-api'
 
 /**
- * 公开邀请填表页（#18，/invite/:token；无侧栏独立壳，不登登录）：
+ * 公开邀请填表页（#18，/invite/:token；无侧栏独立壳，不登登录；issue-A 内置注册含用户名+密码）：
  * - 挂载即读链接：GET /api/invite/<token>；失败 → 错误卡（标题固定，人话来自服务端，无重试）
- * - 提交仅做三字段非空检查（缺 → 行内人话），随后 POST；在途 loading/禁用防重复提交
+ * - 提交前本地校验：三字段非空 + 用户名格式 + 密码≥8 + 两次一致；重名 409 由服务端软闸返回人话
  * - 成功 → 同卡切「申请已提交，等待管理员审批」（链接一次性，不重复提交）
  */
 
@@ -23,13 +23,23 @@ const loadError = ref('')
 const submitting = ref(false)
 const submitError = ref('')
 
-const application = reactive<InviteApplication>({
+const application = reactive<InviteApplication & { passwordConfirm?: string }>({
   displayName: '',
   emailPrefix: '',
   personalEmail: '',
+  username: '',
+  password: '',
+  passwordConfirm: '',
 })
 
-const fieldErrors = ref<{ displayName?: string; emailPrefix?: string; personalEmail?: string }>({})
+const fieldErrors = ref<{
+  displayName?: string
+  emailPrefix?: string
+  personalEmail?: string
+  username?: string
+  password?: string
+  passwordConfirm?: string
+}>({})
 
 onMounted(async () => {
   try {
@@ -44,12 +54,21 @@ onMounted(async () => {
   }
 })
 
-/** 本地校验只查非空（格式/唯一性归服务端，前端不重复防御）。 */
+/** 本地校验只查非空与格式（唯一性归服务端软闸，前端不重复防御）。 */
 function validate(): boolean {
   const errors: typeof fieldErrors.value = {}
   if (application.displayName.trim().length === 0) errors.displayName = '请填写显示名'
   if (application.emailPrefix.trim().length === 0) errors.emailPrefix = '请填写邮箱前缀'
   if (application.personalEmail.trim().length === 0) errors.personalEmail = '请填写个人邮箱'
+  if (!/^[a-zA-Z0-9_-]{3,32}$/.test(application.username ?? '')) {
+    errors.username = '用户名需为 3-32 位字母/数字/_/-'
+  }
+  if ((application.password ?? '').length < 8) {
+    errors.password = '密码长度至少 8 位'
+  }
+  if (application.passwordConfirm !== application.password || (application.passwordConfirm ?? '').length === 0) {
+    errors.passwordConfirm = '两次输入的密码不一致'
+  }
   fieldErrors.value = errors
   return Object.keys(errors).length === 0
 }
@@ -63,6 +82,8 @@ async function onSubmit() {
       displayName: application.displayName.trim(),
       emailPrefix: application.emailPrefix.trim(),
       personalEmail: application.personalEmail.trim(),
+      username: application.username?.trim(),
+      password: application.password,
     })
     phase.value = 'submitted'
   } catch (err) {
@@ -104,6 +125,36 @@ async function onSubmit() {
           :error="fieldErrors.displayName ?? false"
           reserve-error-line
         />
+        <UInput
+          v-model="application.username"
+          label="用户名"
+          name="username"
+          autocomplete="username"
+          placeholder="3-32 位字母/数字/_/-，登录用"
+          required
+          :error="fieldErrors.username ?? false"
+          reserve-error-line
+        />
+        <UInput
+          v-model="application.password"
+          label="登录密码"
+          type="password"
+          name="password"
+          autocomplete="new-password"
+          required
+          :error="fieldErrors.password ?? false"
+          reserve-error-line
+        />
+        <UInput
+          v-model="application.passwordConfirm"
+          label="重复密码"
+          type="password"
+          name="password_confirm"
+          autocomplete="new-password"
+          required
+          :error="fieldErrors.passwordConfirm ?? false"
+          reserve-error-line
+ />
         <UInput
           v-model="application.emailPrefix"
           label="邮箱前缀"

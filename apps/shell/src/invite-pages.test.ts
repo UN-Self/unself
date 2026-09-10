@@ -60,6 +60,9 @@ describe('InviteView 公开填表页（#18）', () => {
     expect(fetchInvite).toHaveBeenCalledWith('tok-1')
 
     await wrapper.find('input[name="display_name"]').setValue('张三')
+    await wrapper.find('input[name="username"]').setValue('zhangsan')
+    await wrapper.find('input[name="password"]').setValue('password123')
+    await wrapper.find('input[name="password_confirm"]').setValue('password123')
     await wrapper.find('input[name="email_prefix"]').setValue('zhangsan')
     await wrapper.find('input[name="personal_email"]').setValue('zhangsan@example.net')
     await wrapper.find('form').trigger('submit')
@@ -69,6 +72,8 @@ describe('InviteView 公开填表页（#18）', () => {
       displayName: '张三',
       emailPrefix: 'zhangsan',
       personalEmail: 'zhangsan@example.net',
+      username: 'zhangsan',
+      password: 'password123',
     })
     expect(wrapper.text()).toContain('申请已提交，等待管理员审批')
     expect(wrapper.find('form').exists()).toBe(false)
@@ -116,6 +121,9 @@ describe('InviteView 公开填表页（#18）', () => {
     const { wrapper } = await mountPage('/invite/tok-1', InviteView)
 
     await wrapper.find('input[name="display_name"]').setValue('张三')
+    await wrapper.find('input[name="username"]').setValue('zhangsan')
+    await wrapper.find('input[name="password"]').setValue('password123')
+    await wrapper.find('input[name="password_confirm"]').setValue('password123')
     await wrapper.find('input[name="email_prefix"]').setValue('zhangsan')
     await wrapper.find('input[name="personal_email"]').setValue('zhangsan@example.net')
     await wrapper.find('form').trigger('submit')
@@ -274,5 +282,53 @@ describe('ActivateView 公开激活页（#18）', () => {
     const text = wrapper.text()
     expect(text).toContain(`此密码用于登录你的邮箱（${WORK_EMAIL}）；若团队登录走独立 IdP，登录账户请联系管理员。`)
     expect(text).toContain('这是邮箱密码，不是工作台登录密码。')
+  })
+})
+
+describe('InviteView 内置注册字段（issue-A）', () => {
+  it('新必填字段渲染：用户名/密码/重复密码在显示名之后', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue(EMPTY_INVITE)
+    const { wrapper } = await mountPage('/invite/tok-1', InviteView)
+
+    for (const name of ['username', 'password', 'password_confirm']) {
+      expect(wrapper.find(`input[name="${name}"]`).exists()).toBe(true)
+    }
+  })
+
+  it('用户名格式不符：不发请求，行内提示可见', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue(EMPTY_INVITE)
+    const { wrapper } = await mountPage('/invite/tok-1', InviteView)
+
+    await wrapper.find('input[name="display_name"]').setValue('张三')
+    await wrapper.find('input[name="username"]').setValue('a')
+    await wrapper.find('input[name="password"]').setValue('password123')
+    await wrapper.find('input[name="password_confirm"]').setValue('password123')
+    await wrapper.find('input[name="email_prefix"]').setValue('zhangsan')
+    await wrapper.find('input[name="personal_email"]').setValue('zhangsan@example.net')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(submitInvite).not.toHaveBeenCalled()
+    const inline = wrapper.findAll('[role="alert"]').map((a) => a.text())
+    expect(inline.some((t) => t.includes('用户名需为 3-32 位字母/数字/_/-'))).toBe(true)
+  })
+
+  it('重名 409：后端人话「用户名已被占用」在提交错误区可见', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue(EMPTY_INVITE)
+    vi.mocked(submitInvite).mockRejectedValue(
+      Object.assign(new Error('用户名已被占用'), { status: 409 }),
+    )
+    const { wrapper } = await mountPage('/invite/tok-1', InviteView)
+
+    await wrapper.find('input[name="display_name"]').setValue('张三')
+    await wrapper.find('input[name="username"]').setValue('zhangsan')
+    await wrapper.find('input[name="password"]').setValue('password123')
+    await wrapper.find('input[name="password_confirm"]').setValue('password123')
+    await wrapper.find('input[name="email_prefix"]').setValue('zhangsan')
+    await wrapper.find('input[name="personal_email"]').setValue('zhangsan@example.net')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('用户名已被占用')
   })
 })
