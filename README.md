@@ -13,6 +13,12 @@
 3. **数据两库 + 表前缀隔离**：`core`（用户/角色/注册表/审计）与 `modules`（全部模块业务数据，表前缀 = 模块 id）两个 D1；模块只经 SDK 存储接口访问，禁止跨模块查询与外键。
 4. **能力自选，按量计费**：对比飞书式全家桶（为用不上的功能买单）与纯聊天工具（功能太窄），Unself 在 Cloudflare 按量计费的地基上自选组合——身份、邮件、聊天、日历各自独立开合。
 
+## 快速开始
+
+- **先看看**：demo 实例 [unself.handywote.top](https://unself.handywote.top)
+- **部署一个**：跟着 [docs/deploy.md](docs/deploy.md) 走，约 15 分钟，无需 Cloudflare 经验
+- **来开发**：见下方「开发」与 docs/PRODUCT_SPEC.md
+
 ## 架构（极简）
 
 ```text

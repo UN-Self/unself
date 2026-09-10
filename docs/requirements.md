@@ -119,7 +119,7 @@
 | # | 决策 | 结论 |
 |---|---|---|
 | 1 | 产品形态 | 自托管软件，不提供中央 SaaS 或多租户托管平台 |
-| 2 | 首选部署 | Cloudflare 一键部署；代码与资源部署到使用者自己的 CF 账户 |
+| 2 | 首选部署 | Cloudflare Workers（按量计费）；正式路径 = 交互式装配器 CLI；一键入口（Deploy Button + Workers Builds）为路线图（2026-09-10 修订） |
 | 3 | Docker | 作为替代部署和扩展能力，不与 CF 主路径竞争 |
 | 4 | 身份 | 登录能力核心内建：内置账号（用户名+密码）为默认；外部 OIDC 为可选增强；支持任意兼容身份源或支持 OIDC 的邮局；身份不是模块（2026-09-10 修订） |
 | 5 | 模块 | 聊天、日历、文档、看板、会议、Git、邮件均可选；未启用则不显示、不部署 |
@@ -132,7 +132,7 @@
 | 12 | 模块身份 | 核心统一身份（内置或 OIDC）并签发模块 token；模块只验 token，不接触身份源 |
 | 13 | 域名 | 单域名路径制 `/m/<模块>/`；Workers Routes 与 openresty location 等价；第三方模块可用独立域名 entry |
 | 14 | 数据归属 | 两个 D1：core（平台数据，物理独立）+ modules（全部模块业务数据，表前缀=模块id）；R2 统一适配层按前缀隔离；export/purge 为模块生命周期契约；模块一律经 SDK 存储接口访问，禁止跨模块查询与外键 |
-| 15 | 部署编排 | 装配 = wrangler 幂等脚本读 `unself.config.jsonc`，只在部署时执行，实例不持 CF 凭证；一键 = Deploy Button + Workers Builds；已部署模块启停 = 注册表开关 + token 门禁，秒级免部署；Docker 读同一份配置 |
+| 15 | 部署编排 | 装配 = wrangler 幂等脚本读 `unself.config.jsonc`，只在部署时执行，实例不持 CF 凭证；装配器是产品核心交互（token 深链接→三选→九步→错误归属）；Deploy Button + Workers Builds 为路线图一键入口；已部署模块启停 = 注册表开关 + token 门禁，秒级免部署；Docker 读同一份配置（2026-09-10 修订） |
 | 16 | M0 技术栈 | TypeScript + Hono + Vue 3 + Vite + Tailwind + zod + jose + pnpm workspaces + Vitest；M0 = hello 模块七步验收剧本 |
 | 17 | 会议记录 | 音频存档永不上云；转写两档（云/机密强制本地），主持人选定、成员可 opt-out；房间时钟统一时间轴，散场只传纯文字由 Worker 合并；核心代调 act claim + 通用 ACL（参会者读、主持人写）；AI 纪要经 SDK 能力；个人片段参会者互见 |
 | 18 | 前端约定 | 设计令牌单一来源（tokens.css + Tailwind @theme，禁裸值）；组件查找序 beUI→shadcn 生态→手写（beUI 动效参数照抄移植 Vue）；基元内聚住 packages/ui；图标只用 Lucide（manifest 存图标名，拒绝 emoji）；中文写死、亮色单主题、系统字体 |
@@ -150,6 +150,8 @@
 | 30 | 用户名唯一性 | 注册时软校验（users+invites 双表查重即时反馈）；批准时硬校验（撞名走可恢复冲突：invite 留 pending + 人话提示） |
 | 31 | 模块三分法 | 功能模块（原生 Worker）/ 适配器（包一层外部系统）/ 伴生服务（整台外部服务只做配置接线）；开发、部署、信任边界各异 |
 | 32 | 官方改编纪律 | fork 只为省时间；默认不跟上游、看情况选择性吸收；继承上游许可证；改造按 L0-L3 适配光谱（官方功能模块走 L3 深度重写）；第三方 DX（sdk 文档/脚手架）是产品面 |
+| 33 | 装配交互 | 正式部署路径 = 交互式 CLI：缺 token 打印深链接（权限预填）→ 域名三选（workers.dev 显式第一选项）→ 模块确认 → 九步进度 + 失败三要素（原因/归属/修复）→ 收尾下一步指引；幂等重跑 |
+| 34 | 升级迁移 | 已入主的迁移文件永不修改；schema 演进一律新增 `000N_*.sql`；`migrations apply` 幂等收敛；替代 M0 直改 init.sql 做法 |
 
 ## 7. 第一性原理技术评估（初版）
 

@@ -368,7 +368,7 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 
 **可逆性**：某模块数据量或写入暴涨时，可将其从 modules 库拆出独立库，SDK 配置切换，模块代码零改动。
 
-### 5.5 部署编排（已拍板，2026-09-06）
+### 5.5 部署编排：装配器是产品的核心交互（2026-09-10 修订）
 
 装配与启停是两个操作：**装配在部署时做一次，启停在运行时随时做。**
 
@@ -376,6 +376,19 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 装配（provision）  建 D1、跑迁移、传 Worker、绑路由 —— 只在部署时执行
 启停（toggle）     注册表开关 + token 门禁 —— 运行时秒级生效
 ```
+
+**装配器 = 产品核心交互**：「选模块 → 得到你的团队软件」就是 Unself 的商店结账页。交互稿（实现于 deploy/cloudflare，教程见 docs/deploy.md）：
+
+```text
+① 检测 CLOUDFLARE_API_TOKEN：缺失时打印预填好权限的 CF 深链接（不报裸错误）
+② 域名三选：workers.dev 免费域 / 自有域 / 配置文件（显式第一选项，非隐性回退）
+③ 模块确认：列出候选模块，回车=全部
+④ 九步进度编号输出；每步失败给三要素：原因 / 归属（token 权限·DNS·代码）/ 修复
+⑤ 收尾「下一步」指引：setup 链接 → 首个管理员 → 邀请拉人 → 邮件轴（可选）
+⑥ 幂等重跑标语：任何时候重跑收敛同一终态
+```
+
+非交互（CI/`-y`）：走配置与环境变量。**一键入口（Deploy to Cloudflare 按钮 + Workers Builds）为路线图项**——当前正式路径 = 交互式 CLI；README 不写「一键」。
 
 **装配引擎 = wrangler 幂等脚本**（deploy/cloudflare），读唯一配置文件 `unself.config.jsonc`：
 
@@ -389,7 +402,7 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 
 脚本九步：① 确保 core/modules 两个 D1 存在；② 跑核心迁移与选中模块迁移（表前缀版本化）；③ 构建上传 Shell Worker；④ 每个选中模块构建、上传、绑 `/m/<id>/*` 路由与存储绑定；⑤ 注册表写入（选中 enabled，未选 not_deployed）；⑥ 建 R2 桶或接收外部 S3 参数；⑦ OIDC 不进配置文件——部署后在 setup 向导填写并存 core 库；⑧ 生成一次性 setup token 打印在部署输出末尾；⑨ 冒烟检查 `/api/health` 与各模块 health。
 
-**一键入口**：Deploy to Cloudflare 按钮（默认模块集）+ Workers Builds（git 连接，配置变更 push 即自动重部署）。运行时进程不持有任何 CF API 凭证。
+**升级纪律（拍板）**：已入主的迁移文件永不修改；schema 演进一律新增迁移文件（`000N_*.sql`），`migrations apply` 幂等收敛——替代 M0「直改 init.sql」的做法，真实用户升级不丢数据。运行时进程不持有任何 CF API 凭证。
 
 **运行时启停**：已部署模块由注册表开关控制——`enabled=false` 即边栏隐藏、core 停发对应 aud 的 token，存量 token 10 分钟内自然过期，数据原地保留。新增/移除模块 = 改 config → push → 自动重部署。
 
