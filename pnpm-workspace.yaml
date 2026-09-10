@@ -3,6 +3,8 @@ packages:
   - services/*
   - modules/*
   - packages/*
+  - adapters/*
+  - adapters/provisioning/*
   - deploy/*
 allowBuilds:
   esbuild: true
