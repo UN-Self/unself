@@ -148,12 +148,33 @@ describe('testOidcConnection（表单[测试连接]按钮的本地预检 + 服�
     )
 
     const result = await testOidcConnection('https://idp.example.com/realms/team')
-    expect(result).toEqual({ ok: true, issuer: 'https://idp.example.com' })
+    expect(result).toEqual({ ok: true, issuer: 'https://idp.example.com', warnings: [] })
     const [url, init] = callArgs(fetchMock)
     expect(url).toBe('/api/oidc/test-connection')
     expect(init?.method).toBe('POST')
     expect(init?.headers).toMatchObject({ 'content-type': 'application/json' })
     expect(JSON.parse(init?.body as string)).toEqual({ issuer: 'https://idp.example.com/realms/team' })
+  })
+
+  it('成功响应的 warnings 原样透传（#17 设置页黄牌）', async () => {
+    mockFetchOnce(
+      jsonResponse({
+        ok: true,
+        status: 200,
+        body: {
+          ok: true,
+          issuer: 'https://idp.example.com',
+          warnings: ['该 IdP 可能无法完成登录（不回显 nonce）'],
+        },
+      }),
+    )
+
+    const result = await testOidcConnection('https://idp.example.com')
+    expect(result).toEqual({
+      ok: true,
+      issuer: 'https://idp.example.com',
+      warnings: ['该 IdP 可能无法完成登录（不回显 nonce）'],
+    })
   })
 
   it('400 映射为 https 人话', async () => {

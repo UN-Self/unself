@@ -128,10 +128,11 @@ export function activateSetup(token: string): Promise<ActivateResult> {
  * 测试连接（#44）：改经 core-api 服务端代理（浏览器直连 issuer 会被 CORS 拦，
  * Stalwart 实测命中），本地只保留 URL 格式预检（非 URL / 非 https 直接报错，不发请求）；
  * 失败信息按状态映射为人话（§6.5），网络异常统一提示服务端侧不可达。
+ * 成功时透传服务端 warnings（#17 设置页黄牌：缺 nonce / 拿不到邮箱）。
  */
 export async function testOidcConnection(
   issuer: string,
-): Promise<{ ok: true; issuer: string } | { ok: false; reason: string }> {
+): Promise<{ ok: true; issuer: string; warnings: string[] } | { ok: false; reason: string }> {
   let issuerUrl: URL
   try {
     issuerUrl = new URL(issuer)
@@ -149,12 +150,16 @@ export async function testOidcConnection(
       credentials: 'same-origin',
     })
     const body = (await res.json().catch(() => null)) as
-      | { ok?: boolean; issuer?: string; error?: string }
+      | { ok?: boolean; issuer?: string; warnings?: unknown; error?: string }
       | null
     if (!res.ok || !body?.ok) {
       return { ok: false, reason: humanizeOidcTest(res.status, body?.error) }
     }
-    return { ok: true, issuer: body.issuer ?? issuer }
+    return {
+      ok: true,
+      issuer: body.issuer ?? issuer,
+      warnings: Array.isArray(body.warnings) ? body.warnings.filter((w): w is string => typeof w === 'string') : [],
+    }
   } catch {
     return { ok: false, reason: '连接测试失败：请确认服务端可访问该 Issuer' }
   }

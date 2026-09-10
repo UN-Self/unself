@@ -116,7 +116,7 @@ describe('SetupView 三态机（#92）', () => {
   })
 
   it('#95 同宽：两态按钮共用同宽接口类（.setup-action = width:100%），不随文案内容宽变化', async () => {
-    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER })
+    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER, warnings: [] })
     const wrapper = mount(SetupView)
     await fillForm(wrapper)
 
@@ -163,7 +163,7 @@ describe('SetupView 三态机（#92）', () => {
   })
 
   it('测试通过：同位置替换为「保存并激活」，并报「连接成功」', async () => {
-    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER })
+    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER, warnings: [] })
     const wrapper = mount(SetupView)
     await fillForm(wrapper)
 
@@ -193,7 +193,7 @@ describe('SetupView 三态机（#92）', () => {
   })
 
   it('测试通过后改任意字段：回「测试连接」，测试结果作废', async () => {
-    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER })
+    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER, warnings: [] })
     const wrapper = mount(SetupView)
     await fillForm(wrapper)
     await clickTest(wrapper)
@@ -232,7 +232,7 @@ describe('SetupView 三态机（#92）', () => {
   })
 
   it('提交失败：回「测试连接」+ 错误卡，可再次测试通过', async () => {
-    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER })
+    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER, warnings: [] })
     vi.mocked(saveOidcConfig).mockRejectedValue(
       Object.assign(new Error('网络不可用，请检查连接后重试'), { status: 0 }),
     )
@@ -252,7 +252,7 @@ describe('SetupView 三态机（#92）', () => {
     expect(btn.attributes('aria-busy')).toBeUndefined()
 
     // 可重测：再次测试成功 → 「保存并激活」回归
-    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER })
+    vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER, warnings: [] })
     await clickTest(wrapper)
     await settle()
     expect(submitButton(wrapper).exists()).toBe(true)
