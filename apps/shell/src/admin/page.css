@@ -1,0 +1,65 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
+/* 管理页共享骨架：标题/空态/骨架/提示条/徽章（#17 四页复用；样式全 tokens）。 */
+
+.page-title {
+  margin: 0 0 var(--unself-space-4);
+  font-size: var(--unself-font-size-xl);
+  font-weight: 600;
+  color: var(--unself-color-text);
+}
+
+.page-empty {
+  margin: 0;
+  padding: var(--unself-space-6) 0;
+  text-align: center;
+  color: var(--unself-color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+}
+
+.page-skeleton {
+  width: min(480px, 100%);
+}
+
+/* 动作失败提示条（行内人话；加载失败走 UErrorCard） */
+.form-alert {
+  margin: 0;
+  padding: var(--unself-space-2) var(--unself-space-3);
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-danger-soft);
+  color: var(--unself-color-danger);
+  font-size: var(--unself-font-size-sm);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--unself-space-2);
+  border-radius: var(--unself-radius-full);
+  font-size: var(--unself-font-size-xs);
+  white-space: nowrap;
+}
+.badge-ok {
+  background: var(--unself-color-primary-soft);
+  color: var(--unself-color-primary);
+}
+.badge-muted {
+  background: var(--unself-color-surface);
+  color: var(--unself-color-text-secondary);
+}
+.badge-admin {
+  background: var(--unself-color-warning);
+  color: var(--unself-color-bg);
+}
+.badge-warn {
+  background: var(--unself-color-warning);
+  color: var(--unself-color-bg);
+}
+
+/* 设置页分节标题 */
+.section-title {
+  margin: var(--unself-space-6) 0 var(--unself-space-3);
+  font-size: var(--unself-font-size-lg);
+  font-weight: 600;
+}

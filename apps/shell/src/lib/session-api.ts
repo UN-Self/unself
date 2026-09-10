@@ -5,12 +5,13 @@
  * 后端契约：core-api #5（GET /api/me、POST /api/auth/logout、GET /api/auth/login）。
  */
 
-/** 当前用户（/api/me 200）。 */
+/** 当前用户（/api/me 200）。role 供前端视图判断（管理入口显隐），真值以服务端守卫为准。 */
 export interface SessionUser {
   id: string
   name: string
   issuer: string
   sub: string
+  role?: string
 }
 
 export type MeResult =

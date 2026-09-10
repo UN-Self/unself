@@ -11,12 +11,24 @@ import { installAuthGuard } from './lib/guarded-fetch'
 
 /**
  * M0 路由：/setup 向导（守卫见下）、/login 登录页（#11）、/ 登录后工作台（#12 完整化）。
+ * #17：/admin 管理台四页（布局组件内做 role 守卫；服务端 /api/admin/* 有真值守卫）。
  */
 
 const routes: RouteRecordRaw[] = [
   { path: '/', component: App },
   { path: '/login', component: LoginView },
   { path: '/setup', component: SetupView },
+  {
+    path: '/admin',
+    component: () => import('./AdminLayout.vue'),
+    children: [
+      { path: '', redirect: '/admin/members' },
+      { path: 'members', component: () => import('./admin/MembersPage.vue') },
+      { path: 'modules', component: () => import('./admin/ModulesPage.vue') },
+      { path: 'audit', component: () => import('./admin/AuditPage.vue') },
+      { path: 'settings', component: () => import('./admin/SettingsPage.vue') },
+    ],
+  },
 ]
 
 export const router = createRouter({
