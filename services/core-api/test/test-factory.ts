@@ -106,7 +106,7 @@ export function createD1Adapter(sqlite: DatabaseSync): D1Database {
       sqlite.exec('BEGIN');
       try {
         for (const statement of statements) {
-          results.push(await (statement as SqliteD1Statement).execute<T>());
+          results.push(await (statement as unknown as SqliteD1Statement).execute<T>());
         }
         sqlite.exec('COMMIT');
       } catch (error) {

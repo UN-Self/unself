@@ -7,9 +7,12 @@
  * - 令牌明文只在生成响应里出现一次，库里只存 SHA-256 哈希（token_hash 主键）；
  * - 状态迁移一律走 assertInviteTransition（#47 契约）+ 单条 UPDATE 状态守卫，
  *   并发双写只有一次 changes=1（#81 原子模式）；
- * - 过期不做定时任务，读取路径惰性判定（2026-09-10 拍板：一次性 + 限期足够）。
+ * - 过期不做定时任务，读取路径惰性判定（2026-09-10 拍板：一次性 + 限期足够）；
+ * - 内置注册凭证（issue-A）住 invite_credentials 表（与 invites 主键同形 token_hash），
+ *   提交时落 username+password_hash，批准时据此开户（决策 28/30）。
  */
 import { assertInviteTransition, type InviteStatus } from '@unself/contracts';
+import { hashPassword } from './passwords';
 
 /** 消费结果三分支：命中消费 / 无匹配（无邀请）/ 已消费。 */
 export type ConsumeInviteOutcome = 'consumed' | 'none' | 'already_consumed';
@@ -37,11 +40,13 @@ export interface Invite extends InviteRow {
 const INVITE_COLUMNS =
   "token_hash, status, personal_email, email_prefix, display_name, created_at, expires_at, (expires_at <= datetime('now')) AS due";
 
-/** 申请表单提交的字段（#18 公开填表页）。 */
+/** 申请表单提交的字段（#18 公开填表页；issue-A 增加内置注册用户名/密码，两者必须同时有）。 */
 export interface InviteApplication {
   displayName: string;
   emailPrefix: string;
   personalEmail: string;
+  username?: string;
+  password?: string;
 }
 
 /**
@@ -168,5 +173,38 @@ export async function updateInviteApplication(
     )
     .bind(application.displayName, application.emailPrefix, application.personalEmail, tokenHash)
     .run();
-  return result.meta.changes > 0;
+  if (result.meta.changes === 0) {
+    return false;
+  }
+  // 内置注册凭证（issue-A）：独立表 INSERT，一链接至多一行；未填用户名则不落行
+  if (application.username !== undefined && application.password !== undefined) {
+    await saveInviteCredentials(db, tokenHash, application.username, await hashPassword(application.password));
+  }
+  return true;
+}
+
+/** 落内置注册凭证（UPDATE 换 INSERT：SQLite 无 UPSERT-keep-existing；重填覆盖走 REPLACE）。 */
+async function saveInviteCredentials(
+  db: D1Database,
+  tokenHash: string,
+  username: string,
+  passwordHash: string,
+): Promise<void> {
+  await db
+    .prepare(
+      'INSERT INTO invite_credentials (token_hash, username, password_hash) VALUES (?, ?, ?) ON CONFLICT(token_hash) DO UPDATE SET username = excluded.username, password_hash = excluded.password_hash',
+    )
+    .bind(tokenHash, username, passwordHash)
+    .run();
+}
+
+/** 读取邀请的内置注册凭证（批准时硬闸开户用）；无内置注册 → null。 */
+export async function getInviteCredentials(
+  db: D1Database,
+  tokenHash: string,
+): Promise<{ username: string; password_hash: string } | null> {
+  return db
+    .prepare('SELECT username, password_hash FROM invite_credentials WHERE token_hash = ?')
+    .bind(tokenHash)
+    .first<{ username: string; password_hash: string }>();
 }

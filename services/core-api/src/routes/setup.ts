@@ -6,6 +6,7 @@ import { readSession } from '../session';
 import { generateSetupToken, storeSetupToken, consumeSetupToken, isSetupTokenValid } from '../setup';
 import { audit } from '../services/audit';
 import { isSetupDone, markSetupDone, persistOidcConfig } from '../services/instance-config';
+import { hashPassword } from '../services/passwords';
 import { promoteToAdmin } from '../services/users';
 import type { Bindings } from '../index';
 
@@ -15,6 +16,12 @@ const OIDC_BODY_SCHEMA = z.object({
   clientId: z.string().min(1),
   clientSecret: z.string().min(1),
   scope: z.string().min(1).optional(),
+});
+
+/** 内置管理员开通 body（issue-A）：与登录/注册同口径；重复密码由前端自查，后端不收。 */
+const BUILTIN_ADMIN_SCHEMA = z.object({
+  username: z.string().regex(/^[a-zA-Z0-9_-]{3,32}$/, '用户名需为 3-32 位字母/数字/_/-'),
+  password: z.string().min(8),
 });
 
 /** 挂载 setup 域（/api/admin/setup-token、/api/setup/*）。 */
@@ -108,5 +115,57 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
     await markSetupDone(db);
     await audit(db, session.uid, 'setup_activated', session.uid);
     return c.json({ ok: true, user: { id: session.uid, name: session.name, role: 'admin' } });
+  });
+
+  /**
+   * 内置管理员开通（issue-A，决策 20：内置账号默认形态）：
+   * username+password → 建 admin（role=admin、status=active）+ 凭证行（batch 原子）
+   * → 置 setup_done 封箱 → 审计。门禁只有 setup_done（token 门留给 OIDC 直线流程，
+   * 内置分支部署后直接可走，SPEC 决策 21「激活即成管理员并直接进工作台」的内置等价物）。
+   */
+  app.post('/api/setup/builtin-admin', async (c) => {
+    const db = c.env.CORE_DB;
+    if (await isSetupDone(db)) {
+      return c.json({ error: 'setup already completed; sealed forever' }, 409);
+    }
+    const body = BUILTIN_ADMIN_SCHEMA.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) {
+      return c.json({ error: '用户名需为 3-32 位字母/数字/_/-，密码长度至少 8 位' }, 400);
+    }
+    const { username, password } = body.data;
+    // 软闸（决策 30）：与注册同一条查重 SQL，重名即时 409
+    const taken = await db
+      .prepare(
+        `SELECT 1 FROM users u JOIN builtin_credentials bc ON bc.user_id = u.id WHERE lower(bc.username) = lower(?)
+         UNION ALL
+         SELECT 1 FROM invite_credentials ic JOIN invites i ON i.token_hash = ic.token_hash WHERE lower(ic.username) = lower(?) AND i.status IN ('pending', 'approved')
+         LIMIT 1`,
+      )
+      .bind(username, username)
+      .first();
+    if (taken) {
+      return c.json({ error: '该用户名已被占用' }, 409);
+    }
+    const passwordHash = await hashPassword(password);
+    const userId = `u_${crypto.randomUUID().replace(/-/g, '')}`;
+    try {
+      await db.batch([
+        db
+          .prepare(
+            "INSERT INTO users (id, issuer, sub, display_name, email, role, status) VALUES (?, 'builtin', ?, ?, NULL, 'admin', 'active')",
+          )
+          .bind(userId, userId, username),
+        db.prepare('INSERT INTO builtin_credentials (user_id, username, password_hash) VALUES (?, ?, ?)').bind(userId, username, passwordHash),
+      ]);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('UNIQUE')) {
+        // 硬闸（决策 30）：软闸与开户之间被并发写入 → 撞 UNIQUE，可恢复 409
+        return c.json({ error: '该用户名已被占用' }, 409);
+      }
+      throw error;
+    }
+    await markSetupDone(db);
+    await audit(db, userId, 'builtin_admin_created', userId);
+    return c.json({ ok: true, user: { id: userId, name: username, role: 'admin' } }, 201);
   });
 }

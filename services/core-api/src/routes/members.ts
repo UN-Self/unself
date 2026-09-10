@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { Hono, type Context } from 'hono';
+import { z } from 'zod';
 
 import { audit } from '../services/audit';
+import { hashPassword } from '../services/passwords';
 import {
   configuredMailProvisioner,
   listMembers,
@@ -26,7 +28,43 @@ export function registerMemberRoutes(
   app.post('/api/admin/members/:id/enable', (c) =>
     updateMemberStatus(c, c.req.param('id'), 'active', createMailProvisioner),
   );
+
+  /**
+   * 手动重置内置登录密码（issue-A，决策 29：忘记密码 = 管理员手动重置，无邮件实例唯一恢复路径）。
+   * 仅内置用户（有 builtin_credentials 行）可重置；OIDC 用户密码在身份源，409 人话。
+   */
+  app.post('/api/admin/members/:id/reset-password', async (c) => {
+    const db = c.env.CORE_DB;
+    const memberId = c.req.param('id');
+    const body = RESET_PASSWORD_SCHEMA.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) {
+      return c.json({ error: '密码长度至少 8 位' }, 400);
+    }
+    const row = await db
+      .prepare(
+        'SELECT u.id AS user_id, bc.user_id AS builtin_id FROM users u LEFT JOIN builtin_credentials bc ON bc.user_id = u.id WHERE u.id = ?',
+      )
+      .bind(memberId)
+      .first<{ user_id: string; builtin_id: string | null }>();
+    if (!row) {
+      return c.json({ error: 'member not found' }, 404);
+    }
+    if (row.builtin_id === null) {
+      return c.json({ error: '该成员无内置登录' }, 409);
+    }
+    await db
+      .prepare('UPDATE builtin_credentials SET password_hash = ? WHERE user_id = ?')
+      .bind(await hashPassword(body.data.password), memberId)
+      .run();
+    await audit(db, (await readSession(c))!.uid, 'member_password_reset', memberId);
+    return c.json({ ok: true });
+  });
 }
+
+/** 重置密码 body（issue-A）：与登录/注册同口径的密码下限。 */
+const RESET_PASSWORD_SCHEMA = z.object({
+  password: z.string().min(8),
+});
 
 /** 状态翻转、可选邮件账户联动和审计属于同一成员生命周期动作。 */
 async function updateMemberStatus(

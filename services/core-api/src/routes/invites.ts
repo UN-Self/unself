@@ -24,6 +24,7 @@ import {
   createInvite,
   DEFAULT_INVITE_EXPIRES_DAYS,
   findInvite,
+  getInviteCredentials,
   listInvites,
   setInviteStatus,
   updateInviteApplication,
@@ -38,16 +39,24 @@ const CREATE_INVITE_SCHEMA = z.object({
   expiresInDays: z.number().int().min(1).max(365).optional(),
 });
 
-/** 公开填表 body：三字段非空；前缀不含 @ 与空白；个人邮箱必须是合法地址。 */
-const APPLICATION_SCHEMA = z.object({
-  displayName: z.string().trim().min(1),
-  emailPrefix: z
-    .string()
-    .trim()
-    .min(1)
-    .regex(/^[^@\s]+$/, '邮箱前缀不能包含 @ 或空白'),
-  personalEmail: z.string().trim().email(),
-});
+/** 公开填表 body：三字段非空；前缀不含 @ 与空白；个人邮箱必须是合法地址。
+ * 内置注册（issue-A 决策 28）：username+password 可选，两者必须同时有或同时无。 */
+const APPLICATION_SCHEMA = z
+  .object({
+    displayName: z.string().trim().min(1),
+    emailPrefix: z
+      .string()
+      .trim()
+      .min(1)
+      .regex(/^[^@\s]+$/, '邮箱前缀不能包含 @ 或空白'),
+    personalEmail: z.string().trim().email(),
+    username: z.string().trim().regex(/^[a-zA-Z0-9_-]{3,32}$/, '用户名需为 3-32 位字母/数字/_/-').optional(),
+    password: z.string().min(8).optional(),
+  })
+  .refine((data) => (data.username === undefined) === (data.password === undefined), {
+    message: '用户名和密码需同时填写',
+    path: ['username'],
+  });
 
 /** 非 pending 状态的人话（409 detail；approve/reject 共用）。 */
 function statusDetail(status: InviteStatus): string {
@@ -134,7 +143,7 @@ export function registerInviteRoutes(
     });
   });
 
-  /** 公开提交：落申请三字段后广播 active 管理员（站内，不发邮件）。 */
+  /** 公开提交：落申请三字段（内置注册时另带用户名/密码）后广播 active 管理员（站内，不发邮件）。 */
   app.post('/api/invite/:token', async (c) => {
     const raw: unknown = await c.req.json().catch(() => null);
     const parsed = APPLICATION_SCHEMA.safeParse(raw ?? {});
@@ -155,6 +164,21 @@ export function registerInviteRoutes(
     }
     if (invite.status !== 'pending') {
       return c.json({ error: '邀请链接已过期或已被使用' }, 410);
+    }
+    // 用户名唯一性软闸（issue-A 决策 30）：users+invites 双表查重，重名即时 409
+    if (parsed.data.username !== undefined) {
+      const taken = await db
+        .prepare(
+          `SELECT 1 FROM users u JOIN builtin_credentials bc ON bc.user_id = u.id WHERE lower(bc.username) = lower(?)
+           UNION ALL
+           SELECT 1 FROM invite_credentials ic JOIN invites i ON i.token_hash = ic.token_hash WHERE lower(ic.username) = lower(?) AND i.status IN ('pending', 'approved')
+           LIMIT 1`,
+        )
+        .bind(parsed.data.username, parsed.data.username)
+        .first();
+      if (taken) {
+        return c.json({ error: '用户名已被占用' }, 409);
+      }
     }
     const updated = await updateInviteApplication(db, tokenHash, parsed.data);
     if (!updated) {
@@ -191,7 +215,10 @@ async function requirePendingInvite(
   return invite;
 }
 
-/** 批准：开号失败可恢复（前缀占用 → 保持 pending）；开号成功后置位并签激活令牌。 */
+/**
+ * 批准：先看内置注册凭证（issue-A）——有则内置开户路径，无则 OIDC JIT 路径。
+ * 邮件轴（provisioner/激活邮件）两条路径共用，行为不变。
+ */
 async function approveInvite(
   c: Context<{ Bindings: Bindings }>,
   id: string,
@@ -203,13 +230,45 @@ async function approveInvite(
   if (invite instanceof Response) {
     return invite;
   }
-  if (invite.email_prefix.length === 0) {
+  const sender = await configuredMailSender(db, dependencies.createMailSender);
+
+  // 内置注册路径（issue-A 决策 28/30）：硬闸靠 builtin_credentials.username UNIQUE 约束，
+  // 撞名走可恢复冲突：invite 留 pending + 人话，拒绝后让新人换名重提。
+  const creds = await getInviteCredentials(db, id);
+  if (creds) {
+    const userId = `u_${crypto.randomUUID().replace(/-/g, '')}`;
+    try {
+      await db.batch([
+        db
+          .prepare(
+            "INSERT INTO users (id, issuer, sub, display_name, email, personal_email, role, status) VALUES (?, 'builtin', ?, ?, NULL, ?, 'member', 'active')",
+          )
+          .bind(userId, userId, invite.display_name, invite.personal_email),
+        db
+          .prepare('INSERT INTO builtin_credentials (user_id, username, password_hash) VALUES (?, ?, ?)')
+          .bind(userId, creds.username, creds.password_hash),
+      ]);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('UNIQUE')) {
+        return c.json(
+          {
+            error: 'invite approve failed',
+            detail: `用户名「${creds.username}」已被占用，邀请保持待审批；请拒绝后让新人换一个用户名重新提交`,
+          },
+          409,
+        );
+      }
+      throw error;
+    }
+  } else if (invite.email_prefix.length === 0) {
+    // OIDC JIT 路径：未填表（无邮箱前缀）无法批准（内置路径没有邮箱前缀字段，不适用）
     return c.json(
       { error: 'invite not filled', detail: '该申请尚未填写完成（缺少邮箱前缀），无法批准' },
       409,
     );
   }
 
+  // 邮件轴开户（完整实例）：内置路径也照旧开户发激活邮件（登录密码归登录、邮箱密码归激活，两码两用途）
   const provisioner = await configuredMailProvisioner(db, dependencies.createMailProvisioner);
   let workEmail: string | null = null;
   if (provisioner) {
@@ -222,6 +281,7 @@ async function approveInvite(
     } catch (error) {
       if (error instanceof MailProvisionerError && error.code === 'ACCOUNT_EXISTS') {
         // 可恢复冲突：邀请留在 pending，管理员拒绝后重新邀请（M1 不支持改前缀）。
+        // 内置路径用户行已建：不回滚（用户存在但邮箱待补，invite 留 pending 可重批）。
         return c.json(
           {
             error: 'invite approve failed',
@@ -240,7 +300,6 @@ async function approveInvite(
     return c.json({ error: 'invite not pending', detail: '邀请状态已变化，请刷新后重试' }, 409);
   }
 
-  const sender = await configuredMailSender(db, dependencies.createMailSender);
   if (provisioner && workEmail !== null) {
     const activationToken = await issueInviteActivation(db, id, workEmail);
     const activateUrl = `${new URL(c.req.url).origin}/activate/${activationToken}`;

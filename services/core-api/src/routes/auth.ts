@@ -18,14 +18,80 @@ import { getOidcConfig } from '../services/instance-config';
 import { consumeApprovedInviteByEmail } from '../services/invites';
 import { bindPendingNotifications } from '../services/notifications';
 import { pickDisplayName, pickEmail, pickNameOrNull, upsertUser } from '../services/users';
+import { verifyPassword } from '../services/passwords';
 import type { Bindings } from '../index';
 
 /** 登录流程 Cookie：HttpOnly，10 分钟有效，仅 /api/auth 路径可见。 */
 const FLOW_COOKIE = 'unself_oidc_flow';
 const FLOW_TTL_SECONDS = 600;
 
+/** 内置账号用户名/密码形状（与注册/Setup 同口径，SPEC 决策 28）。 */
+const BUILTIN_USERNAME = z
+  .string()
+  .regex(/^[a-zA-Z0-9_-]{3,32}$/, '用户名需为 3-32 位字母/数字/_/-');
+const BUILTIN_PASSWORD = z.string().min(8);
+
+/** 登录失败统一文案：404/401 同文案，不泄露哪个错（issue-A 任务书 B 条）。 */
+const LOGIN_FAILED = '用户名或密码错误';
+
 /** 挂载 OIDC 登录域（/api/auth/*）与 OIDC 探测（/api/oidc/test-connection）。 */
 export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
+  /**
+   * 内置登录（issue-A）：username+password → 会话 Cookie。
+   * 格式错/无此用户（404）/密码错（401）统一回 LOGIN_FAILED，不区分哪种错。
+   */
+  app.post('/api/auth/login', async (c) => {
+    const raw: unknown = await c.req.json().catch(() => null);
+    const parsed = z
+      .object({ username: BUILTIN_USERNAME, password: BUILTIN_PASSWORD })
+      .safeParse(raw ?? {});
+    if (!parsed.success) {
+      return c.json({ error: LOGIN_FAILED }, 400);
+    }
+    const db = c.env.CORE_DB;
+    const user = await db
+      .prepare(
+        'SELECT u.id, u.display_name, u.status, bc.password_hash FROM users u JOIN builtin_credentials bc ON bc.user_id = u.id WHERE bc.username = ?',
+      )
+      .bind(parsed.data.username)
+      .first<{ id: string; display_name: string | null; status: string; password_hash: string }>();
+    if (!user) {
+      return c.json({ error: LOGIN_FAILED }, 404);
+    }
+    if (!(await verifyPassword(parsed.data.password, user.password_hash))) {
+      return c.json({ error: LOGIN_FAILED }, 401);
+    }
+    if (user.status === 'disabled') {
+      return c.json({ error: '账号已被停用，请联系管理员' }, 403);
+    }
+    const secret = c.env.JWT_PRIVATE_KEY;
+    if (!secret) {
+      return c.json({ error: 'signing key not provisioned (run deploy bootstrap)' }, 503);
+    }
+    const token = await createSessionToken(
+      {
+        uid: user.id,
+        // 内置身份的 issuer/sub：'builtin' + 用户 id（OIDC JIT 的 issuer+sub 唯一约束天然不冲突）
+        iss: 'builtin',
+        sub: user.id,
+        name: user.display_name ?? parsed.data.username,
+      },
+      secret,
+    );
+    setCookie(c, SESSION_COOKIE, token, sessionCookieOptions());
+    return c.json({ ok: true, user: { id: user.id, name: user.display_name ?? parsed.data.username } });
+  });
+
+  /** 登录方式探测（issue-A）：壳登录页按 oidc 显隐 SSO 按钮；匿名可调。 */
+  app.get('/api/auth/methods', async (c) => {
+    const row = await c.env.CORE_DB.prepare(
+      'SELECT value FROM instance_config WHERE key = ?',
+    )
+      .bind('oidc_issuer')
+      .first<{ value: string }>();
+    return c.json({ builtin: true, oidc: row !== null });
+  });
+
   /** 发起登录：302 到身份源授权页（整页跳转，壳里是一个按钮，§6.5）。 */
   app.get('/api/auth/login', async (c) => {
     const config = await getOidcConfig(c);
