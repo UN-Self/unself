@@ -1,0 +1,10 @@
+{
+  // SPDX-License-Identifier: AGPL-3.0-only
+  "name": "unself-adapter-mail-smtp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01"
+  // TCP 465 冒烟实测：cloudflare:sockets connect + secureTransport:'on' 在
+  // compatibility_date 2026-09-01 下开箱即用，无需任何 compatibility_flags。
+  // test/smoke.ts 由 `pnpm test:smoke` 手动跑（wrangler dev 不进 CI），
+  // GET http://localhost:8787/?host=… 触发握手。
+}
