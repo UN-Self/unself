@@ -12,7 +12,7 @@
  *   提交时落 username+password_hash，批准时据此开户（决策 28/30）。
  */
 import { assertInviteTransition, type InviteStatus } from '@unself/contracts';
-import { hashPassword } from './passwords';
+import { buildStoredCredential } from './passwords';
 
 /** 消费结果三分支：命中消费 / 无匹配（无邀请）/ 已消费。 */
 export type ConsumeInviteOutcome = 'consumed' | 'none' | 'already_consumed';
@@ -46,7 +46,9 @@ export interface InviteApplication {
   emailPrefix: string;
   personalEmail: string;
   username?: string;
-  password?: string;
+  /** pk1（决策 35）：盐与 R 均为客户端生成，服务端只存 SHA256(R)。 */
+  salt?: string;
+  proof?: string;
 }
 
 /**
@@ -177,8 +179,8 @@ export async function updateInviteApplication(
     return false;
   }
   // 内置注册凭证（issue-A）：独立表 INSERT，一链接至多一行；未填用户名则不落行
-  if (application.username !== undefined && application.password !== undefined) {
-    await saveInviteCredentials(db, tokenHash, application.username, await hashPassword(application.password));
+  if (application.username !== undefined && application.proof !== undefined && application.salt !== undefined) {
+    await saveInviteCredentials(db, tokenHash, application.username, await buildStoredCredential(application.salt, application.proof));
   }
   return true;
 }

@@ -6,7 +6,7 @@ import { readSession } from '../session';
 import { generateSetupToken, storeSetupToken, consumeSetupToken, isSetupTokenValid } from '../setup';
 import { audit } from '../services/audit';
 import { isSetupDone, markSetupDone, persistOidcConfig } from '../services/instance-config';
-import { hashPassword } from '../services/passwords';
+import { buildStoredCredential } from '../services/passwords';
 import { promoteToAdmin } from '../services/users';
 import type { Bindings } from '../index';
 
@@ -18,10 +18,11 @@ const OIDC_BODY_SCHEMA = z.object({
   scope: z.string().min(1).optional(),
 });
 
-/** 内置管理员开通 body（issue-A）：与登录/注册同口径；重复密码由前端自查，后端不收。 */
+/** 内置管理员开通 body（issue-A + pk1）：盐/R 均为客户端生成（决策 35）；重复密码由前端自查。 */
 const BUILTIN_ADMIN_SCHEMA = z.object({
   username: z.string().regex(/^[a-zA-Z0-9_-]{3,32}$/, '用户名需为 3-32 位字母/数字/_/-'),
-  password: z.string().min(8),
+  salt: z.string().regex(/^[A-Za-z0-9+/]{22}==$/, '凭据格式不正确'),
+  proof: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, '凭据格式不正确'),
 });
 
 /** 挂载 setup 域（/api/admin/setup-token、/api/setup/*）。 */
@@ -132,7 +133,7 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
     if (!body.success) {
       return c.json({ error: '用户名需为 3-32 位字母/数字/_/-，密码长度至少 8 位' }, 400);
     }
-    const { username, password } = body.data;
+    const { username, salt, proof } = body.data;
     // 软闸（决策 30）：与注册同一条查重 SQL，重名即时 409
     const taken = await db
       .prepare(
@@ -146,7 +147,7 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
     if (taken) {
       return c.json({ error: '该用户名已被占用' }, 409);
     }
-    const passwordHash = await hashPassword(password);
+    const passwordHash = await buildStoredCredential(salt, proof);
     const userId = `u_${crypto.randomUUID().replace(/-/g, '')}`;
     try {
       await db.batch([

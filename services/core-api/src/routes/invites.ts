@@ -51,9 +51,10 @@ const APPLICATION_SCHEMA = z
       .regex(/^[^@\s]+$/, '邮箱前缀不能包含 @ 或空白'),
     personalEmail: z.string().trim().email(),
     username: z.string().trim().regex(/^[a-zA-Z0-9_-]{3,32}$/, '用户名需为 3-32 位字母/数字/_/-').optional(),
-    password: z.string().min(8).optional(),
+    salt: z.string().regex(/^[A-Za-z0-9+/]{22}==$/, '凭据格式不正确').optional(),
+    proof: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, '凭据格式不正确').optional(),
   })
-  .refine((data) => (data.username === undefined) === (data.password === undefined), {
+  .refine((data) => (data.username === undefined) === (data.proof === undefined), {
     message: '用户名和密码需同时填写',
     path: ['username'],
   });

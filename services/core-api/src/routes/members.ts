@@ -3,7 +3,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 
 import { audit } from '../services/audit';
-import { hashPassword } from '../services/passwords';
+import { buildStoredCredential } from '../services/passwords';
 import {
   configuredMailProvisioner,
   listMembers,
@@ -38,7 +38,7 @@ export function registerMemberRoutes(
     const memberId = c.req.param('id');
     const body = RESET_PASSWORD_SCHEMA.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
-      return c.json({ error: '密码长度至少 8 位' }, 400);
+      return c.json({ error: '凭据格式不正确' }, 400);
     }
     const row = await db
       .prepare(
@@ -54,16 +54,17 @@ export function registerMemberRoutes(
     }
     await db
       .prepare('UPDATE builtin_credentials SET password_hash = ? WHERE user_id = ?')
-      .bind(await hashPassword(body.data.password), memberId)
+      .bind(await buildStoredCredential(body.data.salt, body.data.proof), memberId)
       .run();
     await audit(db, (await readSession(c))!.uid, 'member_password_reset', memberId);
     return c.json({ ok: true });
   });
 }
 
-/** 重置密码 body（issue-A）：与登录/注册同口径的密码下限。 */
+/** 重置密码 body（issue-A + pk1）：盐/R 均为管理员浏览器客户端生成（决策 35）。 */
 const RESET_PASSWORD_SCHEMA = z.object({
-  password: z.string().min(8),
+  salt: z.string().regex(/^[A-Za-z0-9+/]{22}==$/, '凭据格式不正确'),
+  proof: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, '凭据格式不正确'),
 });
 
 /** 状态翻转、可选邮件账户联动和审计属于同一成员生命周期动作。 */
