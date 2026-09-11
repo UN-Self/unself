@@ -66,14 +66,16 @@ describe('InviteView 公开填表页（#18）', () => {
     await wrapper.find('input[name="email_prefix"]').setValue('zhangsan')
     await wrapper.find('input[name="personal_email"]').setValue('zhangsan@example.net')
     await wrapper.find('form').trigger('submit')
-    await flushPromises()
+    // pk1：提交路径里有 210k 次 PBKDF2（~80ms 原生异步），flushPromises 排不空——等它真完成
+    await vi.waitFor(() => expect(submitInvite).toHaveBeenCalled())
 
     expect(submitInvite).toHaveBeenCalledWith('tok-1', {
       displayName: '张三',
       emailPrefix: 'zhangsan',
       personalEmail: 'zhangsan@example.net',
       username: 'zhangsan',
-      password: 'password123',
+      salt: expect.stringMatching(/^[A-Za-z0-9+/]{22}==$/),
+      proof: expect.stringMatching(/^[A-Za-z0-9+/]{43}=$/),
     })
     expect(wrapper.text()).toContain('申请已提交，等待管理员审批')
     expect(wrapper.find('form').exists()).toBe(false)
@@ -127,7 +129,8 @@ describe('InviteView 公开填表页（#18）', () => {
     await wrapper.find('input[name="email_prefix"]').setValue('zhangsan')
     await wrapper.find('input[name="personal_email"]').setValue('zhangsan@example.net')
     await wrapper.find('form').trigger('submit')
-    await flushPromises()
+    // pk1：提交路径里有 210k 次 PBKDF2（~80ms 原生异步），flushPromises 排不空——等它真完成
+    await vi.waitFor(() => expect(submitInvite).toHaveBeenCalled())
 
     const button = wrapper.find('button[type="submit"]')
     expect(button.attributes('disabled')).toBeDefined()
@@ -327,6 +330,8 @@ describe('InviteView 内置注册字段（issue-A）', () => {
     await wrapper.find('input[name="email_prefix"]').setValue('zhangsan')
     await wrapper.find('input[name="personal_email"]').setValue('zhangsan@example.net')
     await wrapper.find('form').trigger('submit')
+    // pk1：等待客户端 PBKDF2 完成后再断言后端人话回显
+    await vi.waitFor(() => expect(submitInvite).toHaveBeenCalled())
     await flushPromises()
 
     expect(wrapper.text()).toContain('用户名已被占用')

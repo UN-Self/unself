@@ -18,7 +18,13 @@ import { getOidcConfig } from '../services/instance-config';
 import { consumeApprovedInviteByEmail } from '../services/invites';
 import { bindPendingNotifications } from '../services/notifications';
 import { pickDisplayName, pickEmail, pickNameOrNull, upsertUser } from '../services/users';
-import { verifyPassword } from '../services/passwords';
+import {
+  fakeSaltFor,
+  parseStoredCredential,
+  sha256,
+  toB64,
+  verifyClientProof,
+} from '../services/passwords';
 import type { Bindings } from '../index';
 
 /** 登录流程 Cookie：HttpOnly，10 分钟有效，仅 /api/auth 路径可见。 */
@@ -29,7 +35,13 @@ const FLOW_TTL_SECONDS = 600;
 const BUILTIN_USERNAME = z
   .string()
   .regex(/^[a-zA-Z0-9_-]{3,32}$/, '用户名需为 3-32 位字母/数字/_/-');
-const BUILTIN_PASSWORD = z.string().min(8);
+/** pk1：客户端送的是 R（32B 派生结果的 b64），密码本身不过网（决策 35）。 */
+const CLIENT_PROOF = z.string().regex(/^[A-Za-z0-9+/]{43}=$/, '登录凭据格式不正确');
+
+/** b64 解码（zod 已保证形状，这里只转字节）。 */
+function proofBytes(proofB64: string): Uint8Array {
+  return Uint8Array.from(atob(proofB64), (ch) => ch.charCodeAt(0));
+}
 
 /** 登录失败统一文案：404/401 同文案，不泄露哪个错（issue-A 任务书 B 条）。 */
 const LOGIN_FAILED = '用户名或密码错误';
@@ -43,7 +55,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
   app.post('/api/auth/login', async (c) => {
     const raw: unknown = await c.req.json().catch(() => null);
     const parsed = z
-      .object({ username: BUILTIN_USERNAME, password: BUILTIN_PASSWORD })
+      .object({ username: BUILTIN_USERNAME, proof: CLIENT_PROOF })
       .safeParse(raw ?? {});
     if (!parsed.success) {
       return c.json({ error: LOGIN_FAILED }, 400);
@@ -55,10 +67,15 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       )
       .bind(parsed.data.username)
       .first<{ id: string; display_name: string | null; status: string; password_hash: string }>();
+    // 无此用户：假盐派生路径照走一次 SHA256，文案/时序与真用户对齐（防枚举）
     if (!user) {
+      await verifyClientProof(
+        proofBytes(parsed.data.proof),
+        `unself-pk1$${await fakeSaltFor(parsed.data.username)}$${toB64(await sha256(proofBytes(parsed.data.proof)))}`,
+      );
       return c.json({ error: LOGIN_FAILED }, 404);
     }
-    if (!(await verifyPassword(parsed.data.password, user.password_hash))) {
+    if (!(await verifyClientProof(proofBytes(parsed.data.proof), user.password_hash))) {
       return c.json({ error: LOGIN_FAILED }, 401);
     }
     if (user.status === 'disabled') {
@@ -90,6 +107,28 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       .bind('oidc_issuer')
       .first<{ value: string }>();
     return c.json({ builtin: true, oidc: row !== null });
+  });
+
+  /**
+   * 取盐（pk1，决策 35）：客户端算 R 前必须拿到该用户的盐。
+   * 真用户回真盐；不存在的用户回用户名派生的确定性假盐——形状/时序完全一致，防枚举。
+   * 匿名可调（登录前）；滥用面 = O(1) 哈希，无速率限制（禁过度防御）。
+   */
+  app.get('/api/auth/salt', async (c) => {
+    const username = BUILTIN_USERNAME.safeParse(c.req.query('username'));
+    if (!username.success) {
+      return c.json({ error: '用户名需为 3-32 位字母/数字/_/-' }, 400);
+    }
+    const row = await c.env.CORE_DB.prepare(
+      'SELECT password_hash FROM builtin_credentials bc WHERE bc.username = ?',
+    )
+      .bind(username.data)
+      .first<{ password_hash: string }>();
+    const parsed = row ? parseStoredCredential(row.password_hash) : null;
+    return c.json(
+      { salt: parsed ? toB64(parsed.salt) : await fakeSaltFor(username.data) },
+      row ? 200 : 200,
+    );
   });
 
   /** 发起登录：302 到身份源授权页（整页跳转，壳里是一个按钮，§6.5）。 */

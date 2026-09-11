@@ -5,6 +5,7 @@ import { useRoute } from 'vue-router'
 import { MailCheck, Send, UserPlus } from 'lucide-vue-next'
 import { UButton, UCard, UErrorCard, UInput } from '@unself/ui'
 import { fetchInvite, submitInvite, type InviteApplication } from './lib/invite-api'
+import { generateSalt, deriveProof } from './lib/pk1'
 
 /**
  * 公开邀请填表页（#18，/invite/:token；无侧栏独立壳，不登登录；issue-A 内置注册含用户名+密码）：
@@ -23,7 +24,8 @@ const loadError = ref('')
 const submitting = ref(false)
 const submitError = ref('')
 
-const application = reactive<InviteApplication & { passwordConfirm?: string }>({
+/** 表单本地态：password 仅存在于浏览器内存，提交前派生成盐+R（pk1）。 */
+const application = reactive<InviteApplication & { password?: string; passwordConfirm?: string }>({
   displayName: '',
   emailPrefix: '',
   personalEmail: '',
@@ -78,12 +80,18 @@ async function onSubmit() {
   if (!validate()) return
   submitting.value = true
   try {
+    const username = application.username?.trim()
+    let credentials: { salt: string; proof: string } | undefined
+    if (username) {
+      const salt = generateSalt()
+      credentials = { salt, proof: await deriveProof(application.password ?? '', salt) }
+    }
     await submitInvite(token, {
       displayName: application.displayName.trim(),
       emailPrefix: application.emailPrefix.trim(),
       personalEmail: application.personalEmail.trim(),
-      username: application.username?.trim(),
-      password: application.password,
+      username,
+      ...credentials,
     })
     phase.value = 'submitted'
   } catch (err) {

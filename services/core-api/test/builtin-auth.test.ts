@@ -72,27 +72,67 @@ async function createInviteVia(app: TestApp, env: Env['env'], adminCookie: strin
   return inviteUrl.split('/invite/')[1]!;
 }
 
-/** 公开提交注册表单。 */
+/** 模拟客户端 pk1 派生（与 shell 同款算法）：R = PBKDF2(密码,盐,210k)；盐可选自定义。 */
+async function clientDerive(password: string, saltB64?: string): Promise<{ salt: string; proof: string }> {
+  const salt = saltB64 ?? b64(crypto.getRandomValues(new Uint8Array(16)));
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, [
+    'deriveBits',
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt: Uint8Array.from(atob(salt), (ch) => ch.charCodeAt(0)) as unknown as ArrayBuffer,
+      iterations: 210_000,
+    },
+    key,
+    256,
+  );
+  return { salt, proof: b64(new Uint8Array(bits)) };
+}
+
+function b64(bytes: Uint8Array): string {
+  let bin = '';
+  for (const byte of bytes) bin += String.fromCharCode(byte);
+  return btoa(bin);
+}
+
+/** 公开提交注册表单（pk1：内置注册带盐+R）。 */
 async function submit(app: TestApp, env: Env['env'], token: string, body: Record<string, unknown>): Promise<Response> {
+  const { salt, proof } = body.proof === undefined ? await clientDerive(String(body.password ?? 'password123')) : { salt: '', proof: '' };
+  const { password: _pw, ...rest } = body;
   return app.request(
     `https://team.example.com/api/invite/${token}`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ displayName: '新人', emailPrefix: 'u_new', personalEmail: 'new@personal.example', ...body }),
+      body: JSON.stringify({
+        displayName: '新人',
+        emailPrefix: 'u_new',
+        personalEmail: 'new@personal.example',
+        ...rest,
+        ...(body.proof === undefined && body.password !== undefined ? { salt, proof } : {}),
+      }),
     },
     env,
   );
 }
 
-/** 内置登录（不跟随 redirect）。 */
+/** 内置登录（pk1：先取盐再送 R；不跟随 redirect）。 */
 async function login(app: TestApp, env: Env['env'], username: string, password: string): Promise<Response> {
+  const saltRes = await app.request(
+    `https://team.example.com/api/auth/salt?username=${encodeURIComponent(username)}`,
+    { method: 'GET' },
+    env,
+  );
+  const { salt } = (await saltRes.json()) as { salt: string };
+  const { proof } = await clientDerive(password, salt);
   return app.request(
     'https://team.example.com/api/auth/login',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, proof }),
     },
     env,
   );
@@ -247,7 +287,16 @@ describe('内置身份（issue-A）', () => {
     expect(wrongBody).toBe(JSON.stringify({ error: '用户名或密码错误' }));
 
     // 格式非法（密码 < 8）同文案 400，不暴露是格式错
-    const badFormat = await login(app, env, 'frank', 'short');
+    // pk1：R 形状不对 → 400 同文案（zod 层拒）
+    const badFormat = await app.request(
+      'https://team.example.com/api/auth/login',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'frank', proof: 'short' }),
+      },
+      env,
+    );
     expect(badFormat.status).toBe(400);
     expect(JSON.stringify(await badFormat.json())).toBe(JSON.stringify({ error: '用户名或密码错误' }));
   });
@@ -261,7 +310,7 @@ describe('内置身份（issue-A）', () => {
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username: 'boss', password: 'password123' }),
+        body: JSON.stringify({ username: 'boss', ...(await clientDerive('password123')) }),
       },
       env,
     );
@@ -285,7 +334,7 @@ describe('内置身份（issue-A）', () => {
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username: 'other', password: 'password123' }),
+        body: JSON.stringify({ username: 'other', ...(await clientDerive('password123')) }),
       },
       env,
     );
@@ -312,7 +361,7 @@ describe('内置身份（issue-A）', () => {
       {
         method: 'POST',
         headers: { cookie: adminCookie, 'content-type': 'application/json' },
-        body: JSON.stringify({ password: 'new-password-9' }),
+        body: JSON.stringify(await clientDerive('new-password-9')),
       },
       env,
     );
@@ -328,7 +377,7 @@ describe('内置身份（issue-A）', () => {
       {
         method: 'POST',
         headers: { cookie: adminCookie, 'content-type': 'application/json' },
-        body: JSON.stringify({ password: 'new-password-9' }),
+        body: JSON.stringify(await clientDerive('new-password-9')),
       },
       env,
     );
@@ -341,7 +390,7 @@ describe('内置身份（issue-A）', () => {
       {
         method: 'POST',
         headers: { cookie: adminCookie, 'content-type': 'application/json' },
-        body: JSON.stringify({ password: 'new-password-9' }),
+        body: JSON.stringify(await clientDerive('new-password-9')),
       },
       env,
     );
