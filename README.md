@@ -15,8 +15,14 @@
 
 ## 快速开始
 
+```sh
+git clone https://github.com/UN-Self/unself.git && cd unself
+pnpm install
+node deploy/cloudflare/bin.ts   # 按提示：建 token（链接已预填权限）→ 选域名 → 等九步 → 浏览器设管理员
+```
+
 - **先看看**：demo 实例 [unself.handywote.top](https://unself.handywote.top)
-- **部署一个**：跟着 [docs/deploy.md](docs/deploy.md) 走，约 15 分钟，无需 Cloudflare 经验
+- **部署细节/失败自救/升级**：[docs/deploy.md](docs/deploy.md)
 - **来开发**：见下方「开发」与 docs/PRODUCT_SPEC.md
 
 ## 架构（极简）

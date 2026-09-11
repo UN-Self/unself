@@ -1,129 +1,56 @@
 # 部署指南
 
-> 目标读者：第一次部署 Unself 的团队管理员。全程不需要懂 Cloudflare、OIDC 或邮件协议——照着做就行。约 15 分钟。
->
-> **状态**：正文描述的交互式流程（token 深链接、域名三选、失败三要素）正随装配器交互化 issue 实现中；在该改动合并前，token 需按 deploy/cloudflare/README.md 的权限清单手动创建，其余步骤不变。
-
-## 你需要什么
-
-- 一台装了 Node.js ≥ 22 和 pnpm ≥ 11 的电脑（安装方式见 Node.js 官网）
-- 一个 Cloudflare 账户（免费即可，见文末「花多少钱」）
-- 可选：一个你自己的域名（DNS 托管在 Cloudflare）——没有就用 workers.dev 免费域名
-
-## 总览
-
-```
-① 拿 API Token（30 秒，权限已预选好，只点两下）
-② 跑装配器（3 分钟，问答式，一条命令）
-③ 打开设置链接，设第一个管理员（2 分钟）
-④ 生成邀请链接拉人（之后随时）
-```
-
-## 第一步：拿 Cloudflare API Token
+## 直接跑（复制粘贴，从上到下）
 
 ```sh
+# 前置：Node.js ≥ 22 和 pnpm ≥ 11（node -v 自查）
+
 git clone https://github.com/UN-Self/unself.git && cd unself
 pnpm install
+
+# ① 启动装配器：打印一个建 token 的链接 → 浏览器点两下 → token 粘回终端
 node deploy/cloudflare/bin.ts
+
+# ② 按提示选域名（回车 = workers.dev 免费域名）、确认模块（回车 = 默认）
+# ③ 等九步跑完，终端末尾打印 setup 链接
+
+# ④ 浏览器打开 setup 链接 → 设管理员用户名密码 → 登录工作台
 ```
 
-第一次运行会检测不到 token，装配器会打印一条**权限已预选好**的链接（不用你自己挑权限）：
+**完成。** 拉人：管理台 → 邀请 → 生成链接发给新人 → 新人填表 → 你批准 → 新人登录。
+想要团队邮箱：管理台 → 设置 → 邮件服务（可选，随时配，填了之后批准邀请会自动开邮箱并发激活邮件）。
 
-```
-未检测到 CLOUDFLARE_API_TOKEN。
-需要一个 Cloudflare API Token（权限已为你预选，只需点两次）：
-  ① 打开 https://dash.cloudflare.com/profile/api-tokens/create?<权限预填参数>
-  ② 起名（如 unself-deploy）→ Continue → Create Token → 复制
-  ③ 重跑：export CLOUDFLARE_API_TOKEN=<粘贴> && node deploy/cloudflare/bin.ts
-```
+## 失败了怎么办
 
-## 第二步：跑装配器
+| 现象 | 修复 |
+|---|---|
+| `10405`（权限不足） | 重跑 ① 重建 token（权限没勾全），再继续 |
+| DNS 报错 | 等 60 秒，重跑同一条命令 |
+| 其他任何失败 | 直接重跑 ①——幂等，不会重复建资源 |
 
-再次运行后进入三个轻松选择：
-
-```
-① 团队入口域名：
-   [1] workers.dev 免费域名（推荐起步，随时可换自有域）
-   [2] 自有域名（需 DNS 已托管在 Cloudflare）
-   → 1
-② 启用模块（逗号分隔，回车=全部）：
-   [hello] →
-
-──────────── 将装配 ────────────
-  域名   unself-<自动生成>.workers.dev
-  模块   hello        存储   R2 自动创建
-继续？[y/N] → y
-```
-
-然后九步自动执行，每步带编号；失败时输出会告诉你**原因、归属、怎么修**：
-
-```
-[5/9] 部署模块 hello…… ✗
-  原因：10405（Zone 路由权限不足）
-  归属：你的 token 缺 Zone 级权限
-  修复：用第一屏的深链接重建 token，然后重跑本命令
-```
-
-> **任何失败都直接重跑同一条命令**：装配器幂等，重跑只会补齐没完成的部分，不会重复创建资源。
-
-成功后收尾屏：
-
-```
-装配完成 ✓
-① 打开一次性设置链接：https://xxx.workers.dev/setup?token=…
-② 设置第一个管理员（默认：用户名+密码；也可接团队 OIDC）
-③ 登录 → 管理台 → 邀请 → 生成链接拉人
-④ 想要团队邮箱？设置 → 邮件服务（可选，随时配）
-```
-
-## 第三步：首次设置向导
-
-打开收尾屏里的一次性设置链接：
-
-- **默认形态（内置账号）**：设置第一个管理员的用户名和密码——不需要任何外部系统
-- **接团队已有的 OIDC**（可选，给有 SSO 的团队）：展开高级项，填 issuer / client_id / client_secret，先「测试连接」再激活
-
-激活后你以管理员身份进入工作台。
-
-## 第四步：拉人（入职闭环）
-
-1. 管理台 → **邀请** → 生成邀请链接（一次性，默认 7 天有效）→ 复制发给新人
-2. 新人打开链接填表（用户名+密码，或按实例形态）；提交后进入待审批
-3. 你批准（管理台邀请页，手机同页可批）→ 新人即可以自己的账号登录
-4. **邮件轴（可选）**：管理台 → 设置 → 邮件服务，填好 mail 段后「测试连接」。
-   填了 = 批准时自动开邮箱 + 激活邮件发新人个人邮箱；不填 = 纯身份实例，照常使用
-
-## 失败怎么救
-
-| 现象 | 归属 | 修复 |
-|---|---|---|
-| `10405`（路由权限不足） | token 缺 Zone 级权限 | 第一步的深链接重建 token |
-| DNS 解析未生效 | DNS 传播 | 等 60 秒重跑 |
-| `secret not found`（重跑部署） | 已有实例 | 按提示用 wrangler 注入，或继续（幂等补齐） |
-| 部署一半中断 | 网络/临时故障 | 直接重跑同一条命令 |
-
-## 升级实例
+## 升级已有实例
 
 ```sh
-git pull
-node deploy/cloudflare/bin.ts
+cd unself && git pull && node deploy/cloudflare/bin.ts
 ```
 
-装配器幂等收敛：新迁移自动应用、Worker 覆盖部署、注册表对齐。**数据原地保留**（升级纪律：迁移文件只增不改，见 PRODUCT_SPEC §5.5）。
+数据原地保留（迁移只增不改）。
 
 ## 备份
 
-- `core` 库（用户/权限/审计）+ `modules` 库按表导出 + R2 桶整体——官方提供导出脚本
-- 建议：每周导出一次放团队自己的存储
+core 库（用户/权限/审计）+ modules 库按表导出 + R2 桶整体；建议每周一次，放团队自己的存储。
 
 ## 花多少钱
 
-Cloudflare 免费套餐足够 10 人左右的团队：Workers 10 万请求/天、D1 5GB、R2 10GB 存储。超出后按量计费——**这正是 Unself 的形态哲学：用多少付多少**。
+Cloudflare 免费套餐足够 10 人左右的团队：Workers 10 万请求/天、D1 5GB、R2 10GB。邮件轴需要一台自己的邮件服务器（如 Stalwart，跑在任意 VPS 上）。
 
-邮件轴需要一台自己的邮件服务器（如 Stalwart，跑在任意 VPS 上）——这是自托管邮件的固有成本，也是完整实例和最小形态的分界。
+---
 
-## 相关文档
+## 附：每步在干什么（不用读，卡住了再看）
 
-- 设计真相：[docs/PRODUCT_SPEC.md](PRODUCT_SPEC.md)、[docs/requirements.md](requirements.md)
-- 装配器细节：[deploy/cloudflare/README.md](../deploy/cloudflare/README.md)
-- 开发：根 [README.md](../README.md)
+- **① 深链接**：Cloudflare 要求程序化部署用 API Token（wrangler login 的 OAuth 对 zone 路由授权不足）。链接已预填全部 5 项权限，起个名 → Continue → Create → 复制，粘回终端即可。token 只在本次进程内存里用，不落盘。
+- **② 域名**：workers.dev 免费域名即刻可用；自有域名需 DNS 已托管在 Cloudflare，装配器会自动补代理记录和证书。
+- **③ 九步**：建两个数据库（core/modules）→ 跑迁移 → 构建 Shell → 部署 core-api → 部署各模块 → 写模块注册表 → 建 R2 桶 → 生成一次性 setup token → 冒烟检查。幂等：任何时候重跑，只补没完成的部分。
+- **④ setup 链接**：一次性，设的第一个账号即管理员。默认内置账号（用户名+密码）；团队有 SSO 可在向导里展开接 OIDC。
+- **模块启停**：已部署模块在管理台秒级开关，免重部署；新增/移除模块改 `unself.config.jsonc` 后重跑装配器。
+- **装配器源码**：[deploy/cloudflare/README.md](../deploy/cloudflare/README.md)（九步明细、换钥流程、Docker 注记）。
