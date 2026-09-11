@@ -89,7 +89,7 @@ function buildUpdate(): Parameters<typeof saveSettings>[0] {
   if (baseUrl.value) mail.baseUrl = baseUrl.value
   if (domain.value) mail.domain = domain.value
   if (host.value) mail.host = host.value
-  if (port.value) mail.port = port.value
+  if (port.value) mail.port = Number(port.value)
   if (username.value) mail.username = username.value
   if (from.value) mail.from = from.value
   if (apiKey.value && apiKey.value !== SECRET_MASK) mail.apiKey = apiKey.value
@@ -193,7 +193,13 @@ async function onTestConnection(): Promise<void> {
           <p class="secret-hint">{{ apiKeyConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
           <UInput v-model="domain" label="邮箱域名" placeholder="example.com" />
           <UInput v-model="host" label="SMTP 主机" placeholder="mail.example.com" />
-          <UInput v-model="port" label="SMTP 端口" placeholder="465" />
+          <UInput
+            v-model="port"
+            label="SMTP 端口（纯数字，如 465）"
+            type="text"
+            inputmode="numeric"
+            placeholder="465"
+          />
           <UInput v-model="username" label="SMTP 用户名" />
           <UInput
             v-model="password"
