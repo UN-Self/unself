@@ -7,7 +7,7 @@
  * 鉴权边界与审批状态守卫。故意改坏任何一端业务（丢哈希、漏广播、误置状态）都会红。
  */
 import type { MailSender } from '@unself/mail-smtp';
-import { createFakeMailProvisioner } from '@unself/stalwart-provisioner';
+import { MailProvisionerError, createFakeMailProvisioner } from '@unself/stalwart-provisioner';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';
@@ -396,7 +396,8 @@ describe('邀请域 HTTP（#18）', () => {
   it('开户失败零成员落库（#114）：OIDC 路径无成员行、邀请保持 pending、响应含人话 detail', async () => {
     const provisioner = createFakeMailProvisioner();
     provisioner.createAccount = async () => {
-      throw new Error('JMAP 连接超时');
+      // #115 认证失败轴：HTTP 401/403 → 502 + 「检查 API Key」指引
+      throw new Error('Stalwart JMAP 请求失败：HTTP 401 Unauthorized');
     };
     const app = createApp({ createMailProvisioner: () => provisioner });
     const { env, db, adminCookie } = await envFor(true);
@@ -408,11 +409,11 @@ describe('邀请域 HTTP（#18）', () => {
       { method: 'POST', headers: { cookie: adminCookie } },
       env,
     );
-    expect(approved.status).toBe(500);
+    expect(approved.status).toBe(502);
     const body = (await approved.json()) as { error: string; detail: string };
     expect(body.error).toBe('invite approve failed');
     expect(body.detail).toContain('邮箱开户失败');
-    expect(body.detail).toContain('JMAP 连接超时');
+    expect(body.detail).toContain('检查 API Key');
     expect(body.detail).toContain('邀请保持待审批');
 
     // 零成员落库：开户失败时 users/builtin_credentials 均无新增行
@@ -442,6 +443,42 @@ describe('邀请域 HTTP（#18）', () => {
       status: 'approved',
     });
     expect(db.first<{ count: number }>("SELECT COUNT(*) AS count FROM users WHERE issuer = 'builtin'")?.count).toBe(0);
+  });
+
+  it('开户失败分类（#115）：ACCOUNT_NOT_FOUND → 409 人话指向 Stalwart 后台，#114 语义（零落库/pending）不回退', async () => {
+    const provisioner = createFakeMailProvisioner();
+    provisioner.createAccount = async () => {
+      throw new MailProvisionerError('ACCOUNT_NOT_FOUND', 'Stalwart 中找不到账户 u_new@example.com');
+    };
+    const app = createApp({ createMailProvisioner: () => provisioner });
+    const { env, db, adminCookie } = await envFor(true);
+    const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+    expect((await submitApplication(app, env, token)).status).toBe(200);
+
+    const approved = await app.request(
+      `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(approved.status).toBe(409);
+    const body = (await approved.json()) as { error: string; detail: string };
+    expect(body.error).toBe('invite approve failed');
+    expect(body.detail).toContain('Stalwart 中无此邮箱账号');
+    // approve 时工作邮箱域名还在 provisioner 配置里，detail 只能定位到邮箱前缀
+    expect(body.detail).toContain('（u_new）');
+
+    // #114 语义不回退：零成员落库、邀请保持 pending、无激活令牌与通知
+    expect(db.first<{ count: number }>("SELECT COUNT(*) AS count FROM users WHERE issuer = 'builtin'")?.count).toBe(0);
+    expect(db.first<{ count: number }>('SELECT COUNT(*) AS count FROM builtin_credentials')).toEqual({
+      count: 0,
+    });
+    expect(db.first('SELECT status FROM invites WHERE token_hash = ?', tokenHash)).toEqual({
+      status: 'pending',
+    });
+    expect(db.first<{ count: number }>('SELECT COUNT(*) AS count FROM invite_activations')).toEqual({
+      count: 0,
+    });
+    expect(db.query("SELECT id FROM notifications WHERE type IN ('account_ready', 'invite_result')")).toEqual([]);
   });
 
   it('开户失败零成员落库（#114）：内置注册路径不落 users/builtin_credentials，重批成功后落行', async () => {
@@ -480,7 +517,7 @@ describe('邀请域 HTTP（#18）', () => {
       { method: 'POST', headers: { cookie: adminCookie } },
       env,
     );
-    expect(approved.status).toBe(500);
+    expect(approved.status).toBe(502);
     const body = (await approved.json()) as { error: string; detail: string };
     expect(body.detail).toContain('邮箱开户失败');
     expect(body.detail).toContain('邀请保持待审批');
