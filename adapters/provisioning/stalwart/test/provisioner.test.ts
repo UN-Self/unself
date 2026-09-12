@@ -124,9 +124,10 @@ describe('postJmap（JMAP client）', () => {
 
 describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () => {
   it('createAccount happy path：x:Domain/query 拿 domainId → x:Account/set create（随机密码）→ 返回 email', async () => {
+    // 回显照真实 0.16.17：created.new1 = { id: 'd' }
     const { bodies } = stubFetch([
       ['x:Domain/query', { ids: ['dm1'] }, 'd'],
-      ['x:Account/set', { created: { new1: { id: 'acc1' } } }, 'c'],
+      ['x:Account/set', { created: { new1: { id: 'd' } } }, 'c'],
     ]);
     const provisioner = createStalwartMailProvisioner(config);
     await expect(
@@ -137,14 +138,21 @@ describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () =
     expect(bodies[0]).toMatchObject({ methodCalls: [['x:Domain/query', { filter: { name: 'example.com' } }, 'd']] });
     const create = (bodies[1] as { methodCalls: Array<[string, { create: Record<string, Record<string, unknown>> }]> })
       .methodCalls[0]![1].create['new1']!;
-    expect(create).toMatchObject({
+    // 行为验证：载荷与 0.16.17 实测可用形状逐字段一致——credentials 键控对象（数组被拒
+    // invalidPatch），aliases/memberGroupIds 传 {}（数组被拒 Invalid value for aliases）
+    expect(create).toEqual({
       '@type': 'User',
       name: 'wang',
       domainId: 'dm1',
+      credentials: { '1': { '@type': 'Password', secret: expect.any(String) } },
       roles: { '@type': 'User' },
+      permissions: { '@type': 'Inherit' },
+      aliases: {},
+      memberGroupIds: {},
+      quotas: {},
+      encryptionAtRest: { '@type': 'Disabled' },
     });
-    const secret = (create['credentials'] as Array<{ secret: string }>)[0]!.secret;
-    expect(secret).toHaveLength(24);
+    expect((create['credentials'] as { '1': { secret: string } })['1']!.secret).toHaveLength(24);
   });
 
   it('createAccount：域名不存在 → 人话错误，不建号', async () => {
@@ -173,20 +181,19 @@ describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () =
   });
 
   it('disableAccount：按 email 查到账户 → update 摘 authenticate 权限位', async () => {
-    const { bodies } = stubFetch([
+    // 0.16.17：query 的 name 过滤精确匹配，命中即用——不再发 x:Account/get（账号对象无 emails 字段）
+    const { bodies, fetchFn } = stubFetch([
       ['x:Account/query', { ids: ['acc9'] }, 'q'],
-      ['x:Account/get', { list: [{ id: 'acc9', emails: ['wang@example.com'] }] }, 'g'],
       ['x:Account/set', { updated: { acc9: null } }, 'u'],
     ]);
     const provisioner = createStalwartMailProvisioner(config);
     await expect(provisioner.disableAccount({ email: 'wang@example.com' })).resolves.toBeUndefined();
 
-    expect(bodies.length).toBe(2); // query+get 在同一请求（#ids 引用），update 单独一个
+    expect(bodies.length).toBe(2); // query 一个请求，update 单独一个
+    expect(fetchFn).toHaveBeenCalledTimes(2);
     const queryGet = bodies[0] as { methodCalls: Array<[string, Record<string, unknown>]> };
     const update = bodies[1] as { methodCalls: Array<[string, Record<string, unknown>]> };
-    expect(queryGet.methodCalls[0]![0]).toBe('x:Account/query');
-    expect(queryGet.methodCalls[0]![1]).toMatchObject({ filter: { name: 'wang' } });
-    expect(queryGet.methodCalls[1]![0]).toBe('x:Account/get');
+    expect(queryGet.methodCalls).toEqual([['x:Account/query', { filter: { name: 'wang' } }, 'q']]);
     const setArgs = update.methodCalls[0]![1] as { update: Record<string, Record<string, unknown>> };
     const patch = setArgs.update['acc9']!;
     expect(patch).toEqual({
@@ -201,7 +208,6 @@ describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () =
   it('enableAccount：update 恢复 Inherit', async () => {
     const { bodies } = stubFetch([
       ['x:Account/query', { ids: ['acc9'] }, 'q'],
-      ['x:Account/get', { list: [{ id: 'acc9', emails: ['wang@example.com'] }] }, 'g'],
       ['x:Account/set', { updated: { acc9: null } }, 'u'],
     ]);
     const provisioner = createStalwartMailProvisioner(config);
@@ -211,10 +217,11 @@ describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () =
     expect(setArgs.update['acc9']).toEqual({ permissions: { '@type': 'Inherit' } });
   });
 
-  it('resetPassword：update credentials 为新密码', async () => {
+  // 0.16.17 定案形状（issue #113）：update.credentials 用「随机新键 → Password」键控对象；
+  // 服务端按同 type 单凭据语义替换——凭据列表回到单条、credentialId 变更、旧密码 401。
+  it('resetPassword：credentials 随机新键键控对象（替换旧凭据）', async () => {
     const { bodies } = stubFetch([
       ['x:Account/query', { ids: ['acc9'] }, 'q'],
-      ['x:Account/get', { list: [{ id: 'acc9', emails: ['wang@example.com'] }] }, 'g'],
       ['x:Account/set', { updated: { acc9: null } }, 'u'],
     ]);
     const provisioner = createStalwartMailProvisioner(config);
@@ -223,14 +230,18 @@ describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () =
     ).resolves.toBeUndefined();
     const update = bodies[1] as { methodCalls: Array<[string, Record<string, unknown>]> };
     const setArgs = update.methodCalls[0]![1] as { update: Record<string, Record<string, unknown>> };
-    expect(setArgs.update['acc9']).toEqual({ credentials: [{ '@type': 'Password', secret: '新密码abc' }] });
+    const patch = setArgs.update['acc9']!;
+    expect(Object.keys(patch)).toEqual(['credentials']);
+    const credentials = patch['credentials'] as Record<string, { '@type': string; secret: string }>;
+    const keys = Object.keys(credentials);
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).not.toBe('1'); // 每次 reset 随机新键，不与建号键 '1' 撞
+    expect(credentials[keys[0]!]).toEqual({ '@type': 'Password', secret: '新密码abc' });
   });
 
-  it('查无此人 → ACCOUNT_NOT_FOUND', async () => {
-    stubFetch([
-      ['x:Account/query', { ids: [] }, 'q'],
-      ['x:Account/get', { list: [] }, 'g'],
-    ]);
+  // 0.16.17：query 精确匹配 0 命中 → 不再发 x:Account/get，直接 ACCOUNT_NOT_FOUND
+  it('查无此人（query 精确匹配 0 命中）→ ACCOUNT_NOT_FOUND，不发 x:Account/get', async () => {
+    const { fetchFn } = stubFetch([['x:Account/query', { ids: [] }, 'q']]);
     const provisioner = createStalwartMailProvisioner(config);
     await expect(provisioner.disableAccount({ email: 'ghost@example.com' })).rejects.toMatchObject({
       code: 'ACCOUNT_NOT_FOUND',
@@ -238,6 +249,7 @@ describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () =
     await expect(provisioner.resetPassword({ email: 'ghost@example.com', password: 'x' })).rejects.toBeInstanceOf(
       MailProvisionerError,
     );
+    expect(fetchFn).toHaveBeenCalledTimes(2); // 每次仅一个 query 请求
   });
 
   it('HTTP 401 → 抛错含状态（凭证无效）', async () => {
