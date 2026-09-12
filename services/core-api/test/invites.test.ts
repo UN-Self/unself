@@ -393,6 +393,205 @@ describe('邀请域 HTTP（#18）', () => {
     expect(db.query("SELECT id FROM notifications WHERE type = 'account_ready'")).toEqual([]);
   });
 
+  it('开户失败零成员落库（#114）：OIDC 路径无成员行、邀请保持 pending、响应含人话 detail', async () => {
+    const provisioner = createFakeMailProvisioner();
+    provisioner.createAccount = async () => {
+      throw new Error('JMAP 连接超时');
+    };
+    const app = createApp({ createMailProvisioner: () => provisioner });
+    const { env, db, adminCookie } = await envFor(true);
+    const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+    expect((await submitApplication(app, env, token)).status).toBe(200);
+
+    const approved = await app.request(
+      `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(approved.status).toBe(500);
+    const body = (await approved.json()) as { error: string; detail: string };
+    expect(body.error).toBe('invite approve failed');
+    expect(body.detail).toContain('邮箱开户失败');
+    expect(body.detail).toContain('JMAP 连接超时');
+    expect(body.detail).toContain('邀请保持待审批');
+
+    // 零成员落库：开户失败时 users/builtin_credentials 均无新增行
+    expect(db.first<{ count: number }>("SELECT COUNT(*) AS count FROM users WHERE issuer = 'builtin'")?.count).toBe(0);
+    expect(db.first<{ count: number }>('SELECT COUNT(*) AS count FROM builtin_credentials')).toEqual({
+      count: 0,
+    });
+    // 邀请保持 pending 可重批；无激活令牌、无任何通知与审计
+    expect(db.first('SELECT status FROM invites WHERE token_hash = ?', tokenHash)).toEqual({
+      status: 'pending',
+    });
+    expect(db.first<{ count: number }>('SELECT COUNT(*) AS count FROM invite_activations')).toEqual({
+      count: 0,
+    });
+    expect(db.query("SELECT id FROM notifications WHERE type IN ('account_ready', 'invite_result')")).toEqual([]);
+    expect(db.first<{ count: number }>("SELECT COUNT(*) AS count FROM audit_log WHERE action = 'invite_approved'")?.count).toBe(0);
+
+    // 重批时开户会再试一次：这次成功则正常走完（pending → approved）
+    provisioner.createAccount = createFakeMailProvisioner().createAccount;
+    const retried = await app.request(
+      `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(retried.status).toBe(200);
+    expect(db.first('SELECT status FROM invites WHERE token_hash = ?', tokenHash)).toEqual({
+      status: 'approved',
+    });
+    expect(db.first<{ count: number }>("SELECT COUNT(*) AS count FROM users WHERE issuer = 'builtin'")?.count).toBe(0);
+  });
+
+  it('开户失败零成员落库（#114）：内置注册路径不落 users/builtin_credentials，重批成功后落行', async () => {
+    const provisioner = createFakeMailProvisioner();
+    provisioner.createAccount = async () => {
+      throw new Error('Stalwart 请求失败');
+    };
+    const sent: SentMail[] = [];
+    const app = createApp({
+      createMailProvisioner: () => provisioner,
+      createMailSender: () => fakeSender(sent),
+    });
+    const { env, db, adminCookie } = await envFor(true);
+    const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+    // 内置注册：pk1 盐+R 形状任意字符串即可（本单不验协议，只验成员行与状态顺序）
+    const applied = await app.request(
+      `https://team.example.com/api/invite/${token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          displayName: '新人',
+          emailPrefix: 'u_new',
+          personalEmail: 'new@personal.example',
+          username: 'grace',
+          salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+          proof: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        }),
+      },
+      env,
+    );
+    expect(applied.status).toBe(200);
+
+    const approved = await app.request(
+      `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(approved.status).toBe(500);
+    const body = (await approved.json()) as { error: string; detail: string };
+    expect(body.detail).toContain('邮箱开户失败');
+    expect(body.detail).toContain('邀请保持待审批');
+
+    // 核心断言：开户失败时成员行零落库（旧顺序此处必然有行 = 可登录幽灵）
+    expect(db.first<{ count: number }>("SELECT COUNT(*) AS count FROM users WHERE issuer = 'builtin'")?.count).toBe(0);
+    expect(db.first<{ count: number }>('SELECT COUNT(*) AS count FROM builtin_credentials')).toEqual({
+      count: 0,
+    });
+    expect(db.first('SELECT status FROM invites WHERE token_hash = ?', tokenHash)).toEqual({
+      status: 'pending',
+    });
+    expect(sent).toEqual([]);
+
+    // 重批：开户成功后才落成员行，邀请 approved，登录链路可用
+    provisioner.createAccount = createFakeMailProvisioner().createAccount;
+    const retried = await app.request(
+      `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(retried.status).toBe(200);
+    expect(db.first<{ count: number }>("SELECT COUNT(*) AS count FROM users WHERE issuer = 'builtin'")?.count).toBe(1);
+    expect(db.first<{ username: string }>('SELECT username FROM builtin_credentials')?.username).toBe('grace');
+    expect(db.first('SELECT status FROM invites WHERE token_hash = ?', tokenHash)).toEqual({
+      status: 'approved',
+    });
+    expect(sent).toHaveLength(2);
+    expect(sent[0]!.subject).toContain('账号已开通');
+    expect(sent[1]!.subject).toContain('加入申请已通过');
+  });
+
+  it('内置路径用户名撞 UNIQUE（#114 重排后发生在开户之后）：409 + detail 提示 Stalwart 已预创建', async () => {
+    const provisioner = createFakeMailProvisioner();
+    const app = createApp({ createMailProvisioner: () => provisioner });
+    const { env, db, adminCookie } = await envFor(true);
+
+    // 先落一个同名内置用户（模拟已批准的另一申请）
+    const first = await createInviteVia(app, env, adminCookie);
+    expect(
+      (
+        await app.request(
+          `https://team.example.com/api/invite/${first.token}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              displayName: '先来者',
+              emailPrefix: 'u_first',
+              personalEmail: 'first@personal.example',
+              username: 'heidi',
+              salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+              proof: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+            }),
+          },
+          env,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.request(
+          `https://team.example.com/api/admin/invites/${first.tokenHash}/approve`,
+          { method: 'POST', headers: { cookie: adminCookie } },
+          env,
+        )
+      ).status,
+    ).toBe(200);
+
+    // 绕开软闸制造同名第二申请（同 builtin-auth.test 的 TOCTOU 窗口手法：
+    // 提交时用不重名，随后在库内改名为 heidi，模拟并发窗口下的双 pending 同名）
+    const second = await createInviteVia(app, env, adminCookie);
+    expect(
+      (
+        await app.request(
+          `https://team.example.com/api/invite/${second.token}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              displayName: '新人',
+              emailPrefix: 'u_new',
+              personalEmail: 'new@personal.example',
+              username: 'voldemort',
+              salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+              proof: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+            }),
+          },
+          env,
+        )
+      ).status,
+    ).toBe(200);
+    db.run('UPDATE invite_credentials SET username = ? WHERE username = ?', 'heidi', 'voldemort');
+
+    const approved = await app.request(
+      `https://team.example.com/api/admin/invites/${second.tokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(approved.status).toBe(409);
+    const body = (await approved.json()) as { error: string; detail: string };
+    expect(body.detail).toContain('已被占用');
+    expect(body.detail).toContain('邮箱账号已预创建');
+    // 重排后硬闸发生在开户之后：Stalwart 已建号（u_new@example.com）
+    expect(provisioner.accounts.has('u_new@example.com')).toBe(true);
+    // 邀请仍 pending，本单不做回滚
+    expect(db.first('SELECT status FROM invites WHERE token_hash = ?', second.tokenHash)).toEqual({
+      status: 'pending',
+    });
+  });
+
   it('过期邀请：公开读取/提交 410，惰性置 expired，审批 409', async () => {
     const app = createApp();
     const { env, db, adminCookie } = await envFor();
