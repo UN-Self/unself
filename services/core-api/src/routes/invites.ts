@@ -6,7 +6,7 @@
  *
  * 口径：
  * - 库里只有令牌 SHA-256（one-time-token.ts），明文只出现在生成响应的 URL 里；
- * - 批准 = 完整实例先 Stalwart 开户，再置 approved 并签一次性激活链接发个人邮箱；
+ * - 批准 = 完整实例先 Stalwart 开户，成功后才落成员行（#114），再置 approved 并签一次性激活链接发个人邮箱；
  *   弱化实例（无 mail 段）跳过开户，只置 approved，首登 JIT 按个人邮箱消费邀请（#49）；
  * - 邮箱前缀被占用属可恢复冲突：邀请保持 pending，人话提示拒绝后重新邀请（M1 不改前缀）；
  * - 每个管理员动作落 audit（invite_created / invite_approved / invite_rejected）。
@@ -217,8 +217,10 @@ async function requirePendingInvite(
 }
 
 /**
- * 批准：先看内置注册凭证（issue-A）——有则内置开户路径，无则 OIDC JIT 路径。
- * 邮件轴（provisioner/激活邮件）两条路径共用，行为不变。
+ * 批准（#114 顺序）：完整实例先开户（provisioner.createAccount），成功后才落成员行
+ * （内置注册建 users+builtin_credentials；OIDC JIT 路径无行可落），再置 approved、
+ * 最后签激活链接发通知。开户失败零成员落库、邀请保持 pending（可重批），杜绝
+ * 旧顺序「先落行后开户」失败留下的可登录幽灵成员；ACCOUNT_EXISTS 属可恢复冲突照旧 409。
  */
 async function approveInvite(
   c: Context<{ Bindings: Bindings }>,
@@ -233,9 +235,55 @@ async function approveInvite(
   }
   const sender = await configuredMailSender(db, dependencies.createMailSender);
 
-  // 内置注册路径（issue-A 决策 28/30）：硬闸靠 builtin_credentials.username UNIQUE 约束，
-  // 撞名走可恢复冲突：invite 留 pending + 人话，拒绝后让新人换名重提。
+  // OIDC JIT 路径：未填表（无邮箱前缀）无法批准（内置路径没有邮箱前缀字段，不适用）
   const creds = await getInviteCredentials(db, id);
+  if (!creds && invite.email_prefix.length === 0) {
+    return c.json(
+      { error: 'invite not filled', detail: '该申请尚未填写完成（缺少邮箱前缀），无法批准' },
+      409,
+    );
+  }
+
+  // 邮件轴开户（完整实例）：#114 起先开户后落成员行——旧顺序先插 users/builtin_credentials
+  // 再开户，开户失败留下「可登录幽灵成员」且重批必撞 UNIQUE 409；新顺序失败零落库、
+  // 邀请保持 pending 可重批。内置路径也照旧开户发激活邮件（登录密码归登录、邮箱密码归激活，两码两用途）。
+  const provisioner = await configuredMailProvisioner(db, dependencies.createMailProvisioner);
+  let workEmail: string | null = null;
+  if (provisioner) {
+    try {
+      const account = await provisioner.createAccount({
+        emailPrefix: invite.email_prefix,
+        displayName: invite.display_name,
+      });
+      workEmail = account.email;
+    } catch (error) {
+      if (error instanceof MailProvisionerError && error.code === 'ACCOUNT_EXISTS') {
+        // 可恢复冲突：邀请留在 pending，重批时开户会再试一次；拒绝后重新邀请（M1 不支持改前缀）。
+        // 成员行尚未落库：不存在「用户已建但邮箱待补」的半完成态。
+        return c.json(
+          {
+            error: 'invite approve failed',
+            detail: `邮箱前缀「${invite.email_prefix}」已被占用，邀请保持待审批；请拒绝后重新邀请（M1 不支持改前缀）`,
+          },
+          409,
+        );
+      }
+      // 开户失败（#114）：成员行尚未落库 → 零成员落库、邀请保持 pending 可重批。
+      // 本单先给人话 detail；按错误轴精修状态码是 #115 的事，不越界。
+      const reason = error instanceof Error ? error.message : String(error);
+      return c.json(
+        {
+          error: 'invite approve failed',
+          detail: `邮箱开户失败：${reason}，邀请保持待审批，可稍后重试批准`,
+        },
+        500,
+      );
+    }
+  }
+
+  // 开户成功（或弱化实例无开户）才落成员行。内置注册路径（issue-A 决策 28/30）：
+  // 硬闸靠 builtin_credentials.username UNIQUE 约束，撞名走可恢复冲突：invite 留 pending + 人话。
+  // 与旧顺序不同，此刻 Stalwart 已建号：409 文案补一句预创建说明，不做回滚。
   if (creds) {
     const userId = `u_${crypto.randomUUID().replace(/-/g, '')}`;
     try {
@@ -254,39 +302,7 @@ async function approveInvite(
         return c.json(
           {
             error: 'invite approve failed',
-            detail: `用户名「${creds.username}」已被占用，邀请保持待审批；请拒绝后让新人换一个用户名重新提交`,
-          },
-          409,
-        );
-      }
-      throw error;
-    }
-  } else if (invite.email_prefix.length === 0) {
-    // OIDC JIT 路径：未填表（无邮箱前缀）无法批准（内置路径没有邮箱前缀字段，不适用）
-    return c.json(
-      { error: 'invite not filled', detail: '该申请尚未填写完成（缺少邮箱前缀），无法批准' },
-      409,
-    );
-  }
-
-  // 邮件轴开户（完整实例）：内置路径也照旧开户发激活邮件（登录密码归登录、邮箱密码归激活，两码两用途）
-  const provisioner = await configuredMailProvisioner(db, dependencies.createMailProvisioner);
-  let workEmail: string | null = null;
-  if (provisioner) {
-    try {
-      const account = await provisioner.createAccount({
-        emailPrefix: invite.email_prefix,
-        displayName: invite.display_name,
-      });
-      workEmail = account.email;
-    } catch (error) {
-      if (error instanceof MailProvisionerError && error.code === 'ACCOUNT_EXISTS') {
-        // 可恢复冲突：邀请留在 pending，管理员拒绝后重新邀请（M1 不支持改前缀）。
-        // 内置路径用户行已建：不回滚（用户存在但邮箱待补，invite 留 pending 可重批）。
-        return c.json(
-          {
-            error: 'invite approve failed',
-            detail: `邮箱前缀「${invite.email_prefix}」已被占用，邀请保持待审批；请拒绝后重新邀请（M1 不支持改前缀）`,
+            detail: `用户名「${creds.username}」已被占用，邀请保持待审批；请拒绝后让新人换一个用户名重新提交（邮箱账号已预创建，拒绝本邀请后请管理员在 Stalwart 删除或改用该用户名）`,
           },
           409,
         );
