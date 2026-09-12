@@ -3,6 +3,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 
 import { audit } from '../services/audit';
+import { classifyProvisionerFailure } from '../services/provisioner-errors';
 import { buildStoredCredential } from '../services/passwords';
 import {
   configuredMailProvisioner,
@@ -87,10 +88,18 @@ async function updateMemberStatus(
   if (member.email) {
     const provisioner = await configuredMailProvisioner(c.env.CORE_DB, createMailProvisioner);
     if (provisioner) {
-      if (status === 'disabled') {
-        await provisioner.disableAccount({ email: member.email });
-      } else {
-        await provisioner.enableAccount({ email: member.email });
+      // 邮件轴联动失败不再裸 500（#115）：按错误轴映射——ACCOUNT_NOT_FOUND→409（Stalwart 后台核对）、
+      // 认证失败（HTTP 401/403）→502+API Key 指引、其它→502 透传原因。成员状态翻转已落库，不回滚：
+      // 修好 Stalwart 后反向 enable/disable 或后台手工对齐即可。
+      try {
+        if (status === 'disabled') {
+          await provisioner.disableAccount({ email: member.email });
+        } else {
+          await provisioner.enableAccount({ email: member.email });
+        }
+      } catch (error) {
+        const failure = classifyProvisionerFailure(error, member.email);
+        return c.json({ error: 'member sync failed', detail: failure.detail }, failure.status);
       }
     }
   }

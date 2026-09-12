@@ -18,6 +18,7 @@ import { z } from 'zod';
 
 import type { Bindings, CoreApiDependencies } from '../index';
 import { generateOneTimeToken, hashOneTimeToken } from '../one-time-token';
+import { classifyProvisionerFailure, genericFailureDetail } from '../services/provisioner-errors';
 import { audit } from '../services/audit';
 import { issueInviteActivation } from '../services/invite-activations';
 import {
@@ -268,15 +269,16 @@ async function approveInvite(
           409,
         );
       }
-      // 开户失败（#114）：成员行尚未落库 → 零成员落库、邀请保持 pending 可重批。
-      // 本单先给人话 detail；按错误轴精修状态码是 #115 的事，不越界。
-      const reason = error instanceof Error ? error.message : String(error);
+      // 开户失败（#114 零落库/pending 不变；#115 状态码按错误轴精修）：
+      // ACCOUNT_NOT_FOUND→409（人话指向 Stalwart 后台）、认证失败（HTTP 401/403）→502+API Key 指引、
+      // 其它→502 透传原因；detail 均保 #114 的「邮箱开户失败：…，邀请保持待审批」人话外壳。
+      const failure = classifyProvisionerFailure(error, invite.email_prefix);
       return c.json(
         {
           error: 'invite approve failed',
-          detail: `邮箱开户失败：${reason}，邀请保持待审批，可稍后重试批准`,
+          detail: failure.status === 502 ? genericFailureDetail(failure.detail) : failure.detail,
         },
-        500,
+        failure.status,
       );
     }
   }
