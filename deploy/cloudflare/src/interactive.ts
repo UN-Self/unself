@@ -6,6 +6,7 @@
  * 优先级铁律：CLI > 交互 > 配置文件；非 TTY 无参数 = 静默走配置（CI 安全）。
  */
 import { createInterface } from 'node:readline/promises';
+import { PassThrough } from 'node:stream';
 
 /** CLI 参数（bin.ts 传入 process.argv.slice(2)）。 */
 export interface CliArgs {
@@ -61,6 +62,23 @@ export function resolveDomainChoice(input: {
   return interactive().then((d) => ({ domain: d, source: 'interactive' }));
 }
 
+/**
+ * 域名形态体检（#119③）：返回 null = 合法；否则给一句能直接照做的人话描述。
+ * 规则：至少含一个点；每段为字母/数字/连字符，连字符不开头不结尾，不许有空段。
+ */
+export function domainProblem(domain: string): string | null {
+  const d = domain.trim();
+  if (!d) return '域名为空';
+  if (!d.includes('.')) return `「${d}」不像完整域名：至少要带一个点（如 team.example.com），裸名字没法配 DNS`;
+  for (const label of d.split('.')) {
+    if (label === '') return '域名里有连续的点（空段）';
+    if (!/^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)) {
+      return `「${label}」这段不合法：每段只能用字母、数字、连字符（-），且连字符不能开头或结尾`;
+    }
+  }
+  return null;
+}
+
 /** 域名三选交互（注入 ask/out；返回 null = workers.dev）。文案对齐 docs/deploy.md 第二步。 */
 export async function chooseDomain(io: { ask: (q: string) => Promise<string>; out: (line: string) => void }): Promise<string | null> {
   const { ask, out } = io;
@@ -73,8 +91,16 @@ export async function chooseDomain(io: { ask: (q: string) => Promise<string>; ou
     if (raw === '2') {
       for (let t = 0; t < 2; t++) {
         const domain = (await ask('  输入域名（如 team.example.com）→ ')).trim();
-        if (domain) return domain;
-        out('  域名不能为空。');
+        if (!domain) {
+          out('  域名不能为空。');
+          continue;
+        }
+        const problem = domainProblem(domain);
+        if (problem) {
+          out(`  ${problem}，请重输。`);
+          continue;
+        }
+        return domain;
       }
       return null;
     }
@@ -147,6 +173,7 @@ export function buildTokenFirstScreen(input: { deepLink: string | null; permissi
   lines.push('  ② 起名（如 unself-deploy）→ Continue → Create Token → 复制');
   lines.push('  ③ 重跑：export CLOUDFLARE_API_TOKEN=<粘贴> && node deploy/cloudflare/bin.ts');
   lines.push(tty ? '或直接把 token 粘贴到下面回车继续（只留在本次进程内存，不落盘）：' : '非交互终端无法粘贴 token：请先 export CLOUDFLARE_API_TOKEN=... 后重跑。');
+  if (tty) lines.push('也可先 export CLOUDFLARE_API_TOKEN 再重跑（之后不用每次粘贴），粘贴仅本次有效。');
   return lines;
 }
 
@@ -157,22 +184,47 @@ export function buildTokenFirstScreen(input: { deepLink: string | null; permissi
  * 键位处理），空闲后恢复提问会先吃掉一行甚至触发 pty EOF（真机实测）。故监听 'line'
  * 自建队列——先到的行排队，提问按序消费，宏任务间隙（如读配置文件）不再丢行。
  * EOF（Ctrl+D）或关闭后提问 → 返回空串，调用方走默认/退出分支。
+ *
+ * 回显卫生（#119②）：terminal:false 时 readline 自身不回显（逐字回显来自内核行规程），
+ * 但提问间隙（读配置等宏任务空窗）到达的整行会在终端上留下一行残影，后续输出接在残影
+ * 之后——即 #22 走查实录的「菜单回显残留」。处置：
+ * ① readline 的 output 指向哑 sink：它的输出只发生在提问收尾/close（真机下尾写列归零
+ *    + 清行转义），指哑后彻底不写屏，提示语由本包 ask 自行输出，视觉完全可控；
+ * ② 空闲期入队的行（非 pending question）在 TTY→TTY 链路上补一次「上移 + 列归零 + 清行」
+ *    （\x1b[1A\r\x1b[0K）把内核回显残影擦掉；提问期间的正常键入不擦，用户仍看得到自己刚输的内容。
  */
 export interface Asker {
   ask: (q: string) => Promise<string>;
   close: () => void;
 }
 
-export function createAsker(): Asker {
-  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+/** 流注入点（测试用 PassThrough 仿 stdin/stdout；缺省 = 真实终端）。 */
+export interface AskerStreams {
+  input?: NodeJS.ReadableStream;
+  output?: NodeJS.WritableStream;
+}
+
+export function createAsker(streams: AskerStreams = {}): Asker {
+  const input = streams.input ?? process.stdin;
+  const output = streams.output ?? process.stdout;
+  const inTty = (input as NodeJS.ReadableStream & { isTTY?: boolean }).isTTY === true;
+  const outTty = (output as NodeJS.WritableStream & { isTTY?: boolean }).isTTY === true;
+  const rl = createInterface({ input, output: new PassThrough(), terminal: false });
   const queue: string[] = [];
   const waiters: Array<(v: string) => void> = [];
   let closed = false;
+  const eraseGhostLine = () => {
+    if (inTty && outTty) output.write('\x1b[1A\r\x1b[0K');
+  };
   rl.on('line', (line: string) => {
     const v = line.replace(/\r$/, '');
     const waiter = waiters.shift();
-    if (waiter) waiter(v);
-    else queue.push(v);
+    if (waiter) {
+      waiter(v);
+    } else {
+      eraseGhostLine(); // 间隙到达的行已被内核回显：擦掉残影再入队
+      queue.push(v);
+    }
   });
   rl.on('close', () => {
     closed = true;
@@ -180,7 +232,7 @@ export function createAsker(): Asker {
   });
   return {
     ask: (q) => {
-      process.stdout.write(q);
+      output.write(q);
       const queued = queue.shift();
       if (queued !== undefined) return Promise.resolve(queued);
       if (closed) return Promise.resolve('');
