@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
+import { PassThrough } from 'node:stream';
 import {
   buildTokenDeepLink,
   buildTokenFirstScreen,
   chooseDomain,
+  createAsker,
+  domainProblem,
   parseCliArgs,
   parseModulesInput,
   pickTokenDecision,
@@ -96,6 +99,17 @@ describe('chooseDomain（域名三选交互）', () => {
     const { io } = fakeIo(['2', '', ' team.example.com ']);
     expect(await chooseDomain(io)).toBe('team.example.com');
   });
+  it('选 2 裸名（无点）被拒并重问，第二次合法输入被采纳（#119③）', async () => {
+    const { io, out } = fakeIo(['2', 'myteam', 'myteam.example.com']);
+    expect(await chooseDomain(io)).toBe('myteam.example.com');
+    const hint = out.find((l) => l.includes('myteam'));
+    expect(hint).toBeDefined();
+    expect(hint).toContain('请重输');
+  });
+  it('选 2 两次都非法 → 放弃自有域回退 workers.dev（null）', async () => {
+    const { io } = fakeIo(['2', 'myteam', 'bad..name']);
+    expect(await chooseDomain(io)).toBeNull();
+  });
   it('非法输入重问后默认 1', async () => {
     const { io } = fakeIo(['9', '']);
     expect(await chooseDomain(io)).toBeNull();
@@ -105,6 +119,63 @@ describe('chooseDomain（域名三选交互）', () => {
     await chooseDomain(io);
     expect(out.some((l) => l.includes('[1] workers.dev 免费域名'))).toBe(true);
     expect(out.some((l) => l.includes('[2] 自有域名'))).toBe(true);
+  });
+});
+
+describe('domainProblem（域名形态体检，#119③）', () => {
+  it('合法域名（多级、连字符段）→ null', () => {
+    expect(domainProblem('team.example.com')).toBeNull();
+    expect(domainProblem('my-team.corp.example.cn')).toBeNull();
+  });
+  it('裸名（无点）→ 人话提示且复述输入', () => {
+    const p = domainProblem('myteam');
+    expect(p).toContain('myteam');
+    expect(p).toContain('点');
+  });
+  it('空段（连续点）→ 拒绝', () => {
+    expect(domainProblem('a..b')).not.toBeNull();
+  });
+  it('非法字符/连字符开头结尾 → 拒绝', () => {
+    expect(domainProblem('a b.example.com')).not.toBeNull();
+    expect(domainProblem('-a.example.com')).not.toBeNull();
+    expect(domainProblem('a-.example.com')).not.toBeNull();
+  });
+});
+
+describe('createAsker（回显卫生，#119②）', () => {
+  it('提问间隙到达的行交付时擦一次终端行（TTY→TTY）；正常应答不擦', async () => {
+    const input = Object.assign(new PassThrough(), { isTTY: true });
+    const output = Object.assign(new PassThrough(), { isTTY: true });
+    const written: string[] = [];
+    output.on('data', (c: Buffer) => written.push(c.toString()));
+    const asker = createAsker({ input, output });
+
+    // 提问期间正常应答：逐键回显是内核行规程的事，本包不写擦除控制
+    const p1 = asker.ask('→ [1] ');
+    input.write('2\n');
+    expect(await p1).toBe('2');
+    expect(written.join('')).not.toContain('\x1b[1A');
+
+    // 间隙到达（模拟提问期间读配置文件）：入队时擦一次，交付不重放
+    input.write('team.example.com\n');
+    await new Promise((r) => setImmediate(r));
+    expect(written.join('')).toContain('\x1b[1A\r\x1b[0K');
+    expect(await asker.ask('  域名 → ')).toBe('team.example.com');
+    expect(written.join('').split('\x1b[1A').length).toBe(2); // 只擦一次
+    asker.close();
+  });
+
+  it('非 TTY（管道）不掺控制符', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const written: string[] = [];
+    output.on('data', (c: Buffer) => written.push(c.toString()));
+    const asker = createAsker({ input, output });
+    input.write('piped.example\n');
+    await new Promise((r) => setImmediate(r));
+    expect(await asker.ask('→ ')).toBe('piped.example');
+    expect(written.join('')).not.toContain('\x1b');
+    asker.close();
   });
 });
 
@@ -168,5 +239,16 @@ describe('buildTokenFirstScreen（第一屏文案）', () => {
     const text = lines.join('\n');
     expect(text).toContain('非交互终端');
     expect(text).toContain('export CLOUDFLARE_API_TOKEN=');
+  });
+
+  it('TTY：提示可 export 后重跑、粘贴仅本次有效（#119①）', () => {
+    const lines = buildTokenFirstScreen({ deepLink: 'https://dash.example/x', permissionTable: TOKEN_PERMISSION_TABLE, tty: true });
+    const text = lines.join('\n');
+    expect(text).toContain('export CLOUDFLARE_API_TOKEN 再重跑');
+    expect(text).toContain('粘贴仅本次有效');
+  });
+  it('非 TTY 不出现「粘贴仅本次有效」提示（那是给能粘贴的人看的）', () => {
+    const lines = buildTokenFirstScreen({ deepLink: 'https://dash.example/x', permissionTable: TOKEN_PERMISSION_TABLE, tty: false });
+    expect(lines.join('\n')).not.toContain('粘贴仅本次有效');
   });
 });
