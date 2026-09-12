@@ -90,6 +90,20 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   registerAuditRoutes(app);
   registerSettingsRoutes(app);
 
+  /**
+   * API 前缀未命中 → JSON 404（#116）：§6.5 错误口径——API 层一律 JSON，
+   * 不留 Hono 默认的 text/plain "404 Not Found"。SPA 前端路由由 wrangler
+   * assets 兕底，不在本 app 的接管范围，其余路径不挂 notFound。
+   * `c.json` 构造的响应头部完整（x-request-id 由全局中间件回写保留）。
+   */
+  app.notFound((c) => {
+    const path = new URL(c.req.url).pathname;
+    if (path.startsWith('/api/') || path === '/api' || path.startsWith('/.well-known/')) {
+      return c.json({ error: 'not found' }, 404);
+    }
+    return c.text('404 Not Found', 404);
+  });
+
   return app;
 }
 
