@@ -55,3 +55,19 @@ export async function consumeInviteActivation(
     .bind(tokenHash)
     .first<{ email: string }>();
 }
+
+export interface InviteActivationRecord {
+  token_hash: string;
+  invite_token_hash: string;
+  email: string;
+  expires_at: string;
+  used_at: string | null;
+}
+
+export async function findInviteActivationForInvite(db: D1Database, inviteTokenHash: string): Promise<InviteActivationRecord | null> {
+  return db.prepare('SELECT token_hash, invite_token_hash, email, expires_at, used_at, used_at FROM invite_activations WHERE invite_token_hash = ? ORDER BY rowid DESC LIMIT 1').bind(inviteTokenHash).first<InviteActivationRecord>();
+}
+
+export async function invalidateInviteActivation(db: D1Database, tokenHash: string): Promise<void> {
+  await db.prepare("UPDATE invite_activations SET used_at = datetime('now') WHERE token_hash = ?").bind(tokenHash).run();
+}

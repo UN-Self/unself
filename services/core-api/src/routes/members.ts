@@ -3,7 +3,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 
 import { audit } from '../services/audit';
-import { classifyProvisionerFailure } from '../services/provisioner-errors';
+import { classifyProvisionerFailure, genericFailureDetail } from '../services/provisioner-errors';
 import { buildStoredCredential } from '../services/passwords';
 import {
   configuredMailProvisioner,
@@ -13,12 +13,15 @@ import {
   type MemberStatus,
 } from '../services/members';
 import { readSession } from '../session';
+import { findInviteActivationForInvite, invalidateInviteActivation, issueInviteActivation } from '../services/invite-activations';
+import { configuredMailSender, deliverNotification, type CreateMailSender } from '../services/notifications';
 import type { Bindings } from '../index';
 
 /** 挂载管理端成员域（/api/admin/members）。 */
 export function registerMemberRoutes(
   app: Hono<{ Bindings: Bindings }>,
   createMailProvisioner: CreateMailProvisioner | undefined,
+  createMailSender?: CreateMailSender,
 ): void {
   /** 成员全量列表；邮箱是否存在由前端结合实例形态显示状态。 */
   app.get('/api/admin/members', async (c) => c.json(await listMembers(c.env.CORE_DB)));
@@ -58,6 +61,23 @@ export function registerMemberRoutes(
       .bind(await buildStoredCredential(body.data.salt, body.data.proof), memberId)
       .run();
     await audit(db, (await readSession(c))!.uid, 'member_password_reset', memberId);
+    return c.json({ ok: true });
+  });
+  app.post('/api/admin/members/:id/resend-activation', async (c) => {
+    const db = c.env.CORE_DB;
+    const memberId = c.req.param('id');
+    const member = await db.prepare('SELECT id, issuer, status, personal_email FROM users WHERE id = ?').bind(memberId).first<{ id: string; issuer: string; status: string; personal_email: string | null }>();
+    if (!member || member.issuer !== 'builtin') return c.json({ error: 'member not found' }, 404);
+    if (member.status !== 'active') return c.json({ error: 'resend activation failed', detail: '该成员当前不是 active 状态' }, 409);
+    const invite = await db.prepare("SELECT token_hash, personal_email FROM invites WHERE status = 'approved' AND lower(personal_email) = lower(?) LIMIT 1").bind(member.personal_email ?? '').first<{ token_hash: string; personal_email: string }>();
+    if (!invite) return c.json({ error: 'resend activation failed', detail: '该成员关联的邀请未获批准' }, 409);
+    const activation = await findInviteActivationForInvite(db, invite.token_hash);
+    if (!activation || activation.used_at !== null) return c.json({ error: 'resend activation failed', detail: '该成员无待激活邮箱账号' }, 409);
+    await invalidateInviteActivation(db, activation.token_hash);
+    const token = await issueInviteActivation(db, invite.token_hash, activation.email);
+    const result = await deliverNotification(db, await configuredMailSender(db, createMailSender), 'account_ready', { email: activation.email, activateUrl: new URL(c.req.url).origin + '/activate/' + token }, { invitedEmail: invite.personal_email });
+    if (result?.email === 'failed') return c.json({ error: 'resend activation failed', detail: genericFailureDetail('激活邮件发送失败，请检查邮件 API Key 配置') }, 502);
+    await audit(db, (await readSession(c))!.uid, 'activation_resent', memberId);
     return c.json({ ok: true });
   });
 }

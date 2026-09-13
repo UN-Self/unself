@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { Ban, CircleCheck, KeyRound } from 'lucide-vue-next'
+import { Ban, CircleCheck, KeyRound, Mail } from 'lucide-vue-next'
 
 import { UButton, UErrorCard, USkeleton } from '@unself/ui'
 
 import { resetMemberPassword } from '../lib/builtin-auth-api'
-import { fetchMembers, setMemberStatus, type AdminMember, type ApiError } from '../lib/admin-api'
+import { fetchMembers, resendMemberActivation, setMemberStatus, type AdminMember, type ApiError } from '../lib/admin-api'
 
 /**
  * 管理台成员页（#17 + issue-A）：全量列表 + 停用/启用 + 内置用户重置密码。
@@ -56,6 +56,11 @@ async function onToggle(member: AdminMember): Promise<void> {
  * 重置内置登录密码（issue-A，决策 29）：管理员手动设新密码（无邮件实例唯一恢复路径）。
  * OIDC 用户由服务端 409 人话回绝（前端不预判，权限与真值以服务端为准）。
  */
+async function onResendActivation(member: AdminMember): Promise<void> {
+  busyId.value = member.id; actionError.value = null; actionNotice.value = null;
+  try { await resendMemberActivation(member.id); actionNotice.value = '激活邮件已重发' } catch (err) { const error = err as ApiError; actionError.value = error.detail ?? error.message } finally { busyId.value = null }
+}
+
 async function onResetPassword(member: AdminMember): Promise<void> {
   const name = member.display_name ?? member.id
   const password = window.prompt(`为 ${name} 设置新的登录密码（至少 8 位）：`) ?? ''
@@ -116,6 +121,7 @@ function statusText(status: AdminMember['status']): string {
         </span>
         <span class="member-joined">加入于 {{ member.created_at }}</span>
         <div class="member-actions">
+          <UButton v-if="member.status === 'active'" variant="outline" size="sm" :disabled="busyId !== null" @click="onResendActivation(member)"><Mail :size="14" aria-hidden="true" />重发激活邮件</UButton>
           <UButton
             variant="outline"
             size="sm"

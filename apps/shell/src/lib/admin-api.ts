@@ -63,6 +63,7 @@ export function fetchMembers(): Promise<AdminMember[]> {
 
 /** 停用/启用成员（服务端联动邮箱账户 + 审计）。 */
 export function setMemberStatus(id: string, status: Exclude<MemberStatus, 'active'> | 'active'): Promise<unknown> {
+
   return request(`/api/admin/members/${encodeURIComponent(id)}/${status === 'active' ? 'enable' : 'disable'}`, {
     method: 'POST',
   })
@@ -202,3 +203,7 @@ export function rejectInvite(id: string): Promise<{ status: string }> {
 
 export interface MailTestResult { ok: boolean; detail: string }
 export function testMailConnection(): Promise<{ provisioner: MailTestResult; sender: MailTestResult }> { return request("/api/admin/mail/test", { method: "POST" }) }
+
+export function resendMemberActivation(id: string): Promise<unknown> {
+  return request(`/api/admin/members/${encodeURIComponent(id)}/resend-activation`, { method: 'POST' })
+}
