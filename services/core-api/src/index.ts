@@ -81,7 +81,7 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   });
   registerAuthRoutes(app);
   registerSetupRoutes(app);
-  registerMemberRoutes(app, dependencies.createMailProvisioner);
+  registerMemberRoutes(app, dependencies.createMailProvisioner, dependencies.createMailSender);
   // 邀请域：管理端 /api/admin/invites* + 公开填表 /api/invite/<token>（#18）
   registerInviteRoutes(app, dependencies);
   // 激活域：公开 /api/activate/<token>（#18；登录态无关，链接双证之一）
