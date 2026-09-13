@@ -76,6 +76,63 @@ afterEach(() => {
 });
 
 describe('sendMail（465 隐式 TLS）', () => {
+  it('连接建立挂起 → 10s 后抛 connect 超时并关闭 socket', async () => {
+    let closeCalls = 0;
+    const socket = {
+      readable: new ReadableStream<Uint8Array>({}),
+      writable: new WritableStream<Uint8Array>(),
+      opened: new Promise<void>(() => {}),
+      closed: Promise.resolve(),
+      close: async () => { closeCalls += 1; },
+      startTls: () => { throw new Error('不使用 STARTTLS'); },
+    };
+    const pending = sendMail(CONFIG, MESSAGE, () => socket);
+    const rejection = expect(pending).rejects.toMatchObject({ name: 'MailSendError', stage: 'connect', elapsedMs: 10_000 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+    expect(closeCalls).toBe(1);
+  });
+
+  it('220 问候后无响应 → response 超时并关闭 socket', async () => {
+    let closeCalls = 0;
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('220 ready\r\n')); },
+    });
+    const socket = {
+      readable,
+      writable: new WritableStream<Uint8Array>(),
+      opened: Promise.resolve(),
+      closed: Promise.resolve(),
+      close: async () => { closeCalls += 1; },
+      startTls: () => { throw new Error('不使用 STARTTLS'); },
+    };
+    const pending = sendMail(CONFIG, MESSAGE, () => socket);
+    const rejection = expect(pending).rejects.toMatchObject({ name: 'MailSendError', stage: 'response', elapsedMs: 10_000 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+    expect(closeCalls).toBe(1);
+  });
+
+  it('命令写入挂起 → write 超时并关闭 socket', async () => {
+    let closeCalls = 0;
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('220 ready\r\n')); },
+    });
+    const socket = {
+      readable,
+      writable: new WritableStream<Uint8Array>({ write: () => new Promise<void>(() => {}) }),
+      opened: Promise.resolve(),
+      closed: Promise.resolve(),
+      close: async () => { closeCalls += 1; },
+      startTls: () => { throw new Error('不使用 STARTTLS'); },
+    };
+    const pending = sendMail(CONFIG, MESSAGE, () => socket);
+    const rejection = expect(pending).rejects.toMatchObject({ name: 'MailSendError', stage: 'write', elapsedMs: 10_000 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+    expect(closeCalls).toBe(1);
+  });
+
   it('按 EHLO→AUTH→MAIL→RCPT→DATA→QUIT 序列投递，中文 Subject 走 encoded-word、正文走 base64', async () => {
     const fake = scriptedSocket(happyReplies());
     await sendMail(CONFIG, MESSAGE, fake.connect);
