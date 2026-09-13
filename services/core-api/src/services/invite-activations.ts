@@ -64,10 +64,32 @@ export interface InviteActivationRecord {
   used_at: string | null;
 }
 
-export async function findInviteActivationForInvite(db: D1Database, inviteTokenHash: string): Promise<InviteActivationRecord | null> {
-  return db.prepare('SELECT token_hash, invite_token_hash, email, expires_at, used_at, used_at FROM invite_activations WHERE invite_token_hash = ? ORDER BY rowid DESC LIMIT 1').bind(inviteTokenHash).first<InviteActivationRecord>();
+/**
+ * 读某邀请最新的激活令牌行（重发/claim 重签入口用）。
+ * 不变式：作废只发生在「当时最新」的行上，故最新行是唯一可能未用的行；
+ * used_at 非空/行不存在由调用方按各自语义判。
+ */
+export async function findInviteActivationForInvite(
+  db: D1Database,
+  inviteTokenHash: string,
+): Promise<InviteActivationRecord | null> {
+  return db
+    .prepare(
+      'SELECT token_hash, invite_token_hash, email, expires_at, used_at FROM invite_activations WHERE invite_token_hash = ? ORDER BY rowid DESC LIMIT 1',
+    )
+    .bind(inviteTokenHash)
+    .first<InviteActivationRecord>();
 }
 
-export async function invalidateInviteActivation(db: D1Database, tokenHash: string): Promise<void> {
-  await db.prepare("UPDATE invite_activations SET used_at = datetime('now') WHERE token_hash = ?").bind(tokenHash).run();
+/**
+ * 作废激活令牌（置 used_at）：只命中未用行，回是否作废成功。
+ * used_at IS NULL 守卫让并发双 claim/双重发只有一方成功（#81 原子模式），
+ *败者拿 false —— 「同一时刻至多一个有效明文链接」由这条守卫兜住（#134）。
+ */
+export async function invalidateInviteActivation(db: D1Database, tokenHash: string): Promise<boolean> {
+  const result = await db
+    .prepare("UPDATE invite_activations SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL")
+    .bind(tokenHash)
+    .run();
+  return result.meta.changes > 0;
 }
