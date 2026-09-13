@@ -31,6 +31,37 @@ interface Reply {
   text: string;
 }
 
+export type MailSendStage = 'connect' | 'greeting' | 'response' | 'write';
+
+/** SMTP 阶段超时，供上层审计消费结构化原因。 */
+export class MailSendError extends Error {
+  readonly stage: MailSendStage;
+  readonly elapsedMs: number;
+
+  constructor(stage: MailSendStage, elapsedMs: number) {
+    const labels: Record<MailSendStage, string> = { connect: '连接', greeting: '问候', response: '应答', write: '写入' };
+    super(`SMTP ${labels[stage]}超时（10s）：服务器未在时限内响应`);
+    this.name = 'MailSendError';
+    this.stage = stage;
+    this.elapsedMs = elapsedMs;
+  }
+}
+
+const SMTP_TIMEOUT_MS = 10_000;
+
+async function withTimeout<T>(operation: Promise<T>, stage: MailSendStage): Promise<T> {
+  const startedAt = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new MailSendError(stage, Date.now() - startedAt)), SMTP_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /** 逐行读取 SMTP 应答（跨 TCP 分包缓冲）。 */
 class LineReader {
   #reader: ReadableStreamDefaultReader<Uint8Array>;
@@ -82,11 +113,12 @@ async function command(
   codeMin: number,
   codeMax: number,
   errorPrefix: string,
+  responseStage: MailSendStage = 'response',
 ): Promise<Reply> {
   if (line !== null) {
-    await writer.write(encoder.encode(`${line}\r\n`));
+    await withTimeout(writer.write(encoder.encode(`${line}\r\n`)), 'write');
   }
-  const reply = await readReply(reader);
+  const reply = await withTimeout(readReply(reader), responseStage);
   if (reply.code < codeMin || reply.code > codeMax) {
     throw new Error(`${errorPrefix}（${reply.code}）：${reply.text}`);
   }
@@ -144,11 +176,15 @@ export async function sendMail(
 ): Promise<void> {
   // 惰性加载 workerd 内置模块：仅真实发信路径触发，单测注入 mock 后不触碰该模块。
   const connectImpl = connectFn ?? (await import('cloudflare:sockets')).connect;
-  let socket: Socket;
+  let socket: Socket | undefined;
   try {
     socket = connectImpl({ hostname: config.host, port: config.port, secureTransport: 'on' });
-    await socket.opened;
+    await withTimeout(socket.opened, 'connect');
   } catch (cause) {
+    if (socket && cause instanceof MailSendError) {
+      await socket.close().catch(() => {});
+      throw cause;
+    }
     throw new Error(
       `SMTP 连接失败：无法连接 ${config.host}:${config.port} —— ${errorMessage(cause)}`,
     );
@@ -161,7 +197,7 @@ export async function sendMail(
   const payload = buildDataPayload(config, message).replace(/\r\n$/, '');
 
   try {
-    await command(reader, writer, null, 220, 220, 'SMTP 连接失败：服务器问候异常');
+    await command(reader, writer, null, 220, 220, 'SMTP 连接失败：服务器问候异常', 'greeting');
     await command(reader, writer, `EHLO ${ehloDomain}`, 250, 299, 'SMTP 会话失败：EHLO 被拒');
     await command(reader, writer, 'AUTH LOGIN', 334, 334, 'SMTP 认证失败');
     await command(reader, writer, base64Utf8(config.username), 334, 334, 'SMTP 认证失败');
@@ -170,7 +206,7 @@ export async function sendMail(
     await command(reader, writer, `RCPT TO:<${message.to}>`, 250, 299, 'SMTP 投递被拒：收件人被拒');
     await command(reader, writer, 'DATA', 354, 354, 'SMTP 投递被拒：DATA 被拒');
     await command(reader, writer, `${payload}\r\n.`, 250, 299, 'SMTP 投递被拒：消息被拒');
-    await writer.write(encoder.encode('QUIT\r\n')).catch(() => {});
+    await withTimeout(writer.write(encoder.encode('QUIT\r\n')), 'write').catch(() => {});
   } finally {
     try {
       writer.releaseLock();
