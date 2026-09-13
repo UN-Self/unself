@@ -7,7 +7,14 @@ import type { Component } from 'vue'
 
 import ActivateView from './ActivateView.vue'
 import InviteView from './InviteView.vue'
-import { activateAccount, fetchActivation, fetchInvite, submitInvite } from './lib/invite-api'
+import {
+  activateAccount,
+  claimInviteActivation,
+  fetchActivation,
+  fetchInvite,
+  fetchInviteStatus,
+  submitInvite,
+} from './lib/invite-api'
 
 /**
  * #18 公开填表 / 激活页行为测试（docs/testing.md 两问检验）：
@@ -25,13 +32,22 @@ vi.mock('./lib/invite-api', () => ({
   submitInvite: vi.fn(),
   fetchActivation: vi.fn(),
   activateAccount: vi.fn(),
+  fetchInviteStatus: vi.fn(),
+  claimInviteActivation: vi.fn(),
 }))
 
+/** fetchInviteStatus 缺省放行：避免无关用例误触状态查询时红。 */
 beforeEach(() => {
   vi.clearAllMocks()
+  document.body.innerHTML = ''
+  vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending' })
 })
 
-/** 真实内存路由挂三页：待测页 + /login（「去登录」的目标）。 */
+afterEach(() => {
+  document.body.innerHTML = ''
+})
+
+/** 真实内存路由挂三页：待测页 + /login（「去登录」的目标）+ /activate/:token（claim 落点）。 */
 async function mountPage(path: string, component: Component) {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -43,7 +59,7 @@ async function mountPage(path: string, component: Component) {
   })
   await router.push(path)
   await router.isReady()
-  const wrapper = mount(component, { global: { plugins: [router] } })
+  const wrapper = mount(component, { global: { plugins: [router] }, attachTo: document.body })
   await flushPromises()
   return { wrapper, router }
 }
@@ -52,9 +68,10 @@ const EMPTY_INVITE = { displayName: '', emailPrefix: '', personalEmail: '' }
 const WORK_EMAIL = 'zhangsan@example.net'
 
 describe('InviteView 公开填表页（#18）', () => {
-  it('①加载后提交 → submitInvite 收到三字段 → 进入等待审批态', async () => {
+  it('①加载后提交 → submitInvite 收到三字段 → 进入审批中状态视图', async () => {
     vi.mocked(fetchInvite).mockResolvedValue(EMPTY_INVITE)
     vi.mocked(submitInvite).mockResolvedValue(undefined)
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending' })
     const { wrapper } = await mountPage('/invite/tok-1', InviteView)
 
     expect(fetchInvite).toHaveBeenCalledWith('tok-1')
@@ -77,17 +94,20 @@ describe('InviteView 公开填表页（#18）', () => {
       salt: expect.stringMatching(/^[A-Za-z0-9+/]{22}==$/),
       proof: expect.stringMatching(/^[A-Za-z0-9+/]{43}=$/),
     })
-    expect(wrapper.text()).toContain('申请已提交，等待管理员审批')
+    expect(wrapper.text()).toContain('管理员审批中')
+    expect(wrapper.text()).toContain('申请已提交')
     expect(wrapper.find('form').exists()).toBe(false)
   })
 
-  it('②链接失效（410 人话）→ 渲染错误卡且含该人话，无表单', async () => {
-    const message = '邀请链接已过期或已被使用'
-    vi.mocked(fetchInvite).mockRejectedValue(
-      Object.assign(new Error(message), { status: 410 }),
-    )
+  it('②链接失效（410 人话，表单与状态查询双失败）→ 渲染错误卡且含人话，无表单', async () => {
+    const message = '邀请链接已失效，请联系管理员'
+    const failure = Object.assign(new Error(message), { status: 410 })
+    vi.mocked(fetchInvite).mockRejectedValue(failure)
+    vi.mocked(fetchInviteStatus).mockRejectedValue(failure)
     const { wrapper } = await mountPage('/invite/tok-1', InviteView)
 
+    // 链接失效时先查表单再查状态，两处都失败才落到错误卡
+    expect(fetchInviteStatus).toHaveBeenCalledWith('tok-1')
     const alert = wrapper.find('[role="alert"]')
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toContain('邀请链接不可用')
@@ -143,7 +163,9 @@ describe('InviteView 公开填表页（#18）', () => {
 
     resolveSubmit()
     await flushPromises()
-    expect(wrapper.text()).toContain('申请已提交，等待管理员审批')
+    expect(wrapper.text()).toContain('管理员审批中')
+    expect(wrapper.text()).toContain('申请已提交')
+    expect(wrapper.find('form').exists()).toBe(false)
   })
 })
 
@@ -335,5 +357,112 @@ describe('InviteView 内置注册字段（issue-A）', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('用户名已被占用')
+  })
+})
+
+describe('InviteView 状态化三态（#134）', () => {
+  /** 已提交的链接重开：表单读不回（410），直接进入状态轮询视图。 */
+  async function mountSubmittedView() {
+    vi.mocked(fetchInvite).mockRejectedValue(
+      Object.assign(new Error('邀请链接已过期或已被使用'), { status: 410 }),
+    )
+    return mountPage('/invite/tok-1', InviteView)
+  }
+
+  it('⑨已提交链接重开 + status=pending → 审批中视图 + 手动刷新按钮；刷新翻到 approved', async () => {
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending' })
+    const { wrapper } = await mountSubmittedView()
+
+    expect(fetchInviteStatus).toHaveBeenCalledWith('tok-1')
+    expect(wrapper.text()).toContain('管理员审批中')
+    expect(wrapper.text()).toContain('申请已提交')
+    expect(wrapper.find('form').exists()).toBe(false)
+
+    // 手动刷新：status 翻 approved → 大按钮视图
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved' })
+    const refresh = wrapper.find('[data-test="refresh-status"]')
+    expect(refresh.exists()).toBe(true)
+    await refresh.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('管理员已批准')
+    expect(wrapper.text()).toContain('设置你的邮箱密码')
+    expect(wrapper.find('[data-test="claim-activation"]').exists()).toBe(true)
+  })
+
+  it('⑩approved 态点大按钮 → claim → 跳转 activationUrl 指向的激活页', async () => {
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved' })
+    // 服务端回同源绝对地址（部署常态）；测试里用运行时 origin 拼接
+    const activationUrl = `${window.location.origin}/activate/tok-activation`
+    vi.mocked(claimInviteActivation).mockResolvedValue({ activationUrl })
+    const { wrapper, router } = await mountSubmittedView()
+
+    const claim = wrapper.find('[data-test="claim-activation"]')
+    expect(claim.exists()).toBe(true)
+    expect(claim.text()).toContain('设置邮箱密码')
+    await claim.trigger('click')
+    await flushPromises()
+
+    expect(claimInviteActivation).toHaveBeenCalledWith('tok-1')
+    expect(router.currentRoute.value.path).toBe('/activate/tok-activation')
+  })
+
+  it('⑩bclaim 409「已激活过」→ 状态刷新把视图带到全部就绪（服务端人话即终态指引）', async () => {
+    vi.mocked(fetchInviteStatus)
+      .mockResolvedValueOnce({ status: 'approved' })
+      .mockResolvedValue({ status: 'activated' })
+    vi.mocked(claimInviteActivation).mockRejectedValue(
+      Object.assign(new Error('已激活过，请直接登录'), { status: 409 }),
+    )
+    const { wrapper } = await mountSubmittedView()
+
+    await wrapper.find('[data-test="claim-activation"]').trigger('click')
+    await flushPromises()
+
+    // 「已激活过」的正确响应就是全部就绪视图：不再显示大按钮，直接引导去登录
+    expect(wrapper.text()).toContain('全部就绪')
+    expect(wrapper.text()).toContain('使用邮箱与密码登录')
+    expect(wrapper.find('[data-test="claim-activation"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="go-login"]').exists()).toBe(true)
+  })
+
+  it('⑪activated 态 → 全部就绪视图 + 去登录按钮跳 /login', async () => {
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'activated' })
+    const { wrapper, router } = await mountSubmittedView()
+
+    expect(wrapper.text()).toContain('全部就绪')
+    expect(wrapper.text()).toContain('使用邮箱与密码登录')
+
+    const login = wrapper.find('[data-test="go-login"]')
+    expect(login.exists()).toBe(true)
+    await login.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/login')
+  })
+
+  it('⑫轮询口径：pending 5s 后自动重查、approved/activated/错误即停（无死循环）', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending' })
+      const { wrapper } = await mountSubmittedView()
+      expect(fetchInviteStatus).toHaveBeenCalledTimes(1)
+
+      // pending：5s 一拍，自动重查
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(fetchInviteStatus).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(fetchInviteStatus).toHaveBeenCalledTimes(3)
+
+      // 翻 approved → 停拍
+      vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved' })
+      await vi.advanceTimersByTimeAsync(5000)
+      const callsAfterApproved = vi.mocked(fetchInviteStatus).mock.calls.length
+      expect(callsAfterApproved).toBe(4)
+      expect(wrapper.text()).toContain('管理员已批准')
+      await vi.advanceTimersByTimeAsync(20000)
+      expect(vi.mocked(fetchInviteStatus).mock.calls.length).toBe(callsAfterApproved)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -18,6 +18,9 @@ export interface InviteApiError extends Error {
   status: number
 }
 
+/** 邀请三态（#134）：pending 审批中 / approved 可设邮箱密码 / activated 全部就绪。 */
+export type InviteStatusState = 'pending' | 'approved' | 'activated'
+
 /** 邀请链接读取结果 + 申请提交字段（前后端同形；pk1：内置注册带盐+R，服务端永不见密码）。 */
 export interface InviteApplication {
   displayName: string
@@ -67,6 +70,24 @@ export function submitInvite(token: string, application: InviteApplication): Pro
 /** GET /api/activate/<token>：激活页展示用工作邮箱（不消费令牌）。 */
 export function fetchActivation(token: string): Promise<{ email: string }> {
   return request<{ email: string }>(`/api/activate/${encodeURIComponent(token)}`)
+}
+
+/** GET /api/invite/<token>/status：三态查询（#134 凭令牌即身份，公开）。 */
+export function fetchInviteStatus(token: string): Promise<{ status: InviteStatusState }> {
+  return request<{ status: InviteStatusState }>(
+    `/api/invite/${encodeURIComponent(token)}/status`,
+  )
+}
+
+/** POST /api/invite/<token>/claim-activation：重签激活链接（旧链接作废，新明文只在响应）。 */
+export function claimInviteActivation(token: string): Promise<{ activationUrl: string }> {
+  return request<{ activationUrl: string }>(
+    `/api/invite/${encodeURIComponent(token)}/claim-activation`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    },
+  )
 }
 
 /** POST /api/activate/<token>：消费一次性令牌 → 设置邮箱密码；loginHint 为人话后续指引。 */
