@@ -10,6 +10,7 @@ import {
   SECRET_MASK,
   type ApiError,
   type InstanceSettings,
+  testMailConnection,
 } from '../lib/admin-api'
 import { testOidcConnection } from '../lib/setup-api'
 
@@ -47,6 +48,7 @@ const saveError = ref<string | null>(null)
 const saved = ref(false)
 const testOk = ref<null | { warnings: string[] }>(null)
 const testFailReason = ref<string | null>(null)
+const mailTest = ref<any>(null)
 
 onMounted(load)
 
@@ -119,6 +121,8 @@ async function onSave(): Promise<void> {
     saving.value = false
   }
 }
+
+async function onTestMailConnection(): Promise<void> { testing.value = true; mailTest.value = null; try { mailTest.value = await testMailConnection() } catch (err) { testFailReason.value = (err as ApiError).message } finally { testing.value = false } }
 
 async function onTestConnection(): Promise<void> {
   testing.value = true
@@ -212,6 +216,8 @@ async function onTestConnection(): Promise<void> {
         </div>
       </UCard>
 
+        <UButton variant="outline" :loading="testing" class="test-btn" @click="onTestMailConnection">测试连接</UButton>
+        <div v-if="mailTest" class="mail-test-results" role="status"><div v-for="item in [mailTest.provisioner, mailTest.sender]" :key="item.detail" :class="['mail-test-card', item.ok ? 'is-ok' : 'is-fail']"><strong>{{ item.ok ? '成功' : '失败' }}</strong><span>{{ item.detail }}</span></div></div>
       <UButton :loading="saving" @click="onSave">保存</UButton>
     </template>
   </div>
@@ -260,6 +266,10 @@ async function onTestConnection(): Promise<void> {
   color: var(--unself-color-warning);
   font-size: var(--unself-font-size-sm);
 }
+.mail-test-results { margin-top: var(--unself-space-3); display: grid; gap: var(--unself-space-2); }
+.mail-test-card { padding: var(--unself-space-2) var(--unself-space-3); border: 1px solid currentColor; border-radius: var(--unself-radius-md); display: flex; gap: var(--unself-space-2); }
+.mail-test-card.is-ok { color: var(--unself-color-success); }
+.mail-test-card.is-fail { color: var(--unself-color-danger); }
 .save-ok {
   margin: 0 0 var(--unself-space-3);
   font-size: var(--unself-font-size-sm);

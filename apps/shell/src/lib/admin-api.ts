@@ -147,6 +147,7 @@ export function fetchSettings(): Promise<InstanceSettings> {
 }
 
 export function saveSettings(update: SettingsUpdate): Promise<{ ok: boolean }> {
+
   return request<{ ok: boolean }>('/api/admin/settings', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
@@ -198,3 +199,6 @@ export function rejectInvite(id: string): Promise<{ status: string }> {
     method: 'POST',
   })
 }
+
+export interface MailTestResult { ok: boolean; detail: string }
+export function testMailConnection(): Promise<{ provisioner: MailTestResult; sender: MailTestResult }> { return request("/api/admin/mail/test", { method: "POST" }) }

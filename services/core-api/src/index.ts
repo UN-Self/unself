@@ -10,6 +10,7 @@ import { registerMemberRoutes } from './routes/members';
 import { registerModuleRoutes } from './routes/modules';
 import { registerNotificationRoutes } from './routes/notifications';
 import { registerSettingsRoutes } from './routes/settings';
+import { registerMailTestRoutes } from './routes/mail-test';
 import { registerSetupRoutes } from './routes/setup';
 import { getMemberAccess, type CreateMailProvisioner } from './services/members';
 import type { CreateMailSender } from './services/notifications';
@@ -89,6 +90,7 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   registerNotificationRoutes(app);
   registerAuditRoutes(app);
   registerSettingsRoutes(app);
+  registerMailTestRoutes(app, dependencies);
 
   /**
    * API 前缀未命中 → JSON 404（#116）：§6.5 错误口径——API 层一律 JSON，
