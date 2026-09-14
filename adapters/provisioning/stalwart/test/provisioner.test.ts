@@ -8,6 +8,7 @@ import {
 } from '../src/stalwart-provisioner.ts';
 import { createFakeMailProvisioner } from '../src/fake.ts';
 import type { JmapMethodResponse } from '../src/jmap.ts';
+import { MailProvisionerError as MailProvisionerErrorFromContracts } from '@unself/contracts';
 
 const config: StalwartProvisionerConfig = {
   baseUrl: 'https://mail.example.com',
@@ -33,6 +34,11 @@ function stubFetch(responses: JmapMethodResponse[], status = 200) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+/** #141 契约上提守卫：本包 re-export 的错误类就是 contracts 契约本身，非副本。 */
+it('MailProvisionerError 与 @unself/contracts 是同一构造器', () => {
+  expect(MailProvisionerError).toBe(MailProvisionerErrorFromContracts);
 });
 
 describe('postJmap（JMAP client）', () => {
