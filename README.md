@@ -50,7 +50,7 @@ Workers Routes 按路径绑定；Docker 用 openresty 按 location 分发，两�
 
 ## 状态
 
-**最小可用（v0.1.0）**。M0 垂直切片交付：Cloudflare 实例可部署、首个管理员经 OIDC 登录、hello 模块全链路（网页桥接/握手/token 验签/数据读写）、模块运行时启停、移除模块重部署后路由消失。实机验收通过（https://unself.handywote.top）。后续迭代见 PRODUCT_SPEC/requirements 与 issues。
+**最小可用（v0.1.0）**。M0 垂直切片交付：Cloudflare 实例可部署、首个管理员 setup 自助、hello 模块全链路（网页桥接/握手/token 验签/数据读写）、模块运行时启停、移除模块重部署后路由消失。实机验收通过（https://unself.handywote.top）。M1 进行中：内置身份默认+邀请审批+邀请页三态自助激活（详见 PRODUCT_SPEC/requirements 与 issues）。
 
 ## 开发
 
@@ -68,7 +68,7 @@ Workers Routes 按路径绑定；Docker 用 openresty 按 location 分发，两�
 
 - 核心（Shell、Core API、module-sdk、自研模块）：**AGPL-3.0**（根 LICENSE）
 - EdgeChat 衍生件：**GPL-3.0**（独立 Worker，见 NOTICE）
-- 第三方归属见 NOTICE 与 third_party/components.yaml（M0 登记后生效）
+- 第三方归属见 NOTICE 与 components.yaml 登记约定（M0 登记后生效；登记文件待 third_party/ 目录建立时落地）
 
 ## 参与
 

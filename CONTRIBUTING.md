@@ -46,11 +46,22 @@ DCO 全文：<https://developercertificate.org/>
 - docs/PRODUCT_SPEC.md
 - docs/requirements.md
 
-两份文件是设计真相，评审通过后才允许进入代码；只改代码不改文档的 PR 会被打回。
-
 ## 本地开发
 
-本地开发环境（依赖安装、core 与 modules 两库初始化、hello 模块联调、启停验证等）随 **M0 交付补全**，届时本节约会更新为可执行的步骤。
+```bash
+pnpm install          # 依赖安装
+pnpm -r typecheck     # 类型检查
+pnpm -r test          # 全量测试
+pnpm -r build         # 全量构建
+```
+
+本地不跑真云：core-api 测试用 miniflare/内存 D1 替身，适配器测试用契约假实现；
+联调走部署器（deploy/cloudflare）真环境。模块联调与启停验证参照七步验收剧本
+（docs/PRODUCT_SPEC.md §8 M0 行）。
+
+## 设计变更
+
+两份文件是设计真相，评审通过后才允许进入代码；只改代码不改文档的 PR 会被打回。
 
 ## 许可证与第三方
 

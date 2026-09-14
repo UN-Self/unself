@@ -119,8 +119,8 @@ https://team.example.com
 | 实例配置 | 批准时发生什么 | 用户设几次密码 | 登录怎么走 |
 |---|---|---|---|
 | 内置·无邮件（最小形态） | 翻状态 pending→active | 一次（注册时） | Unself 密码表单 |
-| 内置+邮件 | Stalwart 开户 + 激活邮件发个人邮箱 | 两次：登录密码（注册时）+ 邮箱密码（激活链接） | Unself 密码表单 |
-| Stalwart 兼任 IdP+邮件 | Stalwart 开户（账号既是邮箱也是 IdP 账号）+ 激活邮件 | 一次（激活时设的密码既是邮箱密码也是登录密码） | 跳转 Stalwart OIDC |
+| 内置+邮件 | Stalwart 开户 + 后台尽力发信（激活走邀请页自助） | 两次：登录密码（注册时）+ 邮箱密码（邀请页自助设置） | Unself 密码表单 |
+| Stalwart 兼任 IdP+邮件 | Stalwart 开户（账号既是邮箱也是 IdP 账号）+ 后台尽力发信 | 一次（邀请页激活时设的密码既是邮箱密码也是登录密码） | 跳转 Stalwart OIDC |
 | 独立 IdP（Keycloak 等）+无邮件 | 只翻状态，不开户 | 零次（IdP 侧账号团队自建；Unself 不做通用 IdP 开户） | 跳转 IdP |
 
 ```
@@ -129,10 +129,13 @@ https://team.example.com
 ③ 管理员生成邀请链接（一次性/限期）分发给新人；
 ④ 新人打开链接填表（内置模式含用户名+密码；邮件轴开启时含邮箱前缀+个人邮箱）提交；
 ⑤ 管理员批准（桌面主入口，手机响应式同页）：
-   邮件轴开启：Stalwart 适配器 JMAP 开户（随机初密）+ 激活链接发新人个人邮箱
-              （一次性令牌+邮箱所有权双证，只设邮箱密码）；
+   邮件轴开启：Stalwart 适配器 JMAP 开户（随机初密）+ 后台尽力发信
+              （一次性令牌+邮箱所有权双证，只设邮箱密码；发信失败不阻塞审批）；
    邮件轴关闭：无开户动作；
-⑥ 内置模式：批准即激活，新人直接登录（注册时设的密码已随申请入库）；
+⑥ 激活交付（#134 拍板，2026-09-13）：邀请令牌持有者=被邀请人本人，激活权跟随邀请令牌；
+   必经通道=新人凭邀请链接回邀请页看三态（待审批/已批准→设置邮箱密码/已激活→去登录），
+   claim 原子重签（单一有效链接、明文不落库）；邮件只是尽力增强，不是必经；
+   内置无邮件模式：批准即激活，新人直接登录（注册时设的密码已随申请入库）；
    OIDC 模式：成员首登，JIT 建档并消费邀请记录；
 ⑦ 成员进入统一工作台，只看到已启用且有权限的模块；
 ⑧ Gitea、日历等外部系统通过标准协议或适配器接入（Git 联动在 M3）。
@@ -253,7 +256,7 @@ AI 纪要     经 SDK AI 能力（ai.complete()）生成，归会议模块
                 可选外部 STUN / TURN / SFU
 
    文件：可选 S3 / R2 / MinIO
-   部署：Cloudflare 一键部署优先，Docker 作为替代和扩展
+   部署：Cloudflare 交互式装配器 CLI（正式路径，一键为路线图），Docker 作为替代和扩展
 ```
 
 ### 5.1 模块契约（已拍板，2026-09-06）
@@ -311,7 +314,7 @@ icon: inbox                # 可选，Lucide 图标名（[a-z0-9-]）；
 
 **踢人**：成员停用时核心广播停用事件（manifest lifecycle 钩子），模块立即清理；10 分钟 token 过期作为兑底上限。
 
-**首个管理员**：部署完成输出一次性 setup token 链接；部署者打开并用 OIDC 登录自己，核心将该用户登记为管理员，setup 随即封死。不依赖身份源 groups claim，安全边界是“能读到部署输出的人 = 部署者”。
+**首个管理员**：部署完成输出一次性 setup token 链接；部署者打开并设置管理员用户名+密码（内置身份为默认；OIDC 为折叠可选），核心将该用户登记为管理员，setup 随即封死。不依赖身份源 groups claim，安全边界是“能读到部署输出的人 = 部署者”。
 
 **登出**：壳清会话并广播登出消息，模块丢弃 token。外部身份源的 SLO 暂不做，标记为远期。
 
@@ -472,9 +475,14 @@ mail-1.2.0.tar.gz
 Stalwart 适配事实（0.16 调研，2026-09-07）：管理接口自 0.16.0 起 = JMAP
 对象（POST /jmap），旧 REST API 已删；应用密码只能本人创建（凭据绑认证
 主体，管理员代建在协议层不存在）；禁用 = 摘 authenticate 权限位；删除账
-号连带销毁全部邮箱数据，禁用不删是默认语义；发信走 465 隐式 TLS（0.16
-默认移除 587 监听）；OIDC sub = 内部账户 id，删号重建才变，禁用不变。
+号连带销毁全部邮箱数据，禁用不删是默认语义；Stalwart 侧发信监听 465 隐式 TLS
+（0.16 默认移除 587 监听）；OIDC sub = 内部账户 id，删号重建才变，禁用不变。
 Stalwart ≥ 0.16.10（JMAP 全合规）为集成前提。
+
+**CF Workers 出站 TLS 平台限制（2026-09-13 定案，证据档案 issue #127）**：Workers 内
+`secureTransport: 'on'` 实际不发 TLS、`startTls()` 死于 workerd#2712、25 端口硬禁——
+对任何 implicit-TLS 服务（含 Gmail 对照）均不可用，与端口/服务器无关。因此 Unself
+服务端发信定位=后台尽力增强（不阻塞审批），必经通道=邀请页三态自助（见链路 1 ⑥）。
 
 ### 5.8 官方模块改编纪律（2026-09-10 拍板）
 
@@ -498,6 +506,8 @@ Stalwart ≥ 0.16.10（JMAP 全合规）为集成前提。
 monorepo 保留，目的是让核心协议、模块清单、适配器和部署配置可以在一个 PR 中协作。但第三方完整应用不通过 subtree 混入核心代码；它们保持独立构建边界，并以模块、服务或适配器接入。
 
 ```text
+（目标形态：M1 实际交付为 apps/shell 单壳 + admin 路由；站内通知在 core-api 内；
+模块生态按里程碑逐步就位，目录以仓库现状为准）
 unself/
 ├── apps/
 │   ├── shell/                # 统一壳，Cloudflare Pages / Docker
@@ -526,7 +536,7 @@ unself/
 │   ├── config/                # 模块清单和实例配置
 │   └── mcp-tools/             # MCP/WebMCP 工具定义
 ├── deploy/
-│   ├── cloudflare/            # 首选：Wrangler、绑定、迁移、一键部署
+│   ├── cloudflare/            # 首选：Wrangler、绑定、迁移、装配器 CLI（一键为路线图）
 │   ├── docker/                # 替代部署和扩展组件 compose
 │   └── examples/              # OIDC、SMTP、CalDAV、S3 示例
 ├── third_party/
@@ -668,7 +678,7 @@ component 层  组件接口令牌（button-bg、card-radius…）→ packages/ui
           无顶栏无首页；窄屏 = 底部标签栏（同一份 nav 数据两个渲染器）
 setup     部署输出一次性链接才可配置；三字段+测试连接；
           激活成功直接进工作台；已激活后访问 /setup 一律重定向
-登录      一个按钮整页跳 OIDC（密码永远发生在 Stalwart 页面）；
+登录      默认密码表单，实例配置外部 IdP 时并存 SSO 按钮（按配置显隐）；
           登录后回原目标，直访落第一个启用模块
 侧栏可见性  停用模块 = 从侧栏消失（成员视角，与七步剧本一致）；
             管理页（M1）列全量含停用
@@ -687,11 +697,11 @@ hello 页  身份行（token claims 姓名/邮箱）+ 计数按钮并排：
 | 决策 | 结论 |
 |---|---|
 | 邮箱开户抽象 | MailProvisioner 四方法接口（createAccount/disable/enable/resetPassword）住 contracts；Stalwart JMAP 是第一个实现，后续团队可接 Mailcow 等 |
-| 管理通道凭证 | Stalwart API key（Bearer，最小权限集），wrangler secret 保管；不用人账号 Basic |
+| 管理通道凭证 | Stalwart API key（Bearer，最小权限集），wrangler secret 保管，运行时经 /admin/settings 读写（读出即 masked）；不用人账号 Basic |
 | 移除成员 | 禁用 = 摘 authenticate 权限位，数据原地保留；删除只在链路 6 完整版出现 |
-| 新人凭据 | 激活链接发个人邮箱（一次性令牌+邮箱所有权双证），不经管理员转交；邀请表单收个人邮箱字段 |
+| 新人凭据 | 批准=开户+签激活令牌；邮件后台尽力投递（非必经）；必经通道=邀请页三态自助（待审批/设邮箱密码/去登录），claim 原子重签、单一有效链接、明文不落库；不经管理员转交；邀请表单收个人邮箱字段（2026-09-13 #134 修订） |
 | 应用密码 | M1 = 引导页（跳转 Stalwart 自服务门户）；「邮箱凭据页」用户 token 代调 = A2，排 M6 |
-| 邮箱域名 | 部署配置项（unself.config.jsonc mail 段），非运行时 UI，非手填 |
+| 邮箱域名 | 运行时配置：/admin/settings mail 段（存 core 库 instance_config），即改即生效免重部署；API key 保管在 wrangler secret，运行时经设置页读写（读出即 masked）（2026-09-13 对齐实现） |
 | 通知承载 | 通知类型表（type/模板/渠道位），类型是数据不是代码；模块经 SDK 触发是后续路 |
 | 审批流 | 单级审批，任何管理员可批拒；桌面管理页主入口，手机同页响应式 |
 | 管理界面位置 | shell 内 admin 路由（角色守卫），apps/admin 目录预留独立台 |
@@ -730,7 +740,7 @@ Cloudflare 是官方首选部署目标，但不构成第三方团队的强制基
 | **M0** | 垂直切片：contracts、module-sdk、core-api、shell、hello 模块、幂等部署脚本 | 七步剧本全绿：部署出 setup 链接 → 首个管理员登录 → hello iframe 全链路（握手/token/JWKS/SDK 存储）→ 启停秒级生效 → 移除模块重部署后路由消失 |
 
 M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tailwind + zod + jose + pnpm workspaces + Vitest。
-| **M1** | 入职闭环与可用性：管理界面（成员/模块/审计/设置）、邀请→审批→激活全链、通知类型表+SMTP、Stalwart 瘦适配（MailProvisioner 接口 + JMAP 实现） | 完整版：真实邀请一人，从填表到登录全程不碰 Stalwart 后台；最小版：内置账号+无邮件实例邀请审批闭环可用；手机同页可审批 |
+| **M1** | 入职闭环与可用性：管理界面（成员/模块/审计/设置）、邀请→审批→邀请页三态自助激活全链、通知类型表+运行时邮件配置、Stalwart 瘦适配（MailProvisioner 接口 + JMAP 实现） | 完整版：真实邀请一人，从填表到登录全程不碰 Stalwart 后台；最小版：内置账号+无邮件实例邀请审批闭环可用，且邀请页三态自助激活可达（#134）；手机同页可审批 |
 | **M2** | 聊天（EdgeChat 模块化）：token 化认证、manifest 包装、前端 mobile-first 重写、逐条已读回执 | 仅启用聊天的实例可完整使用消息与已读回执，手机端消息流可用 |
 | **M3** | Git 联动 + Docker 等价：Gitea webhook 通知内部化、Git 开户入链路 1、workerd 路径 Docker 部署 | Git 事件进通知中心；同一份配置 Docker 跑通核心链路 |
 | **M4** | 日历/会议/会议记录：tsdav + CalDAV、P2P iframe、转写两档（本地默认、云端显式 opt-in） | 日历建会一键入会；会后纪要生成；音频存档不出自有机 |
@@ -741,7 +751,7 @@ M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tail
 
 | 风险/决策 | 现状 | 建议 |
 |---|---|---|
-| CF 一键部署 | 官方首选，但不是强制绑定 | 首先保证 Cloudflare 模板和向导体验，再提供 Docker 等价路径 |
+| CF 部署 | 正式路径=交互式装配器 CLI（决策 #2，2026-09-10 修订）；一键入口为路线图 | 首先保证装配器体验与 Cloudflare 模板，再提供 Docker 等价路径 |
 | 模块可选部署 | 未启用模块不应创建资源或显示导航 | 由 Module Registry 统一管理 manifest、依赖和启停 |
 | EdgeChat 许可证 | EdgeChat 模块使用 GPL | 独立构建、保留许可证和修改源码，核心不复制其代码；重写的前端归核心 AGPL，GPL 面积缩到后端 Worker |
 | MiroTalk/会议许可证 | MiroTalk 代码使用 AGPL | 会议信令优先自研 CF Worker；若使用 MiroTalk fork，独立构建并遵守 AGPL |
@@ -772,7 +782,7 @@ M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tail
 | KV | 读 100K/天，写 1K/天，1GB | 会话存储 ~几十次/天 | ✅ |
 | R2 文件 | **10GB 存储**，A 类 1M/月，B 类 10M/月，**出流量免费** | 10 人附件，起步期 1-2GB | ✅ 存储满后可自备桶 |
 | Workers AI | **10K neurons/天** | 小模型助手对话约几十~上百轮/天 | ⚠️ 最紧的一项 |
-| Pages 静态托管 | 无限制 | 统一壳前端 | ✅ |
+| 静态托管 | 无限制 | 统一壳前端（随 core Worker 部署，非独立 Pages） | ✅ |
 
 **结论**：除 AI 与 D1 库数量外全部轻松覆盖，10 人团队基本零成本。三个升级触发点：
 1. AI 用量超 10K neurons/天 → Workers Paid $5/月起，超出按 $0.011/千 neurons 计费（单次对话约几分钱）
