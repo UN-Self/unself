@@ -2,7 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import { exportJWK, importSPKI, jwtVerify, SignJWT } from 'jose';
 
-import app, { getSigningRuntime } from '../src/index';
+import { createApp, getSigningRuntime } from '../src/index';
+
+const app = createApp();
 import { deriveSigningRuntime, generateInstanceKeyPair, toPublicJwks } from '../src/keys';
 
 describe('keys：ES256 密钥体系', () => {

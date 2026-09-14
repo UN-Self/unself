@@ -108,6 +108,3 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
 
   return app;
 }
-
-const app = createApp();
-export default app;

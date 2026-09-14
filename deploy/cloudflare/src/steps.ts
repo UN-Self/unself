@@ -495,12 +495,22 @@ async function writeFileIfMissing(path: string, content: string): Promise<void> 
   }
 }
 
-/** core Worker 入口：core-api 优先；未命中（HTML 导航）回退 ASSETS 的 SPA。相对路径按生成文件目录（.deploy/cloudflare/）计。 */
+/**
+ * core Worker 入口：core-api 优先；未命中（HTML 导航）回退 ASSETS 的 SPA。相对路径按生成文件目录（.deploy/cloudflare/）计。
+ *
+ * 组合根（#141 返工）：deploy 是唯一生产装配点——生成入口 import { createApp } 并注入真 Stalwart 适配器，
+ * core-api 自身不再模块级固化无参实例（那会把 members.ts 的契约回退假实现带进生产开户路径）。
+ * 适配器用相对路径导入：生成目录没有 workspace 的 node_modules 链接，裸包名解析不到；
+ * 相对路径与 core-api 的导入同构，wrangler/esbuild 打包确定可解析。
+ */
 export function coreWorkerEntrySource(outDir: string, rootDir: string): string {
-  const rel = relative(outDir, join(rootDir, 'services/core-api/src/index.ts'));
+  const rel = (p: string): string => relative(outDir, join(rootDir, p)).replaceAll('\\', '/');
   return `// SPDX-License-Identifier: AGPL-3.0-only
-// 由 deploy/cloudflare 生成：core-api Hono app + 未命中路径回退 SPA 资产。
-import app from '${rel.replaceAll("\\", "/")}';
+// 由 deploy/cloudflare 生成（生产组合根）：core-api app（注入 Stalwart 适配器）+ 未命中路径回退 SPA 资产。
+import { createApp } from '${rel('services/core-api/src/index.ts')}';
+import { createStalwartMailProvisioner } from '${rel('adapters/provisioning/stalwart/src/index.ts')}';
+
+const app = createApp({ createMailProvisioner: (cfg) => createStalwartMailProvisioner(cfg) });
 
 export default {
   async fetch(request, env, ctx) {

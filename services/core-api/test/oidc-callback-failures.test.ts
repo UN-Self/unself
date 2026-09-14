@@ -2,7 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
 
-import app from '../src/index';
+import { createApp } from '../src/index';
+
+const app = createApp();
 import { resetOidcCaches } from '../src/oidc';
 import { createCoreDb, type CoreTestDb } from './test-factory';
 
