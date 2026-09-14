@@ -1,39 +1,26 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { Ban, CircleCheck, KeyRound, Mail } from 'lucide-vue-next'
 
 import { UButton, UErrorCard, USkeleton } from '@unself/ui'
 
 import { resetMemberPassword } from '../lib/builtin-auth-api'
 import { fetchMembers, resendMemberActivation, setMemberStatus, type AdminMember, type ApiError } from '../lib/admin-api'
+import { useAsyncLoad } from '../lib/use-async-load'
 
 /**
  * 管理台成员页（#17 + issue-A）：全量列表 + 停用/启用 + 内置用户重置密码。
  * 不做：编辑、删除、搜索、分页、批量（M1 范围外）。
  */
 
-const phase = ref<'loading' | 'ready' | 'error'>('loading')
-const loadError = ref<ApiError | null>(null)
-const members = ref<AdminMember[]>([])
+// #142：加载三态样板收编 use-async-load（phase/loadError 变量名不变，模板零改动）
+const { phase, loadError, data: members } = useAsyncLoad<AdminMember[]>(fetchMembers, { initial: [] })
 /** 正在翻转状态的成员 id（按钮禁用防连点）。 */
 const busyId = ref<string | null>(null)
 /** 动作失败/成功的人话提示（行内展示；列表加载失败才用错误卡）。 */
 const actionError = ref<string | null>(null)
 const actionNotice = ref<string | null>(null)
-
-onMounted(load)
-
-async function load(): Promise<void> {
-  phase.value = 'loading'
-  try {
-    members.value = await fetchMembers()
-    phase.value = 'ready'
-  } catch (err) {
-    loadError.value = err as ApiError
-    phase.value = 'error'
-  }
-}
 
 /** 停用要 confirm；启用直接执行（启用是恢复性操作）。 */
 async function onToggle(member: AdminMember): Promise<void> {

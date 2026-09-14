@@ -1,32 +1,17 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-
 import { UErrorCard, USkeleton } from '@unself/ui'
 
-import { fetchAuditLog, type ApiError, type AuditEntry } from '../lib/admin-api'
+import { fetchAuditLog, type AuditEntry } from '../lib/admin-api'
+import { useAsyncLoad } from '../lib/use-async-load'
 
 /**
  * 管理台审计页（#17）：倒序只读列表，服务端一次给最新 200 条。
  * 不做：筛选、搜索、导出、分页。
  */
 
-const phase = ref<'loading' | 'ready' | 'error'>('loading')
-const loadError = ref<ApiError | null>(null)
-const entries = ref<AuditEntry[]>([])
-
-onMounted(load)
-
-async function load(): Promise<void> {
-  phase.value = 'loading'
-  try {
-    entries.value = await fetchAuditLog()
-    phase.value = 'ready'
-  } catch (err) {
-    loadError.value = err as ApiError
-    phase.value = 'error'
-  }
-}
+// #142：加载三态样板收编 use-async-load（phase/loadError 变量名不变，模板零改动）
+const { phase, loadError, data: entries } = useAsyncLoad<AuditEntry[]>(fetchAuditLog, { initial: [] })
 </script>
 
 <template>
