@@ -20,6 +20,7 @@ import {
   saveSettings,
   setMemberStatus,
   SECRET_MASK,
+  testMailConnection,
 } from './lib/admin-api'
 import { testOidcConnection } from './lib/setup-api'
 import { resetMemberPassword } from './lib/builtin-auth-api'
@@ -49,6 +50,7 @@ vi.mock('./lib/admin-api', () => ({
   fetchAuditLog: vi.fn(),
   fetchSettings: vi.fn(),
   saveSettings: vi.fn(),
+  testMailConnection: vi.fn(),
   fetchInvites: vi.fn(),
   createInvite: vi.fn(),
   approveInvite: vi.fn(),
@@ -276,6 +278,59 @@ describe('SettingsPage 保存与测试连接（#17）', () => {
 
     expect(wrapper.text()).toContain('无法访问该 Issuer')
     expect(wrapper.text()).not.toContain('连接成功')
+  })
+
+  it('邮件测试失败（#139）→ 错误文案只在邮件卡内，不落在 OIDC 卡', async () => {
+    vi.mocked(testMailConnection).mockRejectedValue(makeApiError(502, '邮件服务不可达：请检查 Stalwart 地址'))
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    const [oidcCard, mailCard] = wrapper.findAll('.settings-card')
+    const mailTestBtn = mailCard!.findAll('button').find((b) => b.text().includes('测试连接'))
+    await mailTestBtn!.trigger('click')
+    await flushPromises()
+
+    expect(mailCard!.text()).toContain('邮件服务不可达')
+    expect(mailCard!.find('[role="alert"]').exists()).toBe(true)
+    expect(oidcCard!.text()).not.toContain('邮件服务不可达')
+    expect(oidcCard!.find('[role="alert"]').exists()).toBe(false)
+  })
+
+  it('OIDC 测试与邮件测试互不影响（#139）→ loading 独立，结果各归各卡', async () => {
+    let resolveOidc!: (v: { ok: true; issuer: string; warnings: string[] }) => void
+    vi.mocked(testOidcConnection).mockImplementation(
+      () => new Promise((res) => { resolveOidc = res }),
+    )
+    vi.mocked(testMailConnection).mockResolvedValue({
+      provisioner: { ok: true, detail: '邮箱已创建' },
+      sender: { ok: true, detail: '发信成功' },
+    })
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    const [oidcCard, mailCard] = wrapper.findAll('.settings-card')
+    const oidcBtn = oidcCard!.findAll('button').find((b) => b.text().includes('测试连接'))!
+    const mailBtn = mailCard!.findAll('button').find((b) => b.text().includes('测试连接'))!
+
+    await oidcBtn.trigger('click')
+    await flushPromises()
+    // OIDC 在途转圈，邮件按钮不受牵连
+    expect(oidcBtn.attributes('aria-busy')).toBe('true')
+    expect(mailBtn.attributes('aria-busy')).toBeUndefined()
+
+    await mailBtn.trigger('click')
+    await flushPromises()
+    // 邮件测试完成，结果在邮件卡内；OIDC 仍在途、无结果
+    expect(mailCard!.text()).toContain('邮箱已创建')
+    expect(mailCard!.text()).toContain('发信成功')
+    expect(oidcCard!.text()).not.toContain('连接成功')
+    expect(oidcBtn.attributes('aria-busy')).toBe('true')
+
+    resolveOidc({ ok: true, issuer: 'https://idp.example.com', warnings: [] })
+    await flushPromises()
+    expect(oidcCard!.text()).toContain('连接成功')
+    // 邮件结果不被 OIDC 结果冲掉
+    expect(mailCard!.text()).toContain('发信成功')
   })
 })
 
