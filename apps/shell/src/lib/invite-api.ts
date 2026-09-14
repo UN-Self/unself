@@ -15,12 +15,13 @@
  */
 
 import { request, type ApiError } from './api-client'
+import type { InviteStatusResponse } from '@unself/contracts'
 
 /** 公开邀请域错误：message 一律人话，status 供分档（0 = 网络不可达）。 */
 export type InviteApiError = ApiError
 
 /** 邀请三态（#134）：pending 审批中 / approved 可设邮箱密码 / activated 全部就绪。 */
-export type InviteStatusState = 'pending' | 'approved' | 'activated'
+export type InviteStatusState = InviteStatusResponse['status']
 
 /** 邀请链接读取结果 + 申请提交字段（前后端同形；pk1：内置注册带盐+R，服务端永不见密码）。 */
 export interface InviteApplication {
@@ -37,8 +38,15 @@ export function fetchInvite(token: string): Promise<InviteApplication> {
   return request<InviteApplication>(`/api/invite/${encodeURIComponent(token)}`)
 }
 
+/**
+ * 提交申请载荷（#149）：emailPrefix/personalEmail 仅在有邮件实例时必填，
+ * 无邮件实例可整体省略（键不出现，而非显式 undefined）。
+ */
+export type InviteSubmission = Omit<InviteApplication, 'emailPrefix' | 'personalEmail'> &
+  Partial<Pick<InviteApplication, 'emailPrefix' | 'personalEmail'>>
+
 /** POST /api/invite/<token>：提交申请表单（后端只接受 pending 行）。 */
-export function submitInvite(token: string, application: InviteApplication): Promise<void> {
+export function submitInvite(token: string, application: InviteSubmission): Promise<void> {
   return request<void>(`/api/invite/${encodeURIComponent(token)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -51,11 +59,9 @@ export function fetchActivation(token: string): Promise<{ email: string }> {
   return request<{ email: string }>(`/api/activate/${encodeURIComponent(token)}`)
 }
 
-/** GET /api/invite/<token>/status：三态查询（#134 凭令牌即身份，公开）。 */
-export function fetchInviteStatus(token: string): Promise<{ status: InviteStatusState }> {
-  return request<{ status: InviteStatusState }>(
-    `/api/invite/${encodeURIComponent(token)}/status`,
-  )
+/** GET /api/invite/<token>/status：三态 + 实例能力开关（#134/#149 凭令牌即身份，公开）。 */
+export function fetchInviteStatus(token: string): Promise<InviteStatusResponse> {
+  return request<InviteStatusResponse>(`/api/invite/${encodeURIComponent(token)}/status`)
 }
 
 /** POST /api/invite/<token>/claim-activation：重签激活链接（旧链接作废，新明文只在响应）。 */

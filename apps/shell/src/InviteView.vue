@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { KeyRound, LogIn, MailCheck, RefreshCw, Send, UserPlus } from 'lucide-vue-next'
 import { UButton, UCard, UErrorCard, UInput } from '@unself/ui'
@@ -10,8 +10,9 @@ import {
   fetchInviteStatus,
   submitInvite,
   type InviteApplication,
-  type InviteStatusState,
+  type InviteSubmission,
 } from './lib/invite-api'
+import type { InviteStatusResponse } from '@unself/contracts'
 import { generateSalt, deriveProof } from './lib/pk1'
 
 /**
@@ -22,6 +23,9 @@ import { generateSalt, deriveProof } from './lib/pk1'
  *   · pending   →「管理员审批中」+ 手动刷新（不自动死循环，间隔 ≥5s 才轮询）
  *   · approved  →「设置邮箱密码」大按钮 → claim 重签激活 → 跳 activationUrl
  *   · activated →「全部就绪，去登录页使用邮箱密码登录」
+ * - #149 实例能力开关 mailEnabled（status 响应唯一真相源）：无邮件实例不渲染
+ *   邮箱两字段、提交不带这两键；approved 即激活（无开户动作）→「全部就绪」。
+ *   mailEnabled=true 时所有文案与行为逐字不变。
  */
 
 const route = useRoute()
@@ -34,6 +38,9 @@ const phase = ref<Phase>('loading')
 const loadError = ref('')
 const submitting = ref(false)
 const submitError = ref('')
+
+/** #149 实例能力开关：仅由 status 响应写入（mailEnabled=true 前提下行为与文案零变化）。 */
+const mailEnabled = ref(true)
 
 /** #134 状态轮询：视图态与请求在途态分开（按钮 loading 不换文案）。 */
 const statusRefreshing = ref(false)
@@ -64,12 +71,13 @@ const fieldErrors = ref<{
 }>({})
 
 /** 三态 → 视图态：只认 pending/approved/activated；其余（失效）按错误卡展示。 */
-function applyStatus(status: InviteStatusState): void {
+function applyStatus(response: InviteStatusResponse): void {
+  mailEnabled.value = response.mailEnabled
   claimError.value = ''
-  if (status === 'pending') {
+  if (response.status === 'pending') {
     phase.value = 'submitted'
     schedulePoll()
-  } else if (status === 'approved') {
+  } else if (response.status === 'approved') {
     stopPolling()
     phase.value = 'approved'
   } else {
@@ -82,8 +90,7 @@ function applyStatus(status: InviteStatusState): void {
 async function refreshStatus(): Promise<void> {
   statusRefreshing.value = true
   try {
-    const { status } = await fetchInviteStatus(token)
-    applyStatus(status)
+    applyStatus(await fetchInviteStatus(token))
   } catch (err) {
     stopPolling()
     loadError.value = (err as Error).message
@@ -111,12 +118,12 @@ function schedulePoll(): void {
       return
     }
     try {
-      const { status } = await fetchInviteStatus(token)
-      if (status === 'pending') {
+      const response = await fetchInviteStatus(token)
+      if (response.status === 'pending') {
         schedulePoll()
         return
       }
-      applyStatus(status)
+      applyStatus(response)
     } catch {
       // 轮询失败不掀桌：保持 pending 视图，等下一拍或手动刷新
       schedulePoll()
@@ -162,13 +169,28 @@ function onGoLogin(): void {
   void router.push('/login')
 }
 
+/** #149 全部就绪描述：有邮件提密码已设；无邮件批准即激活，无密码可提。 */
+const readyDesc = computed(() =>
+  mailEnabled.value
+    ? '邮箱密码已设置完成。请前往登录页，使用邮箱与密码登录。'
+    : '账号已激活，请前往登录页登录。',
+)
+
 onMounted(async () => {
   try {
     const invite = await fetchInvite(token)
     application.displayName = invite.displayName ?? ''
     application.emailPrefix = invite.emailPrefix ?? ''
     application.personalEmail = invite.personalEmail ?? ''
-    phase.value = 'form'
+    // 读表单与读状态之间可能被批准：pending 才留表单，否则直接套用最新状态（#149 竞态防御）
+    const status = await fetchInviteStatus(token)
+    if (status.status === 'pending') {
+      // #149：能力开关同样只认 status 响应，无邮件实例表单不渲染邮箱字段
+      mailEnabled.value = status.mailEnabled
+      phase.value = 'form'
+    } else {
+      applyStatus(status)
+    }
   } catch {
     // 已提交过的链接（410）不再能读表单：直接进入状态轮询视图（#134 主路径）
     await refreshStatus()
@@ -181,8 +203,11 @@ onBeforeUnmount(stopPolling)
 function validate(): boolean {
   const errors: typeof fieldErrors.value = {}
   if (application.displayName.trim().length === 0) errors.displayName = '请填写显示名'
-  if (application.emailPrefix.trim().length === 0) errors.emailPrefix = '请填写邮箱前缀'
-  if (application.personalEmail.trim().length === 0) errors.personalEmail = '请填写个人邮箱'
+  // #149：无邮件实例无邮箱字段，两邮箱校验整体跳过（行内错误随 errors 重建自然清空）
+  if (mailEnabled.value) {
+    if (application.emailPrefix.trim().length === 0) errors.emailPrefix = '请填写邮箱前缀'
+    if (application.personalEmail.trim().length === 0) errors.personalEmail = '请填写个人邮箱'
+  }
   if (!/^[a-zA-Z0-9_-]{3,32}$/.test(application.username ?? '')) {
     errors.username = '用户名需为 3-32 位字母/数字/_/-'
   }
@@ -196,6 +221,26 @@ function validate(): boolean {
   return Object.keys(errors).length === 0
 }
 
+/**
+ * 提交载荷（#149）：有邮件实例带邮箱两字段（现行为零变化）；无邮件实例
+ * body 完全不带这两键（省略而非显式 undefined，服务端两字段可省）。
+ */
+function buildSubmission(
+  username: string | undefined,
+  credentials: { salt: string; proof: string } | undefined,
+): InviteSubmission {
+  const body: InviteSubmission = {
+    displayName: application.displayName.trim(),
+    username,
+    ...credentials,
+  }
+  if (mailEnabled.value) {
+    body.emailPrefix = application.emailPrefix.trim()
+    body.personalEmail = application.personalEmail.trim()
+  }
+  return body
+}
+
 async function onSubmit() {
   submitError.value = ''
   if (!validate()) return
@@ -207,13 +252,7 @@ async function onSubmit() {
       const salt = generateSalt()
       credentials = { salt, proof: await deriveProof(application.password ?? '', salt) }
     }
-    await submitInvite(token, {
-      displayName: application.displayName.trim(),
-      emailPrefix: application.emailPrefix.trim(),
-      personalEmail: application.personalEmail.trim(),
-      username,
-      ...credentials,
-    })
+    await submitInvite(token, buildSubmission(username, credentials))
     // 提交成功即进入状态轮询（#134）：先立刻查一次，pending 才挂自动轮询
     await refreshStatus()
   } catch (err) {
@@ -234,7 +273,9 @@ async function onSubmit() {
       <div v-else-if="phase === 'submitted'" class="invite-done" role="status">
         <MailCheck class="invite-done-icon" :size="28" aria-hidden="true" />
         <h1 class="invite-title">管理员审批中</h1>
-        <p class="invite-desc">申请已提交。管理员批准后，本页会出现「设置邮箱密码」入口；你也可以稍后回来刷新。</p>
+        <!-- #149：mailEnabled=true 保现文案逐字不变；无邮件实例批准即激活，无设密入口 -->
+        <p v-if="mailEnabled" class="invite-desc">申请已提交。管理员批准后，本页会出现「设置邮箱密码」入口；你也可以稍后回来刷新。</p>
+        <p v-else class="invite-desc">申请已提交。管理员批准后即可直接登录；你也可以稍后回来刷新。</p>
         <UButton
           class="invite-refresh"
           variant="outline"
@@ -247,7 +288,12 @@ async function onSubmit() {
         </UButton>
       </div>
 
-      <div v-else-if="phase === 'approved'" class="invite-done" role="status">
+      <!-- #149：有邮件实例 approved = 待设邮箱密码（逐字零变化）；无邮件 approved 即激活，与 activated 同视图 -->
+      <div
+        v-else-if="phase === 'approved' && mailEnabled"
+        class="invite-done"
+        role="status"
+      >
         <KeyRound class="invite-done-icon" :size="28" aria-hidden="true" />
         <h1 class="invite-title">管理员已批准！</h1>
         <p class="invite-desc">最后一步：设置你的邮箱密码，设置完成后即可使用邮箱登录。</p>
@@ -258,10 +304,10 @@ async function onSubmit() {
         </UButton>
       </div>
 
-      <div v-else-if="phase === 'activated'" class="invite-done" role="status">
+      <div v-else-if="phase === 'approved' || phase === 'activated'" class="invite-done" role="status">
         <MailCheck class="invite-done-icon" :size="28" aria-hidden="true" />
         <h1 class="invite-title">全部就绪</h1>
-        <p class="invite-desc">邮箱密码已设置完成。请前往登录页，使用邮箱与密码登录。</p>
+        <p class="invite-desc">{{ readyDesc }}</p>
         <UButton size="lg" class="invite-submit" data-test="go-login" @click="onGoLogin">
           <LogIn :size="16" aria-hidden="true" />
           去登录
@@ -317,6 +363,7 @@ async function onSubmit() {
           reserve-error-line
         />
         <UInput
+          v-if="mailEnabled"
           v-model="application.emailPrefix"
           label="邮箱前缀"
           name="email_prefix"
@@ -326,6 +373,7 @@ async function onSubmit() {
           reserve-error-line
         />
         <UInput
+          v-if="mailEnabled"
           v-model="application.personalEmail"
           label="个人邮箱"
           type="email"
