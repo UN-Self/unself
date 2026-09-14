@@ -364,7 +364,7 @@ describe('SettingsPage 邮件轴开关（P4）', () => {
     return wrapper.find('button[role="switch"]')
   }
 
-  it('开关按 mail.enabled 渲染 aria-checked；点击只 PUT { mail: { enabled: false } }，成功后 aria-checked=false', async () => {
+  it('#159 表单语义：切换开关不发请求（只改本地状态并收起配置区），点「保存」才 PUT mail.enabled=false', async () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
@@ -374,34 +374,46 @@ describe('SettingsPage 邮件轴开关（P4）', () => {
     await sw.trigger('click')
     await flushPromises()
 
-    // 只带 enabled（关≠清配置：baseUrl/apiKey 等字段绝不出现在 PUT body）
-    expect(saveSettings).toHaveBeenCalledTimes(1)
-    expect(saveSettings).toHaveBeenCalledWith({ mail: { enabled: false } })
-    const body = vi.mocked(saveSettings).mock.calls[0]![0] as Record<string, Record<string, unknown>>
-    expect(Object.keys(body.mail as object)).toEqual(['enabled'])
+    // 切换不发请求；折叠立即生效（本地表单状态）
+    expect(saveSettings).not.toHaveBeenCalled()
     expect(findSwitch(wrapper).attributes('aria-checked')).toBe('false')
+    const config = wrapper.find('.mail-config')
+    expect(config.classes()).not.toContain('is-open')
+    expect(config.attributes('aria-hidden')).toBe('true')
+
+    // 保存 → 随其余字段一次落库（enabled:false，关≠清配置：无其它字段被下发）
+    const saveBtn = wrapper.findAll('button').find((b) => b.text() === '保存')
+    await saveBtn!.trigger('click')
+    await flushPromises()
+
+    expect(saveSettings).toHaveBeenCalledTimes(1)
+    const body = vi.mocked(saveSettings).mock.calls[0]![0] as Record<string, Record<string, unknown>>
+    // enabled 随保存落库；密钥字段绝不回传（MASK 语义）
+    expect(body.mail!.enabled).toBe(false)
+    expect(body.mail!.apiKey).toBeUndefined()
+    expect(body.mail!.password).toBeUndefined()
   })
 
-  it('关闭态：配置区收进折叠 details（不含 open）+ 测试按钮 disabled + 灰字提示在场', async () => {
+  it('关闭态：配置区收起（grid-rows 过渡容器无 is-open + inert）+ 测试按钮 disabled + 灰字提示在场', async () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
     await findSwitch(wrapper).trigger('click')
     await flushPromises()
 
-    const details = wrapper.find('details.mail-config-toggle')
-    expect(details.exists()).toBe(true)
-    expect(details.attributes('open')).toBeUndefined()
-    expect(details.text()).toContain('展开邮件服务配置')
+    const config = wrapper.find('.mail-config')
+    expect(config.exists()).toBe(true)
+    expect(config.classes()).not.toContain('is-open')
+    expect(config.attributes('inert')).toBeDefined()
+    expect(config.attributes('aria-hidden')).toBe('true')
 
-    const mailTestBtn = details.findAll('button').find((b) => b.text().includes('测试连接'))
+    const mailTestBtn = config.findAll('button').find((b) => b.text().includes('测试连接'))
     expect(mailTestBtn!.attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('关闭后新成员不再开户与发信；已开通的邮箱不受影响')
-    // 开启态的提示行不在场
     expect(wrapper.text()).not.toContain('填写并保存配置后即可开启')
   })
 
-  it('无 mail 行（全字段空、密钥未配置）→ 开关 off + disabled + 折叠/测试禁用 + 「填写并保存配置后即可开启」；保存配置后开关即时解锁', async () => {
+  it('#159 无 mail 行（全字段空、密钥未配置）→ 开关 off+disabled、配置区**展开**（需先填表）、测试禁用；保存配置后开关解锁', async () => {
     vi.mocked(fetchSettings).mockResolvedValue({
       oidc: { issuer: 'https://idp.example.com', clientId: 'c1', clientSecret: SECRET_MASK, scope: 'openid' },
       mail: {
@@ -422,20 +434,19 @@ describe('SettingsPage 邮件轴开关（P4）', () => {
     const sw = findSwitch(wrapper)
     expect(sw.attributes('aria-checked')).toBe('false')
     expect(sw.attributes('disabled')).toBeDefined()
-    // 兼容兜底：即便状态异常也不发请求（disabled 双保险）
     await sw.trigger('click')
     await sw.trigger('keydown', { key: 'Enter' })
     expect(saveSettings).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('填写并保存配置后即可开启')
 
-    // 有效轴关 → 配置区同样折叠、测试按钮禁用（不出现「测试可用但轴关」的错位）
-    const details = wrapper.find('details.mail-config-toggle')
-    expect(details.exists()).toBe(true)
-    expect(details.attributes('open')).toBeUndefined()
-    const testBtn = details.findAll('button').find((b) => b.text().includes('测试连接'))
+    // 无配置 → 配置区展开（用户要能填表）、测试按钮禁用
+    const config = wrapper.find('.mail-config')
+    expect(config.classes()).toContain('is-open')
+    expect(config.attributes('inert')).toBeUndefined()
+    const testBtn = config.findAll('button').find((b) => b.text().includes('测试连接'))
     expect(testBtn!.attributes('disabled')).toBeDefined()
 
-    // 填写并保存配置 → 创建 mail 行：开关就地解锁（off→on，开关可交互），提示消失
+    // 填写并保存 → 创建 mail 行且带 enabled（表单语义：开关值随保存落库）
     const baseUrlInput = wrapper.findAll('input').find(
       (i) => i.attributes('placeholder') === 'https://mail.example.com',
     )
@@ -447,23 +458,26 @@ describe('SettingsPage 邮件轴开关（P4）', () => {
     expect(saveSettings).toHaveBeenCalledTimes(1)
     expect(vi.mocked(saveSettings).mock.calls[0]![0]).toEqual({
       oidc: { issuer: 'https://idp.example.com', clientId: 'c1', scope: 'openid' },
-      mail: { baseUrl: 'https://mail.example.com' },
+      mail: { baseUrl: 'https://mail.example.com', enabled: true },
     })
     expect(findSwitch(wrapper).attributes('disabled')).toBeUndefined()
     expect(findSwitch(wrapper).attributes('aria-checked')).toBe('true')
     expect(wrapper.text()).not.toContain('填写并保存配置后即可开启')
   })
 
-  it('保存失败 → 开关回滚到原值 + role=alert 显示错误（不触发「已保存」）', async () => {
+  it('保存失败 → role=alert 显示错误（不触发「已保存」）；开关保持用户所选（本地表单态，未落库）', async () => {
     vi.mocked(saveSettings).mockRejectedValueOnce(makeApiError(500, '保存失败：服务端错误'))
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    expect(findSwitch(wrapper).attributes('aria-checked')).toBe('true')
     await findSwitch(wrapper).trigger('click')
     await flushPromises()
+    expect(findSwitch(wrapper).attributes('aria-checked')).toBe('false')
 
-    expect(findSwitch(wrapper).attributes('aria-checked')).toBe('true')
+    const saveBtn = wrapper.findAll('button').find((b) => b.text() === '保存')
+    await saveBtn!.trigger('click')
+    await flushPromises()
+
     expect(wrapper.find('[role="alert"]').text()).toContain('保存失败：服务端错误')
     expect(wrapper.text()).not.toContain('已保存')
   })
