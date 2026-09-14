@@ -12,7 +12,7 @@
  * 断言打在行为上（HTTP 状态/库行/邮件副作用），改坏业务必红。
  */
 import type { MailSender } from '@unself/mail-smtp';
-import { createFakeMailProvisioner, type FakeMailProvisioner } from '@unself/stalwart-provisioner';
+import { createFakeMailProvisioner, type FakeMailProvisioner } from '@unself/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';

@@ -8,7 +8,7 @@
  * 断言打在行为（库行/邮件/调用参数）上，改坏业务必红。
  */
 import type { MailSender } from '@unself/mail-smtp';
-import { createFakeMailProvisioner } from '@unself/stalwart-provisioner';
+import { createFakeMailProvisioner } from '@unself/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';

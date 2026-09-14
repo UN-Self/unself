@@ -7,7 +7,7 @@
  * - 普通错误且 message 含 `HTTP 401/403`（JMAP 认证失败/权限不足）→ 502 + 检查 API Key 指引；
  * - 其它普通错误（网络/JMAP 形状等）→ 502，透传原 message（保持「<原前缀>：<原因>」可读性）。
  */
-import { MailProvisionerError } from '@unself/stalwart-provisioner';
+import { MailProvisionerError } from '@unself/contracts';
 
 /** 分类结果：映射后的 HTTP 状态码与人话 detail。 */
 export interface ClassifiedProvisionerFailure {
