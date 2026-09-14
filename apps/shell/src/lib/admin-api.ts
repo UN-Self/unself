@@ -99,6 +99,8 @@ export interface OidcSettings {
 }
 
 export interface MailSettings {
+  /** 邮件轴总开关（缺 enabled 的老数据后端视为 true，GET 恒回 boolean）。 */
+  enabled: boolean
   baseUrl: string
   apiKey: string
   domain: string
@@ -114,10 +116,10 @@ export interface InstanceSettings {
   mail: MailSettings
 }
 
-/** PUT body：字段可选；值为 '' / '***' / 缺省都表示不修改。 */
+/** PUT body：字段可选；值为 '' / '***' / 缺省都表示不修改；mail.enabled 可单独下发。 */
 export type SettingsUpdate = {
   oidc?: Partial<{ [K in keyof OidcSettings]: string }>
-  mail?: Partial<{ [K in keyof OidcSettings]: string }> & Partial<{ [K in keyof MailSettings]: string | number | '' }>
+  mail?: Partial<{ [K in keyof OidcSettings]: string }> & Partial<{ [K in keyof MailSettings]: string | number | '' | boolean }>
 }
 
 export function fetchSettings(): Promise<InstanceSettings> {
