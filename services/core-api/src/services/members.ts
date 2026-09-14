@@ -61,6 +61,23 @@ export async function setMemberStatus(
 }
 
 /**
+ * mail 段 JSON 必须是非数组对象；解析失败/类型不符 → {}（弱化实例不 500）。
+ * 唯一副本：settings 路由（读写合并）与能力判定（isMailEnabled/configuredMailProvisioner）共用，
+ * 别处不得再写同语义解析（一职责一处）。
+ */
+export function parseMailSection(raw: string | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
  * 单点读取 instance_config 的 mail 段（只判有无/取原文，不解析）。
  * 能力判定唯一真相源（#149）：isMailEnabled 与 configuredMailProvisioner 共用本 helper，
  * 别处不得重写同语义 SQL（一文件一职责：mail 段读取只此一处）。
@@ -73,15 +90,20 @@ async function readMailSegment(db: D1Database): Promise<{ value: string } | null
 }
 
 /**
- * 实例邮件轴能力开关：mail 段有无 = 邮件轴能力开关（#149）。
- * 有段=完整实例（开户/激活链接），无段=弱化实例（批准即激活，表单不采集邮箱）。
+ * 实例邮件轴能力开关（#149，邮件轴开关后含 enabled 轴）：
+ * mail 行存在且 enabled !== false = 完整实例（开户/激活链接）；
+ * 无行或 enabled === false = 弱化实例（批准即激活，表单不采集邮箱）。
+ * 解析失败/缺 enabled 字段的老数据 → true（生产零迁移兼容）。
  */
 export async function isMailEnabled(db: D1Database): Promise<boolean> {
-  return (await readMailSegment(db)) !== null;
+  const row = await readMailSegment(db);
+  if (!row) return false;
+  return parseMailSection(row.value).enabled !== false;
 }
 
 /**
- * 配置有 mail 段才惰性构建 provisioner；无段即弱化实例（null，静默降级）。
+ * 配置有 mail 段且未被开关关闭（enabled !== false）才惰性构建 provisioner；
+ * 无段或 enabled === false 即弱化实例（null，静默降级——批准仍走「批准即激活」，不开户）。
  * 生产走 defaultCreateMailProvisioner；单测在外部边界注入假实现（#20 fake，routing 断言用）。
  */
 export async function configuredMailProvisioner(
@@ -89,7 +111,7 @@ export async function configuredMailProvisioner(
   createMailProvisioner: CreateMailProvisioner = defaultCreateMailProvisioner,
 ): Promise<MailProvisioner | null> {
   const config = await readMailSegment(db);
-  if (!config) {
+  if (!config || parseMailSection(config.value).enabled === false) {
     return null;
   }
   return createMailProvisioner(JSON.parse(config.value));
