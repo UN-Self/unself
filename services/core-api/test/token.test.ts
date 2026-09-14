@@ -2,7 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import { importJWK, jwtVerify } from 'jose';
 
-import app from '../src/index';
+import { createApp } from '../src/index';
+
+const app = createApp();
 import { generateInstanceKeyPair } from '../src/keys';
 import { createCoreDb, type CoreTestDb } from './test-factory';
 

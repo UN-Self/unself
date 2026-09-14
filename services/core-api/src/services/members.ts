@@ -25,10 +25,10 @@ export interface MemberAccess {
 export type CreateMailProvisioner = (mailConfig: unknown) => MailProvisioner;
 
 /**
- * 生产组合根装配点（#141 分层归位后）：core-api 服务域只认 contracts 契约，
- * Stalwart 适配器由部署器（deploy/cloudflare）注入到 createApp（配置校验随适配器）。
- * 未注入且 mail 段存在时回退内存假实现：无网络副作用，发信/开户动作仅入审计与日志——
- * 生产必须由部署器注入真实现；此回退仅为「依赖已摘除后仍可启动」的弱化实例口径。
+ * 生产组合根装配点（#141 分层归位后）：core-api 服务域只认 contracts 契约。
+ * 默认装配 = contracts 内存假实现（无网络副作用，测试/本地便利）；【生产入口必须注入真实现】：
+ * deploy/cloudflare 生成 Worker 入口经 createApp({ createMailProvisioner }) 注入 Stalwart 适配器，
+ * 未注入的生产部署开户/改密只入内存不生效——这是显式回退，不是弱化实例口径。
  */
 const defaultCreateMailProvisioner: CreateMailProvisioner = () => createFakeMailProvisioner();
 

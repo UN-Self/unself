@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import app from '../src/index';
+import { createApp } from '../src/index';
+
+const app = createApp();
 import { generateInstanceKeyPair } from '../src/keys';
 import { resetOidcCaches } from '../src/oidc';
 import { createCoreDb, type CoreTestDb } from './test-factory';

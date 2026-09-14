@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { ModuleTokenClaimsSchema } from '@unself/contracts';
 import { verifyModuleToken } from '@unself/module-sdk';
 
-import app from '../src/index';
+import { createApp } from '../src/index';
+
+const app = createApp();
 import { generateInstanceKeyPair } from '../src/keys';
 import { createCoreDb } from './test-factory';
 

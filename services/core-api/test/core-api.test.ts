@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import app from '../src/index';
+import { createApp } from '../src/index';
+
+const app = createApp();
 
 describe('core-api', () => {
   it('GET /api/health 返回 200 与预期 body', async () => {

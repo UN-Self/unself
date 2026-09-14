@@ -146,6 +146,16 @@ describe('coreWorkerEntrySource', () => {
     expect(src).toContain("from '../../services/core-api/src/index.ts'");
     expect(src).toContain('SPDX-License-Identifier');
   });
+
+  it('#141 生产组合根：生成入口注入真 Stalwart 适配器，不落无参 createApp', () => {
+    const src = coreWorkerEntrySource('/repo/.deploy/cloudflare', '/repo');
+    expect(src).toContain("import { createApp } from '../../services/core-api/src/index.ts'");
+    expect(src).toContain("from '../../adapters/provisioning/stalwart/src/index.ts'");
+    expect(src).toContain('createStalwartMailProvisioner');
+    expect(src).toContain('createMailProvisioner:');
+    // 回归守卫：模块级无参固化（createApp() 零参调用）不得再出现
+    expect(src).not.toMatch(/createApp\(\s*\)/);
+  });
 });
 
 describe('buildModuleSdkAssets（T3 页面 SDK 装载契约）', () => {
