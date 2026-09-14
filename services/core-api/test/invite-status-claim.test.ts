@@ -156,7 +156,9 @@ describe('#134 邀请状态三态（GET /api/invite/:token/status）', () => {
     const activation = db.first<{ token_hash: string }>('SELECT token_hash FROM invite_activations');
     expect(activation).not.toBeNull();
     const activated = await consumeInviteActivation(db.d1, activation!.token_hash);
-    expect(activated).toEqual({ email: 'u_new@example.com' });
+    // #151：consume 回 { email, used_at }（used_at = 本次写入值，供失败回滚精确守卫）
+    expect(activated).toMatchObject({ email: 'u_new@example.com' });
+    expect(activated?.used_at).toBeTruthy();
 
     const activatedRes = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(activatedRes.status).toBe(200);

@@ -43,17 +43,37 @@ export async function findInviteActivation(
     .first<{ email: string }>();
 }
 
-/** 原子消费（一次性）：命中回工作邮箱，已用/过期/不存在回 null。 */
+/**
+ * 原子消费（一次性）：命中回 `{ email, used_at }`（used_at = 本次写入值，供失败回滚精确守卫），
+ * 已用/过期/不存在回 null。
+ */
 export async function consumeInviteActivation(
   db: D1Database,
   tokenHash: string,
-): Promise<{ email: string } | null> {
+): Promise<{ email: string; used_at: string } | null> {
   return db
     .prepare(
-      "UPDATE invite_activations SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') RETURNING email",
+      "UPDATE invite_activations SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') RETURNING email, used_at",
     )
     .bind(tokenHash)
-    .first<{ email: string }>();
+    .first<{ email: string; used_at: string }>();
+}
+
+/**
+ * 消费回滚（#151）：后续动作失败时把令牌还给用户——
+ * 仅当 used_at 仍是「我们本次写入的那个值」才清（精确守卫）：期间被 claim 重签作废
+ * （used_at 被改成别的值）或已被再次消费时不动，避免误放行。回滚命中返回 true。
+ */
+export async function releaseInviteActivation(
+  db: D1Database,
+  tokenHash: string,
+  consumedAt: string,
+): Promise<boolean> {
+  const result = await db
+    .prepare('UPDATE invite_activations SET used_at = NULL WHERE token_hash = ? AND used_at = ?')
+    .bind(tokenHash, consumedAt)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
 }
 
 export interface InviteActivationRecord {

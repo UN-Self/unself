@@ -9,7 +9,8 @@
  * - 令牌明文只出现在邮件链接里，库里只有 SHA-256（one-time-token.ts）；
  * - 激活只改邮箱侧密码，不建用户档案（工作台首登 JIT 建档，#49）；
  * - resetPassword 失败按 #115 状态码口径映射（#150）：409/502 + activate 语境人话，
- *   且因令牌已先消费，响应一律带「回邀请页重新获取链接」的出路指引。
+ *   #151 修正：resetPassword 失败时**精确回滚本次消费**（密码没设上不烧链接，可原地重试）；
+ *   回滚精确守卫到本次写入的 used_at，期间被 claim 重签作废的令牌不会误放行。
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -17,10 +18,11 @@ import { z } from 'zod';
 import type { Bindings, CoreApiDependencies } from '../index';
 import { hashOneTimeToken } from '../one-time-token';
 import { audit } from '../services/audit';
-import { consumeInviteActivation, findInviteActivation } from '../services/invite-activations';
+import { consumeInviteActivation, findInviteActivation, releaseInviteActivation } from '../services/invite-activations';
 import { configuredMailProvisioner } from '../services/members';
 import {
   activationFailureDetail,
+  activationRetryDetail,
   classifyProvisionerFailure,
 } from '../services/provisioner-errors';
 
@@ -76,13 +78,23 @@ export function registerActivateRoutes(
       return c.json({ error: INVALID_LINK }, 404);
     }
     // resetPassword 失败不裸 500（#150）：状态码按 #115 同口径映射（ACCOUNT_NOT_FOUND→409、
-    // 认证失败 HTTP 401/403→502+API Key 指引、其它→502），文案换 activate 语境。
-    // 注意：令牌已在上一行原子消费——所以失败响应一律带「回邀请页重新获取链接」的指引。
+    // 密码策略→400、认证失败 HTTP 401/403→502+API Key 指引、其它→502）。
+    // #151：先前置消费 + 失败回滚（精确守卫到本次写入的 used_at）——密码没设上就不该烧链接，
+    // 用户可拿同一条链接直接重试；回滚命中与否决定人话走「重试」还是「重新获取」出路。
     try {
       await provisioner.resetPassword({ email: activation.email, password: parsed.data.password });
     } catch (error) {
       const failure = classifyProvisionerFailure(error, activation.email);
-      return c.json({ error: activationFailureDetail(failure.detail) }, failure.status);
+      const released = await releaseInviteActivation(
+        db,
+        await hashOneTimeToken(c.req.param('token')),
+        activation.used_at,
+      );
+      await audit(db, 'system', 'activation_reset_failed', activation.email);
+      const detail = released
+        ? activationRetryDetail(failure.detail)
+        : activationFailureDetail(failure.detail);
+      return c.json({ error: detail }, failure.status);
     }
     await audit(db, 'system', 'account_activated', activation.email);
     return c.json({ ok: true, loginHint: LOGIN_HINT });
