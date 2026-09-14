@@ -347,4 +347,45 @@ describe('激活域 HTTP（#18）', () => {
       )?.used_at,
     ).toBeNull();
   });
+
+  it('过期链接：GET/POST 均 404（人话不变式），令牌不烧', async () => {
+    const provisioner = createFakeMailProvisioner();
+    const sent: SentMail[] = [];
+    const app = createApp({
+      createMailProvisioner: () => provisioner,
+      createMailSender: () => fakeSender(sent),
+    });
+    const { env, db, adminCookie } = await envFor(true);
+    const { tokenHash } = await approvedInvite(app, env, adminCookie);
+    const { activateToken } = activationFromMail(sent);
+
+    // 前置：未过期时 GET 可读（证明 404 确由过期分支触发，而非路由/令牌问题）
+    const before = await app.request(`https://team.example.com/api/activate/${activateToken}`, {}, env);
+    expect(before.status).toBe(200);
+
+    // 把 48h 限期翻到过去：模拟签发两天前的链接今天才点开
+    db.run(
+      "UPDATE invite_activations SET expires_at = datetime('now', '-1 minute') WHERE invite_token_hash = ?",
+      tokenHash,
+    );
+
+    // GET 展示路径：过期后回统一人话 404（不区分不存在/已用/过期，不泄露状态机）
+    const read = await app.request(`https://team.example.com/api/activate/${activateToken}`, {}, env);
+    expect(read.status).toBe(404);
+    expect(await read.json()).toEqual({ error: '激活链接无效、已使用或已过期' });
+
+    // POST 消费路径：同样 404，密码未被设置
+    const activated = await activate(app, env, activateToken, 'super-secret-1');
+    expect(activated.status).toBe(404);
+    expect(await activated.json()).toEqual({ error: '激活链接无效、已使用或已过期' });
+    expect(provisioner.calls.filter((call) => call.method === 'resetPassword')).toHaveLength(0);
+
+    // 过期不烧令牌：used_at 仍为 null（重发可换新链接，而非误标已用）
+    expect(
+      db.first<{ used_at: string | null }>(
+        'SELECT used_at FROM invite_activations WHERE invite_token_hash = ?',
+        tokenHash,
+      )?.used_at,
+    ).toBeNull();
+  });
 });
