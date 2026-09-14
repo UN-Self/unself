@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-
 /**
  * Stalwart 0.16 MailProvisioner 实现（JMAP 对象协议，POST /jmap）。
  * 设计依据：docs/PRODUCT_SPEC.md §6.6 决策表 + §5.7 末段 Stalwart 适配事实。
  * 只实现四方法；错误处理仅在 JMAP 调用边界，不做重试/缓存/批量优化。
+ *
+ * #141 分层归位：错误契约（MailProvisionerError/Code）与内存假实现全部上提
+ * @unself/contracts，本包只剩协议细节；同名符号从本包 re-export，
+ * 外部导入路径不变（tests/core-api 存量 import 零改动）。
  */
 
 import type {
@@ -13,6 +16,15 @@ import type {
   MailProvisioner,
   ResetMailAccountPasswordInput,
 } from '@unself/contracts';
+
+export {
+  createFakeMailProvisioner,
+  type FakeMailCall,
+  type FakeMailProvisioner,
+  MailProvisionerError,
+  type MailProvisionerErrorCode,
+} from '@unself/contracts';
+import { MailProvisionerError } from '@unself/contracts';
 import {
   postJmap,
   requireResponse,
@@ -20,20 +32,6 @@ import {
   type JmapMethodCall,
   type JmapResponse,
 } from './jmap.ts';
-
-/** 邮箱开户错误码：只覆盖真实错误面中被调用方需要区分的两种。 */
-export type MailProvisionerErrorCode = 'ACCOUNT_EXISTS' | 'ACCOUNT_NOT_FOUND';
-
-/** 携带错误码的开户失败；#18/#17 按需消费 code。 */
-export class MailProvisionerError extends Error {
-  readonly code: MailProvisionerErrorCode;
-
-  constructor(code: MailProvisionerErrorCode, message: string) {
-    super(message);
-    this.name = 'MailProvisionerError';
-    this.code = code;
-  }
-}
 
 /** mail 段配置（unself.config / instance_config `mail` 键）。 */
 export interface StalwartProvisionerConfig {
