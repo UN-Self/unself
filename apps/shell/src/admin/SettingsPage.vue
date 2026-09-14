@@ -8,9 +8,10 @@ import {
   fetchSettings,
   saveSettings,
   SECRET_MASK,
+  testMailConnection,
   type ApiError,
   type InstanceSettings,
-  testMailConnection,
+  type MailTestResult,
 } from '../lib/admin-api'
 import { testOidcConnection } from '../lib/setup-api'
 
@@ -48,7 +49,12 @@ const saveError = ref<string | null>(null)
 const saved = ref(false)
 const testOk = ref<null | { warnings: string[] }>(null)
 const testFailReason = ref<string | null>(null)
-const mailTest = ref<any>(null)
+
+// 邮件测试状态（#139）：与 OIDC 测试的 testing/testFailReason 完全独立，
+// 失败信息只渲染在邮件卡内，两个测试按钮互不干扰。
+const mailTesting = ref(false)
+const mailTestError = ref<string | null>(null)
+const mailTest = ref<{ provisioner: MailTestResult; sender: MailTestResult } | null>(null)
 
 onMounted(load)
 
@@ -122,7 +128,18 @@ async function onSave(): Promise<void> {
   }
 }
 
-async function onTestMailConnection(): Promise<void> { testing.value = true; mailTest.value = null; try { mailTest.value = await testMailConnection() } catch (err) { testFailReason.value = (err as ApiError).message } finally { testing.value = false } }
+async function onTestMailConnection(): Promise<void> {
+  mailTesting.value = true
+  mailTestError.value = null
+  mailTest.value = null
+  try {
+    mailTest.value = await testMailConnection()
+  } catch (err) {
+    mailTestError.value = (err as ApiError).message
+  } finally {
+    mailTesting.value = false
+  }
+}
 
 async function onTestConnection(): Promise<void> {
   testing.value = true
@@ -214,10 +231,24 @@ async function onTestConnection(): Promise<void> {
           <p class="secret-hint">{{ passwordConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
           <UInput v-model="from" label="发件地址" placeholder="no-reply@example.com" />
         </div>
+
+        <UButton variant="outline" :loading="mailTesting" class="test-btn" @click="onTestMailConnection">
+          测试连接
+        </UButton>
+        <p v-if="mailTestError" class="form-alert" role="alert">{{ mailTestError }}</p>
+        <div v-if="mailTest" class="mail-test-results" role="status">
+          <!-- 以轴名（provisioner/sender）做 key，detail 文本可能重复不能当 key（#139） -->
+          <div
+            v-for="(item, axis) in mailTest"
+            :key="axis"
+            :class="['mail-test-card', item.ok ? 'is-ok' : 'is-fail']"
+          >
+            <strong>{{ item.ok ? '成功' : '失败' }}</strong>
+            <span>{{ item.detail }}</span>
+          </div>
+        </div>
       </UCard>
 
-        <UButton variant="outline" :loading="testing" class="test-btn" @click="onTestMailConnection">测试连接</UButton>
-        <div v-if="mailTest" class="mail-test-results" role="status"><div v-for="item in [mailTest.provisioner, mailTest.sender]" :key="item.detail" :class="['mail-test-card', item.ok ? 'is-ok' : 'is-fail']"><strong>{{ item.ok ? '成功' : '失败' }}</strong><span>{{ item.detail }}</span></div></div>
       <UButton :loading="saving" @click="onSave">保存</UButton>
     </template>
   </div>
