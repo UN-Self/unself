@@ -9,6 +9,7 @@ import SetupView from './SetupView.vue'
 import { decideSetupAccess } from './lib/setup-guard'
 import { getSetupStatus } from './lib/setup-api'
 import { loginUrl } from './lib/session-api'
+import { requestOk } from './lib/api-client'
 import { installAuthGuard } from './lib/guarded-fetch'
 
 /**
@@ -55,11 +56,11 @@ router.beforeEach(async (to) => {
   const token = typeof to.query.token === 'string' ? to.query.token : undefined
   try {
     const status = await getSetupStatus(token)
-    const me = await fetch('/api/me', { credentials: 'same-origin' })
+    const me = await requestOk('/api/me')
     const decision = decideSetupAccess({
       setupDone: status.done,
       hasToken: Boolean(token),
-      authenticated: me.ok,
+      authenticated: me,
     })
     if (decision === 'redirect-workspace') return '/'
     if (decision === 'redirect-login') return '/login'

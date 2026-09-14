@@ -3,7 +3,10 @@
 /**
  * 会话客户端（#11）：登录态查询、登出、登录跳转。
  * 后端契约：core-api #5（GET /api/me、POST /api/auth/logout、GET /api/auth/login）。
+ * 传输统一走 lib/api-client（#142）：探测语义（不抛错）由 requestOk 提供。
  */
+
+import { request, send } from './api-client'
 
 /** 当前用户（/api/me 200）。role 供前端视图判断（管理入口显隐），真值以服务端守卫为准。 */
 export interface SessionUser {
@@ -18,15 +21,11 @@ export type MeResult =
   | { authenticated: true; user: SessionUser }
   | { authenticated: false }
 
-/** 查询会话态；网络错误视为未登录（由调用方决定提示）。 */
+/** 查询会话态；网络错误/非 2xx/形状不符均视为未登录（由调用方决定提示）。 */
 export async function fetchMe(): Promise<MeResult> {
   try {
-    const res = await fetch('/api/me', { credentials: 'same-origin' })
-    if (!res.ok) {
-      return { authenticated: false }
-    }
-    const body = (await res.json()) as { authenticated: boolean; user?: SessionUser }
-    if (body.authenticated && body.user) {
+    const body = await request<{ authenticated: boolean; user?: SessionUser }>('/api/me')
+    if (body?.authenticated && body.user) {
       return { authenticated: true, user: body.user }
     }
     return { authenticated: false }
@@ -38,9 +37,9 @@ export async function fetchMe(): Promise<MeResult> {
 /** 登出：清会话 Cookie（后端同时清 HttpOnly），前端回到登录页由调用方处理。 */
 export async function logout(): Promise<void> {
   try {
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
+    await send('/api/auth/logout', { method: 'POST' })
   } catch {
-    // 网络失败也继续：本地会话态按已登出处理
+    // 网络失败/非 2xx 也继续：本地会话态按已登出处理
   }
 }
 

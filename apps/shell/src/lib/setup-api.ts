@@ -11,58 +11,15 @@
  * 直线流程（#55）：提交配置落库 → 整页跳登录 → 回来自动提权成首个管理员 → 进工作台。
  * 后端契约见 services/core-api（#5/#55）。异常三层透传（§6.5）：
  * 成员/部署者只见人话 + request id，技术详情折叠。
+ * 传输/错误构造统一走 lib/api-client（#142）：本文件只留端点函数、人话映射与域类型。
  */
 
-/** 后端 JSON 错误形状（core-api 统一 { error }）。 */
-export interface ApiError extends Error {
-  status: number
-  /** 服务端 request id（X-Request-Id 或响应体），透传给异常卡。 */
-  requestId?: string
-  detail?: string
-}
+import { request, type ApiError } from './api-client'
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(path, { credentials: 'same-origin', ...init })
-  } catch {
-    throw makeError(0, '网络不可用，请检查连接后重试')
-  }
-  const requestId = res.headers.get('x-request-id') ?? undefined
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string; detail?: string } | null
-    throw makeError(res.status, humanize(res.status, body?.error), requestId, body?.detail)
-  }
-  return (await res.json()) as T
-}
+export type { ApiError }
 
-function makeError(status: number, message: string, requestId?: string, detail?: string): ApiError {
-  const err = new Error(message) as ApiError
-  err.status = status
-  err.requestId = requestId
-  err.detail = detail
-  return err
-}
-
-/** 服务端错误 → 人话（§6.5：不暴露堆栈/内部错误码）。 */
-function humanize(status: number, serverMessage?: string): string {
-  switch (status) {
-    case 0:
-      return '网络不可用，请检查连接后重试'
-    case 400:
-      return '链接不完整：请使用部署输出里的完整激活链接'
-    case 401:
-      return '需要先登录工作账号才能完成激活'
-    case 403:
-      return '激活链接无效或已被使用，请向部署者要新的链接'
-    case 409:
-      return '实例已完成配置，setup 页面已关闭'
-    case 503:
-      return '服务尚未就绪，请稍后重试或联系部署者'
-    default:
-      return serverMessage ? `配置失败（${status}）` : `配置失败（${status}），请稍后重试`
-  }
-}
+/** testOidcConnection 的响应体子集（成功/失败共用形状）。 */
+type OidcTestBody = { ok?: boolean; issuer?: string; warnings?: unknown; error?: string } | null
 
 /** setup 状态（GET /api/setup/status）。 */
 export interface SetupStatus {
@@ -74,7 +31,7 @@ export interface SetupStatus {
 
 export function getSetupStatus(token?: string): Promise<SetupStatus> {
   const query = token ? `?token=${encodeURIComponent(token)}` : ''
-  return request<SetupStatus>(`/api/setup/status${query}`)
+  return request<SetupStatus>(`/api/setup/status${query}`, undefined, { messagePolicy: humanize })
 }
 
 /** 激活结果（POST /api/setup/activate）。 */
@@ -111,6 +68,7 @@ export function saveOidcConfig(
         clientSecret: oidc.clientSecret,
       }),
     },
+    { messagePolicy: humanize },
   )
 }
 
@@ -121,7 +79,27 @@ export function saveOidcConfig(
 export function activateSetup(token: string): Promise<ActivateResult> {
   return request<ActivateResult>(`/api/setup/activate?token=${encodeURIComponent(token)}`, {
     method: 'POST',
-  })
+  }, { messagePolicy: humanize })
+}
+
+/** 服务端错误 → 人话（§6.5：不暴露堆栈/内部错误码）。 */
+function humanize(status: number, serverMessage?: string): string {
+  switch (status) {
+    case 0:
+      return '网络不可用，请检查连接后重试'
+    case 400:
+      return '链接不完整：请使用部署输出里的完整激活链接'
+    case 401:
+      return '需要先登录工作账号才能完成激活'
+    case 403:
+      return '激活链接无效或已被使用，请向部署者要新的链接'
+    case 409:
+      return '实例已完成配置，setup 页面已关闭'
+    case 503:
+      return '服务尚未就绪，请稍后重试或联系部署者'
+    default:
+      return serverMessage ? `配置失败（${status}）` : `配置失败（${status}），请稍后重试`
+  }
 }
 
 /**
@@ -143,25 +121,29 @@ export async function testOidcConnection(
     return { ok: false, reason: 'Issuer 地址需要以 https:// 开头' }
   }
   try {
-    const res = await fetch('/api/oidc/test-connection', {
+    const body = await request<OidcTestBody>('/api/oidc/test-connection', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ issuer }),
-      credentials: 'same-origin',
     })
-    const body = (await res.json().catch(() => null)) as
-      | { ok?: boolean; issuer?: string; warnings?: unknown; error?: string }
-      | null
-    if (!res.ok || !body?.ok) {
-      return { ok: false, reason: humanizeOidcTest(res.status, body?.error) }
+    if (body?.ok) {
+      return {
+        ok: true,
+        issuer: body.issuer ?? issuer,
+        warnings: Array.isArray(body.warnings) ? body.warnings.filter((w): w is string => typeof w === 'string') : [],
+      }
     }
-    return {
-      ok: true,
-      issuer: body.issuer ?? issuer,
-      warnings: Array.isArray(body.warnings) ? body.warnings.filter((w): w is string => typeof w === 'string') : [],
+    // 2xx 但 body.ok=false：历史口径按实际状态码（200）映射人话
+    return { ok: false, reason: humanizeOidcTest(200, body?.error) }
+  } catch (err) {
+    const apiErr = err as ApiError
+    if (apiErr.status === 0) {
+      return { ok: false, reason: '连接测试失败：请确认服务端可访问该 Issuer' }
     }
-  } catch {
-    return { ok: false, reason: '连接测试失败：请确认服务端可访问该 Issuer' }
+    // 非 2xx：message 已按默认策略收敛为 error 字段或 `请求失败（<status>）`，
+    // 后者等价于历史「拿不到 error」分支
+    const serverError = apiErr.message === `请求失败（${apiErr.status}）` ? undefined : apiErr.message
+    return { ok: false, reason: humanizeOidcTest(apiErr.status, serverError) }
   }
 }
 
