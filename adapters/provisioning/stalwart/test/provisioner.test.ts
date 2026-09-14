@@ -144,8 +144,8 @@ describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () =
     expect(bodies[0]).toMatchObject({ methodCalls: [['x:Domain/query', { filter: { name: 'example.com' } }, 'd']] });
     const create = (bodies[1] as { methodCalls: Array<[string, { create: Record<string, Record<string, unknown>> }]> })
       .methodCalls[0]![1].create['new1']!;
-    // 行为验证：载荷与 0.16.17 实测可用形状逐字段一致——credentials 键控对象（数组被拒
-    // invalidPatch），aliases/memberGroupIds 传 {}（数组被拒 Invalid value for aliases）
+    // 行为验证：载荷与 0.16.20 实测可用形状逐字段一致（键 '1' 纯数字在索引 List 下幸存）——
+    // credentials 键控对象（数组被拒 invalidPatch），aliases/memberGroupIds 传 {}（数组被拒 Invalid value for aliases）
     expect(create).toEqual({
       '@type': 'User',
       name: 'wang',
@@ -202,16 +202,23 @@ describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () =
     expect(queryGet.methodCalls).toEqual([['x:Account/query', { filter: { name: 'wang' } }, 'q']]);
     const setArgs = update.methodCalls[0]![1] as { update: Record<string, Record<string, unknown>> };
     const patch = setArgs.update['acc9']!;
+    // 0.16.20 定案形状（issue #148）：PermissionsList 的 enabled/disabledPermissions 是
+    // Map<Permission>（对象 + bool），不是数组。实测：数组形状 invalidPatch
+    // 「Invalid value for object property (permissions/enabledPermissions)」；Merge+map → updated
+    // 且登录 403。同形于上游 crates/scim/src/users/mod.rs set_active 的禁用形状。
     expect(patch).toEqual({
       permissions: {
-        '@type': 'Replace',
-        enabledPermissions: [],
-        disabledPermissions: ['authenticate'],
+        '@type': 'Merge',
+        enabledPermissions: {},
+        disabledPermissions: { authenticate: true },
       },
     });
+    const permissions = patch['permissions'] as Record<string, unknown>;
+    expect(Array.isArray(permissions['disabledPermissions'])).toBe(false); // 防回潮：不得是数组
   });
 
   it('enableAccount：update 恢复 Inherit', async () => {
+    // 0.16.20 实测：Inherit → updated，且禁用位摘除、登录恢复 200。
     const { bodies } = stubFetch([
       ['x:Account/query', { ids: ['acc9'] }, 'q'],
       ['x:Account/set', { updated: { acc9: null } }, 'u'],
@@ -223,9 +230,10 @@ describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () =
     expect(setArgs.update['acc9']).toEqual({ permissions: { '@type': 'Inherit' } });
   });
 
-  // 0.16.17 定案形状（issue #113）：update.credentials 用「随机新键 → Password」键控对象；
-  // 服务端按同 type 单凭据语义替换——凭据列表回到单条、credentialId 变更、旧密码 401。
-  it('resetPassword：credentials 随机新键键控对象（替换旧凭据）', async () => {
+  // 0.16.20 定案形状（issue #148）：credentials 属性是索引 List，patch 的 map 键必须是数字
+  // 索引（实测：随机/字母键 invalidPatch「Invalid key for object property」，数字键 "0" → updated，
+  // 旧密码 401 / 新密码 200）。0.16.17 的随机新键形状（issue #113）升 0.16.20 后失效。
+  it('resetPassword：credentials 数字索引键 "0"（替换旧凭据）', async () => {
     const { bodies } = stubFetch([
       ['x:Account/query', { ids: ['acc9'] }, 'q'],
       ['x:Account/set', { updated: { acc9: null } }, 'u'],
@@ -240,9 +248,8 @@ describe('createStalwartMailProvisioner（四方法行为，fetch mock）', () =
     expect(Object.keys(patch)).toEqual(['credentials']);
     const credentials = patch['credentials'] as Record<string, { '@type': string; secret: string }>;
     const keys = Object.keys(credentials);
-    expect(keys).toHaveLength(1);
-    expect(keys[0]).not.toBe('1'); // 每次 reset 随机新键，不与建号键 '1' 撞
-    expect(credentials[keys[0]!]).toEqual({ '@type': 'Password', secret: '新密码abc' });
+    expect(keys).toEqual(['0']); // 数字索引，服务端 parse::<u32>() 可接受；字母键被拒 invalidPatch
+    expect(credentials['0']).toEqual({ '@type': 'Password', secret: '新密码abc' });
   });
 
   // 0.16.17：query 精确匹配 0 命中 → 不再发 x:Account/get，直接 ACCOUNT_NOT_FOUND
