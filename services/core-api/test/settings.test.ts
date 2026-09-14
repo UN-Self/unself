@@ -109,6 +109,8 @@ const EMPTY_SETTINGS = {
     username: '',
     password: '',
     from: '',
+    // 老数据无 enabled 字段（含解析失败的 mail 段）→ 缺省视为开启。
+    enabled: true,
   },
 };
 
@@ -140,6 +142,7 @@ describe('实例设置查看/编辑（#17）', () => {
         username: 'mailer',
         password: '***',
         from: 'noreply@example.com',
+        enabled: true,
       },
     });
 
@@ -230,6 +233,7 @@ describe('实例设置查看/编辑（#17）', () => {
       username: 'mailer',
       password: '***',
       from: 'noreply@example.com',
+      enabled: true,
     });
 
     // 合并写回只换了 apiKey，库里其余 mail 字段原样。
@@ -324,5 +328,81 @@ describe('实例设置查看/编辑（#17）', () => {
     expect(memberGet.status).toBe(403);
     const memberPut = await putJson(app, JSON.stringify({ mail: { host: 'x' } }), memberCookie, env);
     expect(memberPut.status).toBe(403);
+  });
+
+  it('邮件轴开关（enabled）：提供即写、不提供保持，关开不丢配置、MASK 语义不变', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    // 关：只带 enabled:false → 库 JSON = 原字段 + enabled:false，apiKey/password 真值不被清也不被 MASK 覆盖
+    const off = await putJson(app, JSON.stringify({ mail: { enabled: false } }), adminCookie, env);
+    expect(off.status).toBe(200);
+    expect(await off.json()).toEqual({ ok: true });
+    expect(JSON.parse(db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value)).toEqual({
+      baseUrl: 'https://mail.example.com',
+      apiKey: 'api-key',
+      domain: 'example.com',
+      host: 'smtp.example.com',
+      port: 2525,
+      username: 'mailer',
+      password: 'smtp-pass',
+      from: 'noreply@example.com',
+      enabled: false,
+    });
+
+    // GET：enabled:false，密钥仍回 MASK（开关不影响脱敏视图）
+    const read = await app.request(
+      'https://team.example.com/api/admin/settings',
+      { headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(read.status).toBe(200);
+    expect(((await read.json()) as { mail: Record<string, unknown> }).mail).toEqual({
+      baseUrl: 'https://mail.example.com',
+      apiKey: '***',
+      domain: 'example.com',
+      host: 'smtp.example.com',
+      port: 2525,
+      username: 'mailer',
+      password: '***',
+      from: 'noreply@example.com',
+      enabled: false,
+    });
+
+    // 开关关闭状态下改其它字段（不提供 enabled）→ enabled:false 保持、开关语义不受 MASK 空串约定干扰
+    const keepOff = await putJson(app, JSON.stringify({ mail: { host: 'smtp3.example.com' } }), adminCookie, env);
+    expect(keepOff.status).toBe(200);
+    const kept = JSON.parse(db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value) as Record<string, unknown>;
+    expect(kept.enabled).toBe(false);
+    expect(kept.host).toBe('smtp3.example.com');
+
+    // 再开：enabled:true → 恢复开启，配置值仍在
+    const on = await putJson(app, JSON.stringify({ mail: { enabled: true } }), adminCookie, env);
+    expect(on.status).toBe(200);
+    const restored = JSON.parse(db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value) as Record<string, unknown>;
+    expect(restored.enabled).toBe(true);
+    expect(restored.apiKey).toBe('api-key');
+    expect(restored.password).toBe('smtp-pass');
+  });
+
+  it('老数据兼容：直接种 enabled:false 的 mail 行 → GET 回 enabled:false', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db, { enabled: false });
+
+    const res = await app.request(
+      'https://team.example.com/api/admin/settings',
+      { headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { mail: Record<string, unknown> }).mail).toMatchObject({ enabled: false });
+    // 开关关着，库里真值仍在（关 ≠ 删行/清值）
+    expect(JSON.parse(db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value)).toMatchObject({
+      apiKey: 'api-key',
+      password: 'smtp-pass',
+      enabled: false,
+    });
   });
 });

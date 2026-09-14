@@ -3,6 +3,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 
 import { audit } from '../services/audit';
+import { parseMailSection } from '../services/members';
 import { readSession } from '../session';
 import type { Bindings } from '../index';
 
@@ -50,6 +51,8 @@ interface MailSettings {
   username: string;
   password: string;
   from: string;
+  /** 邮件轴开关：缺省 true（老数据无字段视为开启，零迁移）。 */
+  enabled: boolean;
 }
 
 /** GET /api/admin/settings 的对外形状（两段齐备，缺省全空串）。 */
@@ -66,7 +69,7 @@ const oidcSchema = z.object({
   scope: z.string().optional(),
 });
 
-/** mail 段宽松校验：port 只收正整数（空串表示不修改）。 */
+/** mail 段宽松校验：port 只收正整数（空串表示不修改）；enabled 提供即写、不提供即保持。 */
 const mailSchema = z.object({
   baseUrl: z.string().optional(),
   apiKey: z.string().optional(),
@@ -76,6 +79,7 @@ const mailSchema = z.object({
   username: z.string().optional(),
   password: z.string().optional(),
   from: z.string().optional(),
+  enabled: z.boolean().optional(),
 });
 
 const settingsSchema = z.object({
@@ -99,19 +103,6 @@ function portValue(value: unknown): number | '' {
   if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
   if (typeof value === 'string' && /^[1-9]\d*$/.test(value)) return Number(value);
   return '';
-}
-
-/** mail 段 JSON 必须是非数组对象；解析失败/类型不符 → {}（弱化实例不 500）。 */
-function parseMailSection(raw: string | undefined): Record<string, unknown> {
-  if (!raw) return {};
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
 }
 
 /** UPSERT 语法与 persistOidcConfig/markSetupDone 一致。 */
@@ -147,6 +138,7 @@ async function loadSettings(db: D1Database): Promise<InstanceSettings> {
       username: text(mail.username),
       password: masked(mail.password),
       from: text(mail.from),
+      enabled: mail.enabled !== false,
     },
   };
 }
@@ -186,6 +178,11 @@ async function saveSettings(
       mail[field] = value;
       mailChanged = true;
     }
+  }
+  // 邮件轴开关：boolean 才算提供（提供即写，与字段同走整段合并，不影响其余键）。
+  if (typeof body.mail?.enabled === 'boolean') {
+    mail.enabled = body.mail.enabled;
+    mailChanged = true;
   }
   // 整段合并后一次写回：只动本次传入的字段，其余键原样保留。
   if (mailChanged) {

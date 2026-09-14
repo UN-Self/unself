@@ -467,6 +467,58 @@ describe('邀请域 HTTP（#18）', () => {
     expect(await activatedStatus.json()).toEqual({ status: 'activated', mailEnabled: false });
   });
 
+  it('邮件轴开关关闭（mail 行在场但 enabled:false）：status mailEnabled:false，填表只带 displayName 即 200，批准即激活且不开户（provisioner 未被构建）', async () => {
+    // factory 一旦被调即抛错：enabled:false 时 configuredMailProvisioner 必须返回 null（根本不碰工厂）
+    const app = createApp({
+      createMailProvisioner: () => {
+        throw new Error('mail provisioner must stay unconstructed');
+      },
+    });
+    const { env, db, adminCookie } = await envFor();
+    // 关 ≠ 删行：完整配置都在，只是开关关闭（老数据兼容：行存在 + enabled:false）
+    db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail', JSON.stringify({ ...MAIL_CONFIG, enabled: false }));
+    const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+
+    // status：pending 态就暴露 mailEnabled:false（isMailEnabled 吃 enabled 轴）
+    const status = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
+    expect(status.status).toBe(200);
+    expect(await status.json()).toEqual({ status: 'pending', mailEnabled: false });
+
+    // 弱化实例表单：只提交 displayName（+可选内置凭证）即 200，不再要求邮箱字段
+    const applied = await app.request(
+      `https://team.example.com/api/invite/${token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          displayName: '新人',
+          username: 'grace',
+          salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+          proof: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        }),
+      },
+      env,
+    );
+    expect(applied.status).toBe(200);
+    expect(await applied.json()).toEqual({ ok: true });
+
+    // 批准：走「批准即激活」，无开户 → 200 且工作邮箱为 NULL
+    const approved = await app.request(
+      `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toEqual({ status: 'approved', email: null });
+    const member = db.first<{ email: string | null }>("SELECT email FROM users WHERE issuer = 'builtin'");
+    expect(member).toMatchObject({ email: null });
+
+    // 批准后 status：无激活行 → activated + mailEnabled:false
+    const activatedStatus = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
+    expect(activatedStatus.status).toBe(200);
+    expect(await activatedStatus.json()).toEqual({ status: 'activated', mailEnabled: false });
+  });
+
   it('#149 完整实例：status 端点暴露 mailEnabled:true，内置路径批准后成员行回填工作邮箱', async () => {
     const provisioner = createFakeMailProvisioner();
     const sent: SentMail[] = [];
