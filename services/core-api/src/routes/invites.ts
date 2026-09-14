@@ -11,7 +11,7 @@
  * - 邮箱前缀被占用属可恢复冲突：邀请保持 pending，人话提示拒绝后重新邀请（M1 不改前缀）；
  * - 每个管理员动作落 audit（invite_created / invite_approved / invite_rejected）。
  */
-import type { InviteStatus } from '@unself/contracts';
+import type { InviteStatus, InviteStatusResponse } from '@unself/contracts';
 import { MailProvisionerError } from '@unself/contracts';
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
@@ -35,7 +35,7 @@ import {
   updateInviteApplication,
   type Invite,
 } from '../services/invites';
-import { configuredMailProvisioner } from '../services/members';
+import { configuredMailProvisioner, isMailEnabled } from '../services/members';
 import { configuredMailSender } from '../services/notifications';
 import { deliverNotificationInBackground } from '../services/notification-background';
 import { readSession } from '../session';
@@ -45,25 +45,33 @@ const CREATE_INVITE_SCHEMA = z.object({
   expiresInDays: z.number().int().min(1).max(365).optional(),
 });
 
-/** 公开填表 body：三字段非空；前缀不含 @ 与空白；个人邮箱必须是合法地址。
- * 内置注册（issue-A 决策 28）：username+password 可选，两者必须同时有或同时无。 */
-const APPLICATION_SCHEMA = z
-  .object({
-    displayName: z.string().trim().min(1),
-    emailPrefix: z
-      .string()
-      .trim()
-      .min(1)
-      .regex(/^[^@\s]+$/, '邮箱前缀不能包含 @ 或空白'),
-    personalEmail: z.string().trim().email(),
-    username: z.string().trim().regex(/^[a-zA-Z0-9_-]{3,32}$/, '用户名需为 3-32 位字母/数字/_/-').optional(),
-    salt: z.string().regex(/^[A-Za-z0-9+/]{22}==$/, '凭据格式不正确').optional(),
-    proof: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, '凭据格式不正确').optional(),
-  })
-  .refine((data) => (data.username === undefined) === (data.proof === undefined), {
-    message: '用户名和密码需同时填写',
-    path: ['username'],
-  });
+/**
+ * 公开填表 body（按实例形态条件化，#149）：公共部分 displayName 必填；内置注册（issue-A）
+ * username/salt/proof 可选、username 与 proof 必须同时有或同时无。
+ * mailEnabled=true：emailPrefix 必填（不含 @ 与空白）且 personalEmail 必须是合法地址（与原全局 schema 逐字一致）；
+ * mailEnabled=false：两字段可省（可省，带了值也接受——弱化实例无开户动作，批准即激活）。
+ */
+function applicationSchema(mailEnabled: boolean) {
+  return z
+    .object({
+      displayName: z.string().trim().min(1),
+      emailPrefix: mailEnabled
+        ? z
+            .string()
+            .trim()
+            .min(1)
+            .regex(/^[^@\s]+$/, '邮箱前缀不能包含 @ 或空白')
+        : z.string().trim().optional(),
+      personalEmail: mailEnabled ? z.string().trim().email() : z.string().trim().optional(),
+      username: z.string().trim().regex(/^[a-zA-Z0-9_-]{3,32}$/, '用户名需为 3-32 位字母/数字/_/-').optional(),
+      salt: z.string().regex(/^[A-Za-z0-9+/]{22}==$/, '凭据格式不正确').optional(),
+      proof: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, '凭据格式不正确').optional(),
+    })
+    .refine((data) => (data.username === undefined) === (data.proof === undefined), {
+      message: '用户名和密码需同时填写',
+      path: ['username'],
+    });
+}
 
 /** 非 pending 状态的人话（409 detail；approve/reject 共用）。 */
 function statusDetail(status: InviteStatus): string {
@@ -159,8 +167,11 @@ export function registerInviteRoutes(
     if (!invite) {
       return c.json({ error: '邀请链接无效' }, 404);
     }
+    // 能力开关一次算好，三态响应统一携带（前端据此决定表单字段与三态文案）
+    const mailEnabled = await isMailEnabled(c.env.CORE_DB);
     if (invite.status === 'pending') {
-      return c.json({ status: 'pending' });
+      const body: InviteStatusResponse = { status: 'pending', mailEnabled };
+      return c.json(body);
     }
     if (invite.status === 'expired' || invite.status === 'rejected') {
       // 对申请人只暴露 pending/approved/activated 三语义：expired/rejected 是管理侧事实，
@@ -168,11 +179,13 @@ export function registerInviteRoutes(
       return c.json({ error: '邀请链接已失效，请联系管理员' }, 410);
     }
     if (invite.status === 'consumed') {
-      return c.json({ status: 'activated' });
+      const body: InviteStatusResponse = { status: 'activated', mailEnabled };
+      return c.json(body);
     }
     const activation = await findInviteActivationForInvite(c.env.CORE_DB, invite.token_hash);
     const activated = !activation || activation.used_at !== null;
-    return c.json({ status: activated ? 'activated' : 'approved' });
+    const body: InviteStatusResponse = { status: activated ? 'activated' : 'approved', mailEnabled };
+    return c.json(body);
   });
 
   /**
@@ -217,11 +230,15 @@ export function registerInviteRoutes(
   /** 公开提交：落申请三字段（内置注册时另带用户名/密码）后广播 active 管理员（站内，不发邮件）。 */
   app.post('/api/invite/:token', async (c) => {
     const raw: unknown = await c.req.json().catch(() => null);
-    const parsed = APPLICATION_SCHEMA.safeParse(raw ?? {});
+    // 先判实例形态再校验：mail 段有无决定 emailPrefix/personalEmail 是否必填（#149）
+    const mailEnabled = await isMailEnabled(c.env.CORE_DB);
+    const parsed = applicationSchema(mailEnabled).safeParse(raw ?? {});
     if (!parsed.success) {
       return c.json(
         {
-          error: '请填写显示名、邮箱前缀和个人邮箱（邮箱需为有效地址）',
+          error: mailEnabled
+            ? '请填写显示名、邮箱前缀和个人邮箱（邮箱需为有效地址）'
+            : '请填写显示名',
           detail: z.prettifyError(parsed.error),
         },
         400,
@@ -251,7 +268,16 @@ export function registerInviteRoutes(
         return c.json({ error: '用户名已被占用' }, 409);
       }
     }
-    const updated = await updateInviteApplication(db, tokenHash, parsed.data);
+    // 落库与站内通知统一用归一化对象：mailEnabled=false 时可省字段归空串（updateInviteApplication 要 string）
+    const normalized = {
+      displayName: parsed.data.displayName,
+      emailPrefix: parsed.data.emailPrefix ?? '',
+      personalEmail: parsed.data.personalEmail ?? '',
+      username: parsed.data.username,
+      salt: parsed.data.salt,
+      proof: parsed.data.proof,
+    };
+    const updated = await updateInviteApplication(db, tokenHash, normalized);
     if (!updated) {
       // SELECT 与 UPDATE 之间状态被改（竞态）：按链接失效回。
       return c.json({ error: '邀请链接已过期或已被使用' }, 410);
@@ -262,9 +288,9 @@ export function registerInviteRoutes(
       null,
       'invite_pending',
       {
-        name: parsed.data.displayName,
-        emailPrefix: parsed.data.emailPrefix,
-        personalEmail: parsed.data.personalEmail,
+        name: normalized.displayName,
+        emailPrefix: normalized.emailPrefix,
+        personalEmail: normalized.personalEmail,
       },
       { admins: true },
     );
@@ -306,11 +332,17 @@ async function approveInvite(
   }
   const sender = await configuredMailSender(db, dependencies.createMailSender);
 
-  // OIDC JIT 路径：未填表（无邮箱前缀）无法批准（内置路径没有邮箱前缀字段，不适用）
+  // OIDC JIT 路径：未填表无法批准，守卫按实例形态（#149）：有邮件=看邮箱前缀；
+  // 无邮件=看 displayName（无邮件实例表单不再采集邮箱前缀，OIDC+无邮件（无内置凭证）
+  // 若仍按前缀判定将永 409，批准成死路；有邮件实例行为不变）。
+  const mailEnabled = await isMailEnabled(db);
   const creds = await getInviteCredentials(db, id);
-  if (!creds && invite.email_prefix.length === 0) {
+  if (!creds && (mailEnabled ? invite.email_prefix.length === 0 : invite.display_name.length === 0)) {
     return c.json(
-      { error: 'invite not filled', detail: '该申请尚未填写完成（缺少邮箱前缀），无法批准' },
+      {
+        error: 'invite not filled',
+        detail: mailEnabled ? '该申请尚未填写完成（缺少邮箱前缀），无法批准' : '该申请尚未填写完成，无法批准',
+      },
       409,
     );
   }
@@ -362,9 +394,9 @@ async function approveInvite(
       await db.batch([
         db
           .prepare(
-            "INSERT INTO users (id, issuer, sub, display_name, email, personal_email, role, status) VALUES (?, 'builtin', ?, ?, NULL, ?, 'member', 'active')",
+            "INSERT INTO users (id, issuer, sub, display_name, email, personal_email, role, status) VALUES (?, 'builtin', ?, ?, ?, ?, 'member', 'active')",
           )
-          .bind(userId, userId, invite.display_name, invite.personal_email),
+          .bind(userId, userId, invite.display_name, workEmail, invite.personal_email),
         db
           .prepare('INSERT INTO builtin_credentials (user_id, username, password_hash) VALUES (?, ?, ?)')
           .bind(userId, creds.username, creds.password_hash),
