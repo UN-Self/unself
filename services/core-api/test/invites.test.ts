@@ -199,7 +199,8 @@ describe('邀请域 HTTP（#18）', () => {
 
   it('公开填表：GET 预填、POST 落库仍 pending、仅 active 管理员收到待审批站内通知', async () => {
     const app = createApp();
-    const { env, db, adminCookie } = await envFor();
+    // #149 后邮箱字段校验只在有邮件实例生效：本用例要验前缀/邮箱 400，用完整实例（有邮件实例行为零变化）
+    const { env, db, adminCookie } = await envFor(true);
     db.run(
       'INSERT INTO users (id, issuer, sub, display_name, role, status) VALUES (?, ?, ?, ?, ?, ?)',
       'u_off_admin',
@@ -278,7 +279,7 @@ describe('邀请域 HTTP（#18）', () => {
       personal_email: 'new@personal.example',
     });
 
-    // 表单非法（空显示名 / 前缀带 @ / 邮箱不合法）→ 400 且不改库
+    // 表单非法（空显示名 / 前缀带 @ / 邮箱不合法）→ 400 且不改库（#149 后这些字段校验只在有邮件实例生效：本用例是 envFor(true) 完整实例）
     for (const bad of [
       { displayName: '', emailPrefix: 'u_new', personalEmail: 'new@personal.example' },
       { displayName: '新人', emailPrefix: 'u@new', personalEmail: 'new@personal.example' },
@@ -304,6 +305,7 @@ describe('邀请域 HTTP（#18）', () => {
     });
     const { env, db, adminCookie } = await envFor();
     const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+    // 弱化实例仍接受完整三字段（带了也接受，向后兼容）
     expect((await submitApplication(app, env, token)).status).toBe(200);
 
     const approved = await app.request(
@@ -391,6 +393,118 @@ describe('邀请域 HTTP（#18）', () => {
       count: 0,
     });
     expect(db.query("SELECT id FROM notifications WHERE type = 'account_ready'")).toEqual([]);
+  });
+
+  it('#149 弱化实例公开填表：只带 displayName（+可选内置凭证）即 200，email 字段落空串；status 端点暴露 mailEnabled:false；批准后成员行 email 为 NULL', async () => {
+    const app = createApp({
+      createMailProvisioner: () => {
+        throw new Error('mail provisioner must stay unconstructed');
+      },
+    });
+    const { env, db, adminCookie } = await envFor();
+    const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+
+    // 无邮件实例表单不再采集邮箱字段：只提交 displayName + 内置注册凭证 → 200
+    const applied = await app.request(
+      `https://team.example.com/api/invite/${token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          displayName: '新人',
+          username: 'grace',
+          salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+          proof: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        }),
+      },
+      env,
+    );
+    expect(applied.status).toBe(200);
+    expect(await applied.json()).toEqual({ ok: true });
+
+    // invite 行：邮箱字段落空串（表单未采集），显示名在场
+    expect(
+      db.first(
+        'SELECT display_name, email_prefix, personal_email FROM invites WHERE token_hash = ?',
+        tokenHash,
+      ),
+    ).toEqual({ display_name: '新人', email_prefix: '', personal_email: '' });
+
+    // status 端点：弱化实例暴露 mailEnabled:false，pending 态也带
+    const status = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
+    expect(status.status).toBe(200);
+    expect(await status.json()).toEqual({ status: 'pending', mailEnabled: false });
+
+    // 站内通知 payload：可省字段归空串
+    const notification = db.first<{ payload: string }>(
+      "SELECT payload FROM notifications WHERE type = 'invite_pending'",
+    );
+    expect(JSON.parse(notification!.payload)).toEqual({
+      name: '新人',
+      emailPrefix: '',
+      personalEmail: '',
+    });
+
+    // 内置路径批准（有凭证，不靠 displayName 守卫）→ 200；users 行工作邮箱为 NULL
+    const approved = await app.request(
+      `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toEqual({ status: 'approved', email: null });
+    const member = db.first<{ email: string | null; personal_email: string }>(
+      "SELECT email, personal_email FROM users WHERE issuer = 'builtin'",
+    );
+    expect(member).toMatchObject({ email: null, personal_email: '' });
+    expect(db.first('SELECT status FROM invites WHERE token_hash = ?', tokenHash)).toEqual({
+      status: 'approved',
+    });
+
+    // 批准后 status 端点：无激活行（弱化实例批准即激活）→ activated + mailEnabled:false
+    const activatedStatus = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
+    expect(activatedStatus.status).toBe(200);
+    expect(await activatedStatus.json()).toEqual({ status: 'activated', mailEnabled: false });
+  });
+
+  it('#149 完整实例：status 端点暴露 mailEnabled:true，内置路径批准后成员行回填工作邮箱', async () => {
+    const provisioner = createFakeMailProvisioner();
+    const sent: SentMail[] = [];
+    const app = createApp({
+      createMailProvisioner: () => provisioner,
+      createMailSender: () => fakeSender(sent),
+    });
+    const { env, db, adminCookie } = await envFor(true);
+    const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+
+    const status = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
+    expect(status.status).toBe(200);
+    expect(await status.json()).toEqual({ status: 'pending', mailEnabled: true });
+
+    expect(
+      (
+        await submitApplication(app, env, token, {
+          displayName: '新人',
+          emailPrefix: 'u_new',
+          personalEmail: 'new@personal.example',
+          username: 'grace',
+          salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+          proof: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        })
+      ).status,
+    ).toBe(200);
+    const approved = await app.request(
+      `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(approved.status).toBe(200);
+
+    // 开户成功落成员行时回填工作邮箱；个人邮箱照旧
+    const member = db.first<{ email: string | null; personal_email: string }>(
+      "SELECT email, personal_email FROM users WHERE issuer = 'builtin'",
+    );
+    expect(member).toMatchObject({ email: 'u_new@example.com', personal_email: 'new@personal.example' });
   });
 
   it('开户失败零成员落库（#114）：OIDC 路径无成员行、邀请保持 pending、响应含人话 detail', async () => {
@@ -660,7 +774,7 @@ describe('邀请域 HTTP（#18）', () => {
     const { env, db, adminCookie } = await envFor();
     const { tokenHash } = await createInviteVia(app, env, adminCookie);
 
-    // 未填表先批准 → 409（缺邮箱前缀，无法开户）
+    // 未填表先批准 → 409（#149：弱化实例按 displayName 判已填表，此处未填）
     const tooEarly = await app.request(
       `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
       { method: 'POST', headers: { cookie: adminCookie } },

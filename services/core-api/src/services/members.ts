@@ -61,6 +61,26 @@ export async function setMemberStatus(
 }
 
 /**
+ * 单点读取 instance_config 的 mail 段（只判有无/取原文，不解析）。
+ * 能力判定唯一真相源（#149）：isMailEnabled 与 configuredMailProvisioner 共用本 helper，
+ * 别处不得重写同语义 SQL（一文件一职责：mail 段读取只此一处）。
+ */
+async function readMailSegment(db: D1Database): Promise<{ value: string } | null> {
+  return db
+    .prepare('SELECT value FROM instance_config WHERE key = ?')
+    .bind('mail')
+    .first<{ value: string }>();
+}
+
+/**
+ * 实例邮件轴能力开关：mail 段有无 = 邮件轴能力开关（#149）。
+ * 有段=完整实例（开户/激活链接），无段=弱化实例（批准即激活，表单不采集邮箱）。
+ */
+export async function isMailEnabled(db: D1Database): Promise<boolean> {
+  return (await readMailSegment(db)) !== null;
+}
+
+/**
  * 配置有 mail 段才惰性构建 provisioner；无段即弱化实例（null，静默降级）。
  * 生产走 defaultCreateMailProvisioner；单测在外部边界注入假实现（#20 fake，routing 断言用）。
  */
@@ -68,10 +88,7 @@ export async function configuredMailProvisioner(
   db: D1Database,
   createMailProvisioner: CreateMailProvisioner = defaultCreateMailProvisioner,
 ): Promise<MailProvisioner | null> {
-  const config = await db
-    .prepare('SELECT value FROM instance_config WHERE key = ?')
-    .bind('mail')
-    .first<{ value: string }>();
+  const config = await readMailSegment(db);
   if (!config) {
     return null;
   }

@@ -147,10 +147,10 @@ describe('#134 邀请状态三态（GET /api/invite/:token/status）', () => {
     const { fx, token, tokenHash } = await approvedInviteWithActivation();
     const { app, env, db } = fx;
 
-    // 批准后激活令牌未用 → approved
+    // 批准后激活令牌未用 → approved（#149：响应带 mailEnabled，有 mail 段 fixture → true）
     const approved = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(approved.status).toBe(200);
-    expect(await approved.json()).toEqual({ status: 'approved' });
+    expect(await approved.json()).toEqual({ status: 'approved', mailEnabled: true });
 
     // 激活令牌被消费（激活域服务真路径）→ activated
     const activation = db.first<{ token_hash: string }>('SELECT token_hash FROM invite_activations');
@@ -160,7 +160,7 @@ describe('#134 邀请状态三态（GET /api/invite/:token/status）', () => {
 
     const activatedRes = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(activatedRes.status).toBe(200);
-    expect(await activatedRes.json()).toEqual({ status: 'activated' });
+    expect(await activatedRes.json()).toEqual({ status: 'activated', mailEnabled: true });
 
     // 无效令牌：404 人话
     const missing = await app.request('https://team.example.com/api/invite/wrong-token/status', {}, env);
@@ -178,10 +178,10 @@ describe('#134 邀请状态三态（GET /api/invite/:token/status）', () => {
 
     const res = await fx.app.request(`https://team.example.com/api/invite/${token}/status`, {}, fx.env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'pending' });
+    expect(await res.json()).toEqual({ status: 'pending', mailEnabled: true });
   });
 
-  it('无激活行的 approved 邀请（弱化实例）→ activated（claim 判定同口径：无待激活即已激活）', async () => {
+  it('无激活行的 approved 邀请（弱化实例）→ activated（claim 判定同口径：无待激活即已激活；mailEnabled:false）', async () => {
     const pair = await generateInstanceKeyPair();
     const db = createCoreDb();
     db.run(
@@ -228,7 +228,7 @@ describe('#134 邀请状态三态（GET /api/invite/:token/status）', () => {
 
     const res = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'activated' });
+    expect(await res.json()).toEqual({ status: 'activated', mailEnabled: false });
   });
 
   it('过期邀请 → 410 人话（不泄露 expired/rejected 状态机细节）', async () => {
