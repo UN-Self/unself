@@ -8,7 +8,7 @@
  * 断言打在行为（库行/邮件/调用参数）上，改坏业务必红。
  */
 import type { MailSender } from '@unself/mail-smtp';
-import { createFakeMailProvisioner } from '@unself/contracts';
+import { MailProvisionerError, createFakeMailProvisioner } from '@unself/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';
@@ -226,6 +226,65 @@ describe('激活域 HTTP（#18）', () => {
     expect(
       (await app.request(`https://team.example.com/api/activate/${activateToken}`, {}, env)).status,
     ).toBe(404);
+  });
+
+  it('resetPassword 抛 ACCOUNT_NOT_FOUND → 409 人话（设置邮箱密码失败 + 回邀请页指引），不再裸 500', async () => {
+    const fake = createFakeMailProvisioner();
+    const sent: SentMail[] = [];
+    const app = createApp({
+      createMailProvisioner: () => ({
+        ...fake,
+        resetPassword: async () => {
+          throw new MailProvisionerError('ACCOUNT_NOT_FOUND', '邮箱账户 u_new@example.com 不存在');
+        },
+      }),
+      createMailSender: () => fakeSender(sent),
+    });
+    const { env, db, adminCookie } = await envFor(true);
+    const { tokenHash } = await approvedInvite(app, env, adminCookie);
+    const { activateToken } = activationFromMail(sent);
+
+    const failed = await activate(app, env, activateToken, 'super-secret-1');
+    expect(failed.status).toBe(409);
+    const body = (await failed.json()) as { error: string };
+    expect(body.error).toContain('设置邮箱密码失败');
+    expect(body.error).toContain('Stalwart 中无此邮箱账号');
+    expect(body.error).toContain('回邀请页重新获取链接');
+
+    // 失败发生在令牌消费之后：同一链接再点只回统一失效人话，且未入激活审计
+    expect((await activate(app, env, activateToken, 'super-secret-1')).status).toBe(404);
+    expect(
+      db.first<{ used_at: string | null }>(
+        'SELECT used_at FROM invite_activations WHERE invite_token_hash = ?',
+        tokenHash,
+      )?.used_at,
+    ).not.toBeNull();
+    expect(
+      db.first("SELECT count(*) AS n FROM audit_log WHERE action = 'account_activated'"),
+    ).toEqual({ n: 0 });
+  });
+
+  it('resetPassword 通用错误 → 502 透传原因 + 回邀请页指引，不再裸 500', async () => {
+    const fake = createFakeMailProvisioner();
+    const sent: SentMail[] = [];
+    const app = createApp({
+      createMailProvisioner: () => ({
+        ...fake,
+        resetPassword: async () => {
+          throw new Error('JMAP 请求超时');
+        },
+      }),
+      createMailSender: () => fakeSender(sent),
+    });
+    const { env, adminCookie } = await envFor(true);
+    await approvedInvite(app, env, adminCookie);
+    const { activateToken } = activationFromMail(sent);
+
+    const failed = await activate(app, env, activateToken, 'super-secret-1');
+    expect(failed.status).toBe(502);
+    expect(await failed.json()).toEqual({
+      error: '设置邮箱密码失败：JMAP 请求超时。激活链接已失效，请回邀请页重新获取链接',
+    });
   });
 
   it('同一令牌二次提交 404，密码只被设置一次', async () => {

@@ -7,7 +7,9 @@
  *   MailProvisioner.resetPassword 设**邮箱密码**（与工作台登录 IdP 账号无关）；
  * - 弱化实例（无 mail 段）POST 一律 503 且不消费令牌：等实例补配邮件后同一链接仍可用；
  * - 令牌明文只出现在邮件链接里，库里只有 SHA-256（one-time-token.ts）；
- * - 激活只改邮箱侧密码，不建用户档案（工作台首登 JIT 建档，#49）。
+ * - 激活只改邮箱侧密码，不建用户档案（工作台首登 JIT 建档，#49）；
+ * - resetPassword 失败按 #115 状态码口径映射（#150）：409/502 + activate 语境人话，
+ *   且因令牌已先消费，响应一律带「回邀请页重新获取链接」的出路指引。
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -17,6 +19,10 @@ import { hashOneTimeToken } from '../one-time-token';
 import { audit } from '../services/audit';
 import { consumeInviteActivation, findInviteActivation } from '../services/invite-activations';
 import { configuredMailProvisioner } from '../services/members';
+import {
+  activationFailureDetail,
+  classifyProvisionerFailure,
+} from '../services/provisioner-errors';
 
 /** 激活 body：自设邮箱密码（下限 8 位，M1 不引入强度规则）。 */
 const PASSWORD_SCHEMA = z.object({
@@ -69,7 +75,15 @@ export function registerActivateRoutes(
     if (!activation) {
       return c.json({ error: INVALID_LINK }, 404);
     }
-    await provisioner.resetPassword({ email: activation.email, password: parsed.data.password });
+    // resetPassword 失败不裸 500（#150）：状态码按 #115 同口径映射（ACCOUNT_NOT_FOUND→409、
+    // 认证失败 HTTP 401/403→502+API Key 指引、其它→502），文案换 activate 语境。
+    // 注意：令牌已在上一行原子消费——所以失败响应一律带「回邀请页重新获取链接」的指引。
+    try {
+      await provisioner.resetPassword({ email: activation.email, password: parsed.data.password });
+    } catch (error) {
+      const failure = classifyProvisionerFailure(error, activation.email);
+      return c.json({ error: activationFailureDetail(failure.detail) }, failure.status);
+    }
     await audit(db, 'system', 'account_activated', activation.email);
     return c.json({ ok: true, loginHint: LOGIN_HINT });
   });
