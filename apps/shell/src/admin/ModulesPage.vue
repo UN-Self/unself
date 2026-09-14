@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref } from 'vue'
 
 import { UButton, UErrorCard, USkeleton } from '@unself/ui'
 
-import { fetchAdminModules, toggleModule, type AdminModule, type ApiError } from '../lib/admin-api'
+import { fetchAdminModules, toggleModule, type AdminModule } from '../lib/admin-api'
+import { useAsyncLoad } from '../lib/use-async-load'
 
 /**
  * 管理台模块页（#17）：全量列表（含停用）+ 启停开关。
@@ -12,24 +13,10 @@ import { fetchAdminModules, toggleModule, type AdminModule, type ApiError } from
  * 不做：模块详情、配置、排序拖拽。
  */
 
-const phase = ref<'loading' | 'ready' | 'error'>('loading')
-const loadError = ref<ApiError | null>(null)
-const modules = ref<AdminModule[]>([])
+// #142：加载三态样板收编 use-async-load（phase/loadError 变量名不变，模板零改动）
+const { phase, loadError, data: modules } = useAsyncLoad<AdminModule[]>(fetchAdminModules, { initial: [] })
 const busyId = ref<string | null>(null)
 const actionError = ref<string | null>(null)
-
-onMounted(load)
-
-async function load(): Promise<void> {
-  phase.value = 'loading'
-  try {
-    modules.value = await fetchAdminModules()
-    phase.value = 'ready'
-  } catch (err) {
-    loadError.value = err as ApiError
-    phase.value = 'error'
-  }
-}
 
 /** 启停直接生效（注册表开关秒级可见；无 confirm——动作可逆）。 */
 async function onToggle(mod: AdminModule): Promise<void> {
@@ -39,7 +26,7 @@ async function onToggle(mod: AdminModule): Promise<void> {
     await toggleModule(mod.id, !mod.enabled)
     mod.enabled = !mod.enabled
   } catch (err) {
-    actionError.value = (err as ApiError).message
+    actionError.value = (err as Error).message
   } finally {
     busyId.value = null
   }

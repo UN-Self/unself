@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import { Ban, CircleCheck, Copy, MailPlus } from 'lucide-vue-next'
 
 import { UButton, UCard, UErrorCard, USkeleton } from '@unself/ui'
@@ -14,6 +14,7 @@ import {
   type AdminInviteStatus,
   type ApiError,
 } from '../lib/admin-api'
+import { useAsyncLoad } from '../lib/use-async-load'
 
 /**
  * 管理台邀请页（#18）：申请列表 + 批准/拒绝 + 一次性生成邀请链接。
@@ -24,9 +25,8 @@ import {
 /** 有效期选项（天）；默认 7 天（与后端 DEFAULT_INVITE_EXPIRES_DAYS 同值）。 */
 const EXPIRES_OPTIONS = [1, 3, 7, 14, 30] as const
 
-const phase = ref<'loading' | 'ready' | 'error'>('loading')
-const loadError = ref<ApiError | null>(null)
-const invites = ref<AdminInvite[]>([])
+// #142：加载三态样板收编 use-async-load（phase/loadError 变量名不变，模板零改动）
+const { phase, loadError, data: invites } = useAsyncLoad<AdminInvite[]>(fetchInvites, { initial: [] })
 /** 正在审批的邀请 id（按钮禁用防连点）。 */
 const busyId = ref<string | null>(null)
 /** 行内失败人话（按 token_hash 归属；加载失败才走错误卡）。 */
@@ -40,19 +40,6 @@ const expiresDays = ref<number>(7)
 const generating = ref(false)
 const generateError = ref<string | null>(null)
 const inviteUrl = ref<string | null>(null)
-
-onMounted(load)
-
-async function load(): Promise<void> {
-  phase.value = 'loading'
-  try {
-    invites.value = await fetchInvites()
-    phase.value = 'ready'
-  } catch (err) {
-    loadError.value = err as ApiError
-    phase.value = 'error'
-  }
-}
 
 /** 批准直接执行（不可逆但为正常推进）；状态行内翻转 + 开户结果人话。 */
 async function onApprove(invite: AdminInvite): Promise<void> {

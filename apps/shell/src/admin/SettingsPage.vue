@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref, watch } from 'vue'
 
 import { UButton, UCard, UErrorCard, UInput, USkeleton } from '@unself/ui'
 
@@ -14,6 +14,7 @@ import {
   type MailTestResult,
 } from '../lib/admin-api'
 import { testOidcConnection } from '../lib/setup-api'
+import { useAsyncLoad } from '../lib/use-async-load'
 
 /**
  * 管理台设置页（#17）：OIDC 段 + mail 段查看/编辑 + 测试连接（含 warnings 黄牌）。
@@ -21,8 +22,8 @@ import { testOidcConnection } from '../lib/setup-api'
  * 不做：DYN DNS、存储段、多套配置 profile。
  */
 
-const phase = ref<'loading' | 'ready' | 'error'>('loading')
-const loadError = ref<ApiError | null>(null)
+// #142：加载三态样板收编 use-async-load（phase/loadError 变量名不变，模板零改动）
+const { phase, loadError, data: settings } = useAsyncLoad<InstanceSettings>(fetchSettings)
 
 // 表单模型（密钥字段永远不回填真值，只显示占位与「已配置」提示）
 const issuer = ref('')
@@ -56,19 +57,8 @@ const mailTesting = ref(false)
 const mailTestError = ref<string | null>(null)
 const mailTest = ref<{ provisioner: MailTestResult; sender: MailTestResult } | null>(null)
 
-onMounted(load)
-
-async function load(): Promise<void> {
-  phase.value = 'loading'
-  try {
-    const s = await fetchSettings()
-    applyLoaded(s)
-    phase.value = 'ready'
-  } catch (err) {
-    loadError.value = err as ApiError
-    phase.value = 'error'
-  }
-}
+// 数据就位 → 回填表单（含保存后无需重新拉取的既有行为）
+watch(settings, (s) => { if (s) applyLoaded(s) }, { immediate: true })
 
 function applyLoaded(s: InstanceSettings): void {
   issuer.value = s.oidc.issuer
