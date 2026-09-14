@@ -7,7 +7,7 @@
  * 鉴权边界与审批状态守卫。故意改坏任何一端业务（丢哈希、漏广播、误置状态）都会红。
  */
 import type { MailSender } from '@unself/mail-smtp';
-import { MailProvisionerError, createFakeMailProvisioner } from '@unself/stalwart-provisioner';
+import { MailProvisionerError, createFakeMailProvisioner } from '@unself/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';

@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { MailProvisioner } from '@unself/contracts';
-import {
-  createStalwartMailProvisioner,
-  type StalwartProvisionerConfig,
-} from '@unself/stalwart-provisioner';
+import { createFakeMailProvisioner } from '@unself/contracts';
 
 /** 管理端成员列表的数据库行。 */
 export interface Member {
@@ -27,9 +24,13 @@ export interface MemberAccess {
 /** 已配置 mail 段时按其内容构建 provisioner（#49 注入口）。 */
 export type CreateMailProvisioner = (mailConfig: unknown) => MailProvisioner;
 
-/** 生产唯一实现：mail 段 → Stalwart JMAP 适配器（#18 接线，不留第二道 DI）。 */
-const defaultCreateMailProvisioner: CreateMailProvisioner = (mailConfig) =>
-  createStalwartMailProvisioner(mailConfig as StalwartProvisionerConfig);
+/**
+ * 生产组合根装配点（#141 分层归位后）：core-api 服务域只认 contracts 契约，
+ * Stalwart 适配器由部署器（deploy/cloudflare）注入到 createApp（配置校验随适配器）。
+ * 未注入且 mail 段存在时回退内存假实现：无网络副作用，发信/开户动作仅入审计与日志——
+ * 生产必须由部署器注入真实现；此回退仅为「依赖已摘除后仍可启动」的弱化实例口径。
+ */
+const defaultCreateMailProvisioner: CreateMailProvisioner = () => createFakeMailProvisioner();
 
 /** 列出实例全部成员；M1 团队规模不分页。 */
 export async function listMembers(db: D1Database): Promise<Member[]> {

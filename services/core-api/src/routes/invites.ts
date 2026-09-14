@@ -12,7 +12,7 @@
  * - 每个管理员动作落 audit（invite_created / invite_approved / invite_rejected）。
  */
 import type { InviteStatus } from '@unself/contracts';
-import { MailProvisionerError } from '@unself/stalwart-provisioner';
+import { MailProvisionerError } from '@unself/contracts';
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 

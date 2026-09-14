@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { MailProvisioner } from '@unself/contracts';
-import { MailProvisionerError } from '@unself/stalwart-provisioner';
+import { MailProvisionerError } from '@unself/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';
