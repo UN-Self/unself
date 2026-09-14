@@ -50,7 +50,7 @@ Workers Routes 按路径绑定；Docker 用 openresty 按 location 分发，两�
 
 ## 状态
 
-**最小可用（v0.1.0）**。M0 垂直切片交付：Cloudflare 实例可部署、首个管理员 setup 自助、hello 模块全链路（网页桥接/握手/token 验签/数据读写）、模块运行时启停、移除模块重部署后路由消失。实机验收通过（https://unself.handywote.top）。M1 进行中：内置身份默认+邀请审批+邀请页三态自助激活（详见 PRODUCT_SPEC/requirements 与 issues）。
+**最小可用（v0.2.0，M1 已验收 2026-09-14）**。M0 垂直切片交付：Cloudflare 实例可部署、首个管理员 setup 自助、hello 模块全链路（网页桥接/握手/token 验签/数据读写）、模块运行时启停、移除模块重部署后路由消失。M1 交付：**双版本入职闭环**（完整形态：邀请→审批→开户→邀请页三态自助激活→登录；弱化形态：邮件轴开关切换、批准即激活）、内置身份默认、管理台（成员/邀请/审计/设置/模块）、Stalwart 瘦适配（JMAP 开户 + 邮箱密码自助）、运行时邮件配置与邮件轴开关。实机验收通过（https://team.handywote.top）。验收记录见 [docs/m1-acceptance.md](docs/m1-acceptance.md)，后续迭代见 PRODUCT_SPEC/requirements 与 issues。
 
 ## 开发
 
