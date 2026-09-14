@@ -16,7 +16,7 @@ Unself 的 Cloudflare 装配引擎（M0 #14，PRODUCT_SPEC §5.5）：幂等九�
 | ⑥ | 建 R2 桶或接收外部 S3 参数 | `r2 bucket list` 查漏 → `r2 bucket create unself-storage`（provider=s3 时校验外部参数即可） |
 | ⑦ | OIDC 不进配置文件 | 无操作——部署后在 setup 向导填写，存 core 库 instance_config（已知缺口见 spec） |
 | ⑧ | 生成一次性 setup token | 调 `POST /api/admin/setup-token`，打印一次性激活链接在部署输出末尾（409 = 已封死） |
-| ⑨ | 冒烟检查 | `GET /api/health` + 各选中模块 `GET /m/<id>/api/health` |
+| ⑨ | 冒烟检查 | `GET /api/health` + 各选中模块 `GET /m/<id>/api/health` + 主题体检（tokens.css 出入、缺 token 即报，steps.ts 主题步骤） |
 
 ## 可重跑收敛
 
@@ -79,7 +79,7 @@ use:'sig', alg:'ES256' } ] }`（与 core `GET /.well-known/jwks.json` 响应体�
 
 ## Docker 等价注记
 
-`docker/` 目录目前为空壳，本次改动只在 CF 装配器（`deploy/cloudflare`）落地。
+`docker/` 目录尚未建立（M3 交付），当前只在 CF 装配器（`deploy/cloudflare`）落地。
 容器化部署的等价做法：同一环境变量 `CORE_JWKS_JSON` 写入 compose 的模块服务
 environment（值由生成脚本在启动时从 core 侧导出），模块行为与 CF 一致——本地验签、
 零运行时网络取钥。待 docker/ 落地时按此注记实现。

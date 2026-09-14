@@ -1,5 +1,7 @@
 # M0 审核报告（计划偏离 + 测试有效性）
 
+> **历史快照**：本报告评审对象是 origin/m0/dev @ 57a2d73（已并入主干，报告中的路径制矛盾等偏离已在后续里程碑修复）。保留作为评审方法与历史记录，当前结论以 PRODUCT_SPEC/requirements 为准。
+
 - **审核对象**：`origin/m0/dev` @ `57a2d73`（工作区停在旧 main，全部证据经 `git show origin/m0/dev:…` 与 /tmp 干净副本核实）
 - **真源**：docs/PRODUCT_SPEC.md（§5.1/5.2/5.3/5.5/6.5/7/8）+ docs/requirements.md 决策 #1–#26；旁证：issue/PR 讨论只读检索
 - **方法与分工**：三路只读子代理并行（§5.3 偏离专项 / 测试两张皮 / 零覆盖面+issue 挖掘），主会话汇总终审；分报告存 /tmp/audit/T2-report.md、T4-report.md、T5-report.md（含全部证据原文与逐条行号）

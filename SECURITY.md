@@ -4,7 +4,7 @@ Unself 采用协调披露（coordinated disclosure）流程。本项目为自托
 
 ## 报告漏洞
 
-请通过邮件向 **security@unself.cn** 报告安全问题，**不要创建公开 issue**。
+请通过邮件向 **security@unself.cn** 报告安全问题，或使用 GitHub Security Advisory（Security 标签页 → Report a vulnerability）作为备用私密渠道；**不要创建公开 issue**。
 
 报告应包含：
 
