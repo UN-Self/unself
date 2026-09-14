@@ -65,6 +65,8 @@ const mailConfigured = ref(false)
 
 /** 有效轴状态：有配置且开关开着才算「轴开」；无配置时一切按关处理（折叠/测试禁用/开关 off）。 */
 const mailAxisOn = computed(() => mailEnabled.value && mailConfigured.value)
+/** 配置区展开态（#159）：轴开或尚无配置（需先填表）时展开；轴关且有配置时收起（带过渡）。 */
+const mailFormOpen = computed(() => mailAxisOn.value || !mailConfigured.value)
 
 // 数据就位 → 回填表单（含保存后无需重新拉取的既有行为）
 watch(settings, (s) => { if (s) applyLoaded(s) }, { immediate: true })
@@ -103,7 +105,7 @@ function buildUpdate(): Parameters<typeof saveSettings>[0] {
   if (scope.value) oidc.scope = scope.value
   if (clientSecret.value && clientSecret.value !== SECRET_MASK) oidc.clientSecret = clientSecret.value
 
-  const mail: Record<string, string | number> = {}
+  const mail: Record<string, string | number | boolean> = {}
   if (baseUrl.value) mail.baseUrl = baseUrl.value
   if (domain.value) mail.domain = domain.value
   if (host.value) mail.host = host.value
@@ -112,6 +114,8 @@ function buildUpdate(): Parameters<typeof saveSettings>[0] {
   if (from.value) mail.from = from.value
   if (apiKey.value && apiKey.value !== SECRET_MASK) mail.apiKey = apiKey.value
   if (password.value && password.value !== SECRET_MASK) mail.password = password.value
+  // #159：开关属表单字段，随保存一起落库；无配置且本次未写任何字段时不创建 mail 行
+  if (mailConfigured.value || Object.keys(mail).length > 0) mail.enabled = mailEnabled.value
 
   return { oidc, mail }
 }
@@ -141,18 +145,11 @@ async function onSave(): Promise<void> {
 }
 
 /**
- * 邮件轴开关切换：乐观翻转 → 只 PUT mail.enabled（关≠清配置，服务端保留其余字段）；
- * 成功就地保持；失败回滚并沿用 saveError 提示位（不触发「已保存」文案）。
+ * 邮件卡交互（#159）：开关属表单状态——切换只改本地值并驱动折叠，
+ * 落库由页面底部「保存」统一提交（与 OIDC/其余字段同语义），不再点一下发一次 PUT。
  */
-async function onToggleMailEnabled(next: boolean): Promise<void> {
+function onMailSwitch(next: boolean): void {
   mailEnabled.value = next
-  saveError.value = null
-  try {
-    await saveSettings({ mail: { enabled: next } })
-  } catch (err) {
-    mailEnabled.value = !next
-    saveError.value = (err as ApiError).message
-  }
 }
 
 async function onTestMailConnection(): Promise<void> {
@@ -236,7 +233,7 @@ async function onTestConnection(): Promise<void> {
             :model-value="mailAxisOn"
             :disabled="!mailConfigured"
             aria-label="邮件服务开关"
-            @update:model-value="onToggleMailEnabled"
+            @update:model-value="onMailSwitch"
           />
         </div>
         <p v-if="!mailConfigured" class="mail-switch-hint">填写并保存配置后即可开启</p>
@@ -244,101 +241,66 @@ async function onTestConnection(): Promise<void> {
           关闭后新成员不再开户与发信；已开通的邮箱不受影响
         </p>
 
-        <!-- 轴开：与既有结构逐字一致（表单平铺、测试可用、无提示行） -->
-        <template v-if="mailAxisOn">
-          <div class="settings-grid">
-            <UInput v-model="baseUrl" label="Stalwart 地址" type="url" placeholder="https://mail.example.com" />
-            <UInput
-              v-model="apiKey"
-              label="API Key"
-              type="password"
-              :placeholder="apiKeyConfigured ? SECRET_MASK : '未配置'"
-            />
-            <p class="secret-hint">{{ apiKeyConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
-            <UInput v-model="domain" label="邮箱域名" placeholder="example.com" />
-            <UInput v-model="host" label="SMTP 主机" placeholder="mail.example.com" />
-            <UInput
-              v-model="port"
-              label="SMTP 端口（纯数字，如 465）"
-              type="text"
-              inputmode="numeric"
-              placeholder="465"
-            />
-            <UInput v-model="username" label="SMTP 用户名" />
-            <UInput
-              v-model="password"
-              label="SMTP 密码"
-              type="password"
-              :placeholder="passwordConfigured ? SECRET_MASK : '未配置'"
-            />
-            <p class="secret-hint">{{ passwordConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
-            <UInput v-model="from" label="发件地址" placeholder="no-reply@example.com" />
-          </div>
+        <!-- #159：单一结构 + 折叠过渡（轴关且有配置时收起；grid-rows 0fr↔1fr，全 tokens） -->
+        <div
+          class="mail-config"
+          :class="{ 'is-open': mailFormOpen }"
+          :inert="!mailFormOpen ? true : undefined"
+          :aria-hidden="!mailFormOpen ? 'true' : undefined"
+        >
+          <div class="mail-config-inner">
+            <div class="settings-grid">
+              <UInput v-model="baseUrl" label="Stalwart 地址" type="url" placeholder="https://mail.example.com" />
+              <UInput
+                v-model="apiKey"
+                label="API Key"
+                type="password"
+                :placeholder="apiKeyConfigured ? SECRET_MASK : '未配置'"
+              />
+              <p class="secret-hint">{{ apiKeyConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
+              <UInput v-model="domain" label="邮箱域名" placeholder="example.com" />
+              <UInput v-model="host" label="SMTP 主机" placeholder="mail.example.com" />
+              <UInput
+                v-model="port"
+                label="SMTP 端口（纯数字，如 465）"
+                type="text"
+                inputmode="numeric"
+                placeholder="465"
+              />
+              <UInput v-model="username" label="SMTP 用户名" />
+              <UInput
+                v-model="password"
+                label="SMTP 密码"
+                type="password"
+                :placeholder="passwordConfigured ? SECRET_MASK : '未配置'"
+              />
+              <p class="secret-hint">{{ passwordConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
+              <UInput v-model="from" label="发件地址" placeholder="no-reply@example.com" />
+            </div>
 
-          <UButton variant="outline" :loading="mailTesting" class="test-btn" @click="onTestMailConnection">
-            测试连接
-          </UButton>
-          <p v-if="mailTestError" class="form-alert" role="alert">{{ mailTestError }}</p>
-          <div v-if="mailTest" class="mail-test-results" role="status">
-            <!-- 以轴名（provisioner/sender）做 key，detail 文本可能重复不能当 key（#139） -->
-            <div
-              v-for="(item, axis) in mailTest"
-              :key="axis"
-              :class="['mail-test-card', item.ok ? 'is-ok' : 'is-fail']"
+            <UButton
+              variant="outline"
+              :loading="mailTesting"
+              :disabled="!mailAxisOn"
+              class="test-btn"
+              @click="onTestMailConnection"
             >
-              <strong>{{ item.ok ? '成功' : '失败' }}</strong>
-              <span>{{ item.detail }}</span>
+              测试连接
+            </UButton>
+            <p v-if="mailTestError" class="form-alert" role="alert">{{ mailTestError }}</p>
+            <div v-if="mailTest" class="mail-test-results" role="status">
+              <!-- 以轴名（provisioner/sender）做 key，detail 文本可能重复不能当 key（#139） -->
+              <div
+                v-for="(item, axis) in mailTest"
+                :key="axis"
+                :class="['mail-test-card', item.ok ? 'is-ok' : 'is-fail']"
+              >
+                <strong>{{ item.ok ? '成功' : '失败' }}</strong>
+                <span>{{ item.detail }}</span>
+              </div>
             </div>
           </div>
-        </template>
-
-        <!-- 轴关（含无配置）：配置区收进折叠项（SetupView details 口径），测试按钮禁用 -->
-        <details v-else class="mail-config-toggle">
-          <summary class="mail-config-summary">展开邮件服务配置</summary>
-          <div class="settings-grid">
-            <UInput v-model="baseUrl" label="Stalwart 地址" type="url" placeholder="https://mail.example.com" />
-            <UInput
-              v-model="apiKey"
-              label="API Key"
-              type="password"
-              :placeholder="apiKeyConfigured ? SECRET_MASK : '未配置'"
-            />
-            <p class="secret-hint">{{ apiKeyConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
-            <UInput v-model="domain" label="邮箱域名" placeholder="example.com" />
-            <UInput v-model="host" label="SMTP 主机" placeholder="mail.example.com" />
-            <UInput
-              v-model="port"
-              label="SMTP 端口（纯数字，如 465）"
-              type="text"
-              inputmode="numeric"
-              placeholder="465"
-            />
-            <UInput v-model="username" label="SMTP 用户名" />
-            <UInput
-              v-model="password"
-              label="SMTP 密码"
-              type="password"
-              :placeholder="passwordConfigured ? SECRET_MASK : '未配置'"
-            />
-            <p class="secret-hint">{{ passwordConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
-            <UInput v-model="from" label="发件地址" placeholder="no-reply@example.com" />
-          </div>
-
-          <UButton variant="outline" :loading="mailTesting" :disabled="!mailAxisOn" class="test-btn" @click="onTestMailConnection">
-            测试连接
-          </UButton>
-          <p v-if="mailTestError" class="form-alert" role="alert">{{ mailTestError }}</p>
-          <div v-if="mailTest" class="mail-test-results" role="status">
-            <div
-              v-for="(item, axis) in mailTest"
-              :key="axis"
-              :class="['mail-test-card', item.ok ? 'is-ok' : 'is-fail']"
-            >
-              <strong>{{ item.ok ? '成功' : '失败' }}</strong>
-              <span>{{ item.detail }}</span>
-            </div>
-          </div>
-        </details>
+        </div>
       </UCard>
 
       <UButton :loading="saving" @click="onSave">保存</UButton>
@@ -365,16 +327,23 @@ async function onTestConnection(): Promise<void> {
   color: var(--unself-color-text-tertiary);
 }
 /* 折叠口径照抄 SetupView .setup-oidc-toggle/.setup-oidc-summary（全部 tokens） */
-.mail-config-toggle {
-  margin-top: var(--unself-space-5);
-  border-top: 1px solid var(--unself-color-border);
-  padding-top: var(--unself-space-4);
+/* #159：折叠过渡（grid-rows 技巧 + tokens）；reduced-motion 下直接瞬切 */
+.mail-config {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--unself-duration-normal) var(--unself-ease-out);
 }
-.mail-config-summary {
-  cursor: pointer;
-  font-size: var(--unself-font-size-sm);
-  color: var(--unself-color-text-secondary);
-  user-select: none;
+.mail-config.is-open {
+  grid-template-rows: 1fr;
+}
+.mail-config > .mail-config-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mail-config {
+    transition: none;
+  }
 }
 .settings-grid {
   display: grid;
