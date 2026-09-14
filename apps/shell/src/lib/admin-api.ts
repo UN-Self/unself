@@ -9,38 +9,15 @@
  *
  * 错误约定：后端已有守卫与校验，前端不重复防御——失败抛 ApiError 给页面渲染错误卡。
  * request-id 透传（§6.5 三层错误透传）。
+ * 传输/错误构造统一走 lib/api-client（#142）：本文件只留端点函数与域类型。
+ * #142 错误文案保持原状：admin 域固定 `请求失败（<status>）`（statusOnly 策略），
+ * 不吸收后端 error 字段（页面有 detail 行，行为零变化）。
  */
 
-/** 后端 JSON 错误（人话 + request id + 技术详情）。 */
-export interface ApiError extends Error {
-  status: number
-  requestId?: string
-  detail?: string
-}
+import { makeApiError, request, statusOnlyMessage, type ApiError } from './api-client'
 
-export function makeApiError(status: number, message: string, requestId?: string, detail?: string): ApiError {
-  const err = new Error(message) as ApiError
-  err.status = status
-  err.requestId = requestId
-  err.detail = detail
-  return err
-}
-
-/** 统一请求：网络异常/非 2xx 一律抛 ApiError（人话 + request id），2xx 回解析后 JSON。 */
-export async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(url, { credentials: 'same-origin', ...init })
-  } catch {
-    throw makeApiError(0, '网络不可用，请检查连接后重试')
-  }
-  const requestId = res.headers.get('x-request-id') ?? undefined
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string; detail?: string } | null
-    throw makeApiError(res.status, `请求失败（${res.status}）`, requestId, body?.detail)
-  }
-  return (await res.json()) as T
-}
+export type { ApiError }
+export { makeApiError }
 
 // ---------------------------------------------------------------------------
 // 成员域（#49 契约）
@@ -58,7 +35,7 @@ export interface AdminMember {
 }
 
 export function fetchMembers(): Promise<AdminMember[]> {
-  return request<AdminMember[]>('/api/admin/members')
+  return request<AdminMember[]>('/api/admin/members', undefined, { messagePolicy: statusOnlyMessage })
 }
 
 /** 停用/启用成员（服务端联动邮箱账户 + 审计）。 */
@@ -66,7 +43,7 @@ export function setMemberStatus(id: string, status: Exclude<MemberStatus, 'activ
 
   return request(`/api/admin/members/${encodeURIComponent(id)}/${status === 'active' ? 'enable' : 'disable'}`, {
     method: 'POST',
-  })
+  }, { messagePolicy: statusOnlyMessage })
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +57,7 @@ export interface AdminModule {
 }
 
 export function fetchAdminModules(): Promise<AdminModule[]> {
-  return request<AdminModule[]>('/api/admin/modules')
+  return request<AdminModule[]>('/api/admin/modules', undefined, { messagePolicy: statusOnlyMessage })
 }
 
 export function toggleModule(id: string, enabled: boolean): Promise<unknown> {
@@ -88,7 +65,7 @@ export function toggleModule(id: string, enabled: boolean): Promise<unknown> {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ enabled }),
-  })
+  }, { messagePolicy: statusOnlyMessage })
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +81,7 @@ export interface AuditEntry {
 }
 
 export function fetchAuditLog(): Promise<AuditEntry[]> {
-  return request<AuditEntry[]>('/api/admin/audit-log')
+  return request<AuditEntry[]>('/api/admin/audit-log', undefined, { messagePolicy: statusOnlyMessage })
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +121,7 @@ export type SettingsUpdate = {
 }
 
 export function fetchSettings(): Promise<InstanceSettings> {
-  return request<InstanceSettings>('/api/admin/settings')
+  return request<InstanceSettings>('/api/admin/settings', undefined, { messagePolicy: statusOnlyMessage })
 }
 
 export function saveSettings(update: SettingsUpdate): Promise<{ ok: boolean }> {
@@ -153,7 +130,7 @@ export function saveSettings(update: SettingsUpdate): Promise<{ ok: boolean }> {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(update),
-  })
+  }, { messagePolicy: statusOnlyMessage })
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +151,7 @@ export interface AdminInvite {
 
 /** 邀请列表（后端倒序，惰性过期已判）。 */
 export function fetchInvites(): Promise<AdminInvite[]> {
-  return request<AdminInvite[]>('/api/admin/invites')
+  return request<AdminInvite[]>('/api/admin/invites', undefined, { messagePolicy: statusOnlyMessage })
 }
 
 /** 生成邀请链接（完整 URL 只在本响应出现，请立即复制）。 */
@@ -183,7 +160,7 @@ export function createInvite(expiresInDays: number): Promise<{ inviteUrl: string
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ expiresInDays }),
-  })
+  }, { messagePolicy: statusOnlyMessage })
 }
 
 /** 批准申请：email 非空 = 已开户并发出激活链接；null = 弱化实例（首登按个人邮箱匹配）。 */
@@ -191,6 +168,7 @@ export function approveInvite(id: string): Promise<{ status: string; email: stri
   return request<{ status: string; email: string | null }>(
     `/api/admin/invites/${encodeURIComponent(id)}/approve`,
     { method: 'POST' },
+    { messagePolicy: statusOnlyMessage },
   )
 }
 
@@ -198,12 +176,12 @@ export function approveInvite(id: string): Promise<{ status: string; email: stri
 export function rejectInvite(id: string): Promise<{ status: string }> {
   return request<{ status: string }>(`/api/admin/invites/${encodeURIComponent(id)}/reject`, {
     method: 'POST',
-  })
+  }, { messagePolicy: statusOnlyMessage })
 }
 
 export interface MailTestResult { ok: boolean; detail: string }
-export function testMailConnection(): Promise<{ provisioner: MailTestResult; sender: MailTestResult }> { return request("/api/admin/mail/test", { method: "POST" }) }
+export function testMailConnection(): Promise<{ provisioner: MailTestResult; sender: MailTestResult }> { return request("/api/admin/mail/test", { method: "POST" }, { messagePolicy: statusOnlyMessage }) }
 
 export function resendMemberActivation(id: string): Promise<unknown> {
-  return request(`/api/admin/members/${encodeURIComponent(id)}/resend-activation`, { method: 'POST' })
+  return request(`/api/admin/members/${encodeURIComponent(id)}/resend-activation`, { method: 'POST' }, { messagePolicy: statusOnlyMessage })
 }

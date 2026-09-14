@@ -8,7 +8,10 @@
  * - POST /api/notifications/:id/read     → { ok: true }
  *
  * 前端只做展示与点击置读，不硬编码类型中文名、不做批量已读/轮询/实时推送。
+ * 传输/错误构造统一走 lib/api-client（#142）：本文件只留端点函数与域类型。
  */
+
+import { request, send, statusOnlyMessage } from './api-client'
 
 /** 通知条目（core-api #19 响应子集）。 */
 export interface NotificationItem {
@@ -20,29 +23,20 @@ export interface NotificationItem {
   createdAt: string
 }
 
+/** 通知域错误文案保持原状：`请求失败（<status>）`（#142 行为零变化，statusOnly 策略）。 */
 export async function fetchNotifications(): Promise<NotificationItem[]> {
-  const res = await fetch('/api/notifications', { credentials: 'same-origin' })
-  if (!res.ok) {
-    throw new Error(`请求失败（${res.status}）`)
-  }
-  return (await res.json()) as NotificationItem[]
+  return request<NotificationItem[]>('/api/notifications', undefined, { messagePolicy: statusOnlyMessage })
 }
 
 export async function fetchUnreadCount(): Promise<number> {
-  const res = await fetch('/api/notifications/unread-count', { credentials: 'same-origin' })
-  if (!res.ok) {
-    throw new Error(`请求失败（${res.status}）`)
-  }
-  const body = (await res.json()) as { count: number }
+  const body = await request<{ count: number }>('/api/notifications/unread-count', undefined, {
+    messagePolicy: statusOnlyMessage,
+  })
   return body.count
 }
 
 export async function markNotificationRead(id: string): Promise<void> {
-  const res = await fetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
+  await send(`/api/notifications/${encodeURIComponent(id)}/read`, {
     method: 'POST',
-    credentials: 'same-origin',
   })
-  if (!res.ok) {
-    throw new Error(`请求失败（${res.status}）`)
-  }
 }

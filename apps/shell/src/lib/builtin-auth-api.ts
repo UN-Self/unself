@@ -7,16 +7,16 @@
  * - POST /api/setup/builtin-admin             setup 内置管理员开通（建号+封箱）
  * - POST /api/admin/members/:id/reset-password 管理员手动重置内置登录密码
  *
- * 错误口径（§6.5 三层透传，与 invite-api.ts 同构）：非 2xx 抛 Error，
+ * 错误口径（§6.5 三层透传，与 invite-api 同构）：非 2xx 抛 ApiError，
  * message 优先取后端 JSON 的 error 字段（后端已给人话），status 挂 err.status
  * 供分档；网络异常统一 '网络不可用，请检查连接后重试'。
+ * 传输/错误构造统一走 lib/api-client（#142）：本文件只留端点函数与域类型。
  */
 
 import { generateSalt, deriveProof } from './pk1'
+import { request, type ApiError } from './api-client'
 
-export interface AuthError extends Error {
-  status: number
-}
+export type AuthError = ApiError
 
 export interface AuthMethods {
   builtin: boolean
@@ -26,28 +26,6 @@ export interface AuthMethods {
 export interface BuiltinAdminResult {
   ok: boolean
   user: { id: string; name: string; role: string }
-}
-
-function makeError(status: number, message: string): AuthError {
-  const err = new Error(message) as AuthError
-  err.status = status
-  return err
-}
-
-/** 统一请求：网络异常/非 2xx 一律抛 AuthError（人话），2xx 回解析后 JSON。 */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(path, { credentials: 'same-origin', ...init })
-  } catch {
-    throw makeError(0, '网络不可用，请检查连接后重试')
-  }
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null
-    const serverMessage = typeof body?.error === 'string' ? body.error.trim() : ''
-    throw makeError(res.status, serverMessage || `请求失败（${res.status}）`)
-  }
-  return (await res.json()) as T
 }
 
 /** GET /api/auth/methods：登录页按 oidc 显隐 SSO 按钮。 */

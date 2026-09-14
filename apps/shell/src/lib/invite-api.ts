@@ -7,16 +7,17 @@
  * - GET  /api/activate/<token> 激活链接读工作邮箱（未用未过期才有值）
  * - POST /api/activate/<token> 自设邮箱密码（SPEC §5.7：非工作台登录密码）
  *
- * 错误口径（§6.5 三层透传）：非 2xx 抛 Error，message 优先用后端 JSON 的
+ * 错误口径（§6.5 三层透传）：非 2xx 抛 ApiError，message 优先用后端 JSON 的
  * error 字段（本域后端已给人话），拿不到才回 '请求失败（<status>）'；
  * 网络异常统一回 '网络不可用，请检查连接后重试'。status 供调用方分档
  * （404/410 = 链接失效，人话仍由服务端提供）。不重写全局 fetch。
+ * 传输/错误构造统一走 lib/api-client（#142）：本文件只留端点函数与域类型。
  */
 
+import { request, type ApiError } from './api-client'
+
 /** 公开邀请域错误：message 一律人话，status 供分档（0 = 网络不可达）。 */
-export interface InviteApiError extends Error {
-  status: number
-}
+export type InviteApiError = ApiError
 
 /** 邀请三态（#134）：pending 审批中 / approved 可设邮箱密码 / activated 全部就绪。 */
 export type InviteStatusState = 'pending' | 'approved' | 'activated'
@@ -29,28 +30,6 @@ export interface InviteApplication {
   username?: string
   salt?: string
   proof?: string
-}
-
-function makeError(status: number, message: string): InviteApiError {
-  const err = new Error(message) as InviteApiError
-  err.status = status
-  return err
-}
-
-/** 统一请求：网络异常/非 2xx 一律抛 InviteApiError（人话），2xx 回解析后 JSON。 */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(path, { credentials: 'same-origin', ...init })
-  } catch {
-    throw makeError(0, '网络不可用，请检查连接后重试')
-  }
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null
-    const serverMessage = typeof body?.error === 'string' ? body.error.trim() : ''
-    throw makeError(res.status, serverMessage || `请求失败（${res.status}）`)
-  }
-  return (await res.json()) as T
 }
 
 /** GET /api/invite/<token>：链接仍可用时回申请三字段（新链接为空串）。 */

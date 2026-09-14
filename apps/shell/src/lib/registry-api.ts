@@ -3,7 +3,12 @@
 /**
  * 注册表客户端（#12 边栏数据源）：
  * GET /api/modules → 成员视角 enabled 模块（core-api #7）。
+ * 传输/错误构造统一走 lib/api-client（#142）：本文件只留端点函数与域类型。
  */
+
+import { request, type ApiError } from './api-client'
+
+export type { ApiError }
 
 /** 注册表条目（core-api RegistryEntry 的成员侧子集）。 */
 export interface RegistryModule {
@@ -22,34 +27,8 @@ export interface RegistryModule {
   } | null
 }
 
-/** 后端 JSON 错误（人话 + request id + 技术详情，§6.5 三层透传）。 */
-export interface ApiError extends Error {
-  status: number
-  requestId?: string
-  detail?: string
-}
-
 export async function fetchEnabledModules(): Promise<RegistryModule[]> {
-  let res: Response
-  try {
-    res = await fetch('/api/modules', { credentials: 'same-origin' })
-  } catch {
-    throw makeError(0, '网络不可用，请检查连接后重试')
-  }
-  const requestId = res.headers.get('x-request-id') ?? undefined
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string; detail?: string } | null
-    throw makeError(res.status, `模块列表加载失败（${res.status}）`, requestId, body?.detail)
-  }
-  return (await res.json()) as RegistryModule[]
-}
-
-function makeError(status: number, message: string, requestId?: string, detail?: string): ApiError {
-  const err = new Error(message) as ApiError
-  err.status = status
-  err.requestId = requestId
-  err.detail = detail
-  return err
+  return request<RegistryModule[]>('/api/modules', undefined, { messagePolicy: () => '模块列表加载失败' })
 }
 
 /**

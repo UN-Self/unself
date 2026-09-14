@@ -11,6 +11,7 @@ import {
   type ApiError,
 } from './lib/setup-api'
 import { createBuiltinAdmin, loginWithPassword, type AuthError } from './lib/builtin-auth-api'
+import { requestOk } from './lib/api-client'
 
 /**
  * setup 向导页（#10，直线流程 #55，§6.5 动线；issue-A 内置身份为默认分支）：
@@ -73,13 +74,7 @@ onMounted(() => {
  * 已登录 → 自动提权：成功进工作台，403/409 等失败落错误卡；未登录/网络异常 → 静默停在表单。
  */
 async function autoActivateIfAuthed(t: string) {
-  let me: Response
-  try {
-    me = await fetch('/api/me', { credentials: 'same-origin' })
-  } catch {
-    return // 网络异常：不打扰，用户仍可填写提交
-  }
-  if (!me.ok) return // 未登录：等用户提交后走登录
+  if (!(await requestOk('/api/me'))) return // 未登录或网络异常：不打扰，用户仍可填写提交
   activating.value = true
   try {
     await activateSetup(t)
