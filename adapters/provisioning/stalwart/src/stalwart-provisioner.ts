@@ -62,18 +62,14 @@ async function randomPassword(length = 24): Promise<string> {
 }
 
 /**
- * reset 凭据映射用的随机新键——每次 reset 换新键，不与现存 credentialId 撞键。
- * 服务端语义：map 出现新键 = 追加同 type 凭据并替换旧的（0.16.17 实测：凭据列表回到单条、旧密码 401）。
+ * reset 凭据映射用的数字索引键（0.16.20 实测定案，issue #148）。
+ * 0.16.20 起 User.credentials 属性是【索引 List】：patch 的 map 键必须可 parse::<u32>()，
+ * 随机字母数字键会被拒 invalidPatch「Invalid key for object property」（生产实测三形状对照：
+ * 随机键 ✗、现存 credentialId 字母键 ✗、数字键 "0" → updated ✓）。
+ * 0.16.17 历史形状（issue #113）为随机字母数字新键，升 0.16.20 后失效——停机设密码 500 的根因。
  */
-function randomCredentialKey(length = 12): string {
-  const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  let key = '';
-  for (const byte of bytes) {
-    key += alphabet[byte % alphabet.length]!;
-  }
-  return key;
+function credentialPatchKey(): string {
+  return '0';
 }
 
 /**
@@ -95,18 +91,27 @@ async function requireAccountId(
   return accountId;
 }
 
-/** 摘掉（disable）或恢复（enable）authenticate 权限位——可逆禁用语义，不删号。 */
+/**
+ * 摘掉（disable）或恢复（enable）authenticate 权限位——可逆禁用语义，不删号。
+ * disable 形状 = 上游 SCIM set_active 的禁用形状（crates/scim/src/users/mod.rs）：
+ * Permissions::Merge + disabledPermissions map。0.16.20 实测：Merge + {authenticate: true} → updated，
+ * 该账号 Basic 登录 403、permissions 回读 {Merge, disabled:{authenticate:true}}，Inherit 恢复后 200。
+ * 旧形状（0.16.17 写下的数组 enabledPermissions: [] / disabledPermissions: ['authenticate']）
+ * 实测 invalidPatch「Invalid value for object property (permissions/enabledPermissions)」——
+ * PermissionsList 两字段是 Map<Permission>（0.16.17→0.16.20 map.rs 未变，数组从来不是合法形状），
+ * 本次一并修正（issue #148）。
+ */
 function authenticatePermissionPatch(disable: boolean): Record<string, unknown> {
   if (disable) {
     return {
       permissions: {
-        '@type': 'Replace',
-        enabledPermissions: [],
-        disabledPermissions: ['authenticate'],
+        '@type': 'Merge',
+        enabledPermissions: {},
+        disabledPermissions: { authenticate: true },
       },
     };
   }
-  // 恢复继承默认权限，等于把显式禁用位摘掉。
+  // 恢复继承默认权限，等于把显式禁用位摘掉（0.16.20 实测：Inherit → updated，登录 200）。
   return { permissions: { '@type': 'Inherit' } };
 }
 
@@ -134,9 +139,10 @@ export function createStalwartMailProvisioner(
         [
           'x:Account/set',
           {
-            // 载荷形状照 0.16.17 实测定案（issue #113）：credentials 必须键控对象
-            // （数组被拒 invalidPatch；credentialId 为 serverSet，create 不可带，键名任意）；
-            // aliases/memberGroupIds 是 objectList/set 类型，必须传 {} 而非 []。
+            // 载荷形状照 0.16.17 实测定案（issue #113）、0.16.20 复测通过（issue #148）：
+            // credentials 必须键控对象（数组被拒 invalidPatch），键 '1' 是纯数字，
+            // 在 0.16.20 的索引 List 下幸存（实测 create → created）；credentialId 为 serverSet，
+            // create 不可带。aliases/memberGroupIds 是 objectList/set 类型，必须传 {} 而非 []。
             create: {
               new1: {
                 '@type': 'User',
@@ -190,11 +196,12 @@ export function createStalwartMailProvisioner(
           'x:Account/set',
           {
             update: {
-              // 定案形状（0.16.17 实测）：credentials 键控对象 + 随机新键 = 追加并替换同 type 旧凭据。
-              // 整 map 替换 / JMAP "/" patch / 数组形状均被拒（notRequest、notFound、invalidPatch）。
+              // 定案形状（0.16.20 实测，issue #148）：credentials 是索引 List，patch 键必须数字
+              // 索引（随机/字母键 invalidPatch）。0.16.17 历史形状（issue #113）为随机字母数字新键，
+              // 升 0.16.20 后失效；整 map 替换 / JMAP "/" patch / 数组形状均被拒。
               [accountId]: {
                 credentials: {
-                  [randomCredentialKey()]: { '@type': 'Password', secret: password },
+                  [credentialPatchKey()]: { '@type': 'Password', secret: password },
                 },
               },
             },
