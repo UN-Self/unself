@@ -6,6 +6,26 @@ export const InviteStatusSchema = z.enum(['pending', 'approved', 'rejected', 'co
 
 export type InviteStatus = z.infer<typeof InviteStatusSchema>;
 
+/**
+ * 公开邀请页三态（#134）：对申请人只暴露这三个语义，
+ * expired/rejected 是管理侧事实，对外一律「已失效」（不泄露状态机细节）。
+ */
+export const InvitePublicStatusSchema = z.enum(['pending', 'approved', 'activated']);
+
+export type InvitePublicStatus = z.infer<typeof InvitePublicStatusSchema>;
+
+/**
+ * `GET /api/invite/:token/status` 响应（#149）：三态 + 实例能力开关。
+ * mailEnabled = instance_config 有无 `mail` 段（邮件轴能力唯一真相源）：
+ * false 时邀请页不渲染邮箱字段、批准即激活（无开户动作）。
+ */
+export const InviteStatusResponseSchema = z.object({
+  status: InvitePublicStatusSchema,
+  mailEnabled: z.boolean(),
+});
+
+export type InviteStatusResponse = z.infer<typeof InviteStatusResponseSchema>;
+
 /** 一次性、限期邀请记录。 */
 export const InviteSchema = z.object({
   tokenHash: z.string(),
