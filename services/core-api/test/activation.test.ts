@@ -15,7 +15,7 @@ import { createApp } from '../src/index';
 import { generateInstanceKeyPair } from '../src/keys';
 import { hashOneTimeToken } from '../src/one-time-token';
 import { createSessionToken } from '../src/session';
-import { issueInviteActivation } from '../src/services/invite-activations';
+import { issueInviteActivation, releaseInviteActivation } from '../src/services/invite-activations';
 import { createCoreDb, type CoreTestDb } from './test-factory';
 
 /** 完整实例 mail 段（provisioner 与 SMTP 都能装配）。 */
@@ -228,7 +228,7 @@ describe('激活域 HTTP（#18）', () => {
     ).toBe(404);
   });
 
-  it('resetPassword 抛 ACCOUNT_NOT_FOUND → 409 人话（设置邮箱密码失败 + 回邀请页指引），不再裸 500', async () => {
+  it('resetPassword 抛 ACCOUNT_NOT_FOUND → 409 人话（设置邮箱密码失败 + 链接仍有效重试），令牌已回滚（#151）', async () => {
     const fake = createFakeMailProvisioner();
     const sent: SentMail[] = [];
     const app = createApp({
@@ -249,22 +249,25 @@ describe('激活域 HTTP（#18）', () => {
     const body = (await failed.json()) as { error: string };
     expect(body.error).toContain('设置邮箱密码失败');
     expect(body.error).toContain('Stalwart 中无此邮箱账号');
-    expect(body.error).toContain('回邀请页重新获取链接');
+    expect(body.error).toContain('链接仍有效，可直接重试');
 
-    // 失败发生在令牌消费之后：同一链接再点只回统一失效人话，且未入激活审计
-    expect((await activate(app, env, activateToken, 'super-secret-1')).status).toBe(404);
+    // #151：密码没设上就不烧链接——同一链接重试仍走「设置失败」而不是统一失效人话
+    expect((await activate(app, env, activateToken, 'super-secret-1')).status).toBe(409);
     expect(
       db.first<{ used_at: string | null }>(
         'SELECT used_at FROM invite_activations WHERE invite_token_hash = ?',
         tokenHash,
       )?.used_at,
-    ).not.toBeNull();
+    ).toBeNull();
     expect(
       db.first("SELECT count(*) AS n FROM audit_log WHERE action = 'account_activated'"),
     ).toEqual({ n: 0 });
+    expect(
+      db.first("SELECT count(*) AS n FROM audit_log WHERE action = 'activation_reset_failed'"),
+    ).toEqual({ n: 2 });
   });
 
-  it('resetPassword 通用错误 → 502 透传原因 + 回邀请页指引，不再裸 500', async () => {
+  it('resetPassword 通用错误 → 502 透传原因 + 链接仍有效指引，令牌已回滚（#151）', async () => {
     const fake = createFakeMailProvisioner();
     const sent: SentMail[] = [];
     const app = createApp({
@@ -283,8 +286,71 @@ describe('激活域 HTTP（#18）', () => {
     const failed = await activate(app, env, activateToken, 'super-secret-1');
     expect(failed.status).toBe(502);
     expect(await failed.json()).toEqual({
-      error: '设置邮箱密码失败：JMAP 请求超时。激活链接已失效，请回邀请页重新获取链接',
+      error: '设置邮箱密码失败：JMAP 请求超时。密码未被修改，链接仍有效，可直接重试',
     });
+  });
+
+  it('弱密码被 Stalwart 拒绝 → 400 中文人话，令牌回滚后同一链接换强密码即成功（#151 走查现场）', async () => {
+    const fake = createFakeMailProvisioner();
+    const sent: SentMail[] = [];
+    let weak = true;
+    const app = createApp({
+      createMailProvisioner: () => ({
+        ...fake,
+        resetPassword: async (input: { email: string; password: string }) => {
+          if (weak) {
+            weak = false;
+            throw new Error(
+              'Stalwart JMAP resetPassword 写入失败：Password is too weak. Repeats like "abcabcabc" are only slightly harder to guess than "abc".',
+            );
+          }
+          return fake.resetPassword(input);
+        },
+      }),
+      createMailSender: () => fakeSender(sent),
+    });
+    const { env, db, adminCookie } = await envFor(true);
+    await approvedInvite(app, env, adminCookie);
+    const { activateToken } = activationFromMail(sent);
+
+    const failed = await activate(app, env, activateToken, 'abcabcabcabc');
+    expect(failed.status).toBe(400);
+    const body = (await failed.json()) as { error: string };
+    expect(body.error).toContain('密码强度不足');
+    expect(body.error).toContain('链接仍有效，可直接重试');
+
+    // 同一链接换强密码重试 → 成功（令牌未被白烧）
+    const retried = await activate(app, env, activateToken, 'harbor-quartz-ember-42');
+    expect(retried.status).toBe(200);
+    expect(await retried.json()).toMatchObject({ ok: true });
+    expect(
+      db.first<{ used_at: string | null }>(
+        'SELECT used_at FROM invite_activations WHERE invite_token_hash IS NOT NULL',
+      )?.used_at,
+    ).not.toBeNull();
+  });
+
+  it('releaseInviteActivation 精确守卫：used_at 被他人改写（claim 重签）后不回滚（#151）', async () => {
+    const { env, db } = await envFor(true);
+    db.run(
+      "INSERT INTO invite_activations (token_hash, invite_token_hash, email, expires_at, used_at) VALUES ('t_guard', 'i_guard', 'a@b.c', datetime('now','+1 hour'), '2026-01-01 00:00:00')",
+    );
+    // 守卫不匹配（值是别人的）→ 不回滚，也不误判成功
+    expect(await releaseInviteActivation(env.CORE_DB, 't_guard', '1999-01-01 00:00:00')).toBe(false);
+    expect(
+      db.first<{ used_at: string | null }>(
+        'SELECT used_at FROM invite_activations WHERE token_hash = ?',
+        't_guard',
+      )?.used_at,
+    ).toBe('2026-01-01 00:00:00');
+    // 精确匹配 → 回滚成功
+    expect(await releaseInviteActivation(env.CORE_DB, 't_guard', '2026-01-01 00:00:00')).toBe(true);
+    expect(
+      db.first<{ used_at: string | null }>(
+        'SELECT used_at FROM invite_activations WHERE token_hash = ?',
+        't_guard',
+      )?.used_at,
+    ).toBeNull();
   });
 
   it('同一令牌二次提交 404，密码只被设置一次', async () => {

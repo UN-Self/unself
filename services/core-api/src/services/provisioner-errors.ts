@@ -12,7 +12,7 @@ import { MailProvisionerError } from '@unself/contracts';
 
 /** 分类结果：映射后的 HTTP 状态码与人话 detail。 */
 export interface ClassifiedProvisionerFailure {
-  status: 409 | 502;
+  status: 400 | 409 | 502;
   detail: string;
 }
 
@@ -31,11 +31,17 @@ export function genericFailureDetail(reason: string): string {
 
 /**
  * activate 语境的失败外壳（#150）：动作前缀是「设置邮箱密码失败」，不是开户。
- * 关键事实：顺序是「先消费令牌、后 resetPassword」，失败时这条链接已经烧掉——
- * 人话必须带「回邀请页重新获取链接」的出路指引，不能只让用户原地重试。
+ * 两条出路文案由调用方按「令牌是否已回滚」二选一（#151）：
+ * - 回滚成功（链接仍有救）→ activationRetryDetail；
+ * - 回滚失败/无回滚（链接真烧了）→ activationFailureDetail。
  */
 export function activationFailureDetail(reason: string): string {
   return `设置邮箱密码失败：${reason}。激活链接已失效，请回邀请页重新获取链接`;
+}
+
+/** activate 失败但令牌已回滚（#151）：链接未消费，用户可直接原地重试。 */
+export function activationRetryDetail(reason: string): string {
+  return `设置邮箱密码失败：${reason}。密码未被修改，链接仍有效，可直接重试`;
 }
 
 /**
@@ -51,6 +57,14 @@ export function classifyProvisionerFailure(error: unknown, email?: string): Clas
   const reason = error instanceof Error ? error.message : String(error);
   if (/HTTP 40[13]/.test(reason)) {
     return { status: 502, detail: AUTH_DETAIL };
+  }
+  // Stalwart 密码策略拒绝（0.16.20 实测文案：`Password is too weak. Repeats like "abcabcabc"…`）
+  // 属用户输入问题：400 人话，别把英文策略原文当 502 甩给用户（走查 #151 现场）。
+  if (/password is too weak|too weak|password.*policy/i.test(reason)) {
+    return {
+      status: 400,
+      detail: '密码强度不足：请使用更长、避免重复片段与常见词的密码（如两三个不相关的词拼起来）',
+    };
   }
   return { status: 502, detail: reason };
 }
