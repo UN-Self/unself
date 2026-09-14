@@ -5,7 +5,7 @@ import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { mount } from '@vue/test-utils'
 
-import { UButton, UCard, UErrorCard, UInput, USkeleton } from '../src/index'
+import { UButton, UCard, UErrorCard, UInput, USkeleton, USwitch } from '../src/index'
 
 /**
  * 基元测试（#60 测试标准执行 · 两问检验）：
@@ -131,6 +131,54 @@ describe('USkeleton / UCard 输出契约（props → 渲染结果）', () => {
   })
 })
 
+describe('USwitch 开关交互（行为层：事件 = 唯一切换通道）', () => {
+  it('click → emit [true]；再次 click → 回 [false]', async () => {
+    const wrapper = mount(USwitch, { props: { modelValue: false } })
+    const btn = wrapper.find('button')
+
+    await btn.trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toEqual([[true]])
+
+    await wrapper.setProps({ modelValue: true })
+    await btn.trigger('click')
+    expect(wrapper.emitted('update:modelValue')).toEqual([[true], [false]])
+  })
+
+  it('keydown Space 与 Enter 各恰好切换一次（显式 preventDefault 防原生 click 二次触发）', async () => {
+    const wrapper = mount(USwitch, { props: { modelValue: false } })
+    const btn = wrapper.find('button')
+
+    await btn.trigger('keydown', { key: ' ' })
+    expect(wrapper.emitted('update:modelValue')).toEqual([[true]])
+
+    await wrapper.setProps({ modelValue: true })
+    await btn.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('update:modelValue')).toEqual([[true], [false]])
+  })
+
+  it('disabled → click 与 keydown 都不 emit，且 button 带原生 disabled', async () => {
+    const wrapper = mount(USwitch, { props: { modelValue: false, disabled: true } })
+    const btn = wrapper.find('button')
+    expect(btn.attributes('disabled')).toBeDefined()
+
+    await btn.trigger('click')
+    await btn.trigger('keydown', { key: ' ' })
+    await btn.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+
+  it('类名 u-switch-on/off 随状态切换（基元对样式表的公开接口）', async () => {
+    const wrapper = mount(USwitch, { props: { modelValue: false } })
+    const btn = wrapper.find('button')
+    expect(btn.classes()).toContain('u-switch-off')
+    expect(btn.classes()).not.toContain('u-switch-on')
+
+    await wrapper.setProps({ modelValue: true })
+    expect(btn.classes()).toContain('u-switch-on')
+    expect(btn.classes()).not.toContain('u-switch-off')
+  })
+})
+
 describe('SSR 渲染契约（渲染输出 = 用户可见面）', () => {
   it('UButton 默认：真实 button 元素 + type="button"（表单内不误触提交）+ slot 文案可见', async () => {
     const html = await renderToString(
@@ -173,5 +221,23 @@ describe('SSR 渲染契约（渲染输出 = 用户可见面）', () => {
     )
     expect(html).toContain('同步失败')
     expect(html).toContain('请求编号：req-7a1')
+  })
+
+  it('USwitch：role=switch + type=button + aria-checked 反映 modelValue；on/off 类名随状态切换', async () => {
+    const off = await renderToString(
+      createSSRApp({ render: () => h(USwitch, { modelValue: false }) }),
+    )
+    expect(off).toMatch(/<button[^>]*type="button"/)
+    expect(off).toContain('role="switch"')
+    expect(off).toContain('aria-checked="false"')
+    expect(off).toContain('u-switch-off')
+    expect(off).not.toContain('u-switch-on')
+
+    const on = await renderToString(
+      createSSRApp({ render: () => h(USwitch, { modelValue: true }) }),
+    )
+    expect(on).toContain('aria-checked="true"')
+    expect(on).toContain('u-switch-on')
+    expect(on).not.toContain('u-switch-off')
   })
 })
