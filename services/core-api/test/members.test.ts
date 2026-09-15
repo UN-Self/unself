@@ -239,15 +239,27 @@ describe('管理端成员生命周期（#49）', () => {
     expect(calls).toEqual([]);
   });
 
-  it('邮件轴联动失败不再裸 500（#115）：ACCOUNT_NOT_FOUND → 409，认证失败 → 502 + API Key 指引，其它 → 502 透传', async () => {
+  it('邮件轴联动失败不再裸 500（#115/#189）：结构化 code 优先，裸错误文案兜底，超时→502 人话', async () => {
     const calls: string[] = [];
     const errors: unknown[] = [
       new MailProvisionerError('ACCOUNT_NOT_FOUND', 'Stalwart 中找不到账户 member@example.com'),
+      // #189 B1：结构化判定——文案怎么改都不影响认证失败分类（不再靠 /HTTP 40[13]/ 嗅探）
+      new MailProvisionerError('AUTH_FAILED', '上游拒绝：文案已改（HTTP 状态在结构化字段里）', {
+        httpStatus: 403,
+      }),
+      // #189 B5：超时归类为 TIMEOUT，折叠成 502 人话，不把英文/裸原因甩给用户
+      new MailProvisionerError(
+        'TIMEOUT',
+        'Stalwart JMAP disableAccount 调用超时：超过 10s 未响应',
+      ),
+      // 旧口径兑底：未结构化的实现仍按文案分类（兼容存量第三方实现）
       new Error('Stalwart JMAP 请求失败：HTTP 401 Unauthorized'),
       new Error('Stalwart JMAP 请求失败（网络错误）：https://mail.example.com/jmap'),
     ];
     const expected = [
       { status: 409, detailPart: 'Stalwart 中无此邮箱账号（member@example.com）' },
+      { status: 502, detailPart: '检查 API Key' },
+      { status: 502, detailPart: '未在时限内响应' },
       { status: 502, detailPart: '检查 API Key' },
       { status: 502, detailPart: 'Stalwart JMAP 请求失败（网络错误）' },
     ];
@@ -272,8 +284,8 @@ describe('管理端成员生命周期（#49）', () => {
       JSON.stringify({ provider: 'fake' }),
     );
 
-    for (let step = 0; step < 3; step++) {
-      // disable：三类错误 → 409 / 502 / 502，detail 人话且含原文原因
+    for (let step = 0; step < errors.length; step++) {
+      // disable：五类错误 → 409 / 502 三种人话，detail 人话且不含英文裸原因
       const disabled = await app.request(
         'https://team.example.com/api/admin/members/u_member/disable',
         { method: 'POST', headers: { cookie: adminCookie } },
