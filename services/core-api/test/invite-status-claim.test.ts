@@ -379,6 +379,43 @@ describe('#134 claim-activation（POST /api/invite/:token/claim-activation）', 
     expect(((await done.json()) as { error: string }).error).toContain('已激活过');
   });
 
+  it('并发双 claim 同一邀请：恰好一个 200、一个 409，只多出新签一行未用激活行', async () => {
+    // 同型手法参照 activation.test.ts「并发两次提交同一令牌」：Promise.all 双发。
+    // 行为契约 =「同一时刻至多一个有效明文链接」（routes/invites.ts 原子作废注释，
+    // services/invite-activations.ts invalidateInviteActivation 的 used_at IS NULL 守卫）。
+    // node:sqlite 单写者串行执行：两请求先后进入作废语句，先到者 changes=1，
+    // 后到者 zero-change 回 false → 409；或在胜方新签落库前的窗口读到已作废最新行 → 409。
+    const { fx, token } = await approvedInviteWithActivation();
+    const { app, env, db } = fx;
+
+    const responses = await Promise.all([
+      app.request(`https://team.example.com/api/invite/${token}/claim-activation`, { method: 'POST' }, env),
+      app.request(`https://team.example.com/api/invite/${token}/claim-activation`, { method: 'POST' }, env),
+    ]);
+    const statuses = responses.map((response) => response.status).sort();
+    expect(statuses).toEqual([200, 409]);
+
+    // 败方人话：并发窗口里拿不到有效链接——两种引导文案都可能（取决于双发交错窗口），
+    // 但必须是引导性人话（不是裸 500/空白）
+    const loser = responses.find((response) => response.status === 409)!;
+    const loserError = ((await loser.json()) as { error: string }).error;
+    expect(['激活链接已刷新，请重试', '已激活过，请直接登录']).toContain(loserError);
+
+    // 库内真相：批准时的原始行被作废（used_at 带 invalidated@ 前缀，#170 记号），
+    // 胜方新签恰一行未用——不产生第二条未用激活行
+    const rows = db.query<{ used_at: string | null }>(
+      'SELECT used_at FROM invite_activations ORDER BY rowid',
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.used_at).toMatch(/^invalidated@/);
+    expect(rows.filter((row) => row.used_at === null)).toHaveLength(1);
+
+    // 审计只记胜方一次（败方没拿到链接，不产生 activation_claimed）
+    expect(
+      db.query("SELECT action FROM audit_log WHERE action = 'activation_claimed'"),
+    ).toHaveLength(1);
+  });
+
   it('无效令牌 claim → 404；无激活行的 approved（弱化实例）→ 409 引导直接登录', async () => {
     const pair = await generateInstanceKeyPair();
     const db = createCoreDb();
