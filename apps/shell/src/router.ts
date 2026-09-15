@@ -16,6 +16,7 @@ import { installAuthGuard } from './lib/guarded-fetch'
  * M0 路由：/setup 向导（守卫见下）、/login 登录页（#11）、/ 登录后工作台（#12 完整化）。
  * #17：/admin 管理台五页（布局组件内做 role 守卫；服务端 /api/admin/* 有真值守卫）。
  * #18：公开邀请填表 /invite/:token 与激活 /activate/:token（无侧栏独立壳，不登登录）。
+ * #168：/app-password 应用密码说明页（成员可见，登录态 + mailEnabled 决定页面形态）。
  */
 
 const routes: RouteRecordRaw[] = [
@@ -24,6 +25,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/invite/:token', component: InviteView },
   { path: '/activate/:token', component: ActivateView },
   { path: '/setup', component: SetupView },
+  { path: '/app-password', component: () => import('./MailGuideView.vue') },
   {
     path: '/admin',
     component: () => import('./AdminLayout.vue'),

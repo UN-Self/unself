@@ -18,15 +18,33 @@ export interface SessionUser {
 }
 
 export type MeResult =
-  | { authenticated: true; user: SessionUser }
+  | {
+      authenticated: true
+      user: SessionUser
+      /** 邮件轴是否开启（#168）：成员可见能力，决定工作台入口与说明页落地。 */
+      mailEnabled: boolean
+      /** 服务端解析好的邮件门户地址（#168）：portalUrl 优先、domain 推导兜底；缺 → null。 */
+      mailPortalUrl: string | null
+    }
   | { authenticated: false }
 
 /** 查询会话态；网络错误/非 2xx/形状不符均视为未登录（由调用方决定提示）。 */
 export async function fetchMe(): Promise<MeResult> {
   try {
-    const body = await request<{ authenticated: boolean; user?: SessionUser }>('/api/me')
+    const body = await request<{
+      authenticated: boolean
+      user?: SessionUser
+      mailEnabled?: boolean
+      mailPortalUrl?: string | null
+    }>('/api/me')
     if (body?.authenticated && body.user) {
-      return { authenticated: true, user: body.user }
+      return {
+        authenticated: true,
+        user: body.user,
+        // 老后端/缺字段 → 按无邮件能力处理（入口不显示，不抛错）。
+        mailEnabled: body.mailEnabled === true,
+        mailPortalUrl: typeof body.mailPortalUrl === 'string' ? body.mailPortalUrl : null,
+      }
     }
     return { authenticated: false }
   } catch {

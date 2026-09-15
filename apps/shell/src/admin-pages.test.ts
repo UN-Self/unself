@@ -97,6 +97,9 @@ describe('AdminLayout 守卫（#17）', () => {
     vi.mocked(fetchMe).mockResolvedValue({
       authenticated: true,
       user: { id: 'u2', name: '成员', issuer: 'i', sub: 's', role: 'user' },
+      // #168：/api/me 新字段（本用例与邮件轴无关，按未开轴）。
+      mailEnabled: false,
+      mailPortalUrl: null,
     })
     const { currentPath } = await mountAdminLayout()
     expect(currentPath()).toBe('/')
@@ -106,6 +109,8 @@ describe('AdminLayout 守卫（#17）', () => {
     vi.mocked(fetchMe).mockResolvedValue({
       authenticated: true,
       user: { id: 'u1', name: '管理', issuer: 'i', sub: 's', role: 'admin' },
+      mailEnabled: false,
+      mailPortalUrl: null,
     })
     const { currentPath, wrapper } = await mountAdminLayout()
     expect(currentPath()).toBe('/admin/members')
