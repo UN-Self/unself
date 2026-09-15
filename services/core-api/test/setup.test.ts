@@ -51,28 +51,135 @@ function markSetupDone(db: CoreTestDb): void {
   );
 }
 
+/** 模拟装配器第⑧步（#165 方案 B）：本地生成一次性 token 直插 core 库（公开签发端点已删）。
+ *  与 deploy/cloudflare/src/smoke.ts 的 generateSetupToken 同形状（24B → base64url 无填充）。 */
+function issueSetupToken(db: CoreTestDb): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  const token = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  db.run('INSERT INTO setup_tokens (token) VALUES (?)', token);
+  return token;
+}
+
+/** 合法形状的内置凭证（本文件只验 setup 门禁/建号行为；KDF 正确性由 builtin-auth.test.ts 覆盖）。 */
+const BUILTIN_BODY = { username: 'boss', salt: 'AAAAAAAAAAAAAAAAAAAAAA==', proof: `${'A'.repeat(43)}=` };
+
 describe('setup 流程（一次性 token + 首个管理员）', () => {
-  it('部署脚本生成 setup token：未激活时成功，已激活后 409 拒绝', async () => {
-    const { env, db } = await envFor();
-    const res = await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env);
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { token: string; setupUrl: string };
-    expect(body.token).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(body.setupUrl).toBe(`/setup?token=${body.token}`);
-
-    // 真库：token 已落 setup_tokens 且未使用
-    expect(
-      db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', body.token),
-    ).toEqual({ used_at: null });
-    // 真库：审计留痕
-    expect(db.query<{ action: string }>('SELECT action FROM audit_log').map((a) => a.action)).toContain(
-      'setup_token_issued',
+  it('公开签发口已删（#165）：/api/admin/setup-token 无会话 401、admin 会话 404（路由不存在）', async () => {
+    const { env, db, cookie } = await envFor();
+    // 无会话：/api/admin/* 已被 adminGuard 接管（旧实现显式豁免此路径 → 无门自铸 token）
+    const anon = await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env);
+    expect(anon.status).toBe(401);
+    // 有 admin 会话：路由已删 → JSON 404（端点不存在，不是降级/隐藏）
+    db.run("UPDATE users SET role = 'admin' WHERE id = ?", 'u_1');
+    const admin = await app.request(
+      'https://team.example.com/api/admin/setup-token',
+      { method: 'POST', headers: { cookie } },
+      env,
     );
+    expect(admin.status).toBe(404);
+    expect(await admin.json()).toEqual({ error: 'not found' });
+    // 两条路径都不签 token、不落审计
+    expect(db.query('SELECT token FROM setup_tokens')).toEqual([]);
+    expect(
+      db.query<{ action: string }>("SELECT action FROM audit_log WHERE action = 'setup_token_issued'"),
+    ).toEqual([]);
+  });
 
-    // 真 SQL 置位 setup_done（模拟已激活）
+  it('builtin-admin 门禁（#165）：无 token 403、错 token 403，均不建号不封箱', async () => {
+    const { env, db } = await envFor();
+    const payload = JSON.stringify(BUILTIN_BODY);
+
+    const missing = await app.request(
+      'https://team.example.com/api/setup/builtin-admin',
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload },
+      env,
+    );
+    expect(missing.status).toBe(403);
+    expect(await missing.json()).toEqual({ error: 'missing setup token' });
+
+    const forged = await app.request(
+      'https://team.example.com/api/setup/builtin-admin?token=forged-token',
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload },
+      env,
+    );
+    expect(forged.status).toBe(403);
+    expect(await forged.json()).toEqual({ error: 'invalid or already-used setup token' });
+
+    // 真库：未给/错 token 不建号、不封箱
+    expect(db.query("SELECT * FROM users WHERE issuer = 'builtin'")).toEqual([]);
+    expect(db.first("SELECT value FROM instance_config WHERE key = 'setup_done'")).toBeNull();
+  });
+
+  it('builtin-admin 正确 token → 201 建 admin 并封箱；x-setup-token 头同认（#165）', async () => {
+    const { env, db } = await envFor();
+    const token = issueSetupToken(db);
+    const res = await app.request(
+      `https://team.example.com/api/setup/builtin-admin?token=${token}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(BUILTIN_BODY) },
+      env,
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { ok: boolean; user: { role: string; name: string } };
+    expect(body.ok).toBe(true);
+    expect(body.user).toMatchObject({ role: 'admin', name: 'boss' });
+    // 真库：内置 admin + 封箱 + 审计；token 只验不消费（消费/used_by 记录见 #171）
+    expect(
+      db.first<{ role: string; issuer: string }>("SELECT role, issuer FROM users WHERE display_name = 'boss'"),
+    ).toEqual({ role: 'admin', issuer: 'builtin' });
+    expect(db.first("SELECT value FROM instance_config WHERE key = 'setup_done'")).toEqual({ value: '1' });
+    expect(
+      db.query<{ action: string }>("SELECT action FROM audit_log WHERE action = 'builtin_admin_created'"),
+    ).toHaveLength(1);
+    expect(db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', token)).toEqual({
+      used_at: null,
+    });
+
+    // 取法复用 activate：x-setup-token 头同样开门（独立实例，验证头部路径）
+    const { env: env2, db: db2 } = await envFor();
+    const headerToken = issueSetupToken(db2);
+    const viaHeader = await app.request(
+      'https://team.example.com/api/setup/builtin-admin',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-setup-token': headerToken },
+        body: JSON.stringify(BUILTIN_BODY),
+      },
+      env2,
+    );
+    expect(viaHeader.status).toBe(201);
+  });
+
+  it('封箱后全端点 409（#165 验收 4）：builtin-admin / oidc-config / activate', async () => {
+    const { env, db, cookie } = await envFor();
+    const token = issueSetupToken(db);
     markSetupDone(db);
-    const again = await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env);
-    expect(again.status).toBe(409);
+    const builtin = await app.request(
+      `https://team.example.com/api/setup/builtin-admin?token=${token}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(BUILTIN_BODY) },
+      env,
+    );
+    expect(builtin.status).toBe(409);
+    const oidc = await app.request(
+      `https://team.example.com/api/setup/oidc-config?token=${token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ issuer: 'https://idp.example.com', clientId: 'c', clientSecret: 's' }),
+      },
+      env,
+    );
+    expect(oidc.status).toBe(409);
+    const activate = await app.request(
+      `https://team.example.com/api/setup/activate?token=${token}`,
+      { method: 'POST', headers: { cookie } },
+      env,
+    );
+    expect(activate.status).toBe(409);
+    // 封箱优先于 token 门：合法未消费 token 也不建号
+    expect(db.query("SELECT * FROM users WHERE issuer = 'builtin'")).toEqual([]);
   });
 
   it('status：未激活 + 无 token → tokenValid:false；激活后 done:true', async () => {
@@ -80,11 +187,9 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     const none = await app.request('https://team.example.com/api/setup/status', {}, env);
     expect(await none.json()).toEqual({ done: false, tokenValid: false });
 
-    const gen = (await (
-      await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env)
-    ).json()) as { token: string };
+    const token = issueSetupToken(db);
     const withToken = await app.request(
-      `https://team.example.com/api/setup/status?token=${gen.token}`,
+      `https://team.example.com/api/setup/status?token=${token}`,
       {},
       env,
     );
@@ -98,14 +203,12 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
   it('激活全链路：校验 token + 会话 → 首个管理员诞生 → setup 封死', async () => {
     const { env, db, cookie } = await envFor();
 
-    // 1) 生成 token
-    const gen = (await (
-      await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env)
-    ).json()) as { token: string };
+    // 1) 装配器直插 token（#165：签发口已删）
+    const token = issueSetupToken(db);
 
     // 2) 未登录激活 → 纯 401（#55：loginUrl 路径已删——登录在 oidc-config 落库后发起）
     const anon = await app.request(
-      `https://team.example.com/api/setup/activate?token=${gen.token}`,
+      `https://team.example.com/api/setup/activate?token=${token}`,
       { method: 'POST' },
       env,
     );
@@ -116,7 +219,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
 
     // 3) 会话 + token → 激活成功，用户升 admin
     const ok = await app.request(
-      `https://team.example.com/api/setup/activate?token=${gen.token}`,
+      `https://team.example.com/api/setup/activate?token=${token}`,
       { method: 'POST', headers: { cookie } },
       env,
     );
@@ -133,7 +236,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     // 真库断言：token 已消费，used_at 是 SQLite datetime 文本（非 ISO 带 T/Z）
     const tokenRow = db.first<{ created_at: string; used_at: string | null }>(
       'SELECT created_at, used_at FROM setup_tokens WHERE token = ?',
-      gen.token,
+      token,
     );
     expect(tokenRow).not.toBeNull();
     expect(tokenRow!.created_at).toMatch(DATETIME_TEXT);
@@ -141,25 +244,25 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
 
     // 4) 同一 token 第二次使用被拒（验收：同一链接第二次使用被拒）
     const replay = await app.request(
-      `https://team.example.com/api/setup/activate?token=${gen.token}`,
+      `https://team.example.com/api/setup/activate?token=${token}`,
       { method: 'POST', headers: { cookie } },
       env,
     );
     // 已封死优先：先判 setup_done
     expect(replay.status).toBe(409);
 
-    // 5) 激活后再发 token 也被拒
-    const newToken = await app.request(
+    // 5) 封箱后签发口仍不存在：无会话被 adminGuard 拦下（豁免已删，#165）
+    const sealedPort = await app.request(
       'https://team.example.com/api/admin/setup-token',
       { method: 'POST' },
       env,
     );
-    expect(newToken.status).toBe(409);
+    expect(sealedPort.status).toBe(401);
 
-    // 6) 审计留痕（真 audit_log 表 action 列）
+    // 6) 审计留痕（真 audit_log 表 action 列；签发审计随端点一并退场）
     const actions = db.query<{ action: string }>('SELECT action FROM audit_log').map((a) => a.action);
-    expect(actions).toContain('setup_token_issued');
     expect(actions).toContain('setup_activated');
+    expect(actions).not.toContain('setup_token_issued');
   });
 
   it('无效/伪造 token 激活被拒', async () => {
@@ -186,9 +289,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
   it('oidc-config：有效 token 落库审计 + 只验不消费（可重复提交改填），返回 loginUrl', async () => {
     const { env, db } = await envFor();
 
-    const gen = (await (
-      await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env)
-    ).json()) as { token: string };
+    const token = issueSetupToken(db);
 
     const oidc = {
       issuer: 'https://idp.example.com',
@@ -196,7 +297,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
       clientSecret: 's3cret',
     };
     const ok = await app.request(
-      `https://team.example.com/api/setup/oidc-config?token=${gen.token}`,
+      `https://team.example.com/api/setup/oidc-config?token=${token}`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -210,7 +311,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     // loginUrl：next 带回带 token 的 setup 页（直线流程第二步）
     const loginUrl = new URL(okBody.loginUrl);
     expect(`${loginUrl.origin}${loginUrl.pathname}`).toBe('https://team.example.com/api/auth/login');
-    expect(loginUrl.searchParams.get('next')).toBe(`/setup?token=${gen.token}`);
+    expect(loginUrl.searchParams.get('next')).toBe(`/setup?token=${token}`);
 
     // 真库：与 getOidcConfig 读取键一致的 oidc_* 键已落库（无 scope 字段 → 不写 scope，登录时默认三件）
     const configValue = (key: string) =>
@@ -221,12 +322,12 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     expect(configValue('oidc_scope')).toBeNull();
     // 真库：token 未消费（只验不消费）
     expect(
-      db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', gen.token),
+      db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', token),
     ).toEqual({ used_at: null });
 
     // 改填可重复提交：同一 token 再提交新值 → 覆盖 + 仍不消费
     const again = await app.request(
-      `https://team.example.com/api/setup/oidc-config?token=${gen.token}`,
+      `https://team.example.com/api/setup/oidc-config?token=${token}`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -237,7 +338,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     expect(again.status).toBe(200);
     expect(configValue('oidc_issuer')).toBe('https://new-idp.example.com');
     expect(
-      db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', gen.token),
+      db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', token),
     ).toEqual({ used_at: null });
 
     // 审计（真 audit_log 表）
@@ -274,11 +375,9 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     expect(noToken.status).toBe(400);
 
     // 缺字段 → 400（用合法未消费 token：token 门禁在 body 校验之前，先过门禁）
-    const gen = (await (
-      await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env)
-    ).json()) as { token: string };
+    const token = issueSetupToken(db);
     const missing = await app.request(
-      `https://team.example.com/api/setup/oidc-config?token=${gen.token}`,
+      `https://team.example.com/api/setup/oidc-config?token=${token}`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -290,17 +389,15 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     expect(db.first('SELECT value FROM instance_config WHERE key = ?', 'oidc_issuer')).toBeNull();
 
     // 一个合法生成的 token 先激活（消费），随后 oidc-config 再提交 → 403
-    const gen2 = (await (
-      await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env)
-    ).json()) as { token: string };
+    const token2 = issueSetupToken(db);
     const activate = await app.request(
-      `https://team.example.com/api/setup/activate?token=${gen2.token}`,
+      `https://team.example.com/api/setup/activate?token=${token2}`,
       { method: 'POST', headers: { cookie } },
       env,
     );
     expect(activate.status).toBe(200);
     const afterConsume = await app.request(
-      `https://team.example.com/api/setup/oidc-config?token=${gen2.token}`,
+      `https://team.example.com/api/setup/oidc-config?token=${token2}`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -315,9 +412,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
   it('直线流程全链：oidc-config 落库 → 登录可通（表优先）→ 回 setup 激活提权封箱', async () => {
     const { env, db, cookie } = await envFor();
 
-    const gen = (await (
-      await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env)
-    ).json()) as { token: string };
+    const token = issueSetupToken(db);
 
     // 第一步：带 token 提交向导字段（env 无 OIDC_* 兜底——全新部署真实场景）
     const oidc = {
@@ -326,7 +421,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
       clientSecret: 's3cret',
     };
     const save = await app.request(
-      `https://team.example.com/api/setup/oidc-config?token=${gen.token}`,
+      `https://team.example.com/api/setup/oidc-config?token=${token}`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -351,7 +446,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
 
     // 第三步：登录回来带会话 + token → 激活提权封箱
     const activate = await app.request(
-      `https://team.example.com/api/setup/activate?token=${gen.token}`,
+      `https://team.example.com/api/setup/activate?token=${token}`,
       { method: 'POST', headers: { cookie } },
       env,
     );
@@ -362,12 +457,12 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     expect(db.first<{ role: string }>('SELECT role FROM users WHERE id = ?', 'u_1')).toEqual({ role: 'admin' });
     expect(db.first('SELECT value FROM instance_config WHERE key = ?', 'setup_done')).toEqual({ value: '1' });
     expect(
-      db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', gen.token),
+      db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', token),
     ).not.toEqual({ used_at: null });
 
-    // 封箱后：oidc-config / activate / setup-token 全 409
+    // 封箱后：oidc-config / activate 全 409；公开签发口不存在（无会话 → adminGuard 401）
     const after = await app.request(
-      `https://team.example.com/api/setup/oidc-config?token=${gen.token}`,
+      `https://team.example.com/api/setup/oidc-config?token=${token}`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -377,17 +472,17 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     );
     expect(after.status).toBe(409);
     const replay = await app.request(
-      `https://team.example.com/api/setup/activate?token=${gen.token}`,
+      `https://team.example.com/api/setup/activate?token=${token}`,
       { method: 'POST', headers: { cookie } },
       env,
     );
     expect(replay.status).toBe(409);
-    const newToken = await app.request(
+    const sealedPort = await app.request(
       'https://team.example.com/api/admin/setup-token',
       { method: 'POST' },
       env,
     );
-    expect(newToken.status).toBe(409);
+    expect(sealedPort.status).toBe(401);
   });
 
   it('scope：按 discovery scopes_supported 过滤（Stalwart 无 email → 只发 openid；交集空只 openid；字段缺失三件）', async () => {
@@ -403,13 +498,11 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     for (const c of cases) {
       // 同一 issuer 的发现文档 15 分钟缓存：每种子场景都要重置才能拿到各自的 scopes_supported
       resetOidcCaches();
-      const { env } = await envFor();
-      const gen = (await (
-        await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env)
-      ).json()) as { token: string };
+      const { env, db } = await envFor();
+      const token = issueSetupToken(db);
       const oidc = { issuer: 'https://idp.example.com', clientId: 'app-1', clientSecret: 's3cret' };
       await app.request(
-        `https://team.example.com/api/setup/oidc-config?token=${gen.token}`,
+        `https://team.example.com/api/setup/oidc-config?token=${token}`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -433,13 +526,11 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
   it('并发双激活同一 token：仅一次成功（consumeSetupToken 原子化）', async () => {
     const { env, db, cookie } = await envFor();
 
-    const gen = (await (
-      await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env)
-    ).json()) as { token: string };
+    const token = issueSetupToken(db);
 
     const activate = () =>
       app.request(
-        `https://team.example.com/api/setup/activate?token=${gen.token}`,
+        `https://team.example.com/api/setup/activate?token=${token}`,
         { method: 'POST', headers: { cookie } },
         env,
       );
@@ -481,11 +572,9 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
 
   it('守护：激活全链路跑完后各行 SELECT * 列集合 == columns()', async () => {
     const { env, db, cookie } = await envFor();
-    const gen = (await (
-      await app.request('https://team.example.com/api/admin/setup-token', { method: 'POST' }, env)
-    ).json()) as { token: string };
+    const token = issueSetupToken(db);
     const ok = await app.request(
-      `https://team.example.com/api/setup/activate?token=${gen.token}`,
+      `https://team.example.com/api/setup/activate?token=${token}`,
       { method: 'POST', headers: { cookie } },
       env,
     );
@@ -495,7 +584,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
       expect(Object.keys(row ?? {}).sort()).toEqual([...db.columns(table)].sort());
     };
     expectShape('users', db.first('SELECT * FROM users WHERE id = ?', 'u_1'));
-    expectShape('setup_tokens', db.first('SELECT * FROM setup_tokens WHERE token = ?', gen.token));
+    expectShape('setup_tokens', db.first('SELECT * FROM setup_tokens WHERE token = ?', token));
     expectShape('instance_config', db.first("SELECT * FROM instance_config WHERE key = 'setup_done'"));
     const auditRows = db.query('SELECT * FROM audit_log');
     expect(auditRows.length).toBeGreaterThan(0);

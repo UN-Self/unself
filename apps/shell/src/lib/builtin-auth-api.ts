@@ -4,7 +4,7 @@
  * 内置身份 API 客户端（issue-A + pk1 决策 35：密码不出浏览器，线上只走盐和 R）：
  * - GET  /api/auth/methods                    登录方式探测（builtin 恒真，oidc 按配置）
  * - POST /api/auth/login                      用户名+密码登录（Cookie HttpOnly 自动管理）
- * - POST /api/setup/builtin-admin             setup 内置管理员开通（建号+封箱）
+ * - POST /api/setup/builtin-admin             setup 内置管理员开通（建号+封箱；#165 起需一次性 setup token）
  * - POST /api/admin/members/:id/reset-password 管理员手动重置内置登录密码
  *
  * 错误口径（§6.5 三层透传，与 invite-api 同构）：非 2xx 抛 ApiError，
@@ -14,7 +14,7 @@
  */
 
 import { generateSalt, deriveProof } from './pk1'
-import { request, type ApiError } from './api-client'
+import { preferServerMessage, request, type ApiError } from './api-client'
 
 export type AuthError = ApiError
 
@@ -50,15 +50,30 @@ export async function loginWithPassword(username: string, password: string): Pro
   })
 }
 
-/** POST /api/setup/builtin-admin：创建内置管理员并封箱 setup（盐新生成）。 */
-export async function createBuiltinAdmin(username: string, password: string): Promise<BuiltinAdminResult> {
+/** POST /api/setup/builtin-admin：创建内置管理员并封箱 setup（盐新生成）。
+ *  token = 部署输出里的 setup 链接一次性令牌（#165：无 token / 无效 / 已用 → 403）。 */
+export async function createBuiltinAdmin(
+  token: string,
+  username: string,
+  password: string,
+): Promise<BuiltinAdminResult> {
   const salt = generateSalt()
   const proof = await deriveProof(password, salt)
-  return request<BuiltinAdminResult>('/api/setup/builtin-admin', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username, salt, proof }),
-  })
+  return request<BuiltinAdminResult>(
+    `/api/setup/builtin-admin?token=${encodeURIComponent(token)}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, salt, proof }),
+    },
+    { messagePolicy: humanizeSetupToken },
+  )
+}
+
+/** 内置开通错误人话（#165）：403 = token 门（缺失/无效/已用）→ 链接问题（禁用英文服务端文案）；
+ *  其余沿用默认策略（后端中文人话优先），与 setup-api.humanize 同口径。 */
+function humanizeSetupToken(status: number, serverMessage?: string): string {
+  return status === 403 ? '激活链接无效或已被使用，请向部署者要新的链接' : preferServerMessage(status, serverMessage)
 }
 
 /** POST /api/admin/members/:id/reset-password：管理员设新密码（仅内置用户；盐新生成）。 */
