@@ -460,6 +460,13 @@ function applicantLine(invite: AdminInvite): string {
   margin-top: var(--unself-space-3);
 }
 
+/* #181：窄屏下批准/拒绝是高频危险操作，热区 ≥44px（按钮视觉尺寸由 UButton 决定，这里只抬下限） */
+@media (max-width: 768px) {
+  .invite-actions :deep(.u-btn) {
+    min-height: var(--unself-touch-target);
+  }
+}
+
 @media (max-width: 768px) {
   .invite-who {
     flex-basis: 100%;
