@@ -3,7 +3,9 @@
 /**
  * verify-tokens：主题令牌轻量 lint（任务第七条「选最轻方案」——node 单文件，零依赖）。
  * 扫描 apps/ packages/ modules/ services/ deploy/（排除 node_modules/ dist/ .deploy/ coverage/、
- * 任意层级 test/ 与 __tests__/ 目录），只处理 *.vue *.ts *.css *.html。
+ * 任意层级 test/ 与 __tests__/ 目录、*.test.* 与 *.spec.* 测试文件——用例里的 issue 引用
+ * 与颜色夹具不是生产样式，此前 `#139` 之类的引用被误判为裸颜色值），
+ * 只处理 *.vue *.ts *.css *.html。
  *
  * 规则一（裸值）：生产源码不得有裸 hex（#[0-9a-fA-F]{3,8}）与裸 rgb(/rgba( 颜色值；
  *   豁免：apps/shell/src/tokens.css（:root 令牌定义与 @theme 映射允许值）、
@@ -24,6 +26,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url)); // scripts/ 的上�
 const SCAN_DIRS = ['apps', 'packages', 'modules', 'services', 'deploy'];
 const EXCLUDE_DIR_NAMES = new Set(['node_modules', 'dist', '.deploy', 'coverage', 'test', '__tests__']);
 const FILE_EXTS = new Set(['.vue', '.ts', '.css', '.html']);
+const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
 const RULE1_EXEMPT = new Set(['apps/shell/src/tokens.css', 'packages/contracts/src/theme-tokens.json']);
 const CONTRACT_PACKAGE = 'packages/contracts/src/theme-tokens.json';
 
@@ -116,6 +119,7 @@ export function lintRepo(rootDir = ROOT) {
     for (const file of walkFiles(abs)) {
       const rel = relative(rootDir, file).split(sep).join('/');
       if (!FILE_EXTS.has(extname(rel))) continue;
+      if (TEST_FILE_RE.test(rel)) continue;
       violations.push(...lintFile(rel, readFileSync(file, 'utf8'), varWhitelist));
     }
   }
