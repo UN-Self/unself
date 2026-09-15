@@ -386,7 +386,7 @@ describe('SettingsPage 保存与测试连接（#17）', () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    const [oidcCard, mailCard] = wrapper.findAll('.settings-card')
+    const [oidcCard, mailCard] = wrapper.findAll('[data-test="settings-card"]')
     const mailTestBtn = mailCard!.findAll('button').find((b) => b.text().includes('测试连接'))
     await mailTestBtn!.trigger('click')
     await flushPromises()
@@ -409,7 +409,7 @@ describe('SettingsPage 保存与测试连接（#17）', () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    const [oidcCard, mailCard] = wrapper.findAll('.settings-card')
+    const [oidcCard, mailCard] = wrapper.findAll('[data-test="settings-card"]')
     const oidcBtn = oidcCard!.findAll('button').find((b) => b.text().includes('测试连接'))!
     const mailBtn = mailCard!.findAll('button').find((b) => b.text().includes('测试连接'))!
 
@@ -478,7 +478,7 @@ describe('SettingsPage 邮件轴开关（P4）', () => {
     // 切换不发请求；折叠立即生效（本地表单状态）
     expect(saveSettings).not.toHaveBeenCalled()
     expect(findSwitch(wrapper).attributes('aria-checked')).toBe('false')
-    const config = wrapper.find('.mail-config')
+    const config = wrapper.find('[data-test="mail-config"]')
     expect(config.classes()).not.toContain('is-open')
     expect(config.attributes('aria-hidden')).toBe('true')
 
@@ -502,7 +502,7 @@ describe('SettingsPage 邮件轴开关（P4）', () => {
     await findSwitch(wrapper).trigger('click')
     await flushPromises()
 
-    const config = wrapper.find('.mail-config')
+    const config = wrapper.find('[data-test="mail-config"]')
     expect(config.exists()).toBe(true)
     expect(config.classes()).not.toContain('is-open')
     expect(config.attributes('inert')).toBeDefined()
@@ -542,7 +542,7 @@ describe('SettingsPage 邮件轴开关（P4）', () => {
     expect(wrapper.text()).toContain('填写并保存配置后即可开启')
 
     // 无配置 → 配置区展开（用户要能填表）、测试按钮禁用
-    const config = wrapper.find('.mail-config')
+    const config = wrapper.find('[data-test="mail-config"]')
     expect(config.classes()).toContain('is-open')
     expect(config.attributes('inert')).toBeUndefined()
     const testBtn = config.findAll('button').find((b) => b.text().includes('测试连接'))
@@ -643,7 +643,7 @@ describe('InvitesPage 审批与生成（#18）', () => {
     const wrapper = mount(InvitesPage)
     await flushPromises()
 
-    const rows = wrapper.findAll('.invite-row')
+    const rows = wrapper.findAll('[data-test="invite-row"]')
     expect(rows).toHaveLength(2)
     const pendingTexts = rows[0]!.findAll('button').map((b) => b.text())
     expect(pendingTexts.some((t) => t.includes('批准'))).toBe(true)

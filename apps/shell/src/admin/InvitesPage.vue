@@ -217,7 +217,12 @@ function applicantLine(invite: AdminInvite): string {
     <div v-else class="invite-list">
       <p v-if="invites.length === 0" class="page-empty">还没有邀请</p>
 
-      <div v-for="invite in invites" :key="invite.token_hash" class="invite-row">
+      <div
+        v-for="invite in invites"
+        :key="invite.token_hash"
+        class="invite-row"
+        data-test="invite-row"
+      >
         <div class="invite-who">
           <span class="invite-name">{{ invite.display_name || '（未填写）' }}</span>
           <span class="invite-applicant">{{ applicantLine(invite) }}</span>

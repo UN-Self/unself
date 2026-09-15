@@ -12,6 +12,8 @@ import { useNotifications } from './lib/use-notifications'
  * - 克制口径：无轮询、无实时推送、无批量已读、无通知偏好
  * - 类型中文名来自服务端 typeLabel，前端不硬编码类型名映射；摘要只认 payload 契约字段
  * - 桌面左栏与窄屏顶栏两个挂载点共享 use-notifications 单例，不重复拉取
+ * - #193 T1：测试定位器走 data-test 锚点（bell-trigger/bell-badge/bell-panel/bell-backdrop/bell-item-<id>），
+ *   类名只服务样式，重命名类名不再改测试
  */
 
 const PANEL_LIMIT = 10
@@ -65,19 +67,26 @@ function summarize(item: NotificationItem): string {
     <button
       type="button"
       class="notification-bell-trigger"
+      data-test="bell-trigger"
       aria-label="通知"
       aria-haspopup="true"
       :aria-expanded="open"
       @click="togglePanel"
     >
       <Bell :size="18" aria-hidden="true" />
-      <span v-if="unreadCount > 0" class="notification-bell-badge">{{ unreadCount }}</span>
+      <span v-if="unreadCount > 0" class="notification-bell-badge" data-test="bell-badge">{{ unreadCount }}</span>
     </button>
 
     <!-- 点击外部关闭的透明接收层（下拉不做模态遮罩，不压暗工作台） -->
-    <div v-if="open" class="notification-bell-backdrop" @click="open = false" />
+    <div v-if="open" class="notification-bell-backdrop" data-test="bell-backdrop" @click="open = false" />
 
-    <section v-if="open" class="notification-bell-panel" aria-label="通知列表" @click.stop>
+    <section
+      v-if="open"
+      class="notification-bell-panel"
+      data-test="bell-panel"
+      aria-label="通知列表"
+      @click.stop
+    >
       <p
         v-if="error"
         class="notification-bell-status notification-bell-status-error"
@@ -93,6 +102,7 @@ function summarize(item: NotificationItem): string {
           type="button"
           class="notification-bell-item"
           :class="{ 'notification-bell-item-unread': !row.item.isRead }"
+          :data-test="`bell-item-${row.item.id}`"
           @click="markRead(row.item.id)"
         >
           <span class="notification-bell-item-head">
