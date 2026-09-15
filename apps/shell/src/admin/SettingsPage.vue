@@ -209,7 +209,7 @@ async function onTestConnection(): Promise<void> {
       <p v-if="saveError" class="form-alert" role="alert">{{ saveError }}</p>
       <p v-else-if="saved" class="save-ok" role="status">已保存</p>
 
-      <UCard class="settings-card">
+      <UCard class="settings-card" data-test="settings-card">
         <h2 class="section-title">登录（OIDC）</h2>
         <div class="settings-grid">
           <UInput v-model="issuer" label="Issuer" type="url" placeholder="https://idp.example.com" />
@@ -237,7 +237,7 @@ async function onTestConnection(): Promise<void> {
         </div>
       </UCard>
 
-      <UCard class="settings-card">
+      <UCard class="settings-card" data-test="settings-card">
         <div class="mail-card-head">
           <h2 class="section-title">邮件（可选，未配置即弱化实例）</h2>
           <!-- 无 mail 行时开关禁用（避免「开但无配置」状态）；aria-label 独立于可见标题 -->
@@ -256,6 +256,7 @@ async function onTestConnection(): Promise<void> {
         <!-- #159：单一结构 + 折叠过渡（轴关且有配置时收起；grid-rows 0fr↔1fr，全 tokens） -->
         <div
           class="mail-config"
+          data-test="mail-config"
           :class="{ 'is-open': mailFormOpen }"
           :inert="!mailFormOpen ? true : undefined"
           :aria-hidden="!mailFormOpen ? 'true' : undefined"
