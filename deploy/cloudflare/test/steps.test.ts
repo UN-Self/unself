@@ -2,6 +2,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { prefixStripWrapperSource } from '../src/assemble';
 import { coreWorkerEntrySource, needsTotalTls, resolveBaseUrl, runNineSteps } from '../src/steps';
 import type { Wrangler } from '../src/wrangler';
 
@@ -549,6 +550,36 @@ export default { fetch: (r, e, c) => app.fetch(r, e, c) };
       expect(after).toContain("import { createApp } from");
     } finally {
       await rm(entryPath, { force: true });
+    }
+  });
+
+  it('预置旧模板 modules/hello/worker.js 在场 → 部署后 wrapper 产物被刷新为当前模板（#162 同类陷阱回归）', { timeout: 120_000 }, async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    const outDir = join(ROOT, '.deploy/cloudflare');
+    const wrapperPath = join(outDir, 'modules/hello/worker.js');
+    // 预置上一版生成物：旧 wrapper 模板形态（无前缀常量/无安全头——模板演进后旧产物必须被覆写）
+    const stale = `// 旧版 wrapper 生成物
+import worker from './app.js';
+export default { fetch: (r, e, c) => worker.fetch(r, e, c) };
+`;
+    await mkdir(join(outDir, 'modules/hello'), { recursive: true });
+    await writeFile(wrapperPath, stale);
+    try {
+      await runSteps({
+        rootDir: ROOT,
+        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        wrangler: fake.wrangler,
+        http: SMOKE_OK,
+        resolveBaseUrl: async () => 'https://x.example',
+        fetchJwks: async () => FIXED_JWKS,
+      });
+      // 行为断言（不测实现）：文件内容 == 当前 wrapper 模板输出（旧内容已被覆写掉）
+      const after = await readFile(wrapperPath, 'utf8');
+      expect(after).toBe(prefixStripWrapperSource('hello'));
+      expect(after).not.toContain('旧版 wrapper 生成物');
+      expect(after).toContain("const PREFIX = '/m/hello'");
+    } finally {
+      await rm(wrapperPath, { force: true });
     }
   });
 });
