@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { Ban, CircleCheck, Copy, MailPlus } from 'lucide-vue-next'
 
 import { UButton, UCard, UErrorCard, USkeleton } from '@unself/ui'
 
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import {
   approveInvite,
   createInvite,
@@ -14,6 +15,7 @@ import {
   type AdminInviteStatus,
   type ApiError,
 } from '../lib/admin-api'
+import { useLayerFocus } from '../lib/use-layer-focus'
 import { useAsyncLoad } from '../lib/use-async-load'
 
 /**
@@ -34,12 +36,14 @@ const rowError = ref<Record<string, string>>({})
 /** 行内成功提示（批准结果人话，按 token_hash 归属）。 */
 const rowNotice = ref<Record<string, string>>({})
 
-// 生成弹层
+// 生成弹层（#192 F5：Esc 关闭 + 焦点入内/回触发元素）
 const showGenerate = ref(false)
 const expiresDays = ref<number>(7)
 const generating = ref(false)
 const generateError = ref<string | null>(null)
 const inviteUrl = ref<string | null>(null)
+const generateLayer = ref<HTMLElement | null>(null)
+const { onKeydown: onGenerateKeydown } = useLayerFocus(showGenerate, () => generateLayer.value)
 
 /** 批准直接执行（不可逆但为正常推进）；状态行内翻转 + 开户结果人话。 */
 async function onApprove(invite: AdminInvite): Promise<void> {
@@ -52,7 +56,7 @@ async function onApprove(invite: AdminInvite): Promise<void> {
     invite.status = 'approved'
     rowNotice.value[invite.token_hash] = result.email
       ? `已开户 ${result.email}，激活链接已发至个人邮箱`
-      : '已批准（弱化实例：首次登录按个人邮箱匹配）'
+      : approveNotice(invite)
   } catch (err) {
     rowError.value[invite.token_hash] = humanError(err)
   } finally {
@@ -60,10 +64,40 @@ async function onApprove(invite: AdminInvite): Promise<void> {
   }
 }
 
-/** 拒绝前 confirm（人话含显示名/个人邮箱）。 */
-async function onReject(invite: AdminInvite): Promise<void> {
+/**
+ * 弱化实例批准人话按身份轴分流（#192 F8）：
+ * - 内置注册者：填表时已自设登录密码，批准即入职，不存在「首登匹配」环节
+ * - OIDC 首登者：无内置凭证，首次登录 JIT 按个人邮箱消费邀请（原文案口径）
+ * 前端可判依据 = email_prefix（内置注册必填前缀；OIDC 弱化路径免填表单前缀）。
+ */
+function approveNotice(invite: AdminInvite): string {
+  return invite.email_prefix
+    ? '已批准：新人用填表时设置的用户名密码登录即可'
+    : '已批准（弱化实例：首次登录按个人邮箱匹配入职）'
+}
+
+/**
+ * 拒绝改站内确认（#192 F6 去原生弹窗）：
+ * 只开弹层不发改；确认后才 rejectInvite，语义与原 confirm 二次确认一致。
+ */
+const rejectTarget = ref<AdminInvite | null>(null)
+/** v-model 双向：ConfirmDialog 开合（拒绝目标随开合维护）。 */
+const rejectOpen = computed({
+  get: () => rejectTarget.value !== null,
+  set: (open: boolean) => {
+    if (!open) rejectTarget.value = null
+  },
+})
+
+function onReject(invite: AdminInvite): void {
   if (busyId.value !== null) return
-  if (!window.confirm(rejectHint(invite))) return
+  rejectTarget.value = invite
+}
+
+async function onRejectConfirm(): Promise<void> {
+  const invite = rejectTarget.value
+  if (!invite) return
+  rejectTarget.value = null
   busyId.value = invite.token_hash
   delete rowError.value[invite.token_hash]
   delete rowNotice.value[invite.token_hash]
@@ -123,7 +157,7 @@ function humanError(err: unknown): string {
 
 function rejectHint(invite: AdminInvite): string {
   const who = invite.display_name || invite.personal_email || invite.email_prefix || invite.token_hash
-  return `确定拒绝 ${who} 的加入申请？`
+  return `确定拒绝 ${who} 的加入申请？拒绝后不可撤销。`
 }
 
 const STATUS_TEXT: Record<AdminInviteStatus, string> = {
@@ -220,7 +254,14 @@ function applicantLine(invite: AdminInvite): string {
 
     <div v-if="showGenerate" class="invite-scrim" @click.self="closeGenerate">
       <UCard padding="lg" class="invite-modal">
-        <div role="dialog" aria-modal="true" aria-labelledby="invite-generate-title">
+        <div
+          ref="generateLayer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="invite-generate-title"
+          tabindex="-1"
+          @keydown="onGenerateKeydown"
+        >
           <h2 id="invite-generate-title" class="invite-modal-title">生成邀请</h2>
 
           <template v-if="!inviteUrl">
@@ -259,6 +300,15 @@ function applicantLine(invite: AdminInvite): string {
         </div>
       </UCard>
     </div>
+    <!-- 拒绝二次确认（#192 F6：站内确认替代 window.confirm） -->
+    <ConfirmDialog
+      v-model="rejectOpen"
+      kind="danger"
+      title="拒绝加入申请"
+      :message="rejectTarget ? rejectHint(rejectTarget) : ''"
+      confirm-label="拒绝"
+      @confirm="onRejectConfirm"
+    />
   </div>
 </template>
 
