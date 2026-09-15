@@ -2,7 +2,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { coreWorkerEntrySource, needsTotalTls, runNineSteps } from '../src/steps';
+import { coreWorkerEntrySource, needsTotalTls, resolveBaseUrl, runNineSteps } from '../src/steps';
 import type { Wrangler } from '../src/wrangler';
 
 /** 测试注入口：拦截 shell 构建（真实 vite build 约 4.4s/次，#73 每次部署都重建 → 套件必超时；写最小产物即可）。 */
@@ -600,5 +600,68 @@ describe('D3（#194）：域名体检两份入口统一拦截', () => {
       ensureDns: async () => {},
     });
     expect(fake.state.commands.some((c) => c.startsWith('d1 list'))).toBe(true);
+  });
+});
+
+describe('resolveBaseUrl 生产默认路径直测（workers.dev 回放，T3）', () => {
+  /** resolveBaseUrl 只吃四个参数（不跑九步）——reporter 记日志行，fake wrangler 回放 deploy stdout。 */
+  function fakeRep() {
+    const logs: string[] = [];
+    return { rep: { step: () => {}, log: (m: string) => logs.push(m) }, logs };
+  }
+
+  it('domain 空 → 重放幂等 deploy，从 stdout 抓 workers.dev URL；探测日志在场', async () => {
+    const { rep, logs } = fakeRep();
+    const commands: string[] = [];
+    const wrangler: Wrangler = {
+      run: async () => ({ ok: true, code: 0, stdout: '', stderr: '' }),
+      tryRun: async (args) => {
+        commands.push(args.join(' '));
+        // wrangler v4 真实 deploy 输出形状（幂等重跑同样打印 URL）
+        return {
+          ok: true,
+          code: 0,
+          stdout: 'Deployed unself-core-api triggers (1.18 sec)\n  https://unself-core-api.test-subdomain.workers.dev\n',
+          stderr: '',
+        };
+      },
+    };
+    const url = await resolveBaseUrl({}, '', '/cfg/core.wrangler.jsonc', wrangler, rep);
+    expect(url).toBe('https://unself-core-api.test-subdomain.workers.dev');
+    // 生产命令形状：重放 deploy --config <生成配置>
+    expect(commands).toEqual(['deploy --config /cfg/core.wrangler.jsonc']);
+    // 人话日志：告知走 workers.dev 免费域
+    expect(logs.some((l) => l.includes('workers.dev'))).toBe(true);
+  });
+
+  it('domain 已配置 → 直接 https://<domain>，不重放 deploy', async () => {
+    const { rep } = fakeRep();
+    let deployRuns = 0;
+    const wrangler: Wrangler = {
+      run: async () => ({ ok: true, code: 0, stdout: '', stderr: '' }),
+      tryRun: async () => {
+        deployRuns++;
+        return { ok: true, code: 0, stdout: '', stderr: '' };
+      },
+    };
+    const url = await resolveBaseUrl({}, 'team.example.com', '/cfg/core.wrangler.jsonc', wrangler, rep);
+    expect(url).toBe('https://team.example.com');
+    expect(deployRuns).toBe(0);
+  });
+
+  it('deploy 输出解析不到 workers.dev（wrangler 异常输出）→ 人话硬报错并指路配 domain', async () => {
+    const { rep } = fakeRep();
+    const wrangler: Wrangler = {
+      run: async () => ({ ok: true, code: 0, stdout: '', stderr: '' }),
+      tryRun: async () => ({
+        ok: true,
+        code: 0,
+        stdout: '⛅️ wrangler v4.29.1\nNot logged in, run `wrangler login` or set CLOUDFLARE_API_TOKEN',
+        stderr: '',
+      }),
+    };
+    await expect(
+      resolveBaseUrl({}, '', '/cfg/core.wrangler.jsonc', wrangler, rep),
+    ).rejects.toThrow(/无法从 wrangler 输出解析 workers\.dev 域名；请在 unself\.config\.jsonc 配置 domain/);
   });
 });

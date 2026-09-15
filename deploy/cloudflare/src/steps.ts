@@ -433,8 +433,8 @@ export async function runNineSteps(input: {
   };
 }
 
-/** baseUrl 决策：config.domain 优先；否则重放一次幂等 deploy 从其 stdout 抓 workers.dev（wrangler v4 仅在真实部署输出中给出 URL）。 */
-async function resolveBaseUrl(
+/** baseUrl 决策：config.domain 优先；否则重放一次幂等 deploy 从其 stdout 抓 workers.dev（wrangler v4 仅在真实部署输出中给出 URL）。导出仅为直测（#193 T3），行为不变。 */
+export async function resolveBaseUrl(
   input: { resolveBaseUrl?: (domain: string, workerName: string) => Promise<string>; http?: unknown },
   domain: string,
   coreConfigPath: string,
