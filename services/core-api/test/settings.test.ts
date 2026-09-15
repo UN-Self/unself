@@ -93,6 +93,7 @@ function seedSampleConfig(db: CoreTestDb, mail: Record<string, unknown> = {}): v
       username: 'mailer',
       password: 'smtp-pass',
       from: 'noreply@example.com',
+      portalUrl: 'https://mail.example.com/portal',
       ...mail,
     }),
   );
@@ -109,6 +110,8 @@ const EMPTY_SETTINGS = {
     username: '',
     password: '',
     from: '',
+    // 老数据无 portalUrl 字段 → 缺省空串。
+    portalUrl: '',
     // 老数据无 enabled 字段（含解析失败的 mail 段）→ 缺省视为开启。
     enabled: true,
   },
@@ -142,6 +145,7 @@ describe('实例设置查看/编辑（#17）', () => {
         username: 'mailer',
         password: '***',
         from: 'noreply@example.com',
+        portalUrl: 'https://mail.example.com/portal',
         enabled: true,
       },
     });
@@ -233,6 +237,7 @@ describe('实例设置查看/编辑（#17）', () => {
       username: 'mailer',
       password: '***',
       from: 'noreply@example.com',
+      portalUrl: 'https://mail.example.com/portal',
       enabled: true,
     });
 
@@ -249,7 +254,39 @@ describe('实例设置查看/编辑（#17）', () => {
       username: 'mailer',
       password: 'smtp-pass',
       from: 'noreply@example.com',
+      portalUrl: 'https://mail.example.com/portal',
     });
+  });
+
+  it('PUT portalUrl（#168）：单字段落库合并、GET 原样回传（展示用，非密钥不脱敏）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    const res = await putJson(
+      app,
+      JSON.stringify({ mail: { portalUrl: 'https://portal.example.com/app-passwords' } }),
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    const settings = (await (
+      await app.request(
+        'https://team.example.com/api/admin/settings',
+        { headers: { cookie: adminCookie } },
+        env,
+      )
+    ).json()) as { mail: Record<string, unknown> };
+    expect(settings.mail.portalUrl).toBe('https://portal.example.com/app-passwords');
+    // 合并语义未被新字段破坏：其余 mail 字段原样。
+    expect(settings.mail.domain).toBe('example.com');
+
+    const stored = JSON.parse(
+      db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value,
+    ) as Record<string, unknown>;
+    expect(stored.portalUrl).toBe('https://portal.example.com/app-passwords');
   });
 
   it('PUT 空 body / 全空串 / *** → ok 且不写库、无 audit 行', async () => {
@@ -348,6 +385,7 @@ describe('实例设置查看/编辑（#17）', () => {
       username: 'mailer',
       password: 'smtp-pass',
       from: 'noreply@example.com',
+      portalUrl: 'https://mail.example.com/portal',
       enabled: false,
     });
 
@@ -367,6 +405,7 @@ describe('实例设置查看/编辑（#17）', () => {
       username: 'mailer',
       password: '***',
       from: 'noreply@example.com',
+      portalUrl: 'https://mail.example.com/portal',
       enabled: false,
     });
 

@@ -321,6 +321,9 @@ describe('OIDC 登录路由', () => {
     expect(await res.json()).toEqual({
       authenticated: true,
       user: { id: 'u_admin', name: '管理', issuer: ISSUER, sub: 'a-1', role: 'admin' },
+      // #168：成员能力字段（本用例无 mail 行 → 轴关、无门户地址）。
+      mailEnabled: false,
+      mailPortalUrl: null,
     });
   });
 

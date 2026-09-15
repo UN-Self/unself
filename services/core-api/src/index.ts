@@ -12,7 +12,7 @@ import { registerNotificationRoutes } from './routes/notifications';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerMailTestRoutes } from './routes/mail-test';
 import { registerSetupRoutes } from './routes/setup';
-import { getMemberAccess, type CreateMailProvisioner } from './services/members';
+import { getMemberAccess, readMailAccess, type CreateMailProvisioner } from './services/members';
 import type { CreateMailSender } from './services/notifications';
 import { readSession } from './session';
 
@@ -52,7 +52,10 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
 
   app.get('/api/health', (c) => c.json({ ok: true, service: 'core-api' }));
 
-  /** 当前会话用户（shell 判断登录态 / #10-13 前端用；role 供前端能力判断，真值以服务端为准）。 */
+  /**
+   * 当前会话用户（shell 判断登录态 / #10-13 前端用；role 供前端能力判断，真值以服务端为准）。
+   * #168：mailEnabled/mailPortalUrl 供成员态入口与说明页（登录态 + 非敏感，口径同邀请页公开开关）。
+   */
   app.get('/api/me', async (c) => {
     const session = await readSession(c);
     if (!session) {
@@ -62,9 +65,12 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
     if (member?.status === 'disabled') {
       return c.json({ error: 'account disabled' }, 403);
     }
+    const mail = await readMailAccess(c.env.CORE_DB);
     return c.json({
       authenticated: true,
       user: { id: session.uid, name: session.name, issuer: session.iss, sub: session.sub, role: member?.role ?? 'user' },
+      mailEnabled: mail.enabled,
+      mailPortalUrl: mail.portalUrl,
     });
   });
 

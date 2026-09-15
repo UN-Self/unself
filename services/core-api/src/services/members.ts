@@ -90,15 +90,39 @@ async function readMailSegment(db: D1Database): Promise<{ value: string } | null
 }
 
 /**
+ * mail 段里的邮件门户地址（#168 应用密码说明页的跳转目标）：
+ * portalUrl 优先；缺省用 domain 推导 https://mail.<domain>；
+ * 两者都缺/非字符串/空串 → null（说明页仍给步骤，只是跳转按钮禁用）。
+ */
+function mailPortalUrl(section: Record<string, unknown>): string | null {
+  const portalUrl = typeof section.portalUrl === 'string' ? section.portalUrl.trim() : '';
+  if (portalUrl.length > 0) return portalUrl;
+  const domain = typeof section.domain === 'string' ? section.domain.trim() : '';
+  return domain.length > 0 ? `https://mail.${domain}` : null;
+}
+
+/**
+ * 成员可见的邮件摘要（#168，/api/me 用）：一次读 mail 段。
+ * enabled 与 isMailEnabled 同口径（唯一实现，见下）；
+ * portalUrl 只在轴开时给——轴关时无门户可去，避免说明页给出误导链接。
+ */
+export async function readMailAccess(
+  db: D1Database,
+): Promise<{ enabled: boolean; portalUrl: string | null }> {
+  const row = await readMailSegment(db);
+  const section = parseMailSection(row?.value);
+  const enabled = row !== null && section.enabled !== false;
+  return { enabled, portalUrl: enabled ? mailPortalUrl(section) : null };
+}
+
+/**
  * 实例邮件轴能力开关（#149，邮件轴开关后含 enabled 轴）：
  * mail 行存在且 enabled !== false = 完整实例（开户/激活链接）；
  * 无行或 enabled === false = 弱化实例（批准即激活，表单不采集邮箱）。
  * 解析失败/缺 enabled 字段的老数据 → true（生产零迁移兼容）。
  */
 export async function isMailEnabled(db: D1Database): Promise<boolean> {
-  const row = await readMailSegment(db);
-  if (!row) return false;
-  return parseMailSection(row.value).enabled !== false;
+  return (await readMailAccess(db)).enabled;
 }
 
 /**
