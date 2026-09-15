@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 第三方组件登记（出处与复现依据；上游策略见 docs/architecture.md 与 docs/decisions.md #50）
+- name: EdgeChat
+  origin: https://github.com/aozorae/Edgechat
+  commit: 29978c221ee3ae641ce0b9b97851656c00714a5d
+  ref: v2.7.0（2026-09-15 时点）
+  license: GPL-3.0
+  scope:
+    搬运: worker/ 核心（频道/私聊/消息/DO×3/实时/未读/文件/语音/服务端加密）
+    裁剪: Telegram 桥、Capacitor、注册/登录/管理路由
+    前端: 自研不搬
+  local_path: modules/chat/worker
+  upstream_policy: 默认不跟，按 commit 记录再评估
