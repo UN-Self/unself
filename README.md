@@ -79,7 +79,7 @@ Cloudflare **免费套餐**足够 10 人左右的团队日常使用：Workers 10
 
 ## 版本状态
 
-**开发中，以 main 为准**（当前唯一 tag：`v0.1.0`，落后于 main；package.json 不跟踪产品版本）。已验收里程碑：M0 垂直切片（部署、setup、hello 全链路、模块启停）、M1 入职闭环与内置身份（实机验收记录 [docs/m1-acceptance.md](docs/m1-acceptance.md)）。
+**开发中，以 main 为准**（当前 tag：`v0.2.0` = M1 收官终态；package.json 不跟踪产品版本）。已验收里程碑：M0 垂直切片（部署、setup、hello 全链路、模块启停）= `v0.1.0`、M1 入职闭环与内置身份（实机验收记录 [docs/m1-acceptance.md](docs/m1-acceptance.md)）= `v0.2.0`。
 
 ## 开发
 
