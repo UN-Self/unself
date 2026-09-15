@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 
 import { readSession } from '../session';
-import { generateSetupToken, storeSetupToken, consumeSetupToken, isSetupTokenValid } from '../setup';
+import { consumeSetupToken, isSetupTokenValid } from '../setup';
 import { audit } from '../services/audit';
 import { isSetupDone, markSetupDone, persistOidcConfig } from '../services/instance-config';
 import { buildStoredCredential } from '../services/passwords';
@@ -25,20 +25,8 @@ const BUILTIN_ADMIN_SCHEMA = z.object({
   proof: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, '凭据格式不正确'),
 });
 
-/** 挂载 setup 域（/api/admin/setup-token、/api/setup/*）。 */
+/** 挂载 setup 域（/api/setup/*；#165 起不再有公开签发端点）。 */
 export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
-  /** 部署脚本/自检：生成新一次性 setup token 并入库（打印进部署输出）。 */
-  app.post('/api/admin/setup-token', async (c) => {
-    const db = c.env.CORE_DB;
-    if (await isSetupDone(db)) {
-      return c.json({ error: 'setup already completed; sealed forever' }, 409);
-    }
-    const { token } = generateSetupToken();
-    await storeSetupToken(db, token);
-    await audit(db, 'system', 'setup_token_issued');
-    return c.json({ token, setupUrl: `/setup?token=${token}` });
-  });
-
   /** setup 状态查询（#10 向导页用）：是否已激活 / token 是否仍可用。 */
   app.get('/api/setup/status', async (c) => {
     const db = c.env.CORE_DB;
@@ -121,13 +109,22 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
   /**
    * 内置管理员开通（issue-A，决策 20：内置账号默认形态）：
    * username+password → 建 admin（role=admin、status=active）+ 凭证行（batch 原子）
-   * → 置 setup_done 封箱 → 审计。门禁只有 setup_done（token 门留给 OIDC 直线流程，
-   * 内置分支部署后直接可走，SPEC 决策 21「激活即成管理员并直接进工作台」的内置等价物）。
+   * → 置 setup_done 封箱 → 审计。
+   * 门禁（#165）：setup 未封箱 + 一次性 setup token（query `token` 或 `x-setup-token`，
+   * 取法/校验同 activate；未给或无效/已用一律 403）。token 只验不消费——封箱后
+   * 全端点 409，token 的消费/used_by 记录见 #171。
    */
   app.post('/api/setup/builtin-admin', async (c) => {
     const db = c.env.CORE_DB;
     if (await isSetupDone(db)) {
       return c.json({ error: 'setup already completed; sealed forever' }, 409);
+    }
+    const token = c.req.query('token') ?? c.req.header('x-setup-token');
+    if (!token) {
+      return c.json({ error: 'missing setup token' }, 403);
+    }
+    if (!(await isSetupTokenValid(db, token))) {
+      return c.json({ error: 'invalid or already-used setup token' }, 403);
     }
     const body = BUILTIN_ADMIN_SCHEMA.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {

@@ -224,7 +224,7 @@ describe('SetupView 内置管理员分支（issue-A）', () => {
     await wrapper.findAll('form')[0]!.trigger('submit')
     await settle()
 
-    expect(createBuiltinAdmin).toHaveBeenCalledWith('boss', 'password123')
+    expect(createBuiltinAdmin).toHaveBeenCalledWith('tok-92', 'boss', 'password123')
     expect(loginWithPassword).toHaveBeenCalledWith('boss', 'password123')
     expect(routerReplace).toHaveBeenCalledWith('/')
   })

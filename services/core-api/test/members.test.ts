@@ -308,7 +308,7 @@ describe('管理端成员生命周期（#49）', () => {
     expect(calls).toEqual([]);
   });
 
-  it('admin 守卫拒绝普通成员，setup-token 部署通道不受影响', async () => {
+  it('admin 守卫拒绝普通成员，setup-token 公开签发口已删（#165）', async () => {
     const app = createApp();
     const { env, db, memberCookie } = await envFor();
 
@@ -322,11 +322,12 @@ describe('管理端成员生命周期（#49）', () => {
       status: 'active',
     });
 
+    // #165：公开签发口已删 —— 无会话请求被 adminGuard 接管（旧实现显式豁免此路径）
     const setupToken = await app.request(
       'https://team.example.com/api/admin/setup-token',
       { method: 'POST' },
       env,
     );
-    expect(setupToken.status).toBe(200);
+    expect(setupToken.status).toBe(401);
   });
 });

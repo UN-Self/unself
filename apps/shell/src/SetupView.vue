@@ -173,14 +173,14 @@ function validateAdmin(): boolean {
   return Object.keys(errors).length === 0
 }
 
-/** 内置分支提交：建号封箱 → 直接登录拿会话 → 进工作台。 */
+/** 内置分支提交：建号封箱 → 直接登录拿会话 → 进工作台。token 随链接一起提交（#165）。 */
 async function onCreateAdmin() {
   adminError.value = ''
-  if (!validateAdmin()) return
+  if (!validateAdmin() || !token.value) return
   const username = adminUsername.value.trim()
   creatingAdmin.value = true
   try {
-    await createBuiltinAdmin(username, adminPassword.value)
+    await createBuiltinAdmin(token.value, username, adminPassword.value)
     await loginWithPassword(username, adminPassword.value)
     await router.replace('/')
   } catch (err) {

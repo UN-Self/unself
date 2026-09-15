@@ -71,14 +71,8 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   // ---------------------------------------------------------------------------
   // 路由域挂载（一域一文件；组合根只做组装，不写业务）
   // ---------------------------------------------------------------------------
-  const adminGuard = requireAdmin();
-  app.use('/api/admin/*', async (c, next) => {
-    if (c.req.path === '/api/admin/setup-token') {
-      await next();
-      return;
-    }
-    return adminGuard(c, next);
-  });
+  // #165：`/api/admin/*` 一律过 adminGuard——公开 setup-token 签发口已删，不再有豁免路径。
+  app.use('/api/admin/*', requireAdmin());
   registerAuthRoutes(app);
   registerSetupRoutes(app);
   registerMemberRoutes(app, dependencies.createMailProvisioner, dependencies.createMailSender);

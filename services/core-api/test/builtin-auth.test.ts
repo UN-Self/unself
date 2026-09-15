@@ -304,9 +304,11 @@ describe('内置身份（issue-A）', () => {
   it('setup builtin-admin：建 admin + setup_done + 审计；封箱后二次被拒；账号可登录', async () => {
     const app = appWith();
     const { env, db } = await envFor();
+    // #165：builtin-admin 需一次性 setup token（装配器直插），此后门禁同 activate
+    db.run('INSERT INTO setup_tokens (token) VALUES (?)', 'setup-token-1');
 
     const res = await app.request(
-      'https://team.example.com/api/setup/builtin-admin',
+      'https://team.example.com/api/setup/builtin-admin?token=setup-token-1',
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -330,7 +332,7 @@ describe('内置身份（issue-A）', () => {
 
     // 封箱：二次调用（无论用户名）一律 409
     const again = await app.request(
-      'https://team.example.com/api/setup/builtin-admin',
+      'https://team.example.com/api/setup/builtin-admin?token=setup-token-1',
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
