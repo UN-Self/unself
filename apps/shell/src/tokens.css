@@ -68,4 +68,8 @@
   --unself-duration-fast: 150ms;
   --unself-duration-normal: 250ms;
   --unself-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* #191：基元动画时长（u-shake/u-spin/u-shimmer）——同属内部默认值，不进契约 JSON */
+  --unself-duration-shake: 450ms;
+  --unself-duration-spin: 800ms;
+  --unself-duration-shimmer: 1400ms;
 }
