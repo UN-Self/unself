@@ -194,6 +194,3 @@ export function parseWorkersDevFromDeployOutput(stdout: string): string | null {
   const m = /https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.workers\.dev/i.exec(stdout);
   return m ? m[0] : null;
 }
-
-/** 供 fake 注入的最小执行接口别名（保持与 wrangler.ts 解耦）。 */
-export type { Wrangler };

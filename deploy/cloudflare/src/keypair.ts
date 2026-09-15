@@ -10,10 +10,6 @@ import { generateInstanceKeyPair, type InstanceKeyPair } from './es256';
 /** core Worker 的 secret 名（core-api Bindings 契约）。 */
 export const JWT_SECRET_NAME = 'JWT_PRIVATE_KEY';
 
-export type KeypairOutcome =
-  | { action: 'existing' }
-  | { action: 'created'; pair: InstanceKeyPair };
-
 /** 探测 Worker 是否已配置签名私钥 secret。Worker 不存在 → 视为缺失。 */
 export async function detectExistingSecret(
   wrangler: { tryRun(args: string[]): Promise<{ ok: boolean; stdout: string }> },
