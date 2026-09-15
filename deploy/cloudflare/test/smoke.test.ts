@@ -9,7 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
-import { checkModuleThemes, generateSetupToken, parseD1Rows, provisionSetupToken, smokeCheck } from '../src/smoke';
+import { checkModuleThemes, generateSetupToken, parseD1Rows, parseWorkersDevFromDeployOutput, provisionSetupToken, smokeCheck } from '../src/smoke';
 import type { Wrangler } from '../src/wrangler';
 
 afterEach(() => {
@@ -267,5 +267,65 @@ describe('checkModuleThemes（部署期主题体检 · §6.5.8 验产物，不�
     expect(results[0]).toMatchObject({ ok: true, skinned: false, unknown: [] });
     expect(results[1]).toMatchObject({ ok: false, skinned: false });
     expect(results[1]?.unknown).toEqual(['--unsafe-color']);
+  });
+});
+
+describe('parseWorkersDevFromDeployOutput（workers.dev 主路径直测，T3）', () => {
+  it('wrangler v4 真实部署输出形状：Deployed … https://<name>.workers.dev → 抓到完整 URL', () => {
+    // wrangler v4.129.x `wrangler deploy` 实际 stdout（fake wrangler 回放同款，steps.test.ts 部署行）
+    const stdout = [
+      '⛅️ wrangler v4.29.1',
+      '------------------',
+      'Total Upload: 123.45 KiB / Compression: 34.56 KiB',
+      'Uploaded unself-core-api (3.41 sec)',
+      'Deployed unself-core-api triggers (1.18 sec)',
+      '  https://unself-core-api.test-subdomain.workers.dev',
+      '',
+    ].join('\n');
+    expect(parseWorkersDevFromDeployOutput(stdout)).toBe(
+      'https://unself-core-api.test-subdomain.workers.dev',
+    );
+  });
+
+  it('输出含多行日志与杂项 URL：仍只抓 .workers.dev 域（不误抓 dash/others）', () => {
+    const stdout = [
+      '🌀 Building list of candidate versions...',
+      '🌎 ⚠️ No custom domain detected, using workers.dev',
+      '参考文档: https://developers.cloudflare.com/workers/',
+      'Deployed unself-core-api triggers',
+      '  https://unself-core-api.a1b2c3d4.workers.dev',
+    ].join('\n');
+    expect(parseWorkersDevFromDeployOutput(stdout)).toBe(
+      'https://unself-core-api.a1b2c3d4.workers.dev',
+    );
+  });
+
+  it('输出无 workers.dev URL（如仅报错/登录提示）→ null（调用方走「无法解析」人话分支）', () => {
+    expect(parseWorkersDevFromDeployOutput('⛅️ wrangler v4.29.1\nNot logged in, run `wrangler login`')).toBeNull();
+    expect(parseWorkersDevFromDeployOutput('')).toBeNull();
+  });
+});
+
+describe('provisionSetupToken 生产默认路径（wrangler 失败即硬失败，T3）', () => {
+  it('探测命令非零退出（wrangler 报错）→ WranglerError 带命令与 stderr 硬失败（不静默误签）', async () => {
+    // 生产真实路径：run() 对非零退出抛 WranglerError（wrangler.ts）。探测失败必须硬失败——
+    // 若误把「探测失败」当「空输出」，会按未封箱处理在错误账户上凭空 INSERT。
+    // 这里用真实 WranglerError 形状（非 fake 回放）验证错误面含命令与 stderr 人话。
+    const commands: string[] = [];
+    const wrangler: Wrangler = {
+      run: async (args) => {
+        commands.push(args.join(' '));
+        throw Object.assign(new Error('d1 execute 失败（1）\n  命令: wrangler d1 execute CORE_DB --command SELECT ...\n  stderr: failed to fetch D1: network unreachable'), { name: 'WranglerError' });
+      },
+      tryRun: async (args) => {
+        commands.push(args.join(' '));
+        return { ok: false, code: 1, stdout: '', stderr: 'x' };
+      },
+    };
+    await expect(
+      provisionSetupToken({ wrangler, configPath: '/cfg.jsonc' }),
+    ).rejects.toThrow(/failed to fetch D1: network unreachable/);
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toContain('SELECT');
   });
 });
