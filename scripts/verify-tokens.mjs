@@ -81,23 +81,25 @@ function stripComments(text) {
 }
 
 /**
- * 取 CSS 文本（保行号：非 CSS 区段用空格顶掉）——规则三只在样式声明里判时长。
+ * 取 CSS 文本（保行号：非 CSS 区段用「空格顶位、换行保留」顶掉）——规则三只在样式声明里判时长。
  * .css 全文；.vue 只取 <style> 区块；其余扩展名返回 null（不适用）。
  */
 function cssText(relPath, text) {
   const ext = extname(relPath);
   if (ext === '.css') return text;
   if (ext !== '.vue') return null;
+  /** 用空格顶掉非 CSS 字符，但保留换行（行号不乱）。 */
+  const blank = (s) => s.replace(/[^\n]/g, ' ');
   let out = '';
   let idx = 0;
   for (const m of text.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) {
-    out += ' '.repeat(m.index - idx);
+    out += blank(text.slice(idx, m.index));
     const openLen = m[0].indexOf('>') + 1;
-    out += ' '.repeat(openLen) + m[1];
-    out += ' '.repeat(m[0].length - openLen - m[1].length);
+    out += blank(m[0].slice(0, openLen)) + m[1];
+    out += blank(m[0].slice(openLen + m[1].length));
     idx = m.index + m[0].length;
   }
-  return out + ' '.repeat(text.length - idx);
+  return out + blank(text.slice(idx));
 }
 
 /** 单文件 lint：返回违规清单（每条「文件:行号: 原因」）。relPath 用 / 分隔的仓库相对路径。 */
