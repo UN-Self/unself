@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+id: chat
+route: /m/chat
+entry: http://localhost:8791/ # 占位：M0 后由 core-api 注册的运行时地址
+runtime: worker
+requires:
+  - identity
+capabilities:
+  - chat
+version: 0.1.0

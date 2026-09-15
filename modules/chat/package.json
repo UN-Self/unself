@@ -1,0 +1,28 @@
+{
+  "name": "@unself/module-chat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "worker/src/index.js",
+  "exports": {
+    ".": "./worker/src/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.10.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.0.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.0.0"
+  }
+}
