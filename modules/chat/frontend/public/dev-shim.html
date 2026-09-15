@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Unself Chat · dev-shim</title>
+    <style>
+      body { font-family: ui-monospace, monospace; margin: 0; display: flex; height: 100vh; }
+      #console { width: 320px; overflow: auto; border-right: 1px solid silver; padding: 8px; box-sizing: border-box; font-size: 12px; }
+      #framebox { flex: 1; }
+      iframe { width: 100%; height: 100%; border: 0; display: block; }
+      .log { margin: 0 0 4px; white-space: pre-wrap; word-break: break-all; }
+      .ok { color: green; }
+      .warn { color: darkorange; }
+      .err { color: crimson; }
+    </style>
+  </head>
+  <body>
+    <div id="console"><h3>handshake shim</h3><p class="warn">等待模块 ready…</p></div>
+    <div id="framebox"><iframe id="module" src="/"></iframe></div>
+    <script>
+      // 375px 预览辅助：?w=375 时按该宽度装载模块（仅开发用）
+      const w = new URLSearchParams(location.search).get('w')
+      if (w) document.getElementById('framebox').style.maxWidth = w + 'px'
+
+      const consoleEl = document.getElementById('console')
+      function log(kind, text) {
+        const p = document.createElement('p')
+        p.className = 'log ' + (kind || '')
+        p.textContent = '[shim] ' + text
+        consoleEl.appendChild(p)
+      }
+
+      const moduleOrigin = location.origin
+      // 与壳同源装载（同源路径制，architecture.md 模块章节），入站校验 origin === moduleOrigin
+      const CORE_ORIGIN = moduleOrigin
+      const issuedToken = 'dev-shim-token.' + btoa(JSON.stringify({ iss: 'dev-shim', sub: 'u1', aud: 'chat', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 600, name: '走查用户' })).replace(/=+$/, '')
+
+      window.addEventListener('message', (event) => {
+        if (event.origin !== moduleOrigin) return
+        const data = event.data
+        if (!data || typeof data !== 'object') return
+        if (data.type === 'ready') {
+          log('ok', 'ready 收到 → 下发 token（exp+600s，静默续期约 8 分钟后复握手）')
+          event.source.postMessage({ type: 'token', token: issuedToken }, CORE_ORIGIN)
+          log('ok', 'token 已下发')
+          setTimeout(() => {
+            event.source.postMessage({ type: 'tokens', tokens: {} }, CORE_ORIGIN)
+          }, 50)
+        } else if (data.type === 'theme') {
+          log('ok', 'theme: ' + data.mode)
+        } else if (data.type === 'navigate') {
+          log('warn', 'navigate: ' + data.path)
+        } else if (data.type === 'notify') {
+          log('ok', 'notify: ' + data.title)
+        } else {
+          log('', '消息: ' + JSON.stringify(data))
+        }
+      })
+      log('', 'shim 已启动，origin=' + moduleOrigin)
+    </script>
+  </body>
+</html>

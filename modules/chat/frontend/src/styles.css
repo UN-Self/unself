@@ -1,0 +1,37 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+@import 'tailwindcss';
+
+/* #218 chat 前端：本模块零令牌定义、零裸色值——值全部由壳经通道 A/B 下发（§6.5.5）；
+ * 独立开发态的兜底在 dev.js 运行时注入（modules 侧临时值，构建产物不带）。 */
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--unself-color-bg);
+  color: var(--unself-color-text);
+  font-size: var(--unself-font-size-base);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
+}
+
+/* 动效时长/缓动一律取令牌；reduced-motion 降级（AGENTS.md UI 纪律）：组件过渡均通过
+ * --unself-duration-* 令牌，系统开启「减少动态效果」时整体禁用过渡与动画。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none;
+    animation: none;
+  }
+}
