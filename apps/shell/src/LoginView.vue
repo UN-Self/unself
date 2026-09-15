@@ -56,7 +56,7 @@ async function onSubmit() {
     const next = typeof route.query.next === 'string' ? route.query.next : undefined
     await router.replace(next && next.startsWith('/') && !next.startsWith('//') ? next : '/')
   } catch (err) {
-    // 后端 404/401 统一「用户名或密码错误」（人话直接透传），403 停用人话
+    // 后端对「密码错 / 无此用户 / 账号停用」统一 401 同文案（#186 S2 探测收敛），人话直接透传
     formError.value = (err as AuthError).message
   } finally {
     submitting.value = false

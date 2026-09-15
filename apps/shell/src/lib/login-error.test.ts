@@ -9,6 +9,8 @@ describe('humanizeLoginError（#60 T4 短错误码 → 人话）', () => {
     expect(humanizeLoginError('oidc_token_expired')?.message).toContain('过期')
     expect(humanizeLoginError('oidc_provider_error')?.message).toContain('身份源')
     expect(humanizeLoginError('oidc_failed')?.message).toContain('管理员')
+    // #186：停用是「本人可解」的状态，文案必须指向联系管理员（不是通用回退）
+    expect(humanizeLoginError('account_disabled')?.message).toContain('已被停用')
   })
 
   it('标题固定为「登录暂时不可用」', () => {
