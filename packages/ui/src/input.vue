@@ -5,7 +5,7 @@ import { computed, ref, useId, watch } from 'vue'
 /**
  * 输入框基元：label + 可选错误行（稳定占位不跳动）+ 左侧图标插槽。
  * 移植 beUI input 的「稳定错误行 / 错误抖动」语义（§6.5 查找序）：
- * 抖动以 CSS keyframes 等价实现（时长 0.45s 照抄 beUI），错误清除即复位。
+ * 抖动以 CSS keyframes 等价实现（时长走 `--unself-duration-shake` 令牌，#191），错误清除即复位。
  */
 export interface InputProps {
   modelValue?: string
@@ -120,10 +120,11 @@ function onInput(event: Event) {
   color: var(--unself-color-text-tertiary);
 }
 .u-input:focus {
-  outline: none;
+  outline: var(--unself-focus-ring);
+  outline-offset: 2px;
   border-color: var(--unself-color-primary);
-  box-shadow: 0 0 0 3px var(--unself-color-primary-soft);
 }
+
 .u-input:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -131,14 +132,21 @@ function onInput(event: Event) {
 .u-input-error {
   border-color: var(--unself-color-danger);
 }
+/* 错误态只换颜色，环的形状仍出自同一令牌（#191 F4：一处定义） */
 .u-input-error:focus {
+  outline-color: var(--unself-color-danger);
   border-color: var(--unself-color-danger);
-  box-shadow: 0 0 0 3px var(--unself-color-danger-soft);
 }
 
-/* beUI input 的错误抖动：0.45s，位移序列照抄 */
+/* input 错误抖动：时长走令牌（#191），位移序列照抄 beUI */
 .u-input-shake {
-  animation: u-shake 0.45s var(--unself-ease-out);
+  animation: u-shake var(--unself-duration-shake) var(--unself-ease-out);
+}
+/* 降低动效偏好：抖动退化（无位移变化即无动效，保留瞬时状态切换） */
+@media (prefers-reduced-motion: reduce) {
+  .u-input-shake {
+    animation: none;
+  }
 }
 @keyframes u-shake {
   0% { transform: translateX(0); }

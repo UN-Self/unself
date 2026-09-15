@@ -47,7 +47,13 @@ withDefaults(defineProps<SkeletonProps>(), {
     var(--unself-color-surface) 75%
   );
   background-size: 200% 100%;
-  animation: u-shimmer 1.4s ease infinite;
+  animation: u-shimmer var(--unself-duration-shimmer) ease infinite;
+}
+/* 降低动效偏好：微光停止（退化为静态占位色块） */
+@media (prefers-reduced-motion: reduce) {
+  .u-skeleton-line {
+    animation: none;
+  }
 }
 .u-skeleton-line-short {
   width: 60%;

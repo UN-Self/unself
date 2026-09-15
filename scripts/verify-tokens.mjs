@@ -15,6 +15,9 @@
  *   ∪ tokens.css 已声明的内部令牌（动效 duration/ease 等：平台自己的 CSS 声明了值，
  *   壳/组件内引用可解析；但模块页引它们仍会被部署期体检红——通道注入只投契约令牌）；
  *   豁免文件同样检查（tokens.css 内 --unself-focus-ring: 2px solid var(--unself-color-primary) 必须通过）。
+ * 规则三（裸时长，#191 F1）：CSS 声明里不得出现时间字面量（如 `animation: u-spin 0.8s`）——
+ *   动效参数只出自令牌 --unself-duration-*；只查 .css 全体 与 .vue 的 <style> 区块，
+ *   注释/脚本/模板内的文字（如文档里写「约 210ms」）不算；tokens.css 是取值定义处，豁免。
  *
  * 输出：逐条 `文件:行号: 原因`；有违规 exit 1，零违规静默 exit 0。
  */
@@ -28,11 +31,15 @@ const EXCLUDE_DIR_NAMES = new Set(['node_modules', 'dist', '.deploy', 'coverage'
 const FILE_EXTS = new Set(['.vue', '.ts', '.css', '.html']);
 const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
 const RULE1_EXEMPT = new Set(['apps/shell/src/tokens.css', 'packages/contracts/src/theme-tokens.json']);
+/** 规则三豁免：tokens.css 是时长取值的定义处（其余文件只准引用令牌）。 */
+const RULE3_EXEMPT = new Set(['apps/shell/src/tokens.css']);
 const CONTRACT_PACKAGE = 'packages/contracts/src/theme-tokens.json';
 
 const HEX_RE = /#[0-9a-fA-F]{3,8}\b/g;
 const RGB_RE = /rgba?\(/g;
 const VAR_RE = /var\(\s*(--[a-zA-Z0-9-]+)/g;
+/** 规则三：时间字面量（`0.8s` / `450ms`）——CSS 区段内出现即违规。 */
+const TIME_RE = /\b\d+(?:\.\d+)?m?s\b/g;
 
 /** 白名单：契约白名单 ∪ tokens.css 已声明的内部令牌（'--' + 点号键.replaceAll('.', '-')）。 */
 function loadVarWhitelist() {
@@ -73,6 +80,26 @@ function stripComments(text) {
     .replace(/^\s*\/\/.*$/gm, '');
 }
 
+/**
+ * 取 CSS 文本（保行号：非 CSS 区段用空格顶掉）——规则三只在样式声明里判时长。
+ * .css 全文；.vue 只取 <style> 区块；其余扩展名返回 null（不适用）。
+ */
+function cssText(relPath, text) {
+  const ext = extname(relPath);
+  if (ext === '.css') return text;
+  if (ext !== '.vue') return null;
+  let out = '';
+  let idx = 0;
+  for (const m of text.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) {
+    out += ' '.repeat(m.index - idx);
+    const openLen = m[0].indexOf('>') + 1;
+    out += ' '.repeat(openLen) + m[1];
+    out += ' '.repeat(m[0].length - openLen - m[1].length);
+    idx = m.index + m[0].length;
+  }
+  return out + ' '.repeat(text.length - idx);
+}
+
 /** 单文件 lint：返回违规清单（每条「文件:行号: 原因」）。relPath 用 / 分隔的仓库相对路径。 */
 export function lintFile(relPath, text, varWhitelist) {
   const code = stripComments(text);
@@ -91,6 +118,15 @@ export function lintFile(relPath, text, varWhitelist) {
     const name = m[1];
     if (!varWhitelist.has(name)) {
       violations.push(`${relPath}:${lineOf(code, m.index)}: 未解析令牌 ${name}（不在契约白名单）`);
+    }
+  }
+  // 规则三：裸时长（#191 F1：动效参数只出自令牌）
+  const css = RULE3_EXEMPT.has(relPath) ? null : cssText(relPath, code);
+  if (css) {
+    for (const m of css.matchAll(TIME_RE)) {
+      violations.push(
+        `${relPath}:${lineOf(css, m.index)}: 裸时长 ${m[0]}（动效参数只出自 --unself-duration-* 令牌）`,
+      );
     }
   }
   return violations;

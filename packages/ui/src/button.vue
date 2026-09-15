@@ -87,7 +87,7 @@ const sizeClass = computed(() => {
   cursor: not-allowed;
 }
 .u-btn:focus-visible {
-  outline: 2px solid var(--unself-color-primary);
+  outline: var(--unself-focus-ring);
   outline-offset: 2px;
 }
 
@@ -137,11 +137,17 @@ const sizeClass = computed(() => {
   border: 2px solid currentColor;
   border-right-color: transparent;
   border-radius: var(--unself-radius-full);
-  animation: u-spin 0.8s linear infinite;
+  animation: u-spin var(--unself-duration-spin) linear infinite;
 }
 @keyframes u-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+/* 降低动效偏好：旋转退化为静态指示（按钮上仍有 loading 文案/禁用态，不丢信息） */
+@media (prefers-reduced-motion: reduce) {
+  .u-btn-spinner {
+    animation: none;
   }
 }
 </style>
