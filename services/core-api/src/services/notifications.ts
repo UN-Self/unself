@@ -20,6 +20,7 @@ import {
 } from '@unself/mail-smtp';
 
 import { audit } from './audit';
+import { parseMailSection } from './members';
 
 /** 站内/邮件收件人口径：已建档用户 / 待建档受邀邮箱 / 全员广播 / 全体管理员。 */
 export type NotificationRecipient =
@@ -196,7 +197,9 @@ export async function deliverNotification(
 export type CreateMailSender = (mailConfig: Record<string, unknown>) => MailSender | null;
 
 /**
- * 从 instance_config 的 mail 段装配发信口：无段/JSON 非法 → null（弱化实例静默降级）。
+ * 从 instance_config 的 mail 段装配发信口：无段/enabled === false → null（弱化实例静默降级）。
+ * 段解析复用 members.ts 的 parseMailSection（唯一副本口径）；#167 起开关轴与
+ * isMailEnabled/configuredMailProvisioner 同口径：关闭即不装配 sender，也不碰工厂。
  * 字段不完整由 createMailSenderFromConfig 判定，同样回 null。
  */
 export async function configuredMailSender(
@@ -210,15 +213,12 @@ export async function configuredMailSender(
   if (!row) {
     return null;
   }
-  try {
-    const parsed: unknown = JSON.parse(row.value);
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return null;
-    }
-    return createMailSender(parsed as Record<string, unknown>);
-  } catch {
+  const section = parseMailSection(row.value);
+  // 开关关闭 = 弱化实例：整个发信轴不装配（老数据无 enabled 字段 → 缺省开启，行为不变）。
+  if (section.enabled === false) {
     return null;
   }
+  return createMailSender(section);
 }
 
 /**

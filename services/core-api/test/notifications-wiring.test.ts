@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it } from 'vitest';
+import type { MailMessage } from '@unself/mail-smtp';
+import { describe, expect, it, vi } from 'vitest';
 
-import { createApp } from '../src/index';
+import { createApp, type CoreApiDependencies } from '../src/index';
 import { generateInstanceKeyPair } from '../src/keys';
+import { hashOneTimeToken } from '../src/one-time-token';
 import { createSessionToken } from '../src/session';
 import { createCoreDb } from './test-factory';
 
@@ -10,8 +12,9 @@ import { createCoreDb } from './test-factory';
  * #19 触发点接线集成（主会话归属）：模块启停 TODO(#19) 占位处 → module_toggled 广播。
  * 行为口径：全员 active 成员各落一条站内通知（含操作者本人），disabled 不收；
  * payload 带 moduleId/enabled；mail 段未装配不报错（module_toggled 渠道位本就只站内）。
+ * #167：mail.enabled=false 时发信工厂根本不被装配（邀请→批准→模块启停全链零发信尝试）。
  */
-async function envFor() {
+async function envFor(dependencies?: CoreApiDependencies) {
   const pair = await generateInstanceKeyPair();
   const db = createCoreDb();
   db.run(
@@ -49,6 +52,7 @@ async function envFor() {
     pair.privateKeyPem,
   );
   return {
+    app: createApp(dependencies),
     env: { CORE_DB: db.d1, JWT_PRIVATE_KEY: pair.privateKeyPem },
     db,
     adminCookie: `unself_session=${adminToken}`,
@@ -57,8 +61,7 @@ async function envFor() {
 
 describe('模块启停 → module_toggled 广播（#19 接线）', () => {
   it('翻转启停给每个 active 成员落站内通知，disabled 不收', async () => {
-    const app = createApp();
-    const { env, db, adminCookie } = await envFor();
+    const { app, env, db, adminCookie } = await envFor();
 
     const res = await app.request(
       'https://team.example.com/api/admin/modules/hello/toggle',
@@ -80,5 +83,106 @@ describe('模块启停 → module_toggled 广播（#19 接线）', () => {
       expect(JSON.parse(row.payload)).toEqual({ moduleId: 'hello', enabled: false });
       expect(row.is_read).toBe(0);
     }
+  });
+});
+
+/** 完整 mail 段（与 settings 路由契约一致，SMTP 字段齐全）：关开关 ≠ 删行。 */
+const FULL_MAIL_CONFIG = {
+  baseUrl: 'https://mail.example.com',
+  apiKey: 'k',
+  domain: 'example.com',
+  host: 'smtp.example.com',
+  port: 465,
+  username: 'u',
+  password: 'p',
+  from: 'no-reply@example.com',
+};
+
+describe('#167 发信轴吃 mail.enabled（关闭即不装配 sender）', () => {
+  it('enabled=false（字段齐全）：邀请→填表→批准→模块启停全链零发信，工厂零调用', async () => {
+    const sent: Array<{ to: string; subject: string }> = [];
+    const factory = vi.fn(() => ({
+      send: async (message: MailMessage) => {
+        sent.push({ to: message.to, subject: message.subject });
+      },
+    }));
+    const { app, env, db, adminCookie } = await envFor({ createMailSender: factory });
+    // 关 ≠ 删行：完整 SMTP 配置在场，只是 enabled:false（设置页开关关闭后的真实落库形状）。
+    db.run(
+      "INSERT INTO instance_config (key, value) VALUES ('mail', ?)",
+      JSON.stringify({ ...FULL_MAIL_CONFIG, enabled: false }),
+    );
+
+    // 邀请 → 公开填表（弱化实例表单可省邮箱；带上个人邮箱走历史兼容路径）
+    const created = await app.request(
+      'https://team.example.com/api/admin/invites',
+      {
+        method: 'POST',
+        headers: { cookie: adminCookie, 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      },
+      env,
+    );
+    expect(created.status).toBe(201);
+    const { inviteUrl } = (await created.json()) as { inviteUrl: string };
+    const token = inviteUrl.split('/invite/')[1]!;
+    const tokenHash = await hashOneTimeToken(token);
+    const applied = await app.request(
+      `https://team.example.com/api/invite/${token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          displayName: '新人',
+          emailPrefix: 'u_new',
+          personalEmail: 'new@personal.example',
+        }),
+      },
+      env,
+    );
+    expect(applied.status).toBe(200);
+
+    // 批准：弱化实例批准即激活——不开户、不建激活行、不发激活邮件
+    const approved = await app.request(
+      `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toEqual({ status: 'approved', email: null });
+
+    // 同实例另一条发信接线：模块启停广播（module_toggled 渠道位只站内，装配口照样过开关）
+    const toggled = await app.request(
+      'https://team.example.com/api/admin/modules/hello/toggle',
+      {
+        method: 'POST',
+        headers: { cookie: adminCookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      },
+      env,
+    );
+    expect(toggled.status).toBe(200);
+
+    // 核心断言（#167）：整链没装配过发信口，一封都没尝试发
+    expect(factory).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    expect(db.query("SELECT id FROM audit_log WHERE action = 'notification_email_failed'")).toEqual(
+      [],
+    );
+
+    // 站内轴不受影响：invite_pending（管理员）+ invite_result（悬挂个人邮箱）+ module_toggled×2
+    expect(
+      db
+        .query<{ type: string }>('SELECT type FROM notifications ORDER BY rowid')
+        .map((row) => row.type),
+    ).toEqual(['invite_pending', 'invite_result', 'module_toggled', 'module_toggled']);
+    // 弱化实例全链：零开户（无 account_ready）、零激活行
+    expect(db.query("SELECT id FROM notifications WHERE type = 'account_ready'")).toEqual([]);
+    expect(db.first<{ count: number }>('SELECT COUNT(*) AS count FROM invite_activations')).toEqual(
+      { count: 0 },
+    );
+    expect(
+      db.first<{ status: string }>('SELECT status FROM invites WHERE token_hash = ?', tokenHash),
+    ).toEqual({ status: 'approved' });
   });
 });
