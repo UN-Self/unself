@@ -70,6 +70,8 @@ export interface ChatStore {
   closeSockets(): void
   /** 上传附件并返回引用（composer 调用）。 */
   uploadFile(file: File): Promise<Message['attachment']>
+  /** reactive 状态源：组件/接线读动态字段一律走这里（顶层摊平仅数组引用兼容旧测试）。 */
+  readonly state: ChatStoreInternals
 }
 
 /** 内部 reactive 形状（store 原样暴露）。 */
@@ -160,6 +162,8 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
 
   const store: ChatStore = {
     ...state,
+
+    state,
 
     loadChannels: async () => {
       state.channelsState = 'loading'
@@ -349,9 +353,7 @@ export function attachInboxSocket(
 ): { close(): void } | null {
   const token = getToken()
   if (!token) return null
-  return api.openRoomSocket === api.openRoomSocket
-    ? openInbox(api, token, store)
-    : null
+  return openInbox(api, token, store)
 }
 
 function openInbox(api: ChatApi, token: string, store: ChatStore): { close(): void } {
