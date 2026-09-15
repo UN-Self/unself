@@ -180,7 +180,10 @@ export function requireSetSuccess(
   if (failure && typeof failure === 'object') {
     const { description, type } = failure as { description?: string; type?: string };
     const reason = description ?? type ?? '未知错误';
-    if (type === 'alreadyExists') {
+    if (type === 'alreadyExists' || type === 'primaryKeyViolation') {
+      // 0.16.20 真机实测（2026-09-15，mail.unself.cn，#189 复测抓包）：同名建号冲突回
+      // notCreated{type:'primaryKeyViolation',properties:['email']}（非 alreadyExists）；
+      // 两者都归 ACCOUNT_EXISTS，invites/#190 B7 才能按 409 可恢复冲突判定。
       throw new MailProvisionerError(
         'ACCOUNT_EXISTS',
         `Stalwart JMAP ${callId} 写入失败：${reason}`,

@@ -229,6 +229,23 @@ describe('postJmap（JMAP client）', () => {
         'new1',
       ),
     ).toThrow(expect.objectContaining({ code: 'ACCOUNT_EXISTS' }));
+    // 0.16.20 真机实测（2026-09-15 抓包，#189 复测）：同名建号冲突实际形状是
+    // type='primaryKeyViolation'、properties=['email']（非 alreadyExists），同样必须归 ACCOUNT_EXISTS（#190 B7 判定依赖）
+    expect(() =>
+      requireSetSuccess(
+        {
+          notCreated: {
+            n1: {
+              type: 'primaryKeyViolation',
+              properties: ['email'],
+              objectId: { object: 'Account', id: 'y' },
+            },
+          },
+        },
+        'x:Account/set',
+        'n1',
+      ),
+    ).toThrow(expect.objectContaining({ code: 'ACCOUNT_EXISTS' }));
     expect(() =>
       requireSetSuccess(
         {
