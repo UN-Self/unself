@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { MailProvisioner } from '@unself/contracts';
 import { MailProvisionerError } from '@unself/contracts';
+import type { MailMessage } from '@unself/mail-smtp';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';
 import { generateInstanceKeyPair } from '../src/keys';
+import { hashOneTimeToken } from '../src/one-time-token';
 import { createSessionToken } from '../src/session';
 import { createCoreDb, type CoreTestDb } from './test-factory';
 
@@ -85,6 +87,15 @@ function fakeProvisioner(calls: string[]): MailProvisioner {
     resetPassword: async () => undefined,
   };
 }
+
+/** 完整 SMTP 段（settings 契约；不注入假 sender 时足以装配真发信口）。 */
+const FULL_MAIL_CONFIG = {
+  host: 'smtp.example.com',
+  port: 465,
+  username: 'bot',
+  password: 'secret',
+  from: 'no-reply@example.com',
+};
 
 describe('管理端成员生命周期（#49）', () => {
   it('管理员读取全量成员字段；普通成员不能访问管理域', async () => {
@@ -306,6 +317,113 @@ describe('管理端成员生命周期（#49）', () => {
     }
     // 审计只在成员动作起点落过一次（disable 成功于首次翻转前已落）；此处只保证联动异常后不误报 enable 审计
     expect(calls).toEqual([]);
+
+    // #188 S5：失败联动逐次落 audit（方向 + 操作人 + 目标邮箱 + 错误分类），成功路径不受影响
+    const failureRows = db.query<{ actor: string; action: string; target: string | null }>(
+      "SELECT actor, action, target FROM audit_log WHERE action IN ('member_disable_failed', 'member_enable_failed') ORDER BY id",
+    );
+    expect(failureRows).toHaveLength(6);
+    expect(failureRows.map((row) => row.action)).toEqual([
+      'member_disable_failed',
+      'member_enable_failed',
+      'member_disable_failed',
+      'member_enable_failed',
+      'member_disable_failed',
+      'member_enable_failed',
+    ]);
+    expect(failureRows.every((row) => row.actor === 'u_admin')).toBe(true);
+    expect(failureRows.every((row) => row.target?.includes('member@example.com'))).toBe(true);
+    // 三类错误的分类都进 target 文本（409 账户不存在 / 502 认证 / 502 其它）
+    expect(failureRows[0]?.target).toContain('HTTP 409');
+    expect(failureRows[0]?.target).toContain('Stalwart 中找不到账户');
+    expect(failureRows[2]?.target).toContain('HTTP 502');
+    expect(failureRows[2]?.target).toContain('HTTP 401 Unauthorized');
+    expect(failureRows[4]?.target).toContain('网络错误');
+    // 状态翻转的成功审计仍在（失败审计是额外一行，不替掉原行）
+    expect(
+      db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM audit_log WHERE action IN ('member_disabled', 'member_enabled')",
+      ),
+    ).toEqual({ count: 6 });
+  });
+
+  it('#188 S4：重发激活邮件：站内 payload 只有脱敏标记，邮件正文拿到真链接（重签旧令牌作废）', async () => {
+    const sent: MailMessage[] = [];
+    const app = createApp({
+      createMailSender: () => ({
+        send: async (message: MailMessage) => {
+          sent.push(message);
+        },
+      }),
+    });
+    const { env, db, adminCookie } = await envFor();
+    db.run(
+      'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+      'mail',
+      JSON.stringify(FULL_MAIL_CONFIG),
+    );
+    // 内置登录成员 + 已批准的邀请 + 一条待用激活令牌（重发前状态）
+    db.run(
+      "UPDATE users SET issuer = 'builtin', personal_email = 'newbie@personal.example' WHERE id = 'u_member'",
+    );
+    const oldTokenHash = await hashOneTimeToken('old-token-plaintext');
+    db.run(
+      "INSERT INTO invites (token_hash, status, personal_email, email_prefix, display_name, expires_at) VALUES ('invite-hash-1', 'approved', 'newbie@personal.example', 'newbie', '新人', datetime('now', '+1 day'))",
+    );
+    db.run(
+      "INSERT INTO invite_activations (token_hash, invite_token_hash, email, expires_at) VALUES (?, 'invite-hash-1', 'newbie@example.com', datetime('now', '+1 day'))",
+      oldTokenHash,
+    );
+
+    const res = await app.request(
+      'https://team.example.com/api/admin/members/u_member/resend-activation',
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    // 站内行：悬挂在邀请邮箱下，payload 只有收件人 + 脱敏标记
+    const rows = db.query<{ payload: string; invited_email: string; user_id: string | null }>(
+      "SELECT payload, invited_email, user_id FROM notifications WHERE type = 'account_ready'",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ invited_email: 'newbie@personal.example', user_id: null });
+    expect(Object.keys(JSON.parse(rows[0]!.payload) as Record<string, unknown>).sort()).toEqual([
+      'activateLinkGenerated',
+      'email',
+    ]);
+    expect(rows[0]?.payload).not.toMatch(/https?:\/\/|\/activate\/|old-token-plaintext/);
+
+    // 邮件：链接照旧可用的真令牌——明文只在邮件正文里，库里只有哈希（且是重签后的新行）
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.to).toBe('newbie@personal.example');
+    const linkToken = /\/activate\/(\S+)/.exec(sent[0]?.text ?? '')?.[1];
+    expect(linkToken).toBeTruthy();
+    expect(
+      db.first(
+        'SELECT email, used_at FROM invite_activations WHERE token_hash = ?',
+        await hashOneTimeToken(linkToken!),
+      ),
+    ).toEqual({ email: 'newbie@example.com', used_at: null });
+    expect(
+      db.first<{ used_at: string }>(
+        'SELECT used_at FROM invite_activations WHERE token_hash = ?',
+        oldTokenHash,
+      )?.used_at,
+    ).toMatch(/^invalidated@/);
+    // 库里没有明文令牌（站内 payload 与库全表都不含邮件里的那串）
+    expect(
+      db
+        .query<{ payload: string }>('SELECT payload FROM notifications')
+        .some((row) => row.payload.includes(linkToken!)),
+    ).toBe(false);
+    expect(db.first('SELECT actor, action FROM audit_log WHERE action = ?', 'activation_resent')).toEqual(
+      {
+        actor: 'u_admin',
+        action: 'activation_resent',
+      },
+    );
   });
 
   it('admin 守卫拒绝普通成员，setup-token 公开签发口已删（#165）', async () => {

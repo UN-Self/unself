@@ -3,7 +3,11 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 
 import { audit } from '../services/audit';
-import { classifyProvisionerFailure, genericFailureDetail } from '../services/provisioner-errors';
+import {
+  classifyProvisionerFailure,
+  genericFailureDetail,
+  type ClassifiedProvisionerFailure,
+} from '../services/provisioner-errors';
 import { buildStoredCredential } from '../services/passwords';
 import {
   configuredMailProvisioner,
@@ -99,9 +103,10 @@ async function updateMemberStatus(
   if (!member) {
     return c.json({ error: 'member not found' }, 404);
   }
+  const actorId = (await readSession(c))!.uid;
   await audit(
     c.env.CORE_DB,
-    (await readSession(c))!.uid,
+    actorId,
     status === 'disabled' ? 'member_disabled' : 'member_enabled',
     member.id,
   );
@@ -110,7 +115,8 @@ async function updateMemberStatus(
     if (provisioner) {
       // 邮件轴联动失败不再裸 500（#115）：按错误轴映射——ACCOUNT_NOT_FOUND→409（Stalwart 后台核对）、
       // 认证失败（HTTP 401/403）→502+API Key 指引、其它→502 透传原因。成员状态翻转已落库，不回滚：
-      // 修好 Stalwart 后反向 enable/disable 或后台手工对齐即可。
+      // 修好 Stalwart 后反向 enable/disable 或后台手工对齐即可；同时落一行失败审计（#188 S5），
+      // 否则「库说 disabled、邮箱还在用」的偏差在后台无痕可查。
       try {
         if (status === 'disabled') {
           await provisioner.disableAccount({ email: member.email });
@@ -119,9 +125,28 @@ async function updateMemberStatus(
         }
       } catch (error) {
         const failure = classifyProvisionerFailure(error, member.email);
+        await audit(
+          c.env.CORE_DB,
+          actorId,
+          status === 'disabled' ? 'member_disable_failed' : 'member_enable_failed',
+          memberSyncFailureTarget(member.email, failure, error),
+        );
         return c.json({ error: 'member sync failed', detail: failure.detail }, failure.status);
       }
     }
   }
   return c.json({ id: member.id, status: member.status });
+}
+
+/**
+ * 联动失败审计的 target（#188 S5）：目标邮箱 + 分类映射 + 原始原因（人话外壳归 HTTP 响应体）。
+ * 只进 audit_log，不改任何签名/表结构。
+ */
+function memberSyncFailureTarget(
+  email: string,
+  failure: ClassifiedProvisionerFailure,
+  error: unknown,
+): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  return `${email}（HTTP ${failure.status}）：${reason}`;
 }
