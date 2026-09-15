@@ -121,16 +121,28 @@ describe('AdminLayout 守卫（#17）', () => {
   })
 })
 
-describe('MembersPage 停用/启用（#17）', () => {
+describe('MembersPage 停用/启用（#17 + #192 F6）', () => {
   beforeEach(() => {
     // 每例新对象：用例内的状态翻转不得泄漏到下一例
     vi.mocked(fetchMembers).mockResolvedValue([{ ...adminMember }])
     vi.mocked(setMemberStatus).mockResolvedValue({})
     vi.mocked(resetMemberPassword).mockResolvedValue(undefined)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    // #192 F6：原生弹窗已退场；两个 spy 返回「取消」值，旧路径一旦回归用例必红
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+    vi.spyOn(window, 'prompt').mockReturnValue(null)
   })
 
-  it('confirm 停用 → 发出 disable 请求 → 状态徽章翻转为已停用', async () => {
+  /** 站内确认弹层（#192 F6）内按钮：按文本定位，避开与行内同名按钮相撞。 */
+  async function clickDialogButton(wrapper: ReturnType<typeof mount>, label: string): Promise<void> {
+    const dialog = wrapper.find('.u-confirm')
+    expect(dialog.exists()).toBe(true)
+    const btn = dialog.findAll('button').find((b) => b.text() === label)
+    expect(btn).toBeDefined()
+    await btn!.trigger('click')
+    await flushPromises()
+  }
+
+  it('停用：行内点「停用」只开站内弹层不发请求，弹层确认后才 disable → 徽章翻为已停用', async () => {
     const wrapper = mount(MembersPage)
     await flushPromises()
 
@@ -139,25 +151,44 @@ describe('MembersPage 停用/启用（#17）', () => {
     await disableBtn!.trigger('click')
     await flushPromises()
 
+    // 站内弹层已开，且确认前不发请求（与旧 confirm 行为一致：二次确认语义保留）
+    expect(wrapper.find('.u-confirm').text()).toContain('确定停用')
+    expect(window.confirm).not.toHaveBeenCalled()
+    expect(setMemberStatus).not.toHaveBeenCalled()
+
+    await clickDialogButton(wrapper, '停用')
+
     expect(setMemberStatus).toHaveBeenCalledWith('u1', 'disabled')
     expect(wrapper.text()).toContain('已停用')
   })
 
-  it('confirm 取消 → 不发请求，状态不变', async () => {
-    vi.mocked(setMemberStatus).mockClear()
-    vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('停用：弹层点取消 → 不发请求，状态不变', async () => {
     const wrapper = mount(MembersPage)
     await flushPromises()
 
-    const disableBtn = wrapper.findAll('button').find((b) => b.text().includes('停用'))
-    await disableBtn!.trigger('click')
+    await wrapper.findAll('button').find((b) => b.text().includes('停用'))!.trigger('click')
     await flushPromises()
+    await clickDialogButton(wrapper, '取消')
 
     expect(setMemberStatus).not.toHaveBeenCalled()
     expect(wrapper.text()).not.toContain('已停用')
   })
 
-  it('已停用成员显示启用按钮，点击直接启用（无 confirm）', async () => {
+  it('停用：弹层 Esc 关闭（不发请求，弹层退场）', async () => {
+    const wrapper = mount(MembersPage)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((b) => b.text().includes('停用'))!.trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.u-confirm').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    expect(wrapper.find('.u-confirm').exists()).toBe(false)
+    expect(setMemberStatus).not.toHaveBeenCalled()
+  })
+
+  it('已停用成员显示启用按钮，点击直接启用（无弹层、无原生确认）', async () => {
     vi.mocked(fetchMembers).mockResolvedValue([{ ...adminMember, status: 'disabled' as const }])
     const wrapper = mount(MembersPage)
     await flushPromises()
@@ -166,13 +197,13 @@ describe('MembersPage 停用/启用（#17）', () => {
     await enableBtn!.trigger('click')
     await flushPromises()
 
+    expect(wrapper.find('.u-confirm').exists()).toBe(false)
     expect(window.confirm).not.toHaveBeenCalled()
     expect(setMemberStatus).toHaveBeenCalledWith('u1', 'active')
     expect(wrapper.text()).toContain('正常')
   })
 
-  it('重置密码：prompt 输入新密码 → resetMemberPassword 被调 → 成功提示可见', async () => {
-    vi.spyOn(window, 'prompt').mockReturnValue('new-password-9')
+  it('重置密码：弹层内两次一致（≥8 位）→ resetMemberPassword 被调 → 成功提示可见', async () => {
     const wrapper = mount(MembersPage)
     await flushPromises()
 
@@ -181,34 +212,69 @@ describe('MembersPage 停用/启用（#17）', () => {
     await resetBtn!.trigger('click')
     await flushPromises()
 
+    // 站内输入替代 window.prompt（#192 F6）
+    expect(window.prompt).not.toHaveBeenCalled()
+    await wrapper.find('#u-confirm-password').setValue('new-password-9')
+    await wrapper.find('#u-confirm-password-2').setValue('new-password-9')
+    await clickDialogButton(wrapper, '重置')
+
     expect(resetMemberPassword).toHaveBeenCalledWith('u1', 'new-password-9')
     expect(wrapper.find('[role="status"]').text()).toContain('已重置')
   })
 
-  it('重置密码取消（prompt 空返回）：不发请求', async () => {
-    vi.mocked(resetMemberPassword).mockClear()
-    vi.spyOn(window, 'prompt').mockReturnValue(null)
+  it('重置密码：长度不足 8 位 → 人话提示 + 不发请求', async () => {
     const wrapper = mount(MembersPage)
     await flushPromises()
 
-    const resetBtn = wrapper.findAll('button').find((b) => b.text().includes('重置密码'))
-    await resetBtn!.trigger('click')
+    await wrapper.findAll('button').find((b) => b.text().includes('重置密码'))!.trigger('click')
     await flushPromises()
+
+    await wrapper.find('#u-confirm-password').setValue('short')
+    await wrapper.find('#u-confirm-password-2').setValue('short')
+    await clickDialogButton(wrapper, '重置')
+
+    expect(wrapper.find('.u-confirm').text()).toContain('密码长度至少 8 位')
+    expect(resetMemberPassword).not.toHaveBeenCalled()
+  })
+
+  it('重置密码：两次输入不一致 → 人话提示 + 不发请求', async () => {
+    const wrapper = mount(MembersPage)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((b) => b.text().includes('重置密码'))!.trigger('click')
+    await flushPromises()
+
+    await wrapper.find('#u-confirm-password').setValue('new-password-9')
+    await wrapper.find('#u-confirm-password-2').setValue('new-password-8')
+    await clickDialogButton(wrapper, '重置')
+
+    expect(wrapper.find('.u-confirm').text()).toContain('两次输入的密码不一致')
+    expect(resetMemberPassword).not.toHaveBeenCalled()
+  })
+
+  it('重置密码：弹层点取消 → 不发请求', async () => {
+    const wrapper = mount(MembersPage)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((b) => b.text().includes('重置密码'))!.trigger('click')
+    await flushPromises()
+    await clickDialogButton(wrapper, '取消')
 
     expect(resetMemberPassword).not.toHaveBeenCalled()
   })
 
   it('重置密码 409（OIDC 用户）：后端人话行内可见', async () => {
-    vi.spyOn(window, 'prompt').mockReturnValue('new-password-9')
     vi.mocked(resetMemberPassword).mockRejectedValue(
       Object.assign(new Error('该成员无内置登录'), { status: 409 }),
     )
     const wrapper = mount(MembersPage)
     await flushPromises()
 
-    const resetBtn = wrapper.findAll('button').find((b) => b.text().includes('重置密码'))
-    await resetBtn!.trigger('click')
+    await wrapper.findAll('button').find((b) => b.text().includes('重置密码'))!.trigger('click')
     await flushPromises()
+    await wrapper.find('#u-confirm-password').setValue('new-password-9')
+    await wrapper.find('#u-confirm-password-2').setValue('new-password-9')
+    await clickDialogButton(wrapper, '重置')
 
     expect(wrapper.find('[role="alert"]').text()).toContain('该成员无内置登录')
   })
@@ -514,7 +580,8 @@ describe('InvitesPage 审批与生成（#18）', () => {
     vi.mocked(createInvite).mockResolvedValue({ inviteUrl: 'https://unself.example.com/invite/abc123' })
     vi.mocked(approveInvite).mockResolvedValue({ status: 'approved', email: 'alice@example.com' })
     vi.mocked(rejectInvite).mockResolvedValue({ status: 'rejected' })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    // #192 F6：拒绝改站内确认，原生 confirm 已退场；spy 返回「取消」值——旧路径回归用例必红
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
   })
 
   it('列表：五态中文徽章可见，空态显示「还没有邀请」', async () => {
@@ -570,7 +637,8 @@ describe('InvitesPage 审批与生成（#18）', () => {
     expect(buttonTexts(wrapper).some((t) => t.includes('批准'))).toBe(false)
   })
 
-  it('批准结果为 null（弱化实例）→ 显示首登匹配提示', async () => {
+  it('批准结果为 null（弱化实例 · OIDC 首登者：无邮箱前缀）→ 显示个人邮箱匹配提示', async () => {
+    vi.mocked(fetchInvites).mockResolvedValue([{ ...pendingInvite, email_prefix: '' }])
     vi.mocked(approveInvite).mockResolvedValue({ status: 'approved', email: null })
     const wrapper = mount(InvitesPage)
     await flushPromises()
@@ -578,7 +646,19 @@ describe('InvitesPage 审批与生成（#18）', () => {
     await wrapper.findAll('button').find((b) => b.text().includes('批准'))!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已批准（弱化实例：首次登录按个人邮箱匹配）')
+    expect(wrapper.text()).toContain('已批准（弱化实例：首次登录按个人邮箱匹配入职）')
+  })
+
+  it('批准结果为 null（弱化实例 · 内置注册者：有邮箱前缀）→ 显示「用填表时设置的密码登录」', async () => {
+    vi.mocked(approveInvite).mockResolvedValue({ status: 'approved', email: null })
+    const wrapper = mount(InvitesPage)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((b) => b.text().includes('批准'))!.trigger('click')
+    await flushPromises()
+
+    // F8：内置注册者已自设密码，不存在首登匹配环节
+    expect(wrapper.text()).toContain('已批准：新人用填表时设置的用户名密码登录即可')
   })
 
   it('批准失败 → 行内显示后端 detail 人话，状态不变', async () => {
@@ -596,29 +676,58 @@ describe('InvitesPage 审批与生成（#18）', () => {
     expect(buttonTexts(wrapper).some((t) => t.includes('批准'))).toBe(true)
   })
 
-  it('拒绝：confirm true → rejectInvite(id) → 状态翻为已拒绝', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  it('拒绝：行内点「拒绝」只开站内弹层（含申请人 + 不可撤销），确认后才 rejectInvite → 状态翻为已拒绝', async () => {
     const wrapper = mount(InvitesPage)
     await flushPromises()
 
     await wrapper.findAll('button').find((b) => b.text().includes('拒绝'))!.trigger('click')
     await flushPromises()
 
-    expect(String(confirmSpy.mock.calls[0]![0])).toContain('小艾')
+    // 站内确认替代 window.confirm（#192 F6）：确认前不发请求
+    expect(window.confirm).not.toHaveBeenCalled()
+    expect(rejectInvite).not.toHaveBeenCalled()
+    const dialog = wrapper.find('.u-confirm')
+    expect(dialog.text()).toContain('小艾')
+    expect(dialog.text()).toContain('拒绝后不可撤销')
+
+    await dialog.findAll('button').find((b) => b.text() === '拒绝')!.trigger('click')
+    await flushPromises()
+
     expect(rejectInvite).toHaveBeenCalledWith('tok-pending')
     expect(wrapper.text()).toContain('已拒绝')
   })
 
-  it('拒绝：confirm false → 不发请求，状态不变', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('拒绝：弹层取消 → 不发请求，状态不变', async () => {
     const wrapper = mount(InvitesPage)
     await flushPromises()
 
     await wrapper.findAll('button').find((b) => b.text().includes('拒绝'))!.trigger('click')
     await flushPromises()
+    await wrapper.find('.u-confirm').findAll('button').find((b) => b.text() === '取消')!.trigger('click')
+    await flushPromises()
 
     expect(rejectInvite).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('待审批')
+  })
+
+  it('生成弹层：打开焦点入内 + Esc 关闭（#192 F5）', async () => {
+    const wrapper = mount(InvitesPage)
+    await flushPromises()
+
+    const openBtn = wrapper.findAll('button').find((b) => b.text().includes('生成邀请'))!
+    // jsdom 点按钮不自动聚焦，手工模拟触发元素已聚焦（与真实浏览器一致）
+    ;(openBtn.element as HTMLElement).focus()
+    await openBtn.trigger('click')
+    await flushPromises()
+
+    const layer = wrapper.find('[role="dialog"]')
+    expect(layer.exists()).toBe(true)
+    expect(layer.element.contains(document.activeElement)).toBe(true)
+
+    await layer.trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
   })
 
   it('生成：默认 7 天 → createInvite(7) → 链接与一次性提示可见', async () => {

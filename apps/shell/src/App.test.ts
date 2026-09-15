@@ -103,7 +103,7 @@ async function settle() {
  */
 let router: Router
 
-async function mountApp() {
+async function mountApp(attach = false) {
   router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -114,7 +114,11 @@ async function mountApp() {
   })
   await router.push('/')
   await router.isReady()
-  return mount(App, { global: { plugins: [router] } })
+  // attach=true：真实 DOM 挂载（焦点行为断言需要 document.activeElement 生效）
+  return mount(App, {
+    global: { plugins: [router] },
+    ...(attach ? { attachTo: document.body } : {}),
+  })
 }
 
 function currentPath(): string {
@@ -237,10 +241,10 @@ describe('App.vue 退出登录行为', () => {
   const LONG_NAME = 'handy@unself.demo.example'
   const SHORT_NAME = '黄一'
 
-  async function mountAs(name: string) {
+  async function mountAs(name: string, attach = false) {
     vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name }))
     vi.mocked(fetchEnabledModules).mockResolvedValue([])
-    const wrapper = await mountApp()
+    const wrapper = await mountApp(attach)
     await settle()
     return wrapper
   }
@@ -301,6 +305,30 @@ describe('App.vue 退出登录行为', () => {
 
     await wrapper.find('.shell-sheet-backdrop').trigger('click')
     expect(wrapper.find('.shell-sheet').exists()).toBe(false)
+    expect(logout).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('移动端动作单：打开焦点入内 + Esc 关闭 + 焦点回「我的」标签（#192 F5）', async () => {
+    const wrapper = await mountAs(SHORT_NAME, true)
+
+    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')!
+    // jsdom 点按钮不自动聚焦，手工模拟触发元素已聚焦（与真实浏览器一致）
+    ;(meTab.element as HTMLElement).focus()
+    await meTab.trigger('click')
+    await flushPromises()
+
+    const sheet = wrapper.find('.shell-sheet')
+    expect(sheet.exists()).toBe(true)
+    // 打开时焦点入内（弹层内可聚焦元素）
+    expect(sheet.element.contains(document.activeElement)).toBe(true)
+
+    await sheet.trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    expect(wrapper.find('.shell-sheet').exists()).toBe(false)
+    // 关闭后焦点回触发元素
+    expect(document.activeElement).toBe(meTab.element)
     expect(logout).not.toHaveBeenCalled()
     wrapper.unmount()
   })
