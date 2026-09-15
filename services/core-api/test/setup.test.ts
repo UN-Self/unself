@@ -6,6 +6,7 @@ import { createApp } from '../src/index';
 const app = createApp();
 import { generateInstanceKeyPair } from '../src/keys';
 import { resetOidcCaches } from '../src/oidc';
+import { consumeSetupToken, releaseSetupToken } from '../src/setup';
 import { createCoreDb, type CoreTestDb } from './test-factory';
 
 /** SQLite `datetime('now')` 落库文本语义（UTC，无 T/Z，非 ISO）。 */
@@ -125,7 +126,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     const body = (await res.json()) as { ok: boolean; user: { role: string; name: string } };
     expect(body.ok).toBe(true);
     expect(body.user).toMatchObject({ role: 'admin', name: 'boss' });
-    // 真库：内置 admin + 封箱 + 审计；token 只验不消费（消费/used_by 记录见 #171）
+    // 真库：内置 admin + 封箱 + 审计
     expect(
       db.first<{ role: string; issuer: string }>("SELECT role, issuer FROM users WHERE display_name = 'boss'"),
     ).toEqual({ role: 'admin', issuer: 'builtin' });
@@ -133,9 +134,15 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     expect(
       db.query<{ action: string }>("SELECT action FROM audit_log WHERE action = 'builtin_admin_created'"),
     ).toHaveLength(1);
-    expect(db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', token)).toEqual({
-      used_at: null,
-    });
+    // #171：封箱时消费 token——used_by 记新建 admin 的 uid，used_at 非空（一次性语义落实）
+    const adminRow = db.first<{ id: string }>("SELECT id FROM users WHERE display_name = 'boss'");
+    const tokenRow = db.first<{ used_at: string | null; used_by: string | null }>(
+      'SELECT used_at, used_by FROM setup_tokens WHERE token = ?',
+      token,
+    );
+    expect(tokenRow?.used_at).toMatch(DATETIME_TEXT);
+    expect(tokenRow?.used_by).toBe(adminRow?.id);
+    expect(tokenRow?.used_by).toMatch(/^u_[0-9a-f]{32}$/);
 
     // 取法复用 activate：x-setup-token 头同样开门（独立实例，验证头部路径）
     const { env: env2, db: db2 } = await envFor();
@@ -150,6 +157,104 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
       env2,
     );
     expect(viaHeader.status).toBe(201);
+    // 头部路径同样消费并记 used_by
+    const headerAdmin = db2.first<{ id: string }>("SELECT id FROM users WHERE display_name = 'boss'");
+    expect(
+      db2.first<{ used_at: string | null; used_by: string | null }>(
+        'SELECT used_at, used_by FROM setup_tokens WHERE token = ?',
+        headerToken,
+      ),
+    ).toMatchObject({ used_by: headerAdmin?.id });
+    expect(
+      db2.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', headerToken)
+        ?.used_at,
+    ).toMatch(DATETIME_TEXT);
+  });
+
+  it('并发同一 token 双 builtin-admin：仅一次 201，另一次 403 已消费，只落一个 admin（#171 验收 3）', async () => {
+    const { env, db } = await envFor();
+    const token = issueSetupToken(db);
+    const open = () =>
+      app.request(
+        `https://team.example.com/api/setup/builtin-admin?token=${token}`,
+        { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(BUILTIN_BODY) },
+        env,
+      );
+    const [a, b] = await Promise.all([open(), open()]);
+    const statuses = [a.status, b.status].sort();
+    // 契约：恰好一次 201；另一次是 403「invalid or already-used setup token」——不是用户名撞名 409
+    // （消费在建号之前，第二请求根本走不到 UNIQUE 硬闸）
+    expect(statuses).toEqual([201, 403]);
+    const loser = a.status === 403 ? a : b;
+    expect(await loser.json()).toEqual({ error: 'invalid or already-used setup token' });
+    // 真库：只有一个内置 admin、审计仅一条，token 恰好消费一次且 used_by 指向它
+    expect(db.first<{ c: number }>("SELECT COUNT(*) AS c FROM users WHERE issuer = 'builtin'")?.c).toBe(1);
+    const admin = db.first<{ id: string }>("SELECT id FROM users WHERE issuer = 'builtin'");
+    const tokenRow = db.first<{ used_at: string | null; used_by: string | null }>(
+      'SELECT used_at, used_by FROM setup_tokens WHERE token = ?',
+      token,
+    );
+    expect(tokenRow?.used_at).toMatch(DATETIME_TEXT);
+    expect(tokenRow?.used_by).toBe(admin?.id);
+    expect(
+      db.query<{ action: string }>("SELECT action FROM audit_log WHERE action = 'builtin_admin_created'"),
+    ).toHaveLength(1);
+  });
+
+  it('builtin-admin 撞名 409 不烧 token（#171）：软闸失败后同一 token 换名仍可 201', async () => {
+    const { env, db } = await envFor();
+    // 先占位一个内置账号（真行：users + builtin_credentials，软闸 JOIN 才认）
+    db.run(
+      "INSERT INTO users (id, issuer, sub, display_name, role, status) VALUES ('u_taken','builtin','u_taken','taken','admin','active')",
+    );
+    db.run("INSERT INTO builtin_credentials (user_id, username, password_hash) VALUES ('u_taken','boss','x')");
+    const token = issueSetupToken(db);
+
+    const taken = await app.request(
+      `https://team.example.com/api/setup/builtin-admin?token=${token}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(BUILTIN_BODY) },
+      env,
+    );
+    expect(taken.status).toBe(409);
+    expect(await taken.json()).toEqual({ error: '该用户名已被占用' });
+    // 撞名失败不消费 token（否则同一链接直接作废，实例卡死）
+    expect(db.first('SELECT used_at, used_by FROM setup_tokens WHERE token = ?', token)).toEqual({
+      used_at: null,
+      used_by: null,
+    });
+
+    // 换名重试 → 201，used_by 记新 admin uid
+    const retry = await app.request(
+      `https://team.example.com/api/setup/builtin-admin?token=${token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...BUILTIN_BODY, username: 'boss2' }),
+      },
+      env,
+    );
+    expect(retry.status).toBe(201);
+    const admin = db.first<{ id: string }>("SELECT id FROM users WHERE display_name = 'boss2'");
+    expect(db.first('SELECT used_by FROM setup_tokens WHERE token = ?', token)).toEqual({ used_by: admin!.id });
+  });
+
+  it('releaseSetupToken：仅归还自己预占的 token（used_by 不符不动），归还后回到未消费（#171 硬闸补偿）', async () => {
+    const { db } = await envFor();
+    const token = issueSetupToken(db);
+
+    expect(await consumeSetupToken(db.d1, token, 'u_owner')).toBe(true);
+    // 他人 uid 误放 → false，行保持已消费（不误放别人的 token）
+    expect(await releaseSetupToken(db.d1, token, 'u_other')).toBe(false);
+    expect(db.first('SELECT used_at, used_by FROM setup_tokens WHERE token = ?', token)).toMatchObject({
+      used_by: 'u_owner',
+    });
+    // 本人 uid → true，used_at/used_by 双清 → token 可再次消费
+    expect(await releaseSetupToken(db.d1, token, 'u_owner')).toBe(true);
+    expect(db.first('SELECT used_at, used_by FROM setup_tokens WHERE token = ?', token)).toEqual({
+      used_at: null,
+      used_by: null,
+    });
+    expect(await consumeSetupToken(db.d1, token, 'u_owner')).toBe(true);
   });
 
   it('封箱后全端点 409（#165 验收 4）：builtin-admin / oidc-config / activate', async () => {
@@ -233,14 +338,15 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     expect(
       db.first<{ value: string }>("SELECT value FROM instance_config WHERE key = 'setup_done'"),
     ).toEqual({ value: '1' });
-    // 真库断言：token 已消费，used_at 是 SQLite datetime 文本（非 ISO 带 T/Z）
-    const tokenRow = db.first<{ created_at: string; used_at: string | null }>(
-      'SELECT created_at, used_at FROM setup_tokens WHERE token = ?',
+    // 真库断言：token 已消费，used_at 是 SQLite datetime 文本（非 ISO 带 T/Z），used_by = 提权用户 uid
+    const tokenRow = db.first<{ created_at: string; used_at: string | null; used_by: string | null }>(
+      'SELECT created_at, used_at, used_by FROM setup_tokens WHERE token = ?',
       token,
     );
     expect(tokenRow).not.toBeNull();
     expect(tokenRow!.created_at).toMatch(DATETIME_TEXT);
     expect(tokenRow!.used_at).toMatch(DATETIME_TEXT);
+    expect(tokenRow!.used_by).toBe('u_1');
 
     // 4) 同一 token 第二次使用被拒（验收：同一链接第二次使用被拒）
     const replay = await app.request(
@@ -457,8 +563,11 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     expect(db.first<{ role: string }>('SELECT role FROM users WHERE id = ?', 'u_1')).toEqual({ role: 'admin' });
     expect(db.first('SELECT value FROM instance_config WHERE key = ?', 'setup_done')).toEqual({ value: '1' });
     expect(
-      db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', token),
-    ).not.toEqual({ used_at: null });
+      db.first<{ used_at: string | null; used_by: string | null }>(
+        'SELECT used_at, used_by FROM setup_tokens WHERE token = ?',
+        token,
+      ),
+    ).toMatchObject({ used_by: 'u_1' });
 
     // 封箱后：oidc-config / activate 全 409；公开签发口不存在（无会话 → adminGuard 401）
     const after = await app.request(

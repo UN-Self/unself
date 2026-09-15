@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 
 import { readSession } from '../session';
-import { consumeSetupToken, isSetupTokenValid } from '../setup';
+import { consumeSetupToken, isSetupTokenValid, releaseSetupToken } from '../setup';
 import { audit } from '../services/audit';
 import { isSetupDone, markSetupDone, persistOidcConfig } from '../services/instance-config';
 import { buildStoredCredential } from '../services/passwords';
@@ -77,7 +77,7 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
   });
 
   /**
-   * 激活（#55 直线流程第三步）：已登录会话 + 一次性 token（此处消费）→
+   * 激活（#55 直线流程第三步）：已登录会话 + 一次性 token（此处消费，used_by = session.uid，#171）→
    * 提权 admin + 封箱 + 审计。旧「无会话 401→loginUrl」路径已删（死锁根源）；
    * 登录在 oidc-config 落库后发起，本端点不再接受 OIDC body。
    * 已激活后一律拒绝（§6.5：已激活后访问 /setup 一律重定向，页面不复存在）。
@@ -96,7 +96,7 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
       // 无会话：纯 401（已登录是提权前提；loginUrl 路径已删，#55）
       return c.json({ error: 'authentication required' }, 401);
     }
-    const consumed = await consumeSetupToken(db, token);
+    const consumed = await consumeSetupToken(db, token, session.uid);
     if (!consumed) {
       return c.json({ error: 'invalid or already-used setup token' }, 403);
     }
@@ -111,8 +111,10 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
    * username+password → 建 admin（role=admin、status=active）+ 凭证行（batch 原子）
    * → 置 setup_done 封箱 → 审计。
    * 门禁（#165）：setup 未封箱 + 一次性 setup token（query `token` 或 `x-setup-token`，
-   * 取法/校验同 activate；未给或无效/已用一律 403）。token 只验不消费——封箱后
-   * 全端点 409，token 的消费/used_by 记录见 #171。
+   * 取法/校验同 activate；未给或无效/已用一律 403）。
+   * 消费（#171）：开户前先原子预占 token（used_by 预写待落库的 uid）——并发第二请求
+   * 在建号之前就 changes=0 → 403，严格保证「同一 token 只出一个 admin」；
+   * 预占后若硬闸撞 UNIQUE（并发同名），归还 token 再回 409（可换名重试）。
    */
   app.post('/api/setup/builtin-admin', async (c) => {
     const db = c.env.CORE_DB;
@@ -146,6 +148,11 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
     }
     const passwordHash = await buildStoredCredential(salt, proof);
     const userId = `u_${crypto.randomUUID().replace(/-/g, '')}`;
+    // 排他预占（#171）：先消费 token（used_by = 即将落库的 uid）再开户。
+    // 并发第二请求在此处 changes=0 → 403，不会走到 INSERT（也就不可能落第二个 admin）。
+    if (!(await consumeSetupToken(db, token, userId))) {
+      return c.json({ error: 'invalid or already-used setup token' }, 403);
+    }
     try {
       await db.batch([
         db
@@ -157,7 +164,9 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
       ]);
     } catch (error) {
       if (error instanceof Error && error.message.includes('UNIQUE')) {
-        // 硬闸（决策 30）：软闸与开户之间被并发写入 → 撞 UNIQUE，可恢复 409
+        // 硬闸（决策 30）：软闸与开户之间被并发写入 → 撞 UNIQUE，可恢复 409。
+        // 归还预占（否则 token 白耗、实例无 admin 又不可重试），token 回到未消费。
+        await releaseSetupToken(db, token, userId);
         return c.json({ error: '该用户名已被占用' }, 409);
       }
       throw error;
