@@ -14,6 +14,7 @@ import {
   buildTokenFirstScreen,
   chooseDomain,
   createAsker,
+  domainProblem,
   isTty,
   parseCliArgs,
   parseModulesInput,
@@ -106,6 +107,18 @@ export async function main(argv: string[] = []): Promise<Summary> {
     }
   }
   const effective = applyDecision(config, decision.domain, modulesOverride);
+  // 域名体检（#194 D3）：CLI --domain= 与配置文件 domain 两份入口在此统一拦截（九步内部
+  // runNineSteps 还有一道同样检查，双保险；这里能在开屏前给出人话错误，不浪费一次构建）。
+  if (effective.domain) {
+    const problem = domainProblem(effective.domain);
+    if (problem) {
+      out(`域名体检未通过（来源：${decision.source === 'cli' ? '--domain= 参数' : decision.source === 'config' ? 'unself.config.jsonc 的 domain' : '交互输入'}）：`);
+      out(`  ${problem}`);
+      out('拼写错误重跑解决不了：改对输入再跑（本命令幂等，不会创建任何资源）。');
+      process.exitCode = 1;
+      throw new Error(`域名体检未通过：${problem}`);
+    }
+  }
   asker.close(); // 交互终点：后续九步不再读终端
   out('──────────── 将装配 ────────────');
   out(`  域名   ${effective.domain || 'workers.dev 免费域名（自动分配）'}`);
