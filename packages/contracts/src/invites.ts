@@ -16,8 +16,9 @@ export type InvitePublicStatus = z.infer<typeof InvitePublicStatusSchema>;
 
 /**
  * `GET /api/invite/:token/status` 响应（#149）：三态 + 实例能力开关。
- * mailEnabled = instance_config 有无 `mail` 段（邮件轴能力唯一真相源）：
- * false 时邀请页不渲染邮箱字段、批准即激活（无开户动作）。
+ * mailEnabled = isMailEnabled 口径（#157 开关轴并入后）：
+ * instance_config 存在 mail 段且 enabled !== false（缺字段老数据视为开启，生产零迁移）；
+ * 无段或开关关 = 弱化实例：邀请页不渲染邮箱字段、批准即激活（无开户动作）。
  */
 export const InviteStatusResponseSchema = z.object({
   status: InvitePublicStatusSchema,
