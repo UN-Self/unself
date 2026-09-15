@@ -180,6 +180,20 @@ async function saveSettings(
       }
       continue;
     }
+    // #184：portalUrl 是**可选覆盖**（空 = 按邮箱域名推导）。因此它是本段唯一可以「清空」的字段：
+    // 显式传空串 → 删掉覆盖键（回落推导）。其余字段空串一律视为「不修改」（保持既有语义）。
+    if (field === 'portalUrl') {
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed.length > 0) {
+          mail[field] = trimmed;
+        } else {
+          delete mail[field];
+        }
+        mailChanged = true;
+      }
+      continue;
+    }
     if (typeof value === 'string' && value.length > 0 && value !== MASK) {
       mail[field] = value;
       mailChanged = true;

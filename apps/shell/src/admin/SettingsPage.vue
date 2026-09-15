@@ -38,6 +38,10 @@ const port = ref('')
 const username = ref('')
 const password = ref('')
 const from = ref('')
+/** 门户地址（#184）：应用密码说明页的跳转目标；留空则由后端按邮箱域名推导。 */
+const portalUrl = ref('')
+/** 服务端当前存的 portalUrl：用于判断「用户是否真的改了」——没动过的空值不下发，避免无配置实例凭空建 mail 段。 */
+const loadedPortalUrl = ref('')
 
 /** 已配置密钥的提示（GET 返回 '***' 即已配置）。 */
 const oidcSecretConfigured = ref(false)
@@ -81,6 +85,8 @@ function applyLoaded(s: InstanceSettings): void {
   port.value = s.mail.port === '' ? '' : String(s.mail.port)
   username.value = s.mail.username
   from.value = s.mail.from
+  portalUrl.value = s.mail.portalUrl
+  loadedPortalUrl.value = s.mail.portalUrl
   oidcSecretConfigured.value = s.oidc.clientSecret === SECRET_MASK
   apiKeyConfigured.value = s.mail.apiKey === SECRET_MASK
   passwordConfigured.value = s.mail.password === SECRET_MASK
@@ -112,6 +118,10 @@ function buildUpdate(): Parameters<typeof saveSettings>[0] {
   if (port.value) mail.port = Number(port.value)
   if (username.value) mail.username = username.value
   if (from.value) mail.from = from.value
+  // #184：portalUrl 是可选覆盖——只在真的改过时下发（空串 = 显式清空、回落按域名推导）。
+  // 没动过就不发：否则无 mail 配置的实例会因「保存设置」凭空多出一个 mail 段。
+  const nextPortalUrl = portalUrl.value.trim()
+  if (nextPortalUrl !== loadedPortalUrl.value) mail.portalUrl = nextPortalUrl
   if (apiKey.value && apiKey.value !== SECRET_MASK) mail.apiKey = apiKey.value
   if (password.value && password.value !== SECRET_MASK) mail.password = password.value
   // #159：开关属表单字段，随保存一起落库；无配置且本次未写任何字段时不创建 mail 行
@@ -128,6 +138,8 @@ async function onSave(): Promise<void> {
     const update = buildUpdate()
     await saveSettings(update)
     saved.value = true
+    // #184：保存成功 = 服务端状态与表单一致 → 刷新基线；否则「填地址保存 → 清空再保存」第二次不下发清空
+    if (typeof update.mail?.portalUrl === 'string') loadedPortalUrl.value = update.mail.portalUrl
     // 首次保存即创建 mail 行：开关从「无配置」解锁（无需刷新页面）
     if (update.mail && Object.keys(update.mail).length > 0) mailConfigured.value = true
     // 密钥保存后清空输入（不回显真值），「已配置」提示翻转
@@ -276,6 +288,15 @@ async function onTestConnection(): Promise<void> {
               />
               <p class="secret-hint">{{ passwordConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
               <UInput v-model="from" label="发件地址" placeholder="no-reply@example.com" />
+              <UInput
+                v-model="portalUrl"
+                label="邮箱门户地址（可选）"
+                type="url"
+                placeholder="留空 = 按邮箱域名自动推导"
+              />
+              <p class="secret-hint">
+                成员「应用密码说明页」的跳转目标；留空则按邮箱域名推导（https://mail.&lt;域名&gt;）。
+              </p>
             </div>
 
             <UButton

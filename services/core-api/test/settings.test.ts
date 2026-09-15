@@ -289,6 +289,37 @@ describe('实例设置查看/编辑（#17）', () => {
     expect(stored.portalUrl).toBe('https://portal.example.com/app-passwords');
   });
 
+  it('PUT portalUrl 空白串（#184）：清掉覆盖键、回落推导；其余字段原样', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    const res = await putJson(app, JSON.stringify({ mail: { portalUrl: '   ' } }), adminCookie, env);
+    expect(res.status).toBe(200);
+
+    const settings = (await (
+      await app.request(
+        'https://team.example.com/api/admin/settings',
+        { headers: { cookie: adminCookie } },
+        env,
+      )
+    ).json()) as { mail: Record<string, unknown> };
+    // 覆盖被清掉 = 空串（服务端据此回落到 https://mail.<domain> 推导）
+    expect(settings.mail.portalUrl).toBe('');
+    // 合并语义：其余 mail 字段不受影响
+    expect(settings.mail.baseUrl).toBe('https://mail.example.com');
+    expect(settings.mail.domain).toBe('example.com');
+
+    const stored = JSON.parse(
+      db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value,
+    ) as Record<string, unknown>;
+    expect('portalUrl' in stored).toBe(false);
+    // 这次确实改了配置 → 有 audit 行（与「全空串不写库」区分开）
+    expect(
+      db.first<{ count: number }>("SELECT COUNT(*) AS count FROM audit_log WHERE action = 'settings_updated'"),
+    ).toEqual({ count: 1 });
+  });
+
   it('PUT 空 body / 全空串 / *** → ok 且不写库、无 audit 行', async () => {
     const app = settingsApp();
     const { env, db, adminCookie } = await envFor();
