@@ -98,6 +98,90 @@ const FULL_MAIL_CONFIG = {
   from: 'no-reply@example.com',
 };
 
+describe('#188 S4：account_ready 落库脱敏（批准真链路）', () => {
+  it('批准开号：站内 payload 只有脱敏标记，邮件正文拿到库里可用的激活链接', async () => {
+    const sent: MailMessage[] = [];
+    const { app, env, db, adminCookie } = await envFor({
+      createMailProvisioner: () => ({
+        createAccount: async ({ emailPrefix }) => ({ email: `${emailPrefix}@example.com` }),
+        disableAccount: async () => undefined,
+        enableAccount: async () => undefined,
+        resetPassword: async () => undefined,
+      }),
+      createMailSender: () => ({
+        send: async (message: MailMessage) => {
+          sent.push(message);
+        },
+      }),
+    });
+    db.run(
+      "INSERT INTO instance_config (key, value) VALUES ('mail', ?)",
+      JSON.stringify(FULL_MAIL_CONFIG),
+    );
+
+    // 邀请 → 公开填表（带个人邮箱）→ 管理员批准（完整实例：开号 + 签激活令牌 + 发邮件）
+    const created = await app.request(
+      'https://team.example.com/api/admin/invites',
+      {
+        method: 'POST',
+        headers: { cookie: adminCookie, 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      },
+      env,
+    );
+    expect(created.status).toBe(201);
+    const { inviteUrl } = (await created.json()) as { inviteUrl: string };
+    const inviteToken = inviteUrl.split('/invite/')[1]!;
+    const inviteTokenHash = await hashOneTimeToken(inviteToken);
+
+    const applied = await app.request(
+      `https://team.example.com/api/invite/${inviteToken}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          displayName: '新人',
+          emailPrefix: 'newbie',
+          personalEmail: 'new@personal.example',
+        }),
+      },
+      env,
+    );
+    expect(applied.status).toBe(200);
+
+    const approved = await app.request(
+      `https://team.example.com/api/admin/invites/${inviteTokenHash}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(approved.status).toBe(200);
+
+    // 站内行：脱敏后只有收件人 + 「链接已生成」标记；整列不含 URL/激活路径/令牌明文
+    const rows = db.query<{ payload: string; invited_email: string }>(
+      "SELECT payload, invited_email FROM notifications WHERE type = 'account_ready'",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.invited_email).toBe('new@personal.example');
+    expect(Object.keys(JSON.parse(rows[0]!.payload) as Record<string, unknown>).sort()).toEqual([
+      'activateLinkGenerated',
+      'email',
+    ]);
+    expect(rows[0]?.payload).not.toMatch(/https?:\/\/|\/activate\/|token/i);
+
+    // 邮件正文没被脱敏误伤：链接是刚签发的那条真令牌（库里只有哈希、未用、未过期）
+    const accountMail = sent.find((message) => message.subject.includes('账号已开通'));
+    expect(accountMail?.to).toBe('new@personal.example');
+    const linkToken = /\/activate\/(\S+)/.exec(accountMail?.text ?? '')?.[1];
+    expect(linkToken).toBeTruthy();
+    expect(
+      db.first(
+        'SELECT email, used_at FROM invite_activations WHERE token_hash = ?',
+        await hashOneTimeToken(linkToken!),
+      ),
+    ).toEqual({ email: 'newbie@example.com', used_at: null });
+  });
+});
+
 describe('#167 发信轴吃 mail.enabled（关闭即不装配 sender）', () => {
   it('enabled=false（字段齐全）：邀请→填表→批准→模块启停全链零发信，工厂零调用', async () => {
     const sent: Array<{ to: string; subject: string }> = [];

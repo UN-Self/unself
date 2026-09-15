@@ -126,6 +126,46 @@ describe('deliverNotification：类型分派与渠道位', () => {
     );
   });
 
+  it('#188 S4：account_ready 站内 payload 脱敏（无链接/无令牌），邮件正文照常带可用链接', async () => {
+    const db = createCoreDb();
+    seedUser(db, 'u_1', 'user@example.com');
+    const sent: MailMessage[] = [];
+    const send = vi.fn(async (message: MailMessage) => {
+      sent.push(message);
+    });
+    const payload = {
+      email: 'user@example.com',
+      activateUrl: 'https://team.example.com/activate/plain-token-abc123',
+    };
+
+    const result = await deliverNotification(db.d1, { send }, 'account_ready', payload, {
+      userId: 'u_1',
+    });
+
+    expect(result).toEqual({ inApp: 1, email: 'sent' });
+
+    // 列断言：站内行只剩收件人 + 脱敏标记，activateUrl 这个键根本不存在
+    const row = db.first<{ payload: string }>('SELECT payload FROM notifications');
+    expect(Object.keys(JSON.parse(row?.payload ?? '{}') as Record<string, unknown>).sort()).toEqual([
+      'activateLinkGenerated',
+      'email',
+    ]);
+    // 正则断言：整列文本不含 URL / 激活路径 / 令牌原文
+    expect(row?.payload ?? '').not.toMatch(/https?:\/\/|\/activate\/|plain-token/);
+    // 全表扫描：令牌明文在 notifications 里一个字都没有
+    expect(
+      db
+        .query<{ payload: string }>('SELECT payload FROM notifications')
+        .some((notification) => notification.payload.includes('plain-token-abc123')),
+    ).toBe(false);
+
+    // 邮件没被误伤：正文照旧带当时签发的那条链接（脱敏只针对站内持久化）
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain('https://team.example.com/activate/plain-token-abc123');
+    // 入参对象未被就地改写（站内脱敏 ≠ 改调用方数据）
+    expect(payload.activateUrl).toBe('https://team.example.com/activate/plain-token-abc123');
+  });
+
   it('无发信口（弱化实例）：邮件静默降级 skipped，站内照写', async () => {
     const db = createCoreDb();
 
