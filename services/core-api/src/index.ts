@@ -2,6 +2,7 @@
 import { Hono } from 'hono';
 
 import { requireAdmin } from './middleware/admin';
+import { requireActiveMember, type SessionGuardVariables } from './middleware/session-guard';
 import { registerActivateRoutes } from './routes/activate';
 import { registerAuditRoutes } from './routes/audit';
 import { registerAuthRoutes } from './routes/auth';
@@ -12,9 +13,8 @@ import { registerNotificationRoutes } from './routes/notifications';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerMailTestRoutes } from './routes/mail-test';
 import { registerSetupRoutes } from './routes/setup';
-import { getMemberAccess, readMailAccess, type CreateMailProvisioner } from './services/members';
+import { readMailAccess, type CreateMailProvisioner } from './services/members';
 import type { CreateMailSender } from './services/notifications';
-import { readSession } from './session';
 
 export { getSigningRuntime } from './keys';
 
@@ -37,7 +37,7 @@ export interface CoreApiDependencies {
 }
 
 export function createApp(dependencies: CoreApiDependencies = {}) {
-  const app = new Hono<{ Bindings: Bindings }>();
+  const app = new Hono<{ Bindings: Bindings; Variables: SessionGuardVariables }>();
 
   /**
    * 全局请求 ID（#60 T3）：每个请求生成唯一 `req-` + 16 位 hex，
@@ -50,25 +50,36 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
     c.header('x-request-id', requestId);
   });
 
+  // ---------------------------------------------------------------------------
+  // 登录态挂载（唯一真值点 session-guard，见 middleware/session-guard.ts）-----------
+  // Hono 中间件只对「之后注册」的路由生效，故守卫必须在下面所有路由定义之前挂。
+  // 需要会话的 API 前缀统一走 requireActiveMember：无会话 401、成员停用/已删 403（不等 token 到期）。
+  // 公开端点不挂：健康检查、JWKS、/api/auth/*（登录/登出/取盐/方式探测）、/api/invite/*（填表）、
+  // /api/activate/*、/api/oidc/test-connection、/api/setup/* 的 token 门禁端点。
+  // /api/modules（成员侧启用清单）现状匿名可读，维持既有公开读口径；签发端点单独挂。
+  app.use('/api/me', requireActiveMember());
+  app.use('/api/notifications/*', requireActiveMember());
+  app.use('/api/modules/:id/token', requireActiveMember());
+  app.use('/api/setup/activate', requireActiveMember());
+  // #165：`/api/admin/*` 一律过 adminGuard——公开 setup-token 签发口已删，不再有豁免路径。
+  // adminGuard 内部用同一个 authenticateActiveMember 判定登录态，只在其上叠加角色位。
+  app.use('/api/admin/*', requireAdmin());
+
   app.get('/api/health', (c) => c.json({ ok: true, service: 'core-api' }));
 
   /**
    * 当前会话用户（shell 判断登录态 / #10-13 前端用；role 供前端能力判断，真值以服务端为准）。
    * #168：mailEnabled/mailPortalUrl 供成员态入口与说明页（登录态 + 非敏感，口径同邀请页公开开关）。
+   * #187：登录态与 status 判定由 /api/me 前缀上的会话守卫给出（session/member 来自上下文），
+   * 本处理器只做响应整形；未登录 401、停用/已删 403 的形状由守卫统一。
    */
   app.get('/api/me', async (c) => {
-    const session = await readSession(c);
-    if (!session) {
-      return c.json({ authenticated: false }, 401);
-    }
-    const member = await getMemberAccess(c.env.CORE_DB, session.uid);
-    if (member?.status === 'disabled') {
-      return c.json({ error: 'account disabled' }, 403);
-    }
+    const session = c.get('session');
+    const member = c.get('member');
     const mail = await readMailAccess(c.env.CORE_DB);
     return c.json({
       authenticated: true,
-      user: { id: session.uid, name: session.name, issuer: session.iss, sub: session.sub, role: member?.role ?? 'user' },
+      user: { id: session.uid, name: session.name, issuer: session.iss, sub: session.sub, role: member.role },
       mailEnabled: mail.enabled,
       mailPortalUrl: mail.portalUrl,
     });
@@ -77,20 +88,21 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   // ---------------------------------------------------------------------------
   // 路由域挂载（一域一文件；组合根只做组装，不写业务）
   // ---------------------------------------------------------------------------
-  // #165：`/api/admin/*` 一律过 adminGuard——公开 setup-token 签发口已删，不再有豁免路径。
-  app.use('/api/admin/*', requireAdmin());
-  registerAuthRoutes(app);
-  registerSetupRoutes(app);
-  registerMemberRoutes(app, dependencies.createMailProvisioner, dependencies.createMailSender);
+  // 路由模块的签名是 `Hono<{ Bindings: Bindings }>`（一域只认 Bindings）；会话守卫的上下文变量
+  // 只在本文件的 /api/me 消费。这里对同一实例做一次窄化传给路由注册器（运行期无差异）。
+  const routes = app as unknown as Hono<{ Bindings: Bindings }>;
+  registerAuthRoutes(routes);
+  registerSetupRoutes(routes);
+  registerMemberRoutes(routes, dependencies.createMailProvisioner, dependencies.createMailSender);
   // 邀请域：管理端 /api/admin/invites* + 公开填表 /api/invite/<token>（#18）
-  registerInviteRoutes(app, dependencies);
+  registerInviteRoutes(routes, dependencies);
   // 激活域：公开 /api/activate/<token>（#18；登录态无关，链接双证之一）
-  registerActivateRoutes(app, dependencies);
-  registerModuleRoutes(app);
-  registerNotificationRoutes(app);
-  registerAuditRoutes(app);
-  registerSettingsRoutes(app);
-  registerMailTestRoutes(app, dependencies);
+  registerActivateRoutes(routes, dependencies);
+  registerModuleRoutes(routes);
+  registerNotificationRoutes(routes);
+  registerAuditRoutes(routes);
+  registerSettingsRoutes(routes);
+  registerMailTestRoutes(routes, dependencies);
 
   /**
    * API 前缀未命中 → JSON 404（#116）：§6.5 错误口径——API 层一律 JSON，

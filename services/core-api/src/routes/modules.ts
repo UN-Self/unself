@@ -10,14 +10,8 @@ import {
   issueModuleToken,
   MODULE_TOKEN_ISSUER,
 } from '../token';
-import {
-  listModules,
-  ModuleRegistrationSchema,
-  toggleModule,
-  upsertModule,
-} from '../registry';
+import { listModules, ModuleRegistrationSchema, toggleModule, upsertModule } from '../registry';
 import { audit } from '../services/audit';
-import { getMemberAccess } from '../services/members';
 import { configuredMailSender, deliverNotification } from '../services/notifications';
 import { readSession } from '../session';
 import type { Bindings } from '../index';
@@ -61,21 +55,15 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
   /**
    * 模块 token 签发（§5.2）：
    * 壳持有会话后为 iframe 模块取 token 的端点；aud=模块 id，10 分钟有效。
-   * 门禁：会话必须有效；模块必须存在且 enabled（注册表开关）。
+   * 门禁：登录态（会话有效 + 成员 status='active'）由组合根挂的会话守卫统一判定
+   * （issue #187 唯一真值点，见 middleware/session-guard.ts）；此处只管模块存在且 enabled（注册表开关）。
    */
   app.post('/api/modules/:id/token', async (c) => {
     const secret = c.env.JWT_PRIVATE_KEY;
     if (!secret) {
       return c.json({ error: 'signing key not provisioned (run deploy bootstrap)' }, 503);
     }
-    const session = await readSession(c);
-    if (!session) {
-      return c.json({ error: 'authentication required' }, 401);
-    }
-    const member = await getMemberAccess(c.env.CORE_DB, session.uid);
-    if (member?.status === 'disabled') {
-      return c.json({ error: 'account disabled' }, 403);
-    }
+    const session = (await readSession(c))!;
     const moduleId = c.req.param('id');
     const gate = await checkTokenGate(c.env.CORE_DB, moduleId);
     if (!gate.ok) {
