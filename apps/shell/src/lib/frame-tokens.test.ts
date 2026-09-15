@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DEFAULT_THEME,
+  THEME_TOKEN_KEYS,
+  tokenCssName,
 } from '@unself/contracts'
 
 import { attachFrameTokens, FRAME_TOKENS_STYLE_ID, tokensStyleSource } from './frame-tokens'
@@ -34,20 +36,23 @@ describe('tokensStyleSource（通道 A 注入的 style 文本，§6.5.5）', () 
     return map
   }
 
-  /** 平台内部令牌（动效/焦点环）：tokens.css 声明但不在契约包内（通道注入只投契约令牌，
-   *  scripts/verify-tokens.mjs 规则二口径）。交叉校验只比对两处都有的键。 */
-  const PLATFORM_ONLY = new Set(['--unself-duration-fast', '--unself-duration-normal', '--unself-ease-out', '--unself-focus-ring'])
-
-  it('默认包注入文本与壳 tokens.css 逐项同值（同一契约两处实现不漂移）', async () => {
+  it('默认包注入文本与壳 tokens.css 逐项同值（契约令牌两处实现不漂移）', async () => {
     // 交叉校验（非自证）：被测对象 = tokensStyleSource(DEFAULT_THEME) 的产出；
     // 对照真值 = apps/shell/src/tokens.css 的 :root 声明（壳自身启动依赖的独立来源）。
-    // DEFAULT_THEME 若与壳实际注入的值漂移（改名/改值漏同步），这里必红。
+    // 遍历口径走契约清单（theme-tokens.json 的 THEME_TOKEN_KEYS）：每个契约令牌在
+    // tokens.css 与注入文本里都必须同值——改名/改值漏同步必红。
+    // 平台内部令牌（动效时长/缓动等）不在契约包内、不参与校验：无硬编码名单要维护。
     const declared = declaredMap(tokensStyleSource(DEFAULT_THEME))
     const shell = await shellTokensCss()
-    expect(declared.size).toBeGreaterThan(0)
-    for (const [name, value] of shell) {
-      if (PLATFORM_ONLY.has(name)) continue
-      expect(declared.get(name), `${name} 在通道 A 注入文本中缺失或值漂移`).toBe(value)
+    expect(THEME_TOKEN_KEYS.length).toBeGreaterThan(0)
+    for (const key of THEME_TOKEN_KEYS) {
+      const name = tokenCssName(key)
+      expect(shell.get(name), `${name} 未在壳 tokens.css 声明（契约令牌缺失/改名漏同步）`).toBe(
+        DEFAULT_THEME[key],
+      )
+      expect(declared.get(name), `${name} 未出现在通道 A 注入文本（注入与契约清单漂移）`).toBe(
+        DEFAULT_THEME[key],
+      )
     }
   })
 
