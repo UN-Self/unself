@@ -75,10 +75,11 @@
 }
 
 /**
- * 断点令牌（#192 F7）：唯一定义处——组件里只准写 `@media (--unself-bp-md)`。
- * 为什么用 @custom-media：CSS 规范不允许在 @media 条件里用 var()（自定义属性是运行时的），
- * @custom-media 是构建期展开（本仓 Vite/Tailwind 链路实测支持：dist 产物落成 @media(max-width:768px)）。
- * 改断点只改这里一处；verify-tokens 规则四会拦住写回字面量的回流。
+ * 断点令牌（#192 F7）：**取值定义处**——组件里只准写字面量，且必须与这里一致。
+ * 为什么不能像其它令牌那样用 var()：CSS 规范不允许 @media 条件里用自定义属性（运行时时求值）。
+ * @custom-media 也试过：本仓构建链只在入口 chunk 展开它，组件独立 chunk 原样保留
+ * （实测 dist 里 7 处未解析 → 浏览器当无效查询 → 响应式样式静默失效），故不采用。
+ * 一致性由 `scripts/verify-tokens.mjs` 规则四机器执行：@media 里的像素断点必须 ∈ 本清单。
  */
-@custom-media --unself-bp-md (max-width: 768px);
-@custom-media --unself-bp-sm (max-width: 480px);
+--unself-bp-sm: 480px;
+--unself-bp-md: 768px;

@@ -187,7 +187,7 @@ onMounted(async () => {
   display: none;
 }
 
-@media (--unself-bp-md) {
+@media (max-width: 768px) {
   .admin-sidebar {
     display: none;
   }

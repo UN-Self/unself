@@ -15,6 +15,10 @@
  *   ∪ tokens.css 已声明的内部令牌（动效 duration/ease 等：平台自己的 CSS 声明了值，
  *   壳/组件内引用可解析；但模块页引它们仍会被部署期体检红——通道注入只投契约令牌）；
  *   豁免文件同样检查（tokens.css 内 --unself-focus-ring: 2px solid var(--unself-color-primary) 必须通过）。
+ * 规则四（断点漂移，#192 F7）：@media 条件里的像素断点必须 ∈ tokens.css 声明的 `--unself-bp-*` 取值
+ *   （CSS 规范不允许 @media 用 var()，也不能靠 @custom-media——本仓构建链只在入口 chunk 展开它，
+ *   组件独立 chunk 会漏解析 → 响应式样式静默失效；故「取值一处定义 + 字面量必须一致」由本规则机器执行）。
+ *   改断点：改 tokens.css，然后按报错逐个对齐；想要一次性替换可搜 `max-width:`。""",
  * 规则三（裸时长，#191 F1）：CSS 声明里不得出现时间字面量（如 `animation: u-spin 0.8s`）——
  *   动效参数只出自令牌 --unself-duration-*；只查 .css 全体 与 .vue 的 <style> 区块，
  *   注释/脚本/模板内的文字（如文档里写「约 210ms」）不算；tokens.css 是取值定义处，豁免。
@@ -38,6 +42,16 @@ const CONTRACT_PACKAGE = 'packages/contracts/src/theme-tokens.json';
 const HEX_RE = /#[0-9a-fA-F]{3,8}\b/g;
 const RGB_RE = /rgba?\(/g;
 const VAR_RE = /var\(\s*(--[a-zA-Z0-9-]+)/g;
+/** 规则四：媒体查询条件里的像素断点（值必须 ∈ tokens.css 的 --unself-bp-* 声明）。 */
+const MEDIA_PX_RE = /@media[^{;]*?(\d+)px/g;
+
+/** 读 tokens.css 里声明的断点取值集合（--unself-bp-*: Npx）。 */
+function loadBreakpoints() {
+  const tokensCss = join(ROOT, 'apps/shell/src/tokens.css');
+  if (!existsSync(tokensCss)) return new Set();
+  const css = readFileSync(tokensCss, 'utf8');
+  return new Set([...css.matchAll(/--unself-bp-[a-zA-Z0-9-]+\s*:\s*(\d+)px/g)].map((m) => m[1]));
+}
 /** 规则三：时间字面量（`0.8s` / `450ms`）——CSS 区段内出现即违规。 */
 const TIME_RE = /\b\d+(?:\.\d+)?m?s\b/g;
 
@@ -103,7 +117,7 @@ function cssText(relPath, text) {
 }
 
 /** 单文件 lint：返回违规清单（每条「文件:行号: 原因」）。relPath 用 / 分隔的仓库相对路径。 */
-export function lintFile(relPath, text, varWhitelist) {
+export function lintFile(relPath, text, varWhitelist, breakpoints = new Set()) {
   const code = stripComments(text);
   const violations = [];
   // 规则一：裸值（豁免文件除外）
@@ -130,6 +144,14 @@ export function lintFile(relPath, text, varWhitelist) {
         `${relPath}:${lineOf(css, m.index)}: 裸时长 ${m[0]}（动效参数只出自 --unself-duration-* 令牌）`,
       );
     }
+    // 规则四：断点漂移（@media 的像素值必须 ∈ tokens.css 的 --unself-bp-* 清单）
+    for (const m of css.matchAll(MEDIA_PX_RE)) {
+      if (!breakpoints.has(m[1])) {
+        violations.push(
+          `${relPath}:${lineOf(css, m.index)}: 媒体查询断点 ${m[1]}px 不在 tokens.css 的 --unself-bp-* 清单里（断点取值一处定义）`,
+        );
+      }
+    }
   }
   return violations;
 }
@@ -150,6 +172,7 @@ function* walkFiles(dir) {
 /** 全仓 lint：扫描目录树 + 契约主题包（.json 不在常规扩展内，但规则二要求查其 var 引用）。 */
 export function lintRepo(rootDir = ROOT) {
   const varWhitelist = loadVarWhitelist();
+  const breakpoints = loadBreakpoints();
   const violations = [];
   for (const dir of SCAN_DIRS) {
     const abs = join(rootDir, dir);
@@ -158,13 +181,13 @@ export function lintRepo(rootDir = ROOT) {
       const rel = relative(rootDir, file).split(sep).join('/');
       if (!FILE_EXTS.has(extname(rel))) continue;
       if (TEST_FILE_RE.test(rel)) continue;
-      violations.push(...lintFile(rel, readFileSync(file, 'utf8'), varWhitelist));
+      violations.push(...lintFile(rel, readFileSync(file, 'utf8'), varWhitelist, breakpoints));
     }
   }
   // 契约主题包不满足扩展过滤，单独按规则二查（--unself-focus-ring 一行必须通过）
   const pkg = join(rootDir, CONTRACT_PACKAGE);
   if (existsSync(pkg)) {
-    violations.push(...lintFile(CONTRACT_PACKAGE, readFileSync(pkg, 'utf8'), varWhitelist));
+    violations.push(...lintFile(CONTRACT_PACKAGE, readFileSync(pkg, 'utf8'), varWhitelist, breakpoints));
   }
   return violations;
 }

@@ -249,7 +249,7 @@ function summarize(item: NotificationItem): string {
 }
 
 /* 窄屏：下拉全宽挂在顶栏下方（与 App.vue .shell-topbar 高度 48px 对齐） */
-@media (--unself-bp-md) {
+@media (max-width: 768px) {
   .notification-bell-panel {
     position: fixed;
     top: 48px;
