@@ -118,11 +118,18 @@ async function submit(app: TestApp, env: Env['env'], token: string, body: Record
   );
 }
 
-/** 内置登录（pk1：先取盐再送 R；不跟随 redirect）。 */
-async function login(app: TestApp, env: Env['env'], username: string, password: string): Promise<Response> {
+/** 内置登录（pk1：先取盐再送 R；不跟随 redirect）。ip 传则带 cf-connecting-ip（限速/审计按来源分桶）。 */
+async function login(
+  app: TestApp,
+  env: Env['env'],
+  username: string,
+  password: string,
+  ip?: string,
+): Promise<Response> {
+  const ipHeader: Record<string, string> = ip ? { 'cf-connecting-ip': ip } : {};
   const saltRes = await app.request(
     `https://team.example.com/api/auth/salt?username=${encodeURIComponent(username)}`,
-    { method: 'GET' },
+    { method: 'GET', headers: ipHeader },
     env,
   );
   const { salt } = (await saltRes.json()) as { salt: string };
@@ -131,11 +138,36 @@ async function login(app: TestApp, env: Env['env'], username: string, password: 
     'https://team.example.com/api/auth/login',
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...ipHeader },
       body: JSON.stringify({ username, proof }),
     },
     env,
   );
+}
+
+/** 邀请→提交→批准建一个可登录的内置成员（返回其 user id）。 */
+async function createMember(
+  app: TestApp,
+  env: Env['env'],
+  db: CoreTestDb,
+  adminCookie: string,
+  username: string,
+  password = 'password123',
+): Promise<{ id: string }> {
+  const token = await createInviteVia(app, env, adminCookie);
+  expect((await submit(app, env, token, { username, password })).status).toBe(200);
+  expect(
+    (
+      await app.request(
+        `https://team.example.com/api/admin/invites/${await hashOneTimeToken(token)}/approve`,
+        { method: 'POST', headers: { cookie: adminCookie } },
+        env,
+      )
+    ).status,
+  ).toBe(200);
+  const user = db.first<{ id: string }>('SELECT id FROM users WHERE display_name = ?', '新人');
+  expect(user).not.toBeNull();
+  return user!;
 }
 
 describe('内置身份（issue-A）', () => {
@@ -266,28 +298,28 @@ describe('内置身份（issue-A）', () => {
     ).toBe(1);
   });
 
-  it('登录失败统一文案：错密码 401 与错用户名 404 响应体逐字相同', async () => {
+  it('#186 S2：密码错/无此用户/账号停用统一 401 同文案（探测收敛）', async () => {
     const app = appWith();
-    const { env, adminCookie } = await envFor();
-    const token = await createInviteVia(app, env, adminCookie);
-    await submit(app, env, token, { username: 'frank', password: 'password123' });
-    await app.request(
-      `https://team.example.com/api/admin/invites/${await hashOneTimeToken(token)}/approve`,
-      { method: 'POST', headers: { cookie: adminCookie } },
-      env,
-    );
+    const { env, db, adminCookie } = await envFor();
+    const member = await createMember(app, env, db, adminCookie, 'frank');
 
     const wrongPassword = await login(app, env, 'frank', 'wrong-password');
     expect(wrongPassword.status).toBe(401);
+    // #186：不再有 404 专码——无此用户与密码错同码
     const noUser = await login(app, env, 'nobody', 'wrong-password');
-    expect(noUser.status).toBe(404);
+    expect(noUser.status).toBe(401);
     const wrongBody = JSON.stringify(await wrongPassword.json());
     const nobodyBody = JSON.stringify(await noUser.json());
     expect(wrongBody).toBe(nobodyBody);
     expect(wrongBody).toBe(JSON.stringify({ error: '用户名或密码错误' }));
 
-    // 格式非法（密码 < 8）同文案 400，不暴露是格式错
-    // pk1：R 形状不对 → 400 同文案（zod 层拒）
+    // 停用账号：正确密码也回同一响应（码与文案都不是状态探针）
+    db.run("UPDATE users SET status = 'disabled' WHERE id = ?", member.id);
+    const disabled = await login(app, env, 'frank', 'password123');
+    expect(disabled.status).toBe(401);
+    expect(JSON.stringify(await disabled.json())).toBe(wrongBody);
+
+    // 格式非法（R 形状不对）400 同文案，不暴露是格式错
     const badFormat = await app.request(
       'https://team.example.com/api/auth/login',
       {
@@ -299,6 +331,79 @@ describe('内置身份（issue-A）', () => {
     );
     expect(badFormat.status).toBe(400);
     expect(JSON.stringify(await badFormat.json())).toBe(JSON.stringify({ error: '用户名或密码错误' }));
+  });
+
+  it('#186 S2：同一用户名/IP 连续失败达阈值 → 429 人话（正确密码也拦）；未知用户名同样计数', async () => {
+    const app = appWith();
+    const { env, db, adminCookie } = await envFor();
+    await createMember(app, env, db, adminCookie, 'frank');
+    const ip = '203.0.113.7';
+
+    // 阈值内 4 次失败：仍是 401 同文案
+    for (let i = 1; i < 5; i += 1) {
+      const res = await login(app, env, 'frank', 'wrong-password', ip);
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: '用户名或密码错误' });
+    }
+    // 第 5 次失败触阈；第 6 次请求（正确密码）被 429 拦下，人话带窗口
+    expect((await login(app, env, 'frank', 'wrong-password', ip)).status).toBe(401);
+    const throttled = await login(app, env, 'frank', 'password123', ip);
+    expect(throttled.status).toBe(429);
+    expect(await throttled.json()).toEqual({ error: '登录尝试过于频繁，请 15 分钟后再试' });
+
+    // 未知用户名不被豁免：另一个来源 IP 上错 5 次同样 429（429 不是存在性探针）
+    const ghostIp = '198.51.100.9';
+    for (let i = 0; i < 5; i += 1) {
+      expect((await login(app, env, 'ghost', 'wrong-password', ghostIp)).status).toBe(401);
+    }
+    expect((await login(app, env, 'ghost', 'wrong-password', ghostIp)).status).toBe(429);
+  });
+
+  it('#186 S2：成功登录清零失败计数（连续失败从零起算）', async () => {
+    const app = appWith();
+    const { env, db, adminCookie } = await envFor();
+    await createMember(app, env, db, adminCookie, 'frank');
+    const ip = '203.0.113.8';
+
+    // 阈值前成功：计数清零
+    for (let i = 0; i < 4; i += 1) {
+      expect((await login(app, env, 'frank', 'wrong-password', ip)).status).toBe(401);
+    }
+    expect((await login(app, env, 'frank', 'password123', ip)).status).toBe(200);
+    expect(db.query('SELECT key FROM login_attempts')).toEqual([]);
+
+    // 清零后再错 4 次仍不到阈值（计数真从头开始），成功仍可登
+    for (let i = 0; i < 4; i += 1) {
+      expect((await login(app, env, 'frank', 'wrong-password', ip)).status).toBe(401);
+    }
+    expect((await login(app, env, 'frank', 'password123', ip)).status).toBe(200);
+  });
+
+  it('#186 S5：登录成功/失败各留审计行（actor/target=来源 IP 可对账）', async () => {
+    const app = appWith();
+    const { env, db, adminCookie } = await envFor();
+    const member = await createMember(app, env, db, adminCookie, 'frank');
+    const ip = '203.0.113.9';
+
+    expect((await login(app, env, 'frank', 'wrong-password', ip)).status).toBe(401);
+    expect(
+      db.first('SELECT actor, action, target FROM audit_log WHERE action = ?', 'login_failed'),
+    ).toEqual({ actor: 'frank', action: 'login_failed', target: ip });
+
+    expect((await login(app, env, 'frank', 'password123', ip)).status).toBe(200);
+    expect(
+      db.first('SELECT actor, action, target FROM audit_log WHERE action = ?', 'login_success'),
+    ).toEqual({ actor: member.id, action: 'login_success', target: ip });
+
+    // 停用后登录失败也留痕（actor 用 user id，别再出现「静默拒绝」）
+    db.run("UPDATE users SET status = 'disabled' WHERE id = ?", member.id);
+    expect((await login(app, env, 'frank', 'password123', ip)).status).toBe(401);
+    expect(
+      db.first(
+        "SELECT actor, target FROM audit_log WHERE action = 'login_failed' AND actor = ?",
+        member.id,
+      ),
+    ).toEqual({ actor: member.id, target: ip });
   });
 
   it('setup builtin-admin：建 admin + setup_done + 审计；封箱后二次被拒；账号可登录', async () => {

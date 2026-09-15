@@ -14,9 +14,16 @@ import {
   type DiscoveredMetadata,
 } from '../oidc';
 import { createSessionToken, SESSION_COOKIE, sessionCookieOptions } from '../session';
+import { audit } from '../services/audit';
 import { getOidcConfig } from '../services/instance-config';
 import { consumeApprovedInviteByEmail } from '../services/invites';
 import { bindPendingNotifications } from '../services/notifications';
+import {
+  clearLoginFailures,
+  isLoginThrottled,
+  LOGIN_FAILURE_WINDOW_SECONDS,
+  recordLoginFailure,
+} from '../services/rate-limit';
 import { pickDisplayName, pickEmail, pickNameOrNull, upsertUser } from '../services/users';
 import {
   fakeSaltFor,
@@ -43,14 +50,25 @@ function proofBytes(proofB64: string): Uint8Array {
   return Uint8Array.from(atob(proofB64), (ch) => ch.charCodeAt(0));
 }
 
-/** 登录失败统一文案：404/401 同文案，不泄露哪个错（issue-A 任务书 B 条）。 */
+/** 客户端 IP（Cloudflare 注入 cf-connecting-ip；测试/本地缺省 unknown，限速仍有一条桶）。 */
+function clientIp(c: Context<{ Bindings: Bindings }>): string {
+  return c.req.header('cf-connecting-ip') ?? 'unknown';
+}
+
+/**
+ * 登录失败统一文案：404/401 同文案，不泄露哪个错（issue-A 任务书 B 条）。
+ * #186 S2：密码错、无此用户、账号停用全走 401 + 本文案——响应码/文案不再是
+ * 账号状态探针（真实原因只进 audit_log）。
+ */
 const LOGIN_FAILED = '用户名或密码错误';
+/** 连续失败达阈值的人话（阈值/窗口唯一真值点在 services/rate-limit.ts）。 */
+const LOGIN_THROTTLED = `登录尝试过于频繁，请 ${LOGIN_FAILURE_WINDOW_SECONDS / 60} 分钟后再试`;
 
 /** 挂载 OIDC 登录域（/api/auth/*）与 OIDC 探测（/api/oidc/test-connection）。 */
 export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
   /**
    * 内置登录（issue-A）：username+password → 会话 Cookie。
-   * 格式错/无此用户（404）/密码错（401）统一回 LOGIN_FAILED，不区分哪种错。
+   * 格式错 400；无此用户/密码错/账号停用统一 401 同文案（#186 S2）；连续失败达阈值 → 429。
    */
   app.post('/api/auth/login', async (c) => {
     const raw: unknown = await c.req.json().catch(() => null);
@@ -61,25 +79,38 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       return c.json({ error: LOGIN_FAILED }, 400);
     }
     const db = c.env.CORE_DB;
+    const { username } = parsed.data;
+    const ip = clientIp(c);
+    // 限速先于账号查询/密码验证：未知用户名同样计数，429 不构成存在性探针
+    if (await isLoginThrottled(db, username, ip)) {
+      return c.json({ error: LOGIN_THROTTLED }, 429);
+    }
     const user = await db
       .prepare(
         'SELECT u.id, u.display_name, u.status, bc.password_hash FROM users u JOIN builtin_credentials bc ON bc.user_id = u.id WHERE bc.username = ?',
       )
-      .bind(parsed.data.username)
+      .bind(username)
       .first<{ id: string; display_name: string | null; status: string; password_hash: string }>();
     // 无此用户：假盐派生路径照走一次 SHA256，文案/时序与真用户对齐（防枚举）
     if (!user) {
       await verifyClientProof(
         proofBytes(parsed.data.proof),
-        `unself-pk1$${await fakeSaltFor(parsed.data.username)}$${toB64(await sha256(proofBytes(parsed.data.proof)))}`,
+        `unself-pk1$${await fakeSaltFor(username)}$${toB64(await sha256(proofBytes(parsed.data.proof)))}`,
       );
-      return c.json({ error: LOGIN_FAILED }, 404);
-    }
-    if (!(await verifyClientProof(proofBytes(parsed.data.proof), user.password_hash))) {
+      await recordLoginFailure(db, username, ip);
+      await audit(db, username, 'login_failed', ip);
       return c.json({ error: LOGIN_FAILED }, 401);
     }
+    if (!(await verifyClientProof(proofBytes(parsed.data.proof), user.password_hash))) {
+      await recordLoginFailure(db, username, ip);
+      await audit(db, username, 'login_failed', ip);
+      return c.json({ error: LOGIN_FAILED }, 401);
+    }
+    // #186 S1/S2：停用分支与密码错同码同文案（否则可探测账号状态）；真实原因只进审计
     if (user.status === 'disabled') {
-      return c.json({ error: '账号已被停用，请联系管理员' }, 403);
+      await recordLoginFailure(db, username, ip);
+      await audit(db, user.id, 'login_failed', ip);
+      return c.json({ error: LOGIN_FAILED }, 401);
     }
     const secret = c.env.JWT_PRIVATE_KEY;
     if (!secret) {
@@ -91,12 +122,14 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
         // 内置身份的 issuer/sub：'builtin' + 用户 id（OIDC JIT 的 issuer+sub 唯一约束天然不冲突）
         iss: 'builtin',
         sub: user.id,
-        name: user.display_name ?? parsed.data.username,
+        name: user.display_name ?? username,
       },
       secret,
     );
+    await clearLoginFailures(db, username, ip);
     setCookie(c, SESSION_COOKIE, token, sessionCookieOptions());
-    return c.json({ ok: true, user: { id: user.id, name: user.display_name ?? parsed.data.username } });
+    await audit(db, user.id, 'login_success', ip);
+    return c.json({ ok: true, user: { id: user.id, name: user.display_name ?? username } });
   });
 
   /** 登录方式探测（issue-A）：壳登录页按 oidc 显隐 SSO 按钮；匿名可调。 */
@@ -156,6 +189,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
   /**
    * OIDC callback 失败 → 短错误码（#60 T4）：
    * 只映射到固定枚举，不把内部细节（如 IdP 返回的 error_description）带进 URL。
+   * 停用态不经异常映射，由调用点直发 `account_disabled`。
    * LoginView.vue 消费 route.query.error 仅展示人话（"登录校验失败…"）。
    */
   function oidcErrorCode(err: unknown): string {
@@ -167,9 +201,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
   }
 
   /** 失败态统一出口：清流程 Cookie（该轮流程作废）+ 302 回登录页带短错误码。 */
-  function redirectToLoginError(c: Context<{ Bindings: Bindings }>, err: unknown): Response {
+  function redirectToLoginCode(c: Context<{ Bindings: Bindings }>, code: string): Response {
     deleteCookie(c, FLOW_COOKIE, { path: '/' });
-    return c.redirect(`/login?error=${encodeURIComponent(oidcErrorCode(err))}`);
+    return c.redirect(`/login?error=${encodeURIComponent(code)}`);
+  }
+
+  function redirectToLoginError(c: Context<{ Bindings: Bindings }>, err: unknown): Response {
+    return redirectToLoginCode(c, oidcErrorCode(err));
   }
 
   /** 授权回调：state/PKCE/nonce 校验 → 换 token → JIT 建档 → 签会话 Cookie。 */
@@ -215,6 +253,25 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       name,
       email,
     });
+    // #186 S1：停用成员不得经 OIDC 回调拿到新会话（此前只有 /api/me 与 token 端点拒，
+    // 回调照签 7 天会话 → 通知读侧等面可被停用者绕过）。错误码只回给刚在 IdP 完成
+    // 认证的本人（不是未认证可探测的通道），登录页据此显示人话。
+    const member = await c.env.CORE_DB.prepare('SELECT status FROM users WHERE id = ?')
+      .bind(uid)
+      .first<{ status: string }>();
+    if (member?.status === 'disabled') {
+      await audit(c.env.CORE_DB, uid, 'login_failed', clientIp(c));
+      return redirectToLoginCode(c, 'account_disabled');
+    }
+    // #186 S5：JIT 建档留痕（actor=新用户 id，target=邮箱或身份串）
+    if (created) {
+      await audit(
+        c.env.CORE_DB,
+        uid,
+        'jit_user_created',
+        email ?? `${config.issuer}|${String(result.claims.sub)}`,
+      );
+    }
     // 弱化实例首登：email claim 匹配已批准邀请 → 消费（大小写不敏感；三分支见 services/invites）
     if (created && email) {
       await consumeApprovedInviteByEmail(c.env.CORE_DB, uid, email);
@@ -234,6 +291,8 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       secret,
     );
     setCookie(c, SESSION_COOKIE, token, sessionCookieOptions());
+    // #186 S5：登录成功留痕（actor=用户 id，target=来源 IP）
+    await audit(c.env.CORE_DB, uid, 'login_success', clientIp(c));
     return c.redirect(next ?? '/');
   });
 
@@ -319,9 +378,15 @@ async function resolveClaims(
   };
 }
 
-/** 站内回跳白名单：仅允许本站绝对路径。 */
-function sanitizeNext(next: string | null): string | null {
+/**
+ * 站内回跳白名单：仅允许本站绝对路径。
+ * 负例（#186 S10）：`//evil.com`（协议相对）、`/\evil.com`（浏览器把 `\` 归一成 `/`，
+ * 等价于协议相对跳转）、`https://evil.com`（绝对 URL）一律拒；
+ * 反斜杠与控制字符整体拒（后者兼防 Location 头注入）。
+ */
+export function sanitizeNext(next: string | null): string | null {
   if (!next) return null;
+  if (/[\\\u0000-\u001f\u007f]/.test(next)) return null;
   if (!next.startsWith('/') || next.startsWith('//')) return null;
   return next;
 }
