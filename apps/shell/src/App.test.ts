@@ -3,6 +3,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import App from './App.vue'
 import { fetchMe, logout } from './lib/session-api'
 import { fetchEnabledModules } from './lib/registry-api'
@@ -81,6 +82,29 @@ async function settle() {
   await flushPromises()
 }
 
+/**
+ * 工作台在真实运行中挂在路由 '/' 下（main.ts 根组件 = RouterView）；
+ * 测试同构：装真实路由（memory history）→ 点击入口即真实路由变化（#166）。
+ */
+let router: Router
+
+async function mountApp() {
+  router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', component: App },
+      { path: '/admin/:page?', component: { template: '<div />' } },
+    ],
+  })
+  await router.push('/')
+  await router.isReady()
+  return mount(App, { global: { plugins: [router] } })
+}
+
+function currentPath(): string {
+  return router.currentRoute.value.path
+}
+
 /** 模拟 iframe 内 SDK 发 ready（真实 MessageEvent，走真实桥的消息监听）。 */
 function dispatchReady(iframe: HTMLIFrameElement) {
   const ev = new MessageEvent('message', {
@@ -103,7 +127,7 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     })
     vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
 
-    const wrapper = mount(App)
+    const wrapper = await mountApp()
     await settle()
 
     const iframeEl = wrapper.find('iframe')
@@ -141,7 +165,7 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     })
     vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
 
-    const wrapper = mount(App)
+    const wrapper = await mountApp()
     await settle()
 
     const before = wrapper.find('iframe').element as HTMLIFrameElement
@@ -185,7 +209,7 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     })
     vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
 
-    const wrapper = mount(App)
+    const wrapper = await mountApp()
     await settle()
 
     dispatchReady(wrapper.find('iframe').element as HTMLIFrameElement)
@@ -212,7 +236,7 @@ describe('App.vue 退出登录行为', () => {
       user: { id: 'u1', name, issuer: 'unself', sub: 'u1' },
     })
     vi.mocked(fetchEnabledModules).mockResolvedValue([])
-    const wrapper = mount(App)
+    const wrapper = await mountApp()
     await settle()
     return wrapper
   }
@@ -274,6 +298,82 @@ describe('App.vue 退出登录行为', () => {
     await wrapper.find('.shell-sheet-backdrop').trigger('click')
     expect(wrapper.find('.shell-sheet').exists()).toBe(false)
     expect(logout).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+/**
+ * 管理台入口（#166）：role 取自 /api/me，非 admin 完全不渲染。
+ * 契约 = 用户可见结果：入口在/不在 + 点击后的真实路由变化
+ * （以导航目标定位入口，不断言类名/静态文案，见 docs/testing.md 禁项）。
+ */
+describe('App.vue 管理台入口（#166）', () => {
+  /** 管理台入口 = 指向 /admin/members 的可导航元素。 */
+  const ADMIN_ENTRY = 'a[href="/admin/members"]'
+
+  async function mountAsRole(role?: string) {
+    vi.mocked(fetchMe).mockResolvedValue({
+      authenticated: true,
+      user: { id: 'u1', name: '黄一', issuer: 'unself', sub: 'u1', role },
+    })
+    vi.mocked(fetchEnabledModules).mockResolvedValue([])
+    const wrapper = await mountApp()
+    await settle()
+    return wrapper
+  }
+
+  /** 手机端「我的」动作单：底部标签栏既定入口（#83），返回对话框容器。 */
+  async function openMeSheet(wrapper: ReturnType<typeof mount>) {
+    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')
+    expect(meTab).toBeTruthy()
+    await meTab!.trigger('click')
+    return wrapper.find('[role="dialog"]')
+  }
+
+  it('管理员：桌面侧栏入口可见，点击即进 /admin/members', async () => {
+    const wrapper = await mountAsRole('admin')
+
+    const desktop = wrapper.find(`aside ${ADMIN_ENTRY}`)
+    expect(desktop.exists()).toBe(true)
+    expect(desktop.isVisible()).toBe(true)
+
+    await desktop.trigger('click')
+    await flushPromises()
+    expect(currentPath()).toBe('/admin/members')
+    wrapper.unmount()
+  })
+
+  it('管理员：手机「我的」动作单入口可见，点击进 /admin/members 并收起动作单', async () => {
+    const wrapper = await mountAsRole('admin')
+
+    const sheet = await openMeSheet(wrapper)
+    expect(sheet.exists()).toBe(true)
+    const mobile = sheet.find(ADMIN_ENTRY)
+    expect(mobile.exists()).toBe(true)
+    expect(mobile.isVisible()).toBe(true)
+
+    await mobile.trigger('click')
+    await flushPromises()
+    expect(currentPath()).toBe('/admin/members')
+    expect(wrapper.find('.shell-sheet').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('普通成员：桌面与手机动作单都没有通往管理台的可导航元素', async () => {
+    const wrapper = await mountAsRole('user')
+
+    expect(wrapper.findAll(ADMIN_ENTRY)).toHaveLength(0)
+    await openMeSheet(wrapper)
+    expect(wrapper.findAll(ADMIN_ENTRY)).toHaveLength(0)
+    expect(wrapper.findAll('a[href^="/admin"]')).toHaveLength(0)
+    expect(currentPath()).toBe('/')
+    wrapper.unmount()
+  })
+
+  it('role 缺失（服务端未返回）：同样不显示入口（只认 admin）', async () => {
+    const wrapper = await mountAsRole(undefined)
+
+    expect(wrapper.findAll(ADMIN_ENTRY)).toHaveLength(0)
     wrapper.unmount()
   })
 })
