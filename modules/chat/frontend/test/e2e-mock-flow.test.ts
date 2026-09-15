@@ -33,8 +33,10 @@ describe('mock 全链路：列表 → 房间 → 发送/接收（WS）→ 附件
     expect(store.state.messages.at(-1)?.content).toBe('你好，**加粗**')
     expect(store.state.messages.at(-1)?.sender.id).toBe(api.world.me.id)
 
-    // WS 广播回显（服务端把该消息再推给房间）：不重复插入
+    // WS 广播回显（服务端把该消息再推给房间）：不重复插入。三重链路各环都被去重兜住：
+    // ① REST 回包后同 id 广播；② 广播帧连发两遍；③ 广播后服务端幂等回显。去重保障独立于此链路顺序。
     const last = store.state.messages.at(-1)!
+    store.receiveRoomFrame({ protocolVersion: 1, type: 'message', message: last })
     store.receiveRoomFrame({ protocolVersion: 1, type: 'message', message: last })
     expect(store.state.messages.filter((m) => m.id === last.id)).toHaveLength(1)
 
