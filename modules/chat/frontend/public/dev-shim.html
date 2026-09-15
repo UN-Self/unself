@@ -34,7 +34,14 @@
       const moduleOrigin = location.origin
       // 与壳同源装载（同源路径制，architecture.md 模块章节），入站校验 origin === moduleOrigin
       const CORE_ORIGIN = moduleOrigin
-      const issuedToken = 'dev-shim-token.' + btoa(JSON.stringify({ iss: 'dev-shim', sub: 'u1', aud: 'chat', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 600, name: '走查用户' })).replace(/=+$/, '')
+      // JWT payload base64url：JSON 含中文（如 name）必须经 UTF-8 字节编码，直接 btoa 会抛 Latin1 异常
+      const base64urlUtf8 = (obj) => {
+        const bytes = new TextEncoder().encode(JSON.stringify(obj))
+        let bin = ''
+        for (const b of bytes) bin += String.fromCharCode(b)
+        return btoa(bin).replace(/=+$/, '')
+      }
+      const issuedToken = 'dev-shim-token.' + base64urlUtf8({ iss: 'dev-shim', sub: 'u1', aud: 'chat', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 600, name: '走查用户' }) + '.sig'
 
       window.addEventListener('message', (event) => {
         if (event.origin !== moduleOrigin) return
