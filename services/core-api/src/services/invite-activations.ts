@@ -104,11 +104,18 @@ export async function findInviteActivationForInvite(
 /**
  * 作废激活令牌（置 used_at）：只命中未用行，回是否作废成功。
  * used_at IS NULL 守卫让并发双 claim/双重发只有一方成功（#81 原子模式），
- *败者拿 false —— 「同一时刻至多一个有效明文链接」由这条守卫兜住（#134）。
+ * 败者拿 false —— 「同一时刻至多一个有效明文链接」由这条守卫兜住（#134）。
+ *
+ * 记号带 `invalidated@` 前缀（#170）：消费写的是裸 datetime('now')，秒粒度下
+ * 同秒的作废值会与之相等，失败回滚的精确守卫（releaseInviteActivation）就无法
+ * 区分「本次消费」与「他人作废」→ 会复活已作废令牌。前缀让两者恒不相等；
+ * 该列全仓读取点只判 null/非 null，不解析时间，故语义不变。
  */
 export async function invalidateInviteActivation(db: D1Database, tokenHash: string): Promise<boolean> {
   const result = await db
-    .prepare("UPDATE invite_activations SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL")
+    .prepare(
+      "UPDATE invite_activations SET used_at = 'invalidated@' || datetime('now') WHERE token_hash = ? AND used_at IS NULL",
+    )
     .bind(tokenHash)
     .run();
   return result.meta.changes > 0;

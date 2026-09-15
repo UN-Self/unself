@@ -15,7 +15,11 @@ import { createApp } from '../src/index';
 import { generateInstanceKeyPair } from '../src/keys';
 import { hashOneTimeToken } from '../src/one-time-token';
 import { createSessionToken } from '../src/session';
-import { issueInviteActivation, releaseInviteActivation } from '../src/services/invite-activations';
+import {
+  consumeInviteActivation,
+  issueInviteActivation,
+  releaseInviteActivation,
+} from '../src/services/invite-activations';
 import { createCoreDb, type CoreTestDb } from './test-factory';
 
 /** 完整实例 mail 段（provisioner 与 SMTP 都能装配）。 */
@@ -91,7 +95,7 @@ async function approvedInvite(
   app: TestApp,
   env: ActivationEnv['env'],
   adminCookie: string,
-): Promise<{ tokenHash: string }> {
+): Promise<{ tokenHash: string; inviteToken: string }> {
   const created = await app.request(
     'https://team.example.com/api/admin/invites',
     {
@@ -126,7 +130,7 @@ async function approvedInvite(
   expect((await approved.json()) as { email: string | null }).toMatchObject({
     email: 'u_new@example.com',
   });
-  return { tokenHash };
+  return { tokenHash, inviteToken };
 }
 
 /** 从 account_ready 邮件正文提取激活链接（明文只出现在邮件里）。 */
@@ -351,6 +355,72 @@ describe('激活域 HTTP（#18）', () => {
         't_guard',
       )?.used_at,
     ).toBeNull();
+  });
+
+  it('同秒竞态（#170）：claim 重签作废后，迟到的失败回滚不得复活旧令牌', async () => {
+    const provisioner = createFakeMailProvisioner();
+    const sent: SentMail[] = [];
+    const app = createApp({
+      createMailProvisioner: () => provisioner,
+      createMailSender: () => fakeSender(sent),
+    });
+    const { env, db, adminCookie } = await envFor(true);
+    const { inviteToken } = await approvedInvite(app, env, adminCookie);
+    const { activateToken } = activationFromMail(sent);
+    const oldHash = await hashOneTimeToken(activateToken);
+
+    // 对齐到秒初：把 #151 的消费写（裸 datetime('now')）与随后 claim 重签的作废写
+    // 压进同一墙钟秒——正是 #170 的窗口（旧实现两者同值，精确守卫失效）。
+    //
+    // 构造口径：claim/重发的 `used_at IS NULL` 守卫会拦住在消费窗口内作废（claim 直接
+    // 409），故真实竞态形态是「消费→回滚」与「claim 作废」的先后错序；这里用
+    // 消费 → #151 正常回滚 → 同秒 claim 重签作废 → 重放 T0 迟到的回滚来确定性复现。
+    while (Date.now() % 1000 > 50) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    // T0：旧令牌被消费（记下本次写入值）→ 干活失败 → #151 正常回滚（行回 NULL）
+    const consumed = await consumeInviteActivation(env.CORE_DB, oldHash);
+    expect(consumed).not.toBeNull();
+    expect(await releaseInviteActivation(env.CORE_DB, oldHash, consumed!.used_at)).toBe(true);
+
+    // 同一秒内用户点邀请页 claim 重签（真路由）：旧行作废（他人写入）、新明文下发
+    const claimed = await app.request(
+      `https://team.example.com/api/invite/${inviteToken}/claim-activation`,
+      { method: 'POST' },
+      env,
+    );
+    expect(claimed.status).toBe(200);
+    const { activationUrl } = (await claimed.json()) as { activationUrl: string };
+    const newToken = activationUrl.split('/activate/')[1]!;
+    const invalidatedAt = db.first<{ used_at: string | null }>(
+      'SELECT used_at FROM invite_activations WHERE token_hash = ?',
+      oldHash,
+    )?.used_at;
+
+    // T0 迟到的回滚重放（仍凭旧的 consumedAt）：旧实现同秒下误判命中 → 作废行被清空
+    const replayed = await releaseInviteActivation(env.CORE_DB, oldHash, consumed!.used_at);
+    const after = db.first<{ used_at: string | null }>(
+      'SELECT used_at FROM invite_activations WHERE token_hash = ?',
+      oldHash,
+    )?.used_at;
+
+    // 主断言：已作废的旧令牌不得复活（旧实现同秒下 used_at 被清空 → 这里必红）
+    expect(after).not.toBeNull();
+    expect(after).toBe(invalidatedAt);
+    expect(
+      (await app.request(`https://team.example.com/api/activate/${activateToken}`, {}, env)).status,
+    ).toBe(404);
+    expect((await activate(app, env, activateToken, 'super-secret-1')).status).toBe(404);
+
+    // 守卫语义：迟到的回滚必须拒绝；作废写与消费写可区分（旧实现同秒下两者相等）
+    expect(replayed).toBe(false);
+    expect(invalidatedAt).not.toBe(consumed!.used_at);
+
+    // claim 签出的新链接不受回滚连坐，仍可打开激活页
+    expect(
+      (await app.request(`https://team.example.com/api/activate/${newToken}`, {}, env)).status,
+    ).toBe(200);
   });
 
   it('同一令牌二次提交 404，密码只被设置一次', async () => {
