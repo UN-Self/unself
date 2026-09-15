@@ -51,6 +51,8 @@ vi.mock('./lib/session-api', () => ({
   fetchMe: vi.fn().mockResolvedValue({
     authenticated: true,
     user: { id: 'u1', name: '黄一', issuer: 'unself', sub: 'u1' },
+    mailEnabled: false,
+    mailPortalUrl: null,
   }),
   loginUrl: (next?: string) => `/api/auth/login${next ? `?next=${encodeURIComponent(next)}` : ''}`,
   logout: vi.fn().mockResolvedValue(undefined),
@@ -73,6 +75,19 @@ beforeEach(() => {
   assignMock.mockClear()
 })
 
+/** /api/me 200 结果（#168 起含邮件能力字段；缺省未开轴、无门户地址）。 */
+function meOk(
+  user: { id: string; name: string; role?: string },
+  extras: { mailEnabled?: boolean; mailPortalUrl?: string | null } = {},
+) {
+  return {
+    authenticated: true as const,
+    user: { issuer: 'unself', sub: user.id, ...user },
+    mailEnabled: extras.mailEnabled ?? false,
+    mailPortalUrl: extras.mailPortalUrl ?? null,
+  }
+}
+
 /** 冲刷挂载 → 拉注册表 → 选模块 → post-flush 挂桥整条异步链。 */
 async function settle() {
   await flushPromises()
@@ -94,6 +109,7 @@ async function mountApp() {
     routes: [
       { path: '/', component: App },
       { path: '/admin/:page?', component: { template: '<div />' } },
+      { path: '/app-password', component: { template: '<div />' } },
     ],
   })
   await router.push('/')
@@ -121,10 +137,7 @@ function dispatchReady(iframe: HTMLIFrameElement) {
 describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
   it('桥在 iframe 挂载后 attach：ready → token → frameState ready（不误判配置无效）', async () => {
     vi.mocked(fetchModuleToken).mockResolvedValue(TOKEN)
-    vi.mocked(fetchMe).mockResolvedValue({
-      authenticated: true,
-      user: { id: 'u1', name: '黄一', issuer: 'unself', sub: 'u1' },
-    })
+    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '黄一' }))
     vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
 
     const wrapper = await mountApp()
@@ -159,10 +172,7 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     vi.mocked(fetchModuleToken)
       .mockRejectedValueOnce(REJECTED)
       .mockResolvedValue(TOKEN)
-    vi.mocked(fetchMe).mockResolvedValue({
-      authenticated: true,
-      user: { id: 'u1', name: '黄一', issuer: 'unself', sub: 'u1' },
-    })
+    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '黄一' }))
     vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
 
     const wrapper = await mountApp()
@@ -203,10 +213,7 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
   it('token 接口 403 时异常卡以「此模块已停用」示人（#83 状态判定，非字符串嗅探）', async () => {
     const DISABLED = Object.assign(new Error('此模块已停用'), { status: 403 })
     vi.mocked(fetchModuleToken).mockRejectedValue(DISABLED)
-    vi.mocked(fetchMe).mockResolvedValue({
-      authenticated: true,
-      user: { id: 'u1', name: '黄一', issuer: 'unself', sub: 'u1' },
-    })
+    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '黄一' }))
     vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
 
     const wrapper = await mountApp()
@@ -231,10 +238,7 @@ describe('App.vue 退出登录行为', () => {
   const SHORT_NAME = '黄一'
 
   async function mountAs(name: string) {
-    vi.mocked(fetchMe).mockResolvedValue({
-      authenticated: true,
-      user: { id: 'u1', name, issuer: 'unself', sub: 'u1' },
-    })
+    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name }))
     vi.mocked(fetchEnabledModules).mockResolvedValue([])
     const wrapper = await mountApp()
     await settle()
@@ -312,10 +316,7 @@ describe('App.vue 管理台入口（#166）', () => {
   const ADMIN_ENTRY = 'a[href="/admin/members"]'
 
   async function mountAsRole(role?: string) {
-    vi.mocked(fetchMe).mockResolvedValue({
-      authenticated: true,
-      user: { id: 'u1', name: '黄一', issuer: 'unself', sub: 'u1', role },
-    })
+    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '黄一', role }))
     vi.mocked(fetchEnabledModules).mockResolvedValue([])
     const wrapper = await mountApp()
     await settle()
@@ -374,6 +375,74 @@ describe('App.vue 管理台入口（#166）', () => {
     const wrapper = await mountAsRole(undefined)
 
     expect(wrapper.findAll(ADMIN_ENTRY)).toHaveLength(0)
+    wrapper.unmount()
+  })
+})
+
+/**
+ * 应用密码入口（#168）：mailEnabled 取自 /api/me，未开轴完全不渲染。
+ * 这是成员功能（非 admin 也要看得到），位置与管理台同族（桌面用户区 + 手机「我的」）；
+ * 契约 = 用户可见结果：入口在/不在 + 点击后的真实路由变化。
+ * （describe 名不带 #168——issue 号写在测试名里会被 verify-tokens 当裸颜色值误报，见 #169。）
+ */
+describe('App.vue 应用密码入口（成员可见）', () => {
+  /** 说明页入口 = 指向 /app-password 的可导航元素。 */
+  const MAIL_ENTRY = 'a[href="/app-password"]'
+
+  async function mountAsMail(mailEnabled: boolean) {
+    vi.mocked(fetchMe).mockResolvedValue(
+      meOk(
+        { id: 'u1', name: '黄一', role: 'user' },
+        { mailEnabled, mailPortalUrl: mailEnabled ? 'https://mail.example.com' : null },
+      ),
+    )
+    vi.mocked(fetchEnabledModules).mockResolvedValue([])
+    const wrapper = await mountApp()
+    await settle()
+    return wrapper
+  }
+
+  it('邮件轴开：普通成员在桌面侧栏看到入口，点击即进 /app-password 说明页', async () => {
+    const wrapper = await mountAsMail(true)
+
+    const desktop = wrapper.find(`aside ${MAIL_ENTRY}`)
+    expect(desktop.exists()).toBe(true)
+    expect(desktop.isVisible()).toBe(true)
+
+    await desktop.trigger('click')
+    await flushPromises()
+    expect(currentPath()).toBe('/app-password')
+    wrapper.unmount()
+  })
+
+  it('邮件轴开：手机「我的」动作单同样有入口，点击进说明页并收起动作单', async () => {
+    const wrapper = await mountAsMail(true)
+
+    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')
+    await meTab!.trigger('click')
+    const sheet = wrapper.find('[role="dialog"]')
+    expect(sheet.exists()).toBe(true)
+
+    const mobile = sheet.find(MAIL_ENTRY)
+    expect(mobile.exists()).toBe(true)
+    expect(mobile.isVisible()).toBe(true)
+
+    await mobile.trigger('click')
+    await flushPromises()
+    expect(currentPath()).toBe('/app-password')
+    expect(wrapper.find('.shell-sheet').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('邮件轴关：桌面与手机动作单都没有通往说明页的可导航元素', async () => {
+    const wrapper = await mountAsMail(false)
+
+    expect(wrapper.findAll(MAIL_ENTRY)).toHaveLength(0)
+
+    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')
+    await meTab!.trigger('click')
+    expect(wrapper.findAll(MAIL_ENTRY)).toHaveLength(0)
+    expect(currentPath()).toBe('/')
     wrapper.unmount()
   })
 })

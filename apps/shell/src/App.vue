@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { LogOut, LayoutDashboard, ShieldCheck, User } from 'lucide-vue-next'
+import { LogOut, LayoutDashboard, KeyRound, ShieldCheck, User } from 'lucide-vue-next'
 import { RouterLink } from 'vue-router'
 import { UButton, UErrorCard, USkeleton } from '@unself/ui'
 
@@ -18,6 +18,7 @@ import { moduleInitial, resolveModuleIcon } from './lib/module-icon'
  * - 桌面 = 220px 左栏（顶部实例名 / 中部模块列表 / 底部用户区+退出），无顶栏无首页
  * - 窄屏 = 底部标签栏（同一份 nav 数据、第二渲染器）+「我的」动作单（手机端登出入口）
  * - 管理台入口（#166）：仅 admin 可见（role 来自 /api/me），桌面在用户区、手机在「我的」动作单
+ * - 应用密码入口（#168）：仅 mailEnabled（来自 /api/me）可见，位置同用户区/「我的」——成员功能，非管理功能
  * - 会话/模块清单引导在此（骨架/失败卡/空态）；iframe 生命周期归 ModuleHost
  * - 登录未检查完 / 未登录 → 登录页（会话真值在服务端，§6.5）
  */
@@ -29,6 +30,11 @@ const phase = ref<LoadPhase>('checking-session')
 const loadError = ref<ApiError | null>(null)
 const modules = ref<RegistryModule[]>([])
 const user = ref<{ id: string; name: string; role?: string } | null>(null)
+
+/**
+ * 邮件轴能力（#168）：只信 /api/me 的 mailEnabled，未开轴不渲染入口（成员功能，位置同管理台）。
+ */
+const mailEnabled = ref(false)
 
 /** 当前选中 nav id（'workspace' 或模块 id）。 */
 const selectedId = ref('workspace')
@@ -44,6 +50,9 @@ const isAdmin = computed(() => user.value?.role === 'admin')
 
 /** 管理台首页（#166）：与 AdminLayout 的 /admin → /admin/members 落地一致。 */
 const ADMIN_HOME = '/admin/members'
+
+/** 应用密码说明页（#168）：成员自助配置邮件客户端的入口（路由见 router.ts）。 */
+const APP_PASSWORD_HOME = '/app-password'
 
 const nav = computed<NavItem[]>(() =>
   buildNav(modules.value.map((m) => ({ id: m.id, enabled: m.enabled, icon: m.manifest?.icon }))),
@@ -67,6 +76,7 @@ onMounted(async () => {
     return
   }
   user.value = { id: me.user.id, name: me.user.name, role: me.user.role }
+  mailEnabled.value = me.mailEnabled
 
   // ② 拉注册表 + ③ 落地（可重试）
   await loadModules()
@@ -151,6 +161,11 @@ function onTabClick(item: NavItem) {
       </nav>
 
       <div class="shell-sidebar-footer">
+        <!-- 应用密码入口（#168）：仅邮件轴开启时渲染（成员可见，位置同管理台） -->
+        <RouterLink v-if="mailEnabled" class="shell-mail-entry" :to="APP_PASSWORD_HOME">
+          <KeyRound :size="16" aria-hidden="true" />
+          应用密码
+        </RouterLink>
         <!-- 管理台入口（#166）：仅 admin 渲染（非 admin 无此 DOM，不只是视觉隐藏） -->
         <RouterLink v-if="isAdmin" class="shell-admin-entry" :to="ADMIN_HOME">
           <ShieldCheck :size="16" aria-hidden="true" />
@@ -249,6 +264,16 @@ function onTabClick(item: NavItem) {
           <span class="shell-user-avatar" aria-hidden="true">{{ user?.name?.charAt(0) ?? '?' }}</span>
           <span class="shell-sheet-username">{{ user?.name ?? '…' }}</span>
         </div>
+        <!-- 应用密码入口（#168）：手机同页可进说明页；点击先收起动作单 -->
+        <RouterLink
+          v-if="mailEnabled"
+          class="shell-sheet-mail"
+          :to="APP_PASSWORD_HOME"
+          @click="sheetOpen = false"
+        >
+          <KeyRound :size="16" aria-hidden="true" />
+          应用密码
+        </RouterLink>
         <!-- 管理台入口（#166）：手机同页可进管理台（SPEC §8）；点击先收起动作单 -->
         <RouterLink
           v-if="isAdmin"
@@ -387,8 +412,9 @@ function onTabClick(item: NavItem) {
   min-width: 0;
 }
 
-/* 管理台入口（#166）：桌面用户区，行样式与侧栏导航项同族 */
-.shell-admin-entry {
+/* 用户区入口（#166 管理台 / #168 应用密码）：行样式与侧栏导航项同族 */
+.shell-admin-entry,
+.shell-mail-entry {
   display: flex;
   align-items: center;
   gap: var(--unself-space-2);
@@ -402,11 +428,13 @@ function onTabClick(item: NavItem) {
     background-color var(--unself-duration-fast) var(--unself-ease-out),
     color var(--unself-duration-fast) var(--unself-ease-out);
 }
-.shell-admin-entry:hover {
+.shell-admin-entry:hover,
+.shell-mail-entry:hover {
   background: var(--unself-color-surface-hover);
   color: var(--unself-color-text);
 }
-.shell-admin-entry:focus-visible {
+.shell-admin-entry:focus-visible,
+.shell-mail-entry:focus-visible {
   outline: var(--unself-focus-ring);
   outline-offset: 2px;
 }
@@ -591,7 +619,8 @@ function onTabClick(item: NavItem) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.shell-sheet-admin {
+.shell-sheet-admin,
+.shell-sheet-mail {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -606,11 +635,13 @@ function onTabClick(item: NavItem) {
     background-color var(--unself-duration-fast) var(--unself-ease-out),
     color var(--unself-duration-fast) var(--unself-ease-out);
 }
-.shell-sheet-admin:hover {
+.shell-sheet-admin:hover,
+.shell-sheet-mail:hover {
   background: var(--unself-color-surface-hover);
   color: var(--unself-color-text);
 }
-.shell-sheet-admin:focus-visible {
+.shell-sheet-admin:focus-visible,
+.shell-sheet-mail:focus-visible {
   outline: var(--unself-focus-ring);
   outline-offset: 2px;
 }
