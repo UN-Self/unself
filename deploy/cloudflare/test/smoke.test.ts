@@ -7,9 +7,10 @@
  * - 行为：200+ok:true、200 缺 ok:true（detail「响应体缺 ok:true」）、非 200（detail「HTTP 503」且不解析 JSON）、
  *   fetch 抛错（detail 以「不可达：」开头、status=0）、多模块混合按 moduleIds 顺序返回且失败项不影响成功项。
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
-import { checkModuleThemes, smokeCheck } from '../src/smoke';
+import { checkModuleThemes, generateSetupToken, parseD1Rows, provisionSetupToken, smokeCheck } from '../src/smoke';
+import type { Wrangler } from '../src/wrangler';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -115,6 +116,87 @@ describe('smokeCheck 行为断言', () => {
       { name: 'module:hello', url: 'https://demo.handywote.top/m/hello/api/health', ok: true, status: 200, detail: undefined },
       { name: 'module:meet', url: 'https://demo.handywote.top/m/meet/api/health', ok: false, status: 503, detail: 'HTTP 503' },
     ]);
+  });
+});
+
+describe('步骤⑧ 本地签发（#165 方案 B：不再 POST /api/admin/setup-token）', () => {
+  beforeEach(() => {
+    // 硬边界：步骤⑧ 全程不发起 HTTP（签发已收归装配器 + d1 execute）
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        throw new Error('步骤⑧不应发起 HTTP');
+      }),
+    );
+  });
+
+  /** 真 wrangler v4.129.0 `d1 execute --json` 形状（本地 D1 实测夹具）。 */
+  const d1Json = (rows: Array<Record<string, unknown>>) =>
+    JSON.stringify([{ results: rows, success: true, meta: { duration: 0 } }]);
+
+  /** 录制型 stub wrangler：按调用序回放 stdout。 */
+  function stubWrangler(outputs: string[]): { wrangler: Wrangler; commands: string[] } {
+    const commands: string[] = [];
+    let i = 0;
+    const run = async (args: string[]) => {
+      commands.push(args.join(' '));
+      const stdout = outputs[Math.min(i, outputs.length - 1)] ?? '';
+      i++;
+      return { ok: true, code: 0, stdout, stderr: '' };
+    };
+    return { wrangler: { run, tryRun: run }, commands };
+  }
+
+  it('generateSetupToken：24B → 32 字符 base64url（URL 安全、无填充、两次不同）', () => {
+    const a = generateSetupToken();
+    const b = generateSetupToken();
+    expect(a).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(b).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(a).not.toBe(b);
+  });
+
+  it('未封箱且无既有 token：INSERT 写入 core 库（--remote + 生成配置 + --json），返回相对 setupUrl', async () => {
+    const { wrangler, commands } = stubWrangler([d1Json([{ sealed: 0, token: null }]), d1Json([])]);
+    const result = await provisionSetupToken({ wrangler, configPath: '/repo/.deploy/migrate/core.wrangler.jsonc' });
+    expect(result).toMatchObject({ setupUrl: expect.stringMatching(/^\/setup\?token=[A-Za-z0-9_-]{32}$/) });
+    const token = 'token' in result ? result.token : '';
+    expect(commands[0]).toContain('SELECT');
+    expect(commands[0]).toContain('--remote');
+    expect(commands[0]).toContain('--config /repo/.deploy/migrate/core.wrangler.jsonc');
+    expect(commands[1]).toBe(
+      `d1 execute CORE_DB --command INSERT INTO setup_tokens (token) VALUES ('${token}') -y --remote --config /repo/.deploy/migrate/core.wrangler.jsonc --json`,
+    );
+  });
+
+  it('已有未消费 token：复用且不再 INSERT（重跑幂等，链接不变）', async () => {
+    const { wrangler, commands } = stubWrangler([d1Json([{ sealed: 0, token: 'tok-existing' }])]);
+    const result = await provisionSetupToken({ wrangler, configPath: '/cfg.jsonc' });
+    expect(result).toEqual({ token: 'tok-existing', setupUrl: '/setup?token=tok-existing' });
+    expect(commands).toHaveLength(1);
+  });
+
+  it('已封箱：回 sealed，且不 INSERT', async () => {
+    const { wrangler, commands } = stubWrangler([d1Json([{ sealed: 1, token: null }])]);
+    const result = await provisionSetupToken({ wrangler, configPath: '/cfg.jsonc' });
+    expect(result).toEqual({ sealed: true });
+    expect(commands).toHaveLength(1);
+  });
+
+  it('标准输出带前缀日志行：仍能解析出 results（不误判为未封箱）', async () => {
+    expect(parseD1Rows(`Cloudflare 登录提示\n${d1Json([{ sealed: 1, token: null }])}`)).toEqual([
+      { sealed: 1, token: null },
+    ]);
+    const { wrangler, commands } = stubWrangler([`日志行\n${d1Json([{ sealed: 1, token: null }])}`]);
+    expect(await provisionSetupToken({ wrangler, configPath: '/cfg.jsonc' })).toEqual({ sealed: true });
+    expect(commands).toHaveLength(1);
+  });
+
+  it('空/不可解析输出：按未封箱处理并签发（不阻断新部署）', async () => {
+    expect(parseD1Rows('')).toEqual([]);
+    const { wrangler, commands } = stubWrangler(['', d1Json([])]);
+    const result = await provisionSetupToken({ wrangler, configPath: '/cfg.jsonc' });
+    expect('token' in result).toBe(true);
+    expect(commands).toHaveLength(2);
   });
 });
 
