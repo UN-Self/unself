@@ -51,6 +51,18 @@
 | #157 | #158 | 邮件轴开关（`mail.enabled` 持久化，关≠删配置；老数据缺省开启） + `USwitch` 基元 |
 | #159 | #160 | 开关改表单语义（保存才落库）+ 折叠过渡动效（tokens / reduced-motion 降级） |
 
+**M1 复核阶段（09-14 验收之后）发现并已修（7 项，全部已合并在 M2 波次 0）**：
+
+| Issue | 内容 |
+|---|---|
+| #165 | 未封箱窗口接管面加锁：builtin-admin 加 setup token 门 + 删公开签发口 |
+| #166 | 工作台补管理台入口（桌面侧栏 + 手机「我的」，仅 admin 可见） |
+| #167 | 发信轴吃 `mail.enabled`——关闭即不装配 sender |
+| #168 | 应用密码说明页（A1）：步骤说明 + 门户跳转 |
+| #169 | `verify-tokens` 跳过 `*.test.*/*.spec.*` 误报 + CI 接入闸门 |
+| #170 | #151 回滚精确守卫：作废记号可区分（同秒回滚不复活已作废令牌） |
+| #171 | setup token 消费记录补 `used_by`（#49 验收项 5 补齐） |
+
 ## 5. 平台限制入档
 
 - **CF Workers 出站 TLS 平台不可用**（决策 #31，证据档案 issue #127）：`secureTransport:'on'` 实际不发 TLS、`startTls()` 死于 workerd#2712、25 端口硬禁。
@@ -59,17 +71,42 @@
 
 ## 6. 未决与交接
 
+（#130 / #120 两行已于 09-14 关单执行，保留在此仅为交接留痕；其余四项仍待办。）
+
 | 项 | 归属 |
 |---|---|
 | #152 resend-activation 改造（后台化/失败保留旧令牌/语境文案） | M2 |
 | #135 服务器侧邮件轮询发送器 | M2 |
 | #121 zxcvbn 前端强度计 / workerd PBKDF2 上限跟进 | M2 备忘 |
 | #21 「邮箱凭据页」A2 占位 | M6 |
-| #130 收官清理（探针 Worker×12、服务器 8465 实验配置回滚、临时文件） | 关单后运维动作 |
-| #120 已暴露凭据统一轮换（CF token / SSH root / Stalwart API key 等） | 关单后运维动作 |
+| #130 收官清理（探针 Worker×12、服务器 8465 实验配置回滚、临时文件） | 已执行（09-14 关单，探针 Worker/8465 回滚/临时文件已清） |
+| #120 已暴露凭据统一轮换（CF token / SSH root / Stalwart API key 等） | 已执行（09-14 关单，由用户自行轮换） |
 
 ## 7. 验收资产
 
 - D1 清理记录：`/tmp/unself-cleanup-prod-0914.md`（含逐表变更行数与终态计数）
-- 邮件配置备份：`/tmp/mail-config-backup.json`（弱化形态切换前后恢复用，已恢复原值）
+- 邮件配置备份：`/tmp/mail-config-backup.json`（弱化形态切换前后恢复用，原值已恢复）——**已于 #130 清理**（含 API key/密码的本机临时文件，见 #130 关单记录）
 - 生产终态：users=1（admin）· invites/activations/notifications/audit 全 0 · Stalwart 账号 = admin/handy/no-reply（无测试孤儿）
+
+## 8. M1 后补：手机 375px 复走查（#172）
+
+> 走查日期 2026-09-15 · 视口 **375×812**（deviceScaleFactor=2）· 基线 `382c15b`（m2/dev，含 #166 管理台入口 + #167/#170）
+> 实录全文 `/tmp/m2-172-walkthrough.md`；截图 37 张 `/tmp/m2-172-01-*.png` … `/tmp/m2-172-37-*.png`
+
+**结论**：手机 375px **可完成全链路审批**——8 步动线全通，含手机端真实点击「批准」两次（状态行内翻转 + D1 `invites.status=approved` + `audit_log: invite_approved`），邀请页三态（待审批 → 已批准 → 已激活）窄屏可读可点，三态 `scrollWidth=375` 无横向溢出；`member` 身份手机端看不到管理台入口，且服务端 `GET /api/admin/invites` 返回 403（前端隐藏 ≠ 权限）。
+
+**限定（结论只在此范围内成立）**：
+
+| # | 限定 |
+|---|---|
+| L1 | 邮件轴（开户/改密）走 contracts 内存假 provisioner；本地无 Stalwart，**不构成对真 Stalwart 形状的复核**（生产 0.16.20 形状见 §2） |
+| L2 | 假 provisioner 工作邮箱写死 `@example.com` → 域名拼接规则本次未覆盖 |
+| L3 | 默认不注入 provisioner 时假实现每请求新建 → 第 8 步「设置邮箱密码」必失败（`ACCOUNT_NOT_FOUND`）。这是本地验收环境限制，不是产品缺陷；假实现提到模块作用域后一次通过 |
+| L4 | 桌面 Chromium 375×812 视口 + `tap` 语义，未覆盖真机触摸/软键盘/横屏/320px；生产未参与（零生产流量） |
+
+**本次新发现（均未当场修，已开 issue）**：
+
+- #180 管理台顶部导航末项「设置」375px 被裁切（`scrollWidth=366 > clientWidth=343`，滚 23px 可达但无滚动提示）
+- #181 移动端触屏目标偏小（管理导航 32px、邀请行批准/拒绝 32px、动作单行 40px、通知铃 32px；≥ WCAG 2.5.8 的 24px 底线，属体验打磨）
+- #182 本地验收阻断：contracts 假 provisioner 每请求新建 → 完整形态第 8 步必失败（= L3；建议 dev 入口或 testing.md 固化「进程内单例 fake」走法）
+- #184 `portalUrl` 无设置页输入位（#168 字段只能靠推导或直接调 API）

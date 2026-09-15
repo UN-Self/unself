@@ -39,6 +39,8 @@
 
 - **D1 不支持 BEGIN/COMMIT**：清理/批量变更逐条执行，先 COUNT 留档、后复查（见 /tmp 清理记录）
 - **已应用的迁移文件禁改**：生产与新装 schema 会分叉；更正走新迁移或注释
+- **原地改已应用迁移 → 旧库升级静默跳过**：升级链按**文件名**记账（`d1_migrations.name` = 文件名），改内容不改名 = 不重跑。2026-09-15 本地 D1 实测（wrangler 4.129.1）：原地改 0001 后 `apply` 直接报「No migrations to apply!」——旧库 `users` 缺列、新表不建；补一个 0002 新文件即正常应用。0.1.0 时期的 0001/0002 已被原地改过，那时建的库需重建 D1（见 docs/deploy.md 升级段）
+- **未封箱窗口 = 实例接管面**：setup token 的签发权必须在部署者手里（本地签发 + d1 直插），任何公开签发口都不允许（#165）
 - **部署**：wrangler OAuth access token ≈ 2h 过期——部署前先 `wrangler whoami` 触发刷新再导出；`--domain=team.handywote.top` 必带（workers.dev 本机不通）
 - **`.deploy/` 生成物是「存在即跳过」**：入口模板（core-worker.js）变更后须先删除旧文件再部署，否则打包报「No matching export」
 - **CF Workers 出站 TLS 平台不可用**（决策 #31）：邮件=后台尽力增强；可靠发信排 M2（#135）
