@@ -56,4 +56,4 @@
 | #46 | 2026-09-15 | CORS 不配置 | 同源部署（壳与模块同域，模块走 `/m/<id>/*`），浏览器同源策略即兜底；主动配 CORS 反而扩大暴露面。将来支持 `runtime: external` 外部模块时再按白名单显式配置 | M1 复核 S9 |
 | #47 | 2026-09-15 | 反点击劫持 | 外壳 HTML 加 `Content-Security-Policy: frame-ancestors 'self'` + 基础 CSP（`default-src 'self'`），`X-Frame-Options: SAMEORIGIN` 兼容旧浏览器；模块 iframe 页面由模块 worker 自负（本波未加，登记已知限制） | M1 复核 S8 |
 | #48 | 2026-09-15 | Stalwart 终态自述不再独立核验 | 复核环境无 Stalwart 管理凭据，终态只能采信服务端自述；用户认可不再投入（真要独立核验 = 重装实例）。此项**取消**，非推迟 | M1 复核 X2 |
-| #49 | 2026-09-15 | 里程碑 tag 约定 | 每个里程碑收官打 annotated tag `v0.<里程碑号>.0`（M0=0.1.0、M1=0.2.0），带 `Signed-off-by`，指向收官终态 `main`；package.json 不跟踪产品版本，tag 是「哪一版生产在跑」的唯一权威；README「版本状态」随 tag 同步 | M1 收官审计（M1 无 tag 收尾暴露的流程缺口） |
+| #50 | 2026-09-15 | EdgeChat 搬运路线 | 放弃「L3 深度重写/按规格重写不复制」，改为固定 commit 搬运 + 最小适配；不做 GitHub fork，出处与复现 = third_party/components.yaml 登记（上游 https://github.com/aozorae/Edgechat + 基准 commit 29978c221ee3ae641ce0b9b97851656c00714a5d，2026-09-15 v2.7.0）；GPL 面积 = 含上游代码的 worker 衍生件归 GPL-3.0（modules/chat/worker），前端自研归 AGPL（口径修订自 #10，#10 原文不动）；存储收口豁免 = chat 专属 D1/KV/R2（chat- 前缀）由装配器直接供给，不经 modules 库/SDK 收口 | issue #215（用户拍板 2026-09-15） |
