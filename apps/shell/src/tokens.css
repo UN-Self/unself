@@ -74,5 +74,11 @@
   --unself-duration-shimmer: 1400ms;
 }
 
-/* F7 断点令牌可行性实测（#192）：临时 */
+/**
+ * 断点令牌（#192 F7）：唯一定义处——组件里只准写 `@media (--unself-bp-md)`。
+ * 为什么用 @custom-media：CSS 规范不允许在 @media 条件里用 var()（自定义属性是运行时的），
+ * @custom-media 是构建期展开（本仓 Vite/Tailwind 链路实测支持：dist 产物落成 @media(max-width:768px)）。
+ * 改断点只改这里一处；verify-tokens 规则四会拦住写回字面量的回流。
+ */
 @custom-media --unself-bp-md (max-width: 768px);
+@custom-media --unself-bp-sm (max-width: 480px);

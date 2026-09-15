@@ -279,7 +279,7 @@ onMounted(async () => {
 }
 
 /* 375px 窄屏：收紧外边距，长 URL/长词不撑破布局 */
-@media (max-width: 480px) {
+@media (--unself-bp-sm) {
   .guide-main {
     padding: var(--unself-space-4) var(--unself-space-3) var(--unself-space-6);
   }

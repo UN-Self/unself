@@ -460,7 +460,7 @@ function applicantLine(invite: AdminInvite): string {
   margin-top: var(--unself-space-3);
 }
 
-@media (max-width: 768px) {
+@media (--unself-bp-md) {
   .invite-who {
     flex-basis: 100%;
   }
