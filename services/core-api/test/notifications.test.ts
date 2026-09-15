@@ -228,6 +228,18 @@ describe('bindPendingNotifications：首登补投归属', () => {
   });
 });
 
+/** 完整 mail 段（与 settings 路由契约一致，SMTP 字段齐全）：#167 开关轴用例从这里出发。 */
+const FULL_MAIL_CONFIG = {
+  baseUrl: 'https://mail.example.com',
+  apiKey: 'k',
+  domain: 'example.com',
+  host: 'smtp.example.com',
+  port: 465,
+  username: 'bot',
+  password: 'secret',
+  from: 'noreply@example.com',
+};
+
 describe('configuredMailSender：mail 段装配状态', () => {
   it('段缺失/非法 JSON → null；完整段 → 可用发信口；字段不全 → null', async () => {
     const db = createCoreDb();
@@ -255,6 +267,66 @@ describe('configuredMailSender：mail 段装配状态', () => {
       JSON.stringify({ host: 'smtp.example.com' }),
     );
     expect(await configuredMailSender(db.d1)).toBeNull();
+  });
+
+  it('#167 mail.enabled=false：字段再全也不装配，工厂零调用', async () => {
+    const db = createCoreDb();
+    db.run(
+      "INSERT INTO instance_config (key, value) VALUES ('mail', ?)",
+      JSON.stringify({ ...FULL_MAIL_CONFIG, enabled: false }),
+    );
+    const send = vi.fn(async (_message: MailMessage) => {});
+    const factory = vi.fn(() => ({ send }));
+
+    expect(await configuredMailSender(db.d1, factory)).toBeNull();
+    expect(factory).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('#167 enabled 缺省（老数据）/ enabled=true：行为不变，照常装配', async () => {
+    const db = createCoreDb();
+    const factory = vi.fn(() => ({ send: async (_message: MailMessage) => {} }));
+    db.run(
+      "INSERT INTO instance_config (key, value) VALUES ('mail', ?)",
+      JSON.stringify(FULL_MAIL_CONFIG),
+    );
+
+    expect(await configuredMailSender(db.d1, factory)).not.toBeNull();
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    db.run(
+      "UPDATE instance_config SET value = ? WHERE key = 'mail'",
+      JSON.stringify({ ...FULL_MAIL_CONFIG, enabled: true }),
+    );
+    expect(await configuredMailSender(db.d1, factory)).not.toBeNull();
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it('#167 enabled=false：触发通知 → 邮件渠道 skipped（工厂零调用、站内照写）', async () => {
+    const db = createCoreDb();
+    db.run(
+      "INSERT INTO instance_config (key, value) VALUES ('mail', ?)",
+      JSON.stringify({ ...FULL_MAIL_CONFIG, enabled: false }),
+    );
+    const send = vi.fn(async (_message: MailMessage) => {});
+    const factory = vi.fn(() => ({ send }));
+
+    const sender = await configuredMailSender(db.d1, factory);
+    const result = await deliverNotification(
+      db.d1,
+      sender,
+      'invite_result',
+      { approved: true, name: '小林', approver: '管理' },
+      { invitedEmail: 'invitee@example.com' },
+    );
+
+    expect(result).toEqual({ inApp: 1, email: 'skipped' });
+    expect(factory).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(db.query("SELECT id FROM notifications WHERE type = 'invite_result'")).toHaveLength(1);
+    expect(db.query("SELECT id FROM audit_log WHERE action = 'notification_email_failed'")).toEqual(
+      [],
+    );
   });
 });
 
