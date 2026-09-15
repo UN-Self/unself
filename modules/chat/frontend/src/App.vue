@@ -104,7 +104,7 @@ async function onSend(text: string, mentionUserIds: number[]): Promise<void> {
     await store.sendMessage({ content: text, mentionUserIds })
     replyTo.value = null
   } catch {
-    // 发送失败：sendError 已由 store 置为人话提示（compose 区显示 sending 状态复原）
+    // 发送失败：sendError 已由 store 置为人话提示（发送态复原，输入不丢可重试）
   }
 }
 
