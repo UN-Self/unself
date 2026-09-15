@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { generateKeyPair, SignJWT, exportJWK, type JWK } from 'jose';
 
 import { createApp } from '../src/index';
+import { sanitizeNext } from '../src/routes/auth';
 
 const app = createApp();
 import { resetOidcCaches } from '../src/oidc';
@@ -585,12 +586,13 @@ async function acquireFlow(e: Record<string, unknown>): Promise<{ state: string;
 
 /**
  * 走一遍完整登录回跳：先拿流程 Cookie，再按其中 nonce 签发 id_token 调 callback。
- * claims = id_token 载荷；userinfo 传入时发现文档带 userinfo_endpoint 并拦截其请求。
+ * claims = id_token 载荷；userinfo 传入时发现文档带 userinfo_endpoint 并拦截其请求；
+ * ip 传入时给 callback 带 cf-connecting-ip（审计按来源 IP 记账）；next 拼进回调 URL。
  */
 async function runLogin(
   e: Record<string, unknown>,
   claims: Record<string, unknown>,
-  opts: { sub?: string; userinfo?: FakeUserInfo } = {},
+  opts: { sub?: string; userinfo?: FakeUserInfo; ip?: string; next?: string } = {},
 ): Promise<Response> {
   const restoreLogin = installFakeIdp('unused', opts.userinfo);
   const login = await app.request('https://team.example.com/api/auth/login', {}, e);
@@ -603,10 +605,14 @@ async function runLogin(
   restoreLogin();
   const restore = installFakeIdp(await issueIdToken(flow.nonce, opts.sub, claims), opts.userinfo);
   try {
+    const nextQuery = opts.next === undefined ? '' : `&next=${encodeURIComponent(opts.next)}`;
     return await app.request(
-      `https://team.example.com/api/auth/callback?code=abc&state=${encodeURIComponent(flow.state)}`,
+      `https://team.example.com/api/auth/callback?code=abc&state=${encodeURIComponent(flow.state)}${nextQuery}`,
       {
-        headers: { cookie: `unself_oidc_flow=${encodeURIComponent(JSON.stringify(flow))}` },
+        headers: {
+          cookie: `unself_oidc_flow=${encodeURIComponent(JSON.stringify(flow))}`,
+          ...(opts.ip ? { 'cf-connecting-ip': opts.ip } : {}),
+        },
         redirect: 'manual',
       },
       e,
@@ -614,6 +620,13 @@ async function runLogin(
   } finally {
     restore();
   }
+}
+
+/** 响应里下发的会话 Cookie（无则 null；callback 会同时清流程 Cookie）。 */
+function sessionCookieOf(res: Response): string | null {
+  const all = (res.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie?.() ?? [];
+  const cookie = all.find((item) => item.startsWith('unself_session='));
+  return cookie ? cookie.split(';')[0]! : null;
 }
 
 describe('弱化实例首登：#49 userinfo 兜底 + email 匹配消费邀请', () => {
@@ -804,5 +817,107 @@ describe('弱化实例首登：#49 userinfo 兜底 + email 匹配消费邀请', 
       ),
     ).toHaveLength(1);
     expect(db.query('SELECT id FROM users WHERE issuer = ?', ISSUER)).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #186 身份轴：S1 停用旁路 / S5 审计 / S10 回跳负例
+// ---------------------------------------------------------------------------
+
+describe('#186 身份轴（S1 停用旁路 / S5 审计 / S10 回跳负例）', () => {
+  const CLAIMS = { name: '爱丽丝', email: 'alice@personal.example' };
+
+  it('#186 S1：status=disabled 的成员走 callback 不建会话（302 回登录页带错误码），启用后恢复', async () => {
+    const { e, db } = await loginEnv();
+    const first = await runLogin(e, CLAIMS);
+    expect(first.status).toBe(302);
+    const uid = db.first<{ id: string }>(
+      'SELECT id FROM users WHERE issuer = ? AND sub = ?',
+      ISSUER,
+      'u-123',
+    )!.id;
+    expect(sessionCookieOf(first)).not.toBeNull();
+
+    // 停用后：不建会话（无 unself_session Cookie），302 带人话错误码
+    db.run("UPDATE users SET status = 'disabled' WHERE id = ?", uid);
+    const blocked = await runLogin(e, CLAIMS);
+    expect(blocked.status).toBe(302);
+    expect(blocked.headers.get('location') ?? '').toContain('/login?error=account_disabled');
+    expect(sessionCookieOf(blocked)).toBeNull();
+
+    // 启用后恢复：能拿到会话且 /api/me 可读
+    db.run("UPDATE users SET status = 'active' WHERE id = ?", uid);
+    const restored = await runLogin(e, CLAIMS);
+    expect(restored.status).toBe(302);
+    const cookie = sessionCookieOf(restored);
+    expect(cookie).not.toBeNull();
+    const me = await app.request(
+      'https://team.example.com/api/me',
+      { headers: { cookie: cookie! } },
+      e,
+    );
+    expect(me.status).toBe(200);
+  });
+
+  it('#186 S5：OIDC 首登写 jit_user_created + login_success（target=来源 IP）；回访不重复建档行', async () => {
+    const { e, db } = await loginEnv();
+    const res = await runLogin(e, CLAIMS, { ip: '203.0.113.11' });
+    expect(res.status).toBe(302);
+    const uid = db.first<{ id: string }>(
+      'SELECT id FROM users WHERE issuer = ? AND sub = ?',
+      ISSUER,
+      'u-123',
+    )!.id;
+
+    expect(
+      db.first('SELECT actor, action, target FROM audit_log WHERE action = ?', 'jit_user_created'),
+    ).toEqual({ actor: uid, action: 'jit_user_created', target: 'alice@personal.example' });
+    expect(
+      db.first('SELECT actor, action, target FROM audit_log WHERE action = ?', 'login_success'),
+    ).toEqual({ actor: uid, action: 'login_success', target: '203.0.113.11' });
+
+    const again = await runLogin(e, CLAIMS, { ip: '203.0.113.12' });
+    expect(again.status).toBe(302);
+    expect(db.query("SELECT id FROM audit_log WHERE action = 'jit_user_created'")).toHaveLength(1);
+    expect(db.query("SELECT id FROM audit_log WHERE action = 'login_success'")).toHaveLength(2);
+  });
+
+  it('#186 S10：callback 只接受站内路径——//evil.com、/\\evil.com、https://evil.com 全落 /，站内路径照回', async () => {
+    const { e } = await loginEnv();
+    for (const evil of ['//evil.com', '/\\evil.com', 'https://evil.com']) {
+      const res = await runLogin(e, CLAIMS, { next: evil });
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toBe('/');
+    }
+    const good = await runLogin(e, CLAIMS, { next: '/m/chat?tab=1' });
+    expect(good.status).toBe(302);
+    expect(good.headers.get('location')).toBe('/m/chat?tab=1');
+  });
+});
+
+describe('#186 S10 sanitizeNext 回跳白名单', () => {
+  it('协议相对 / 反斜杠变体 / 绝对 URL / 空值全拒', () => {
+    expect(sanitizeNext('//evil.com')).toBeNull();
+    // 浏览器把 `\\` 归一成 `/`：`/\\evil.com` 等价于 `//evil.com`（协议相对跳转）
+    expect(sanitizeNext('/\\evil.com')).toBeNull();
+    expect(sanitizeNext('/\\/evil.com')).toBeNull();
+    expect(sanitizeNext('https://evil.com')).toBeNull();
+    expect(sanitizeNext('http://evil.com')).toBeNull();
+    expect(sanitizeNext('m/chat')).toBeNull(); // 非站内绝对路径
+    expect(sanitizeNext('')).toBeNull();
+    expect(sanitizeNext(null)).toBeNull();
+  });
+
+  it('站内绝对路径放行（含查询串）', () => {
+    expect(sanitizeNext('/')).toBe('/');
+    expect(sanitizeNext('/m/chat?tab=1')).toBe('/m/chat?tab=1');
+    expect(sanitizeNext('/admin/members')).toBe('/admin/members');
+  });
+
+  it('控制字符拒（防 Location 头注入）', () => {
+    expect(
+      sanitizeNext(`/x${String.fromCharCode(10)}Location: https://evil.com`),
+    ).toBeNull();
+    expect(sanitizeNext(`/x${String.fromCharCode(0)}y`)).toBeNull();
   });
 });
