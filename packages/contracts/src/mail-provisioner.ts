@@ -40,17 +40,46 @@ export interface MailProvisioner {
   resetPassword(input: ResetMailAccountPasswordInput): Promise<void>;
 }
 
-/** 邮箱开户错误码：只覆盖真实错误面中被调用方需要区分的两种（#141 自适配器上提）。 */
-export type MailProvisionerErrorCode = 'ACCOUNT_EXISTS' | 'ACCOUNT_NOT_FOUND';
+/**
+ * 邮箱开户/维护的失败归类（#141 自适配器上提；#189 B1 补全）：
+ * 调用方按 `code`（必要时叠加 `httpStatus`）判定失败轴，不再嗅探错误文案——
+ * 适配器改文案不再让上层分类静默退化。
+ * - `ACCOUNT_EXISTS` / `ACCOUNT_NOT_FOUND`：账户级可恢复冲突（沿用 #141）；
+ * - `AUTH_FAILED`：Stalwart 拒绝认证（HTTP 401/403，或 API key 未配置）；
+ * - `TIMEOUT`：JMAP 在配置时限内未响应（缺省 10s，#189 B5）；
+ * - `PASSWORD_REJECTED`：Stalwart 密码策略拒绝（用户输入问题，不是上游故障）；
+ * - `UPSTREAM_FAILURE`：其余上游失败（网络、响应形状、写入被拒），原始 HTTP 状态码见 `httpStatus`。
+ */
+export type MailProvisionerErrorCode =
+  | 'ACCOUNT_EXISTS'
+  | 'ACCOUNT_NOT_FOUND'
+  | 'AUTH_FAILED'
+  | 'TIMEOUT'
+  | 'PASSWORD_REJECTED'
+  | 'UPSTREAM_FAILURE';
+
+/** 结构化失败附带的原始信息；正文人话仍走 message。 */
+export interface MailProvisionerErrorOptions {
+  /** 上游 HTTP 状态码（失败发生在 JMAP HTTP 边界时才有）——结构化字段，取代上层正则嗅探。 */
+  httpStatus?: number;
+  /** 原始异常（网络错误等），仅用于排查。 */
+  cause?: unknown;
+}
 
 /** 携带错误码的开户失败；#18/#17 按需消费 code（#141 契约上提：核心层零适配器依赖）。 */
 export class MailProvisionerError extends Error {
   readonly code: MailProvisionerErrorCode;
+  readonly httpStatus?: number;
 
-  constructor(code: MailProvisionerErrorCode, message: string) {
-    super(message);
+  constructor(
+    code: MailProvisionerErrorCode,
+    message: string,
+    options: MailProvisionerErrorOptions = {},
+  ) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'MailProvisionerError';
     this.code = code;
+    this.httpStatus = options.httpStatus;
   }
 }
 
