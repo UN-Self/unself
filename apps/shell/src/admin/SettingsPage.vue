@@ -392,7 +392,7 @@ async function onTestConnection(): Promise<void> {
   color: var(--unself-color-success);
 }
 
-@media (--unself-bp-md) {
+@media (max-width: 768px) {
   .settings-grid {
     grid-template-columns: 1fr;
   }

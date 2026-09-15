@@ -254,7 +254,7 @@ function statusText(status: AdminMember['status']): string {
   font-size: var(--unself-font-size-sm);
 }
 
-@media (--unself-bp-md) {
+@media (max-width: 768px) {
   .member-row {
     flex-wrap: wrap;
   }
