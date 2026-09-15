@@ -38,7 +38,7 @@ cd unself && git pull && node deploy/cloudflare/bin.ts
 
 - **迁移只加新文件，不改旧文件**：已应用过的迁移不会重跑——`wrangler d1 migrations apply` 按**文件名**记账（`d1_migrations` 表）。要改 schema 就新增 `000N_*.sql`，原地改旧文件对已升级的库不生效（2026-09-15 本地实测：原地改 0001 后重跑报「No migrations to apply!」，旧库仍缺列缺表；补一个新文件即正常应用）。
 - **升级前先备份**：core 库 + modules 库（按表导出）+ R2 桶。
-- **历史例外（0.1.0 时期）**：`0001_init.sql` / `0002_setup_oidc.sql` 曾被原地修改（0001 补 `users.email/personal_email/status` 与 `invites`/`notification_types`/`notifications` 等表；0002 删 `oidc_flows`）。因此**那时建的旧库**升级到当前版本会缺表缺列——需重建 D1（或手工补 schema）后重跑装配器；0.1.0 之后建的库（迁移一次到位）不受影响。
+- **历史例外（0.1.0 时期）**：`0001_init.sql` / `0002_setup_oidc.sql` 曾被原地修改（0001 补 `users.email/personal_email/status` 与 `invites`/`notification_types`/`notifications` 等表；0002 删 `oidc_flows`）。因此**那时建的旧库**升级到当前版本会缺表缺列：0001/0002 被跳过，只执行新增的 0004/0005，**在 0004 处中断**——`no such table: notification_types: SQLITE_ERROR`（0004 依赖被改的 0001 建的表），`d1_migrations` 停在 0003，库留半迁移态（实测 wrangler 4.129.1）。需重建 D1（或手工补 schema）后重跑装配器；0.1.0 之后建的库（迁移一次到位）不受影响。
 
 ## 备份
 
