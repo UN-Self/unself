@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { Ban, CircleCheck, KeyRound, Mail } from 'lucide-vue-next'
 
 import { UButton, UErrorCard, USkeleton } from '@unself/ui'
 
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import { resetMemberPassword } from '../lib/builtin-auth-api'
 import { fetchMembers, resendMemberActivation, setMemberStatus, type AdminMember, type ApiError } from '../lib/admin-api'
 import { useAsyncLoad } from '../lib/use-async-load'
@@ -22,10 +23,45 @@ const busyId = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const actionNotice = ref<string | null>(null)
 
-/** 停用要 confirm；启用直接执行（启用是恢复性操作）。 */
+/**
+ * 停用改站内确认（#192 F6 去原生弹窗）：只开弹层不发改，确认后才 disable；
+ * 启用是恢复性操作，仍直接执行。
+ */
+const disableTarget = ref<AdminMember | null>(null)
+const disableOpen = computed({
+  get: () => disableTarget.value !== null,
+  set: (open: boolean) => {
+    if (!open) disableTarget.value = null
+  },
+})
+
+/** 重置密码改站内弹层（#192 F6：去 window.prompt；长度/一致性前置校验在 ConfirmDialog）。 */
+const resetTarget = ref<AdminMember | null>(null)
+const resetOpen = computed({
+  get: () => resetTarget.value !== null,
+  set: (open: boolean) => {
+    if (!open) resetTarget.value = null
+  },
+})
+
 async function onToggle(member: AdminMember): Promise<void> {
   const disabling = member.status === 'active'
-  if (disabling && !window.confirm(disableHint(member))) return
+  if (disabling) {
+    disableTarget.value = member
+    return
+  }
+  await runToggle(member, false)
+}
+
+/** 确认停用（ConfirmDialog confirm 后回调）。 */
+async function onDisableConfirm(): Promise<void> {
+  const member = disableTarget.value
+  if (!member) return
+  disableTarget.value = null
+  await runToggle(member, true)
+}
+
+async function runToggle(member: AdminMember, disabling: boolean): Promise<void> {
   busyId.value = member.id
   actionError.value = null
   actionNotice.value = null
@@ -48,10 +84,17 @@ async function onResendActivation(member: AdminMember): Promise<void> {
   try { await resendMemberActivation(member.id); actionNotice.value = '激活邮件已重发' } catch (err) { const error = err as ApiError; actionError.value = error.detail ?? error.message } finally { busyId.value = null }
 }
 
-async function onResetPassword(member: AdminMember): Promise<void> {
+/** 打开重置密码弹层（#192 F6：站内输入替代 window.prompt）。 */
+function onResetPassword(member: AdminMember): void {
+  resetTarget.value = member
+}
+
+/** 确认重置（ConfirmDialog 带前置校验后回调；空值防御仍在）。 */
+async function onResetConfirm(password: string): Promise<void> {
+  const member = resetTarget.value
+  if (!member || password.length === 0) return
+  resetTarget.value = null
   const name = member.display_name ?? member.id
-  const password = window.prompt(`为 ${name} 设置新的登录密码（至少 8 位）：`) ?? ''
-  if (password.length === 0) return
   busyId.value = member.id
   actionError.value = null
   actionNotice.value = null
