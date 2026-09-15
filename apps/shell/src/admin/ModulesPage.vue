@@ -52,7 +52,7 @@ async function onToggle(mod: AdminModule): Promise<void> {
 
       <p v-if="modules.length === 0" class="page-empty">还没有注册模块（部署脚本装配后出现在这里）</p>
 
-      <div v-for="mod in modules" :key="mod.id" class="module-row">
+      <div v-for="mod in modules" :key="mod.id" class="module-row" data-test="module-row">
         <div class="module-id">
           {{ mod.id }}
           <span v-if="mod.version" class="module-version">v{{ mod.version }}</span>
