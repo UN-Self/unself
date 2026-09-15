@@ -20,6 +20,31 @@ describe('mail-provisioner 错误契约（#141）', () => {
     expect(error.name).toBe('MailProvisionerError');
     expect(error.code).toBe('ACCOUNT_EXISTS');
     expect(error.message).toBe('邮箱账户 u1@example.com 已存在');
+    expect(error.httpStatus).toBeUndefined();
+  });
+
+  it('#189 B1：失败轴以结构化字段携带（code 归类 + httpStatus 原始状态码 + cause），上层不匹配文案', () => {
+    const cause = new TypeError('fetch failed');
+    const error = new MailProvisionerError('AUTH_FAILED', '上游拒绝（文案可随时改）', {
+      httpStatus: 403,
+      cause,
+    });
+    expect(error.code).toBe('AUTH_FAILED');
+    expect(error.httpStatus).toBe(403);
+    expect(error.cause).toBe(cause);
+
+    // 五个错误码都在契约里（调用方按 code 分类，不靠 grep message）
+    const codes = [
+      'ACCOUNT_EXISTS',
+      'ACCOUNT_NOT_FOUND',
+      'AUTH_FAILED',
+      'TIMEOUT',
+      'PASSWORD_REJECTED',
+      'UPSTREAM_FAILURE',
+    ] as const;
+    for (const code of codes) {
+      expect(new MailProvisionerError(code, 'x').code).toBe(code);
+    }
   });
 
   it('fake 抛出的错误可用 contracts 的 MailProvisionerError 捕获并读 code', async () => {
