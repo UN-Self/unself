@@ -19,9 +19,12 @@
  *
  * 生产装配点零变化：deploy/cloudflare 生成入口仍注入 Stalwart 适配器（#141 组合根）。
  */
+import type { ExportedHandler } from '@cloudflare/workers-types';
+import type { ExecutionContext } from 'hono';
+
 import { createFakeMailProvisioner } from '@unself/contracts';
 
-import { createApp } from '../src/index';
+import { createApp, type Bindings } from '../src/index';
 
 /** 进程内单例：批准写的账户在后续激活请求里仍可读（这就是 #182 拦路虎的解）。 */
 const provisioner = createFakeMailProvisioner();
@@ -31,6 +34,14 @@ const app = createApp({
 });
 
 export default {
-  fetch: (request: Request, env: unknown, ctx: unknown) =>
-    app.fetch(request, env as never, ctx as never),
-};
+  /**
+   * wrangler dev 以 `fetch(request, env, ctx)` 三参调用模块默认导出——
+   * 这里把 bindings 按自身 Bindings、ctx 按 Hono 的 ExecutionContext 声明
+   * （入口只是 Hono app 的适配层，不用 `as never` 掩盖）；
+   * 外层 `satisfies ExportedHandler<Bindings>` 保证这确实是合法 Workers entry 形状，
+   * 同时保留具体签名（#193 的 dev-entry.test 要直接三参调用）。
+   */
+  fetch(request: Request, env: Bindings, ctx: ExecutionContext): Response | Promise<Response> {
+    return app.fetch(request, env, ctx);
+  },
+} satisfies ExportedHandler<Bindings>;
