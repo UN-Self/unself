@@ -13,8 +13,16 @@ async function envWith(): Promise<{ JWT_PRIVATE_KEY: string }> {
   return { JWT_PRIVATE_KEY: pair.privateKeyPem };
 }
 
-/** 签一个合法会话 Cookie 值。 */
-async function sessionCookieFor(pem: string, uid = 'u_1'): Promise<string> {
+/**
+ * 签一个合法会话 Cookie 值，并在真 users 表种下对应成员行。
+ * #187 起受保护端点要求会话成员在 users 表且 status='active'（会话守卫唯一真值点），
+ * 只签 token 不落行的旧夹具会被守卫按「已删除成员」拒掉。
+ */
+async function sessionCookieFor(pem: string, db: CoreTestDb, uid = 'u_1'): Promise<string> {
+  db.run(
+    "INSERT INTO users (id, issuer, sub, display_name) VALUES (?, 'https://idp', 'u-1', '黄一')",
+    uid,
+  );
   const { createSessionToken } = await import('../src/session');
   const token = await createSessionToken({ uid, iss: 'https://idp', sub: 'u-1', name: '黄一' }, pem);
   return `unself_session=${token}`;
@@ -55,8 +63,8 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
 
   it('模块不存在回 404', async () => {
     const env = await envWith();
-    const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY);
     const db = createCoreDb();
+    const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY, db);
     const res = await app.request(
       'https://team.example.com/api/modules/ghost/token',
       { method: 'POST', headers: { cookie } },
@@ -67,8 +75,8 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
 
   it('模块停用（enabled=0）回 403 —— token 门禁', async () => {
     const env = await envWith();
-    const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY);
     const db = createCoreDb();
+    const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY, db);
     seedHello(db, 0);
     const res = await app.request(
       'https://team.example.com/api/modules/hello/token',
@@ -81,8 +89,8 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
 
   it('合法请求签出 ES256 JWT：claims 正确、JWKS 可验、caps 进 payload', async () => {
     const env = await envWith();
-    const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY);
     const db = createCoreDb();
+    const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY, db);
     seedHello(db);
     const res = await app.request(
       'https://team.example.com/api/modules/hello/token',
@@ -133,8 +141,8 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
 
   it('已停用模块在启停后（enabled=1）可再取 token —— 同一真库状态翻转', async () => {
     const env = await envWith();
-    const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY);
     const db = createCoreDb();
+    const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY, db);
     seedHello(db, 0); // 同一真库：先 INSERT enabled=0
     const disabled = await app.request(
       'https://team.example.com/api/modules/hello/token',
@@ -167,7 +175,7 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
 
     // 路由级：token 门禁 SELECT 引用真列（假 D1 的 .find() 命中即绿，这里 200 才算）
     const env = await envWith();
-    const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY);
+    const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY, db);
     const res = await app.request(
       'https://team.example.com/api/modules/hello/token',
       { method: 'POST', headers: { cookie } },

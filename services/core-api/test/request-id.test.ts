@@ -55,13 +55,15 @@ describe('x-request-id 全局中间件', () => {
     expect(id).toMatch(SAFE_ID);
   });
 
-  it('token：无签名密钥的 503 也带 x-request-id', async () => {
+  it('token：受保护端点的 401 也带 x-request-id（#187 起守卫先于签名密钥检查）', async () => {
+    // #187 在 /api/modules/:id/token 上挂了会话守卫（放行前先判登录态），匿名请求
+    // 不再走到路由内的「密钥未 provision」503 —— 认证先于配置状态，也不向匿名方透露部署进度。
     const res = await app.request(
       'https://team.example.com/api/modules/hello/token',
       { method: 'POST' },
       env(),
     );
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(401);
     const id = res.headers.get('x-request-id');
     expect(id).toBeTruthy();
     expect(id).toMatch(SAFE_ID);
