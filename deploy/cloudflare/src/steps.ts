@@ -19,7 +19,8 @@ import {
   type Provisioned,
 } from './assemble';
 import { loadUnselfConfig, type ModuleRef, type UnselfConfig } from './config';
-import { createKeypair, detectExistingSecret, publicJwksJson, putSecret, JWT_SECRET_NAME } from './keypair';
+import { domainProblem } from './interactive';
+import { createKeypair, detectExistingSecret, publicJwksJson, putSecret } from './keypair';
 import {
   ensureTotalTls,
   ensureZoneRecord,
@@ -127,6 +128,16 @@ export async function runNineSteps(input: {
   const { rootDir, wrangler } = input;
   const rep = input.reporter ?? consoleReporter();
   const config = input.configOverride ?? (await loadUnselfConfig(rootDir));
+  // 域名体检（#194 D3）：CLI --domain= 与配置文件 domain 都汇入 config.domain，此处统一拦截。
+  // 拼写错误重跑解决不了——当场给人话，别让人带着裸名跑九步。
+  if (config.domain) {
+    const problem = domainProblem(config.domain);
+    if (problem) {
+      throw new Error(
+        `域名体检未通过（来源 --domain= 参数或 unself.config.jsonc domain，交互输入已在开屏前拦截）：${problem}——重跑解决不了拼写，先改输入`,
+      );
+    }
+  }
   validateS3Storage(config);
   const modules = await discoverModules(rootDir, config.modules);
   const selected = modules.filter((m) => m.selected);
@@ -167,7 +178,6 @@ export async function runNineSteps(input: {
     config,
     modules,
     dbIds,
-    keypair: { existing: true } as const,
     wrangler,
     buildShell: input.buildShell,
   };
@@ -229,7 +239,9 @@ export async function runNineSteps(input: {
     join(provisioned.outDir, 'core.wrangler.jsonc'),
     coreWranglerConfig({ config, dbIds, coreName: provisioned.coreName, zoneName: resolvedZone?.name }),
   );
-  await writeFileIfMissing(
+  // 入口产物无条件重写（#162/#194 D1）：旧版「存在即跳过」使入口模板变更后升级部署沿用旧产物
+  // （旧模板 import default → No matching export 直接炸）。生成物是纯产物，每次部署刷新。
+  await writeConfig(
     join(provisioned.outDir, 'core-worker.js'),
     coreWorkerEntrySource(provisioned.outDir, rootDir),
   );
@@ -239,13 +251,8 @@ export async function runNineSteps(input: {
       await input.putSecret(provisioned.coreName, freshPair.privateKeyPem);
       rep.log('写入 secret JWT_PRIVATE_KEY（测试注入口）');
     } else {
-      await putSecretStdin({
-        wranglerBin: wranglerBin(rootDir),
-        rootDir,
-        workerName: provisioned.coreName,
-        value: freshPair.privateKeyPem,
-        log: rep.log,
-      });
+      // secret put（值经 stdin 管道喂入）：正式部署路径；测试走上面的 putSecret 注入口，不进这里。
+      await putSecret(wranglerBin(rootDir), rootDir, provisioned.coreName, freshPair.privateKeyPem, rep.log);
     }
     // secret put 会触发重新部署使 secret 生效
     await wrangler.run(['deploy', '--config', join(provisioned.outDir, 'core.wrangler.jsonc')]);
@@ -269,7 +276,6 @@ export async function runNineSteps(input: {
     wrangler,
     rep,
   );
-  provisioned.baseUrl = baseUrl;
 
   // ④ 模块构建/上传/路由绑定
   rep.step(4, '构建上传模块 Worker，绑 <domain>/m/<id>/* 路由（zone 路径）与存储绑定');
@@ -352,6 +358,8 @@ export async function runNineSteps(input: {
   // ⑥ R2 / S3
   rep.step(6, '建 R2 桶或接收外部 S3 参数');
   if (config.storage.provider === 'r2') {
+    // D2（#194）：桶只建不绑——Worker 侧 r2_buckets 绑定等 M5 存储里程碑接线（届时 core-api
+    // 存储适配器一并落地）。现在绑了也没消费者；建桶幂等无害，先占桶名防后期被抢。
     await ensureR2Bucket(wrangler, config.storage.bucket, rep.log);
   } else {
     rep.log(`外部 S3：endpoint=${config.storage.endpoint} bucket=${config.storage.bucket}（不建桶）`);
@@ -462,23 +470,6 @@ async function defaultFetchJwks(baseUrl: string): Promise<string> {
   return JSON.stringify(body);
 }
 
-/** secret put（stdin 喂值）：正式部署路径；测试以注入 fake Wrangler 时不会走到此处之外的真实 spawn——
- *  幂等收敛测试首跑带 freshPair，也需要 put。为了让 fake 账户可测，提供 spy 挂点：
- *  单测通过 env UNSELF_SKIP_SECRET_PUT=1 跳过真实 spawn（fake 状态由测试自记）。 */
-function putSecretStdin(input: {
-  wranglerBin: string;
-  rootDir: string;
-  workerName: string;
-  value: string;
-  log: (msg: string) => void;
-}): Promise<void> {
-  if (process.env.UNSELF_SKIP_SECRET_PUT === '1') {
-    input.log(`[skip] 写入 secret ${JWT_SECRET_NAME} → ${input.workerName}（UNSELF_SKIP_SECRET_PUT=1）`);
-    return Promise.resolve();
-  }
-  return putSecret(input.wranglerBin, input.rootDir, input.workerName, input.value, input.log);
-}
-
 function wranglerBin(rootDir: string): string {
   const local = join(rootDir, 'node_modules', '.bin', 'wrangler');
   return existsSync(local) ? local : 'wrangler';
@@ -492,12 +483,6 @@ function inlineParams(sql: string, binds: unknown[]): string {
     out = out.replace(new RegExp(`\\?${i + 1}`, 'g'), literal);
   });
   return out;
-}
-
-async function writeFileIfMissing(path: string, content: string): Promise<void> {
-  if (!existsSync(path)) {
-    await writeConfig(path, content);
-  }
 }
 
 /**

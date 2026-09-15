@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { needsTotalTls, runNineSteps } from '../src/steps';
+import { coreWorkerEntrySource, needsTotalTls, runNineSteps } from '../src/steps';
 import type { Wrangler } from '../src/wrangler';
 
 /** 测试注入口：拦截 shell 构建（真实 vite build 约 4.4s/次，#73 每次部署都重建 → 套件必超时；写最小产物即可）。 */
@@ -518,5 +518,87 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       fetchJwks: async () => FIXED_JWKS,
     });
     expect(summary.themeChecks).toEqual([]);
+  });
+});
+
+describe('D1（#162/#194）：入口产物「存在即跳过」陷阱', () => {
+  it('预置旧模板 core-worker.js 在场 → 部署后产物被刷新为当前模板（升级路径不再沿用旧入口）', { timeout: 120_000 }, async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    const outDir = join(ROOT, '.deploy/cloudflare');
+    const entryPath = join(outDir, 'core-worker.js');
+    // 预置上一版生成物：旧入口模板（import default——即 #162 实锤的 No matching export 形态）
+    const stale = `// SPDX-License-Identifier: AGPL-3.0-only
+import app from '../../services/core-api/src/index.ts';
+export default { fetch: (r, e, c) => app.fetch(r, e, c) };
+`;
+    await mkdir(outDir, { recursive: true });
+    await writeFile(entryPath, stale);
+    try {
+      await runSteps({
+        rootDir: ROOT,
+        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        wrangler: fake.wrangler,
+        http: SMOKE_OK,
+        resolveBaseUrl: async () => 'https://x.example',
+        fetchJwks: async () => FIXED_JWKS,
+      });
+      // 行为断言（不测实现）：文件内容 == 当前模板输出（旧 import default 已被覆写掉）
+      const after = await readFile(entryPath, 'utf8');
+      expect(after).toBe(coreWorkerEntrySource(outDir, ROOT));
+      expect(after).not.toContain("import app from");
+      expect(after).toContain("import { createApp } from");
+    } finally {
+      await rm(entryPath, { force: true });
+    }
+  });
+});
+
+describe('D3（#194）：域名体检两份入口统一拦截', () => {
+  it('config.domain 裸名（无点）→ 九步开跑前报人话（含输入复述与「重跑解决不了」提示）', async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    await expect(
+      runSteps({
+        rootDir: ROOT,
+        // CLI --domain= 与配置文件 domain 最终都汇入 configOverride.domain（main.ts applyDecision）
+        configOverride: { domain: 'myteam', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        wrangler: fake.wrangler,
+        http: SMOKE_OK,
+        resolveBaseUrl: async () => 'https://x.example',
+        fetchJwks: async () => FIXED_JWKS,
+      }),
+    ).rejects.toThrow(/域名体检未通过[\s\S]*myteam[\s\S]*至少要带一个点/);
+    // 拦截发生在九步之前：零 wrangler 命令（连 D1 探测都没跑）
+    expect(fake.state.commands).toHaveLength(0);
+  });
+
+  it('config.domain 连续点/非法字符 → 同样人话拒绝', async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    await expect(
+      runSteps({
+        rootDir: ROOT,
+        configOverride: { domain: 'team..example.com', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        wrangler: fake.wrangler,
+        http: SMOKE_OK,
+        resolveBaseUrl: async () => 'https://x.example',
+        fetchJwks: async () => FIXED_JWKS,
+      }),
+    ).rejects.toThrow(/域名体检未通过[\s\S]*空段/);
+  });
+
+  it('合法域名照常通过（不误伤正常部署路径）', { timeout: 120_000 }, async () => {
+    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+    await runSteps({
+      rootDir: ROOT,
+      configOverride: { domain: 'demo.handywote.top', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      wrangler: fake.wrangler,
+      http: SMOKE_OK,
+      resolveZone: async () => ({ id: 'zone-1', name: 'handywote.top' }),
+      cleanupCustomDomains: async () => {},
+      ensureTotalTls: async () => {},
+      resolveBaseUrl: async () => 'https://demo.handywote.top',
+      fetchJwks: async () => FIXED_JWKS,
+      ensureDns: async () => {},
+    });
+    expect(fake.state.commands.some((c) => c.startsWith('d1 list'))).toBe(true);
   });
 });
