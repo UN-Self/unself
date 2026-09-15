@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import type { Bindings } from '../src/index';
 import { generateInstanceKeyPair } from '../src/keys';
 import { hashOneTimeToken } from '../src/one-time-token';
 import { createSessionToken } from '../src/session';
@@ -25,12 +26,18 @@ const MAIL_CONFIG = {
   from: 'no-reply@example.com',
 };
 
-interface DevEnv {
-  CORE_DB: D1Database;
-  JWT_PRIVATE_KEY: string;
-}
+/**
+ * wrangler dev 入口的真实导出形状（`ExportedHandler<Bindings>` 三参 fetch）——
+ * 用 `typeof import(...)` 取型，形状漂移时测试跟着报错，不靠手抄签名。
+ */
+type DevApp = typeof import('./dev-entry').default;
 
-async function fixture(): Promise<{ db: CoreTestDb; env: DevEnv; adminCookie: string; app: { fetch: typeof fetch } }> {
+async function fixture(): Promise<{
+  db: CoreTestDb;
+  env: Bindings;
+  adminCookie: string;
+  app: DevApp;
+}> {
   const pair = await generateInstanceKeyPair();
   const db = createCoreDb();
   db.run(
@@ -51,15 +58,17 @@ async function fixture(): Promise<{ db: CoreTestDb; env: DevEnv; adminCookie: st
   const devEntry = await import('./dev-entry');
   return {
     db,
-    env: { CORE_DB: db.d1, JWT_PRIVATE_KEY: pair.privateKeyPem },
+    // 与 wrangler.jsonc 同构：dev 入口有 CORE_DB + MODULES_DB 两个 D1 绑定；
+    // 本用例只走 core 侧路由，MODULES_DB 指向同一内存库（不共享状态给其它用例）。
+    env: { CORE_DB: db.d1, MODULES_DB: db.d1, JWT_PRIVATE_KEY: pair.privateKeyPem },
     adminCookie,
     app: devEntry.default,
   };
 }
 
 async function request(
-  app: { fetch: typeof fetch },
-  env: DevEnv,
+  app: DevApp,
+  env: Bindings,
   path: string,
   init?: RequestInit,
 ): Promise<Response> {
@@ -92,6 +101,11 @@ describe('#182 dev-entry 单例 fake：完整形态第 8 步（跨请求）', ()
         displayName: '王小米',
         emailPrefix: 'wangxm',
         personalEmail: 'wangxm@personal.example',
+        // 本地完整形态走的是内置注册路径（图内无 IdP）：填表带 username/salt/proof，
+        // 才会落 invite_credentials，批准那条路径才会建成员行并回填工作邮箱。
+        username: 'wangxm',
+        salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+        proof: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
       }),
     });
     expect(applied.status).toBe(200);
@@ -123,11 +137,11 @@ describe('#182 dev-entry 单例 fake：完整形态第 8 步（跨请求）', ()
     // 库内真相：批准时已建成员行并回填工作邮箱（开户结果）；邀请保持 approved——
     // 状态机口径：invites.consumed 只在「工作台首登 JIT 建档」时翻转（consumeApprovedInviteByEmail），
     // 激活只设邮箱密码（activate.ts 顶部注释：激活不建用户档案）。
-    const member = db.first<{ email: string | null }>(
-      'SELECT email FROM users WHERE email = ?',
+    const member = db.first<{ email: string | null; issuer: string }>(
+      'SELECT email, issuer FROM users WHERE email = ?',
       'wangxm@example.com',
     );
-    expect(member).not.toBeNull();
+    expect(member).toEqual({ email: 'wangxm@example.com', issuer: 'builtin' });
     expect(db.first('SELECT status FROM invites WHERE token_hash = ?', tokenHash)).toEqual({
       status: 'approved',
     });
