@@ -1,7 +1,8 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { LogOut, LayoutDashboard, User } from 'lucide-vue-next'
+import { LogOut, LayoutDashboard, ShieldCheck, User } from 'lucide-vue-next'
+import { RouterLink } from 'vue-router'
 import { UButton, UErrorCard, USkeleton } from '@unself/ui'
 
 import ModuleHost from './ModuleHost.vue'
@@ -16,6 +17,7 @@ import { moduleInitial, resolveModuleIcon } from './lib/module-icon'
  * 工作台壳（#12，§6.5 动线；#83 拆分后只剩布局与导航）：
  * - 桌面 = 220px 左栏（顶部实例名 / 中部模块列表 / 底部用户区+退出），无顶栏无首页
  * - 窄屏 = 底部标签栏（同一份 nav 数据、第二渲染器）+「我的」动作单（手机端登出入口）
+ * - 管理台入口（#166）：仅 admin 可见（role 来自 /api/me），桌面在用户区、手机在「我的」动作单
  * - 会话/模块清单引导在此（骨架/失败卡/空态）；iframe 生命周期归 ModuleHost
  * - 登录未检查完 / 未登录 → 登录页（会话真值在服务端，§6.5）
  */
@@ -26,13 +28,22 @@ type LoadPhase = 'checking-session' | 'loading-modules' | 'ready' | 'error' | 'e
 const phase = ref<LoadPhase>('checking-session')
 const loadError = ref<ApiError | null>(null)
 const modules = ref<RegistryModule[]>([])
-const user = ref<{ id: string; name: string } | null>(null)
+const user = ref<{ id: string; name: string; role?: string } | null>(null)
 
 /** 当前选中 nav id（'workspace' 或模块 id）。 */
 const selectedId = ref('workspace')
 
 /** 手机端「我的」动作单开合（底部标签栏 → 用户名 + 退出）。 */
 const sheetOpen = ref(false)
+
+/**
+ * 管理台入口显隐（#166）：只信 /api/me 的 role，非 admin 完全不渲染。
+ * 前端只是视图判断；真值守卫在服务端 /api/admin/* 与 AdminLayout（§6.5 权限真值）。
+ */
+const isAdmin = computed(() => user.value?.role === 'admin')
+
+/** 管理台首页（#166）：与 AdminLayout 的 /admin → /admin/members 落地一致。 */
+const ADMIN_HOME = '/admin/members'
 
 const nav = computed<NavItem[]>(() =>
   buildNav(modules.value.map((m) => ({ id: m.id, enabled: m.enabled, icon: m.manifest?.icon }))),
@@ -55,7 +66,7 @@ onMounted(async () => {
     window.location.assign(`/login?next=${encodeURIComponent(next)}`)
     return
   }
-  user.value = { id: me.user.id, name: me.user.name }
+  user.value = { id: me.user.id, name: me.user.name, role: me.user.role }
 
   // ② 拉注册表 + ③ 落地（可重试）
   await loadModules()
@@ -140,14 +151,21 @@ function onTabClick(item: NavItem) {
       </nav>
 
       <div class="shell-sidebar-footer">
-        <div class="shell-user">
-          <span class="shell-user-avatar" aria-hidden="true">{{ user?.name?.charAt(0) ?? '?' }}</span>
-          <span class="shell-user-name">{{ user?.name ?? '…' }}</span>
+        <!-- 管理台入口（#166）：仅 admin 渲染（非 admin 无此 DOM，不只是视觉隐藏） -->
+        <RouterLink v-if="isAdmin" class="shell-admin-entry" :to="ADMIN_HOME">
+          <ShieldCheck :size="16" aria-hidden="true" />
+          管理台
+        </RouterLink>
+        <div class="shell-user-row">
+          <div class="shell-user">
+            <span class="shell-user-avatar" aria-hidden="true">{{ user?.name?.charAt(0) ?? '?' }}</span>
+            <span class="shell-user-name">{{ user?.name ?? '…' }}</span>
+          </div>
+          <button type="button" class="shell-logout" aria-label="退出登录" @click="onLogout">
+            <LogOut :size="16" aria-hidden="true" />
+            退出
+          </button>
         </div>
-        <button type="button" class="shell-logout" aria-label="退出登录" @click="onLogout">
-          <LogOut :size="16" aria-hidden="true" />
-          退出
-        </button>
       </div>
     </aside>
 
@@ -231,6 +249,16 @@ function onTabClick(item: NavItem) {
           <span class="shell-user-avatar" aria-hidden="true">{{ user?.name?.charAt(0) ?? '?' }}</span>
           <span class="shell-sheet-username">{{ user?.name ?? '…' }}</span>
         </div>
+        <!-- 管理台入口（#166）：手机同页可进管理台（SPEC §8）；点击先收起动作单 -->
+        <RouterLink
+          v-if="isAdmin"
+          class="shell-sheet-admin"
+          :to="ADMIN_HOME"
+          @click="sheetOpen = false"
+        >
+          <ShieldCheck :size="16" aria-hidden="true" />
+          管理台
+        </RouterLink>
         <UButton class="shell-sheet-logout" @click="onLogout">
           <LogOut :size="16" aria-hidden="true" />
           退出登录
@@ -346,11 +374,41 @@ function onTabClick(item: NavItem) {
 
 .shell-sidebar-footer {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: var(--unself-space-2);
   padding: var(--unself-space-3) var(--unself-space-4);
   border-top: 1px solid var(--unself-color-border);
+}
+.shell-user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--unself-space-2);
+  min-width: 0;
+}
+
+/* 管理台入口（#166）：桌面用户区，行样式与侧栏导航项同族 */
+.shell-admin-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--unself-space-2);
+  height: 32px;
+  padding: 0 var(--unself-space-2);
+  border-radius: var(--unself-radius-md);
+  color: var(--unself-color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+  text-decoration: none;
+  transition:
+    background-color var(--unself-duration-fast) var(--unself-ease-out),
+    color var(--unself-duration-fast) var(--unself-ease-out);
+}
+.shell-admin-entry:hover {
+  background: var(--unself-color-surface-hover);
+  color: var(--unself-color-text);
+}
+.shell-admin-entry:focus-visible {
+  outline: var(--unself-focus-ring);
+  outline-offset: 2px;
 }
 .shell-user {
   display: flex;
@@ -533,6 +591,29 @@ function onTabClick(item: NavItem) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.shell-sheet-admin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--unself-space-2);
+  height: 40px;
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-surface);
+  color: var(--unself-color-text-secondary);
+  font-size: var(--unself-font-size-base);
+  text-decoration: none;
+  transition:
+    background-color var(--unself-duration-fast) var(--unself-ease-out),
+    color var(--unself-duration-fast) var(--unself-ease-out);
+}
+.shell-sheet-admin:hover {
+  background: var(--unself-color-surface-hover);
+  color: var(--unself-color-text);
+}
+.shell-sheet-admin:focus-visible {
+  outline: var(--unself-focus-ring);
+  outline-offset: 2px;
+}
 .shell-sheet-logout {
   width: 100%;
 }
@@ -542,6 +623,12 @@ function onTabClick(item: NavItem) {
   }
   to {
     transform: translateY(0);
+  }
+}
+/* 降低动效偏好：动作单瞬切（原先未限幅，随本次改动补齐） */
+@media (prefers-reduced-motion: reduce) {
+  .shell-sheet {
+    animation: none;
   }
 }
 </style>
