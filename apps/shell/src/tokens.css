@@ -73,3 +73,6 @@
   --unself-duration-spin: 800ms;
   --unself-duration-shimmer: 1400ms;
 }
+
+/* F7 断点令牌可行性实测（#192）：临时 */
+@custom-media --unself-bp-md (max-width: 768px);

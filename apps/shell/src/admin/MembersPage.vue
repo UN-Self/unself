@@ -174,6 +174,26 @@ function statusText(status: AdminMember['status']): string {
         </div>
       </div>
     </div>
+
+    <!-- 停用二次确认（#192 F6：站内确认替代 window.confirm） -->
+    <ConfirmDialog
+      v-model="disableOpen"
+      kind="danger"
+      title="停用成员"
+      :message="disableTarget ? disableHint(disableTarget) : ''"
+      confirm-label="停用"
+      @confirm="onDisableConfirm"
+    />
+
+    <!-- 重置密码（#192 F6：站内输入替代 window.prompt；长度/一致性前置校验在弹层内） -->
+    <ConfirmDialog
+      v-model="resetOpen"
+      with-password
+      title="重置登录密码"
+      :message="resetTarget ? `为 ${resetTarget.display_name ?? resetTarget.email ?? resetTarget.id} 设置新的登录密码` : ''"
+      confirm-label="重置"
+      @confirm="onResetConfirm"
+    />
   </div>
 </template>
 

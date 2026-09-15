@@ -12,6 +12,7 @@ import { buildNav, isHostView, type NavItem } from './lib/nav'
 import { fetchEnabledModules, type ApiError, type RegistryModule } from './lib/registry-api'
 import { fetchMe, logout } from './lib/session-api'
 import { moduleInitial, resolveModuleIcon } from './lib/module-icon'
+import { useLayerFocus } from './lib/use-layer-focus'
 
 /**
  * 工作台壳（#12，§6.5 动线；#83 拆分后只剩布局与导航）：
@@ -41,6 +42,9 @@ const selectedId = ref('workspace')
 
 /** 手机端「我的」动作单开合（底部标签栏 → 用户名 + 退出）。 */
 const sheetOpen = ref(false)
+const sheetLayer = ref<HTMLElement | null>(null)
+/** #192 F5：动作单 Esc 关闭 + 打开焦点入内 + 关闭焦点回「我的」标签（同一基元，复用面见 use-layer-focus）。 */
+const { onKeydown: onSheetKeydown } = useLayerFocus(sheetOpen, () => sheetLayer.value)
 
 /**
  * 管理台入口显隐（#166）：只信 /api/me 的 role，非 admin 完全不渲染。
@@ -253,10 +257,13 @@ function onTabClick(item: NavItem) {
     <!-- 手机端「我的」动作单：用户名 + 退出（复用 onLogout，#83） -->
     <div v-if="sheetOpen" class="shell-sheet-backdrop" @click="sheetOpen = false">
       <section
+        ref="sheetLayer"
         class="shell-sheet"
         role="dialog"
         aria-modal="true"
         aria-label="我的"
+        tabindex="-1"
+        @keydown="onSheetKeydown"
         @click.stop
       >
         <div class="shell-sheet-handle" aria-hidden="true" />
