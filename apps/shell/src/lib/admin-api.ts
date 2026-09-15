@@ -109,6 +109,8 @@ export interface MailSettings {
   username: string
   password: string
   from: string
+  /** 应用密码说明页跳转目标（#168 展示用；#184 起可在设置页直接填）。空 = 后端按 domain 推导 https://mail.<domain>。 */
+  portalUrl: string
 }
 
 export interface InstanceSettings {

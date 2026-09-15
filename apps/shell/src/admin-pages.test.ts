@@ -284,6 +284,8 @@ describe('MembersPage 停用/启用（#17 + #192 F6）', () => {
 
 describe('SettingsPage 保存与测试连接（#17）', () => {
   beforeEach(() => {
+    // 调用史清零：上一例的 saveSettings 调用不得泄漏到下一例的「调用次数」断言
+    vi.clearAllMocks()
     vi.mocked(fetchSettings).mockResolvedValue({
       oidc: { issuer: 'https://idp.example.com', clientId: 'c1', clientSecret: SECRET_MASK, scope: 'openid' },
       mail: {
@@ -296,9 +298,34 @@ describe('SettingsPage 保存与测试连接（#17）', () => {
         username: '',
         password: '',
         from: '',
+        portalUrl: '',
       },
     })
     vi.mocked(saveSettings).mockResolvedValue({ ok: true })
+  })
+
+  it('#184：填了邮箱门户地址 → PUT 带 portalUrl；清空 → PUT 带空串（后端清覆盖、回落推导）', async () => {
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    // 填值保存：PUT 里出现 portalUrl
+    const portal = wrapper.findAll('input').find((i) => i.attributes('placeholder')?.includes('留空'))
+    expect(portal).toBeDefined()
+    await portal!.setValue('https://portal.example.com/app-passwords')
+    await wrapper.findAll('button').find((b) => b.text().includes('保存'))!.trigger('click')
+    await flushPromises()
+    expect(saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ mail: expect.objectContaining({ portalUrl: 'https://portal.example.com/app-passwords' }) }),
+    )
+
+    // 清空再保存：空串（= 让后端删掉覆盖键、回落按域名推导），不是「不发该字段」
+    vi.mocked(saveSettings).mockClear()
+    await portal!.setValue('')
+    await wrapper.findAll('button').find((b) => b.text().includes('保存'))!.trigger('click')
+    await flushPromises()
+    expect(saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ mail: expect.objectContaining({ portalUrl: '' }) }),
+    )
   })
 
   it('保存：密钥留空 → PUT body 不含密钥字段，只发改动/非空字段', async () => {
@@ -428,6 +455,7 @@ describe('SettingsPage 邮件轴开关（P4）', () => {
         username: '',
         password: '',
         from: '',
+        portalUrl: '',
       },
     })
     vi.mocked(saveSettings).mockResolvedValue({ ok: true })
@@ -499,6 +527,7 @@ describe('SettingsPage 邮件轴开关（P4）', () => {
         username: '',
         password: '',
         from: '',
+        portalUrl: '',
       },
     })
     const wrapper = mount(SettingsPage)
