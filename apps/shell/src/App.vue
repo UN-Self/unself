@@ -166,21 +166,21 @@ function onTabClick(item: NavItem) {
 
       <div class="shell-sidebar-footer">
         <!-- 应用密码入口（#168）：仅邮件轴开启时渲染（成员可见，位置同管理台） -->
-        <RouterLink v-if="mailEnabled" class="shell-mail-entry" :to="APP_PASSWORD_HOME">
+        <RouterLink v-if="mailEnabled" class="shell-mail-entry" data-test="mail-entry" :to="APP_PASSWORD_HOME">
           <KeyRound :size="16" aria-hidden="true" />
           应用密码
         </RouterLink>
         <!-- 管理台入口（#166）：仅 admin 渲染（非 admin 无此 DOM，不只是视觉隐藏） -->
-        <RouterLink v-if="isAdmin" class="shell-admin-entry" :to="ADMIN_HOME">
+        <RouterLink v-if="isAdmin" class="shell-admin-entry" data-test="admin-entry" :to="ADMIN_HOME">
           <ShieldCheck :size="16" aria-hidden="true" />
           管理台
         </RouterLink>
         <div class="shell-user-row">
           <div class="shell-user">
             <span class="shell-user-avatar" aria-hidden="true">{{ user?.name?.charAt(0) ?? '?' }}</span>
-            <span class="shell-user-name">{{ user?.name ?? '…' }}</span>
+            <span class="shell-user-name" data-test="user-name">{{ user?.name ?? '…' }}</span>
           </div>
-          <button type="button" class="shell-logout" aria-label="退出登录" @click="onLogout">
+          <button type="button" class="shell-logout" data-test="logout" aria-label="退出登录" @click="onLogout">
             <LogOut :size="16" aria-hidden="true" />
             退出
           </button>
@@ -242,6 +242,7 @@ function onTabClick(item: NavItem) {
         :key="item.id"
         type="button"
         class="shell-tab"
+        :data-test="item.id === ME_TAB.id ? 'me-tab' : 'module-tab'"
         :class="{ 'shell-tab-active': selectedId === item.id }"
         :aria-current="selectedId === item.id ? 'page' : undefined"
         :aria-haspopup="item.id === ME_TAB.id ? 'dialog' : undefined"
@@ -255,10 +256,11 @@ function onTabClick(item: NavItem) {
     </nav>
 
     <!-- 手机端「我的」动作单：用户名 + 退出（复用 onLogout，#83） -->
-    <div v-if="sheetOpen" class="shell-sheet-backdrop" @click="sheetOpen = false">
+    <div v-if="sheetOpen" class="shell-sheet-backdrop" data-test="me-sheet-backdrop" @click="sheetOpen = false">
       <section
         ref="sheetLayer"
         class="shell-sheet"
+        data-test="me-sheet"
         role="dialog"
         aria-modal="true"
         aria-label="我的"
@@ -291,7 +293,7 @@ function onTabClick(item: NavItem) {
           <ShieldCheck :size="16" aria-hidden="true" />
           管理台
         </RouterLink>
-        <UButton class="shell-sheet-logout" @click="onLogout">
+        <UButton class="shell-sheet-logout" data-test="sheet-logout" @click="onLogout">
           <LogOut :size="16" aria-hidden="true" />
           退出登录
         </UButton>

@@ -190,7 +190,8 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     await settle()
     expect(fetchModuleToken).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('模块加载失败')
-    const retry = wrapper.find('button.u-error-retry')
+    // 重试入口 = 异常卡上的重试按钮（用户可见文案定位，非样式类名）
+    const retry = wrapper.find('[data-test="module-error-card"] button')
     expect(retry.text()).toBe('重新加载')
 
     // retry：frameReload 自增 → iframe 按 key 重挂（DOM 元素被替换）
@@ -251,9 +252,9 @@ describe('App.vue 退出登录行为', () => {
 
   it('长用户名：桌面侧栏「退出」可点，点击触发 logout 并跳 /login', async () => {
     const wrapper = await mountAs(LONG_NAME)
-    expect(wrapper.find('.shell-user-name').text()).toBe(LONG_NAME)
+    expect(wrapper.find('[data-test="user-name"]').text()).toBe(LONG_NAME)
 
-    const btn = wrapper.find('.shell-logout')
+    const btn = wrapper.find('[data-test="logout"]')
     expect(btn.text()).toBe('退出')
     await btn.trigger('click')
     await flushPromises()
@@ -265,9 +266,9 @@ describe('App.vue 退出登录行为', () => {
 
   it('短用户名回归：同一登出契约不被破坏', async () => {
     const wrapper = await mountAs(SHORT_NAME)
-    expect(wrapper.find('.shell-user-name').text()).toBe(SHORT_NAME)
+    expect(wrapper.find('[data-test="user-name"]').text()).toBe(SHORT_NAME)
 
-    const btn = wrapper.find('.shell-logout')
+    const btn = wrapper.find('[data-test="logout"]')
     await btn.trigger('click')
     await flushPromises()
 
@@ -279,17 +280,17 @@ describe('App.vue 退出登录行为', () => {
   it('移动端：底部标签栏「我的」→ 动作单显示用户名与退出，退出即登出跳 /login', async () => {
     const wrapper = await mountAs(SHORT_NAME)
 
-    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')
+    const meTab = wrapper.findAll('[data-test="me-tab"]').find((b) => b.text() === '我的')
     expect(meTab).toBeTruthy()
     await meTab!.trigger('click')
 
     // 动作单展示用户名 + 退出按钮（可点击性 = 行为契约）
-    const sheet = wrapper.find('.shell-sheet')
+    const sheet = wrapper.find('[data-test="me-sheet"]')
     expect(sheet.exists()).toBe(true)
     expect(sheet.text()).toContain(SHORT_NAME)
     expect(sheet.text()).toContain('退出登录')
 
-    await wrapper.find('.shell-sheet-logout').trigger('click')
+    await wrapper.find('[data-test="sheet-logout"]').trigger('click')
     await flushPromises()
     expect(logout).toHaveBeenCalledTimes(1)
     expect(assignMock).toHaveBeenCalledWith('/login')
@@ -299,12 +300,12 @@ describe('App.vue 退出登录行为', () => {
   it('移动端动作单：点遮罩关闭（不触发登出）', async () => {
     const wrapper = await mountAs(SHORT_NAME)
 
-    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')
+    const meTab = wrapper.findAll('[data-test="me-tab"]').find((b) => b.text() === '我的')
     await meTab!.trigger('click')
-    expect(wrapper.find('.shell-sheet').exists()).toBe(true)
+    expect(wrapper.find('[data-test="me-sheet"]').exists()).toBe(true)
 
-    await wrapper.find('.shell-sheet-backdrop').trigger('click')
-    expect(wrapper.find('.shell-sheet').exists()).toBe(false)
+    await wrapper.find('[data-test="me-sheet-backdrop"]').trigger('click')
+    expect(wrapper.find('[data-test="me-sheet"]').exists()).toBe(false)
     expect(logout).not.toHaveBeenCalled()
     wrapper.unmount()
   })
@@ -353,7 +354,7 @@ describe('App.vue 管理台入口（#166）', () => {
 
   /** 手机端「我的」动作单：底部标签栏既定入口（#83），返回对话框容器。 */
   async function openMeSheet(wrapper: ReturnType<typeof mount>) {
-    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')
+    const meTab = wrapper.findAll('[data-test="me-tab"]').find((b) => b.text() === '我的')
     expect(meTab).toBeTruthy()
     await meTab!.trigger('click')
     return wrapper.find('[role="dialog"]')
@@ -384,7 +385,7 @@ describe('App.vue 管理台入口（#166）', () => {
     await mobile.trigger('click')
     await flushPromises()
     expect(currentPath()).toBe('/admin/members')
-    expect(wrapper.find('.shell-sheet').exists()).toBe(false)
+    expect(wrapper.find('[data-test="me-sheet"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -446,7 +447,7 @@ describe('App.vue 应用密码入口（成员可见）', () => {
   it('邮件轴开：手机「我的」动作单同样有入口，点击进说明页并收起动作单', async () => {
     const wrapper = await mountAsMail(true)
 
-    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')
+    const meTab = wrapper.findAll('[data-test="me-tab"]').find((b) => b.text() === '我的')
     await meTab!.trigger('click')
     const sheet = wrapper.find('[role="dialog"]')
     expect(sheet.exists()).toBe(true)
@@ -458,7 +459,7 @@ describe('App.vue 应用密码入口（成员可见）', () => {
     await mobile.trigger('click')
     await flushPromises()
     expect(currentPath()).toBe('/app-password')
-    expect(wrapper.find('.shell-sheet').exists()).toBe(false)
+    expect(wrapper.find('[data-test="me-sheet"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -467,7 +468,7 @@ describe('App.vue 应用密码入口（成员可见）', () => {
 
     expect(wrapper.findAll(MAIL_ENTRY)).toHaveLength(0)
 
-    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')
+    const meTab = wrapper.findAll('[data-test="me-tab"]').find((b) => b.text() === '我的')
     await meTab!.trigger('click')
     expect(wrapper.findAll(MAIL_ENTRY)).toHaveLength(0)
     expect(currentPath()).toBe('/')

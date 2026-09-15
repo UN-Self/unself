@@ -40,6 +40,7 @@ const errorTitle = computed(() =>
     <div v-if="frameState === 'failed'" class="mh-frame-error">
       <UErrorCard
         class="mh-error-card"
+        data-test="module-error-card"
         :title="errorTitle"
         :message="frameError?.message"
         :request-id="frameError && 'requestId' in frameError ? frameError.requestId : undefined"

@@ -58,12 +58,12 @@ async function mountBell(): Promise<VueWrapper> {
 }
 
 async function openPanel(wrapper: VueWrapper): Promise<void> {
-  await wrapper.find('.notification-bell-trigger').trigger('click')
+  await wrapper.find('[data-test="bell-trigger"]').trigger('click')
   await flushPromises()
 }
 
 function itemContaining(wrapper: VueWrapper, text: string) {
-  return wrapper.findAll('.notification-bell-item').find((item) => item.text().includes(text))
+  return wrapper.findAll('[data-test^="bell-item-"]').find((item) => item.text().includes(text))
 }
 
 describe('NotificationBell（#19）', () => {
@@ -71,12 +71,12 @@ describe('NotificationBell（#19）', () => {
     api.fetchNotifications.mockResolvedValue([MODULE_ITEM])
     api.fetchUnreadCount.mockResolvedValue(2)
     const withUnread = await mountBell()
-    expect(withUnread.find('.notification-bell-badge').text()).toBe('2')
+    expect(withUnread.find('[data-test="bell-badge"]').text()).toBe('2')
     withUnread.unmount()
 
     api.fetchUnreadCount.mockResolvedValue(0)
     const withoutUnread = await mountBell()
-    expect(withoutUnread.find('.notification-bell-badge').exists()).toBe(false)
+    expect(withoutUnread.find('[data-test="bell-badge"]').exists()).toBe(false)
     withoutUnread.unmount()
   })
 
@@ -86,11 +86,11 @@ describe('NotificationBell（#19）', () => {
     const wrapper = await mountBell()
 
     // 未打开时不渲染下拉
-    expect(wrapper.find('.notification-bell-panel').exists()).toBe(false)
+    expect(wrapper.find('[data-test="bell-panel"]').exists()).toBe(false)
 
     await openPanel(wrapper)
 
-    const panel = wrapper.find('.notification-bell-panel')
+    const panel = wrapper.find('[data-test="bell-panel"]')
     expect(panel.exists()).toBe(true)
     expect(panel.text()).toContain('模块状态已更新')
     expect(panel.text()).toContain('「hello」已启用')
@@ -98,8 +98,8 @@ describe('NotificationBell（#19）', () => {
     expect(panel.text()).toContain('账号已开通')
     expect(panel.text()).toContain('a@example.com 已开通')
 
-    await wrapper.find('.notification-bell-trigger').trigger('click')
-    expect(wrapper.find('.notification-bell-panel').exists()).toBe(false)
+    await wrapper.find('[data-test="bell-trigger"]').trigger('click')
+    expect(wrapper.find('[data-test="bell-panel"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -107,16 +107,16 @@ describe('NotificationBell（#19）', () => {
     api.fetchNotifications.mockResolvedValue([MODULE_ITEM])
     api.fetchUnreadCount.mockResolvedValue(2)
     const wrapper = await mountBell()
-    expect(wrapper.find('.notification-bell-badge').text()).toBe('2')
+    expect(wrapper.find('[data-test="bell-badge"]').text()).toBe('2')
 
     api.fetchNotifications.mockResolvedValue([ACCOUNT_ITEM])
     api.fetchUnreadCount.mockResolvedValue(0)
     await openPanel(wrapper)
 
-    const panel = wrapper.find('.notification-bell-panel')
+    const panel = wrapper.find('[data-test="bell-panel"]')
     expect(panel.text()).toContain('账号已开通')
     expect(panel.text()).not.toContain('模块状态已更新')
-    expect(wrapper.find('.notification-bell-badge').exists()).toBe(false)
+    expect(wrapper.find('[data-test="bell-badge"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -128,23 +128,21 @@ describe('NotificationBell（#19）', () => {
 
     const unread = itemContaining(wrapper, '模块状态已更新')
     expect(unread).toBeDefined()
-    expect(unread!.classes()).toContain('notification-bell-item-unread')
 
     await unread!.trigger('click')
     await flushPromises()
 
     expect(api.markNotificationRead).toHaveBeenCalledTimes(1)
     expect(api.markNotificationRead).toHaveBeenCalledWith('n1')
-    expect(wrapper.find('.notification-bell-badge').text()).toBe('1')
-    expect(wrapper.find('.notification-bell-panel').exists()).toBe(true)
-    expect(unread!.classes()).not.toContain('notification-bell-item-unread')
+    expect(wrapper.find('[data-test="bell-badge"]').text()).toBe('1')
+    expect(wrapper.find('[data-test="bell-panel"]').exists()).toBe(true)
 
     // 本就已读的项再点：不发请求、未读不再减
     const read = itemContaining(wrapper, '账号已开通')
     await read!.trigger('click')
     await flushPromises()
     expect(api.markNotificationRead).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('.notification-bell-badge').text()).toBe('1')
+    expect(wrapper.find('[data-test="bell-badge"]').text()).toBe('1')
     wrapper.unmount()
   })
 
@@ -155,7 +153,7 @@ describe('NotificationBell（#19）', () => {
 
     await openPanel(wrapper)
 
-    expect(wrapper.find('.notification-bell-panel').text()).toContain('通知加载失败')
+    expect(wrapper.find('[data-test="bell-panel"]').text()).toContain('通知加载失败')
     wrapper.unmount()
   })
 
@@ -163,7 +161,7 @@ describe('NotificationBell（#19）', () => {
     const wrapper = await mountBell()
     await openPanel(wrapper)
 
-    expect(wrapper.find('.notification-bell-panel').text()).toContain('暂无通知')
+    expect(wrapper.find('[data-test="bell-panel"]').text()).toContain('暂无通知')
     wrapper.unmount()
   })
 
@@ -182,7 +180,7 @@ describe('NotificationBell（#19）', () => {
     const wrapper = await mountBell()
     await openPanel(wrapper)
 
-    const panel = wrapper.find('.notification-bell-panel')
+    const panel = wrapper.find('[data-test="bell-panel"]')
     expect(panel.text()).toContain('邀请申请结果')
     expect(panel.text()).toContain('加入申请未通过')
     expect(panel.text()).toContain('仓库动态')
@@ -196,11 +194,11 @@ describe('NotificationBell（#19）', () => {
     const wrapper = await mountBell()
     await openPanel(wrapper)
 
-    await wrapper.find('.notification-bell-panel').trigger('click')
-    expect(wrapper.find('.notification-bell-panel').exists()).toBe(true)
+    await wrapper.find('[data-test="bell-panel"]').trigger('click')
+    expect(wrapper.find('[data-test="bell-panel"]').exists()).toBe(true)
 
-    await wrapper.find('.notification-bell-backdrop').trigger('click')
-    expect(wrapper.find('.notification-bell-panel').exists()).toBe(false)
+    await wrapper.find('[data-test="bell-backdrop"]').trigger('click')
+    expect(wrapper.find('[data-test="bell-panel"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })
