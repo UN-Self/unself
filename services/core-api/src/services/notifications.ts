@@ -10,6 +10,8 @@
  * - 邮件渠道查 mail 段装配状态，段缺失/不完整即静默降级（与 routes/settings.ts 同口径）。
  * - 弱化实例（无邮件）邀请审批闭环可用：invite_result 对尚未建档的受邀人先按
  *   invited_email 悬挂站内通知，首登建档后由 bindPendingNotifications 归属（#47/#49）。
+ * - 落库与邮件渲染分离（#188 S4）：邮件拿完整 payload 渲染，站内 payload 先按
+ *   PAYLOAD_SCOPES 脱敏再持久化——一次性激活链接/令牌不进库，只留「链接已生成」标记。
  */
 import {
   createMailSenderFromConfig,
@@ -108,7 +110,46 @@ async function resolveRecipients(
   return [{ userId: recipient.userId, invitedEmail: null, email: stored ?? null }];
 }
 
-/** 按类型渲染邮件：已知类型走 mail-smtp 模板，未来类型用类型表 template 作主题、正文留空。 */
+/**
+ * 站内 payload 字段面（#188 S4）：列出「只给邮件」的字段与脱敏标记。
+ * - emailOnly：只在邮件渲染时可见，站内持久化前剥掉（一次性令牌/激活链接不落库）；
+ * - inAppMarker：剥字段后补进站内 payload 的脱敏标记，让站内一眼看出
+ *   「链接已生成但本体不在库里」；
+ * - 未登记的类型 = 全字段两边一致（新类型无须登记即保持今天的行为）。
+ * 新增「只给邮件」的敏感字段时只改这张表，别在调用方手工裁剪 payload
+ * （裁剪点在服务层，全部触发路径共用同一口径）。
+ */
+interface PayloadScope {
+  emailOnly: readonly string[];
+  inAppMarker?: Record<string, unknown>;
+}
+
+const PAYLOAD_SCOPES: Record<string, PayloadScope> = {
+  account_ready: { emailOnly: ['activateUrl'], inAppMarker: { activateLinkGenerated: true } },
+};
+
+/**
+ * 站内持久化 payload：剥掉该类型声明为 emailOnly 的字段，再补脱敏标记。
+ * 未登记类型原样返回（同一对象引用）；不改动入参——邮件渲染随后仍用完整 payload。
+ */
+function inAppPayload(type: string, payload: Record<string, unknown>): Record<string, unknown> {
+  const scope = PAYLOAD_SCOPES[type];
+  if (!scope) {
+    return payload;
+  }
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (!scope.emailOnly.includes(key)) {
+      sanitized[key] = value;
+    }
+  }
+  return { ...sanitized, ...scope.inAppMarker };
+}
+
+/**
+ * 按类型渲染邮件：已知类型走 mail-smtp 模板，未来类型用类型表 template 作主题、正文留空。
+ * 入参 payload 是调用方原样传入的完整值（含只给邮件的字段，如 account_ready 的 activateUrl）。
+ */
 function renderNotification(
   type: string,
   template: string,
@@ -135,8 +176,9 @@ function renderNotification(
 /**
  * 触发一次通知投递（内部口径，不暴露 HTTP）：
  * 1. 按 type 查渠道位；无该类型 → null（不投递）；
- * 2. in_app=1 → 逐收件人写站内行（payload 原样 JSON 存储）；
- * 3. email=1 且有 sender → 逐收件人发信，单封失败各自落审计，不影响站内与其他收件人。
+ * 2. in_app=1 → 逐收件人写站内行（payload 经 inAppPayload 脱敏后 JSON 存储）；
+ * 3. email=1 且有 sender → 逐收件人用完整 payload 渲染发信，单封失败各自落审计，
+ *    不影响站内与其他收件人。
  */
 export async function deliverNotification(
   db: D1Database,
@@ -162,7 +204,13 @@ export async function deliverNotification(
         .prepare(
           'INSERT INTO notifications (id, user_id, invited_email, type, payload) VALUES (?, ?, ?, ?, ?)',
         )
-        .bind(crypto.randomUUID(), target.userId, target.invitedEmail, type, JSON.stringify(payload))
+        .bind(
+          crypto.randomUUID(),
+          target.userId,
+          target.invitedEmail,
+          type,
+          JSON.stringify(inAppPayload(type, payload)),
+        )
         .run();
       inApp += 1;
     }
