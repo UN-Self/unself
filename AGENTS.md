@@ -20,7 +20,7 @@
 
 ## 编排规范（主会话）
 
-**派工**：herdr agent（引擎 pi + GLM 5.3 flash；pane ID ≠ tab ID，`herdr pane list` 查；`herdr agent start` 时传 pane ID）。任务书写 `/tmp/task-<issue>.md`（含硬边界/验收对照）；每个 worker 独立 worktree（分支 `m<M>/issue-<N>`）——worktree 内**禁 git switch、禁 stash**（stash 是全仓共享，会炸）、禁碰主仓库。改动面互不相交才并行；共享文件/紧耦合留主会话。
+**派工**：herdr agent（引擎 pi；pane ID ≠ tab ID，`herdr pane list` 查；`herdr agent start` 时传 pane ID）。任务书写 `/tmp/task-<issue>.md`（含硬边界/验收对照）；每个 worker 独立 worktree（分支 `m<M>/issue-<N>`）——worktree 内**禁 git switch、禁 stash**（stash 是全仓共享，会炸）、禁碰主仓库。改动面互不相交才并行；共享文件/紧耦合留主会话。
 
 **五关验收（合并前缺一不可）**：
 1. diff/边界复核（越界改动要么退回要么明示批准）
