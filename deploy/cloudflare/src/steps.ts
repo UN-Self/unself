@@ -499,6 +499,7 @@ export function coreWorkerEntrySource(outDir: string, rootDir: string): string {
 // 由 deploy/cloudflare 生成（生产组合根）：core-api app（注入 Stalwart 适配器）+ 未命中路径回退 SPA 资产。
 import { createApp } from '${rel('services/core-api/src/index.ts')}';
 import { createStalwartMailProvisioner } from '${rel('adapters/provisioning/stalwart/src/index.ts')}';
+import { withHtmlSecurityHeaders } from '${rel('services/core-api/src/security-headers.ts')}';
 
 const app = createApp({ createMailProvisioner: (cfg) => createStalwartMailProvisioner(cfg) });
 
@@ -513,7 +514,9 @@ export default {
         request.method !== 'GET') {
       return res;
     }
-    return env.ASSETS.fetch(new URL('/', url.origin).toString(), request);
+    // 决策 #47：/<domain>/setup* 走 Worker（run_worker_first），其 HTML 不经静态资产
+    // 的 _headers，故在这里补同一套安全头（值同源：security-headers.ts）。
+    return withHtmlSecurityHeaders(await env.ASSETS.fetch(new URL('/', url.origin).toString(), request));
   },
 };
 `;
