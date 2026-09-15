@@ -331,3 +331,98 @@ describe('管理端成员生命周期（#49）', () => {
     expect(setupToken.status).toBe(401);
   });
 });
+
+/**
+ * 应用密码说明页的成员能力（#168）：/api/me 的 mailEnabled + mailPortalUrl。
+ * 成员态可达（非 admin）是刻意为之——说明页是成员功能，不是管理功能；
+ * mailPortalUrl 是服务端解析好的最终跳转目标（portalUrl 优先，domain 推导兜底）。
+ */
+describe('应用密码说明页能力（#168）', () => {
+  it('mail 段配了 portalUrl：成员拿到的 mailEnabled=true + mailPortalUrl=portalUrl（优先于 domain 推导）', async () => {
+    const app = createApp();
+    const { env, db, memberCookie } = await envFor();
+    db.run(
+      'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+      'mail',
+      JSON.stringify({ domain: 'example.com', portalUrl: 'https://portal.example.com/app-passwords' }),
+    );
+
+    const res = await app.request(
+      'https://team.example.com/api/me',
+      { headers: { cookie: memberCookie } },
+      env,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { mailEnabled: boolean; mailPortalUrl: string | null };
+    expect(body.mailEnabled).toBe(true);
+    expect(body.mailPortalUrl).toBe('https://portal.example.com/app-passwords');
+  });
+
+  it('mail 段只有 domain：mailPortalUrl 推导为 https://mail.<domain>', async () => {
+    const app = createApp();
+    const { env, db, memberCookie } = await envFor();
+    db.run(
+      'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+      'mail',
+      JSON.stringify({ domain: 'example.com', host: 'smtp.example.com' }),
+    );
+
+    const res = await app.request(
+      'https://team.example.com/api/me',
+      { headers: { cookie: memberCookie } },
+      env,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { mailEnabled: boolean; mailPortalUrl: string | null };
+    expect(body.mailEnabled).toBe(true);
+    expect(body.mailPortalUrl).toBe('https://mail.example.com');
+  });
+
+  it('mail 段两者都缺：轴开但 mailPortalUrl=null（说明页只禁用跳转，不是关闭轴）', async () => {
+    const app = createApp();
+    const { env, db, memberCookie } = await envFor();
+    db.run(
+      'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+      'mail',
+      JSON.stringify({ baseUrl: 'https://mail.example.com', apiKey: 'k' }),
+    );
+
+    const res = await app.request(
+      'https://team.example.com/api/me',
+      { headers: { cookie: memberCookie } },
+      env,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { mailEnabled: boolean; mailPortalUrl: string | null };
+    expect(body.mailEnabled).toBe(true);
+    expect(body.mailPortalUrl).toBeNull();
+  });
+
+  it('邮件轴关闭 / 无 mail 行：mailEnabled=false 且不给门户地址（不误导）', async () => {
+    const app = createApp();
+    const { env, db, memberCookie } = await envFor();
+    db.run(
+      'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+      'mail',
+      JSON.stringify({ domain: 'example.com', enabled: false }),
+    );
+
+    const off = await app.request(
+      'https://team.example.com/api/me',
+      { headers: { cookie: memberCookie } },
+      env,
+    );
+    expect(off.status).toBe(200);
+    expect(await off.json()).toMatchObject({ mailEnabled: false, mailPortalUrl: null });
+
+    // 无 mail 行（弱化实例）同口径：仍可登录，只是没有邮件能力。
+    const weak = await envFor();
+    const weakRes = await createApp().request(
+      'https://team.example.com/api/me',
+      { headers: { cookie: weak.memberCookie } },
+      weak.env,
+    );
+    expect(weakRes.status).toBe(200);
+    expect(await weakRes.json()).toMatchObject({ mailEnabled: false, mailPortalUrl: null });
+  });
+});

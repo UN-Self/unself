@@ -20,7 +20,8 @@ const OIDC_KEYS = {
 
 /**
  * mail 段 JSON 字段（key='mail' 单条）：
- * stalwart-provisioner 消费 baseUrl/apiKey/domain，mail-smtp 消费 host/port/username/password/from。
+ * stalwart-provisioner 消费 baseUrl/apiKey/domain，mail-smtp 消费 host/port/username/password/from，
+ * portalUrl 仅供成员应用密码说明页跳转（#168，展示用）。
  */
 const MAIL_FIELDS = [
   'baseUrl',
@@ -31,6 +32,7 @@ const MAIL_FIELDS = [
   'username',
   'password',
   'from',
+  'portalUrl',
 ] as const;
 
 type OidcField = keyof typeof OIDC_KEYS;
@@ -51,6 +53,8 @@ interface MailSettings {
   username: string;
   password: string;
   from: string;
+  /** 邮件门户地址（#168）：缺省空串，成员说明页回退用 domain 推导。 */
+  portalUrl: string;
   /** 邮件轴开关：缺省 true（老数据无字段视为开启，零迁移）。 */
   enabled: boolean;
 }
@@ -79,6 +83,7 @@ const mailSchema = z.object({
   username: z.string().optional(),
   password: z.string().optional(),
   from: z.string().optional(),
+  portalUrl: z.string().optional(),
   enabled: z.boolean().optional(),
 });
 
@@ -138,6 +143,7 @@ async function loadSettings(db: D1Database): Promise<InstanceSettings> {
       username: text(mail.username),
       password: masked(mail.password),
       from: text(mail.from),
+      portalUrl: text(mail.portalUrl),
       enabled: mail.enabled !== false,
     },
   };
