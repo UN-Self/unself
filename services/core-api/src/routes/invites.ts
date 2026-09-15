@@ -361,12 +361,15 @@ async function approveInvite(
       workEmail = account.email;
     } catch (error) {
       if (error instanceof MailProvisionerError && error.code === 'ACCOUNT_EXISTS') {
-        // 可恢复冲突：邀请留在 pending，重批时开户会再试一次；拒绝后重新邀请（M1 不支持改前缀）。
+        // 可恢复冲突（0.16.20 实测：同名建号回 primaryKeyViolation，适配器已归 ACCOUNT_EXISTS，#190）。
+        // #190 B6：败方真实处境是「另一管理员已胜出，本邀请永远批不进」——教「拒绝后重新邀请」
+        // 只会死循环；必须指向真实出路：刷新确认，或到邮件后台处理同名账号后重批。
         // 成员行尚未落库：不存在「用户已建但邮箱待补」的半完成态。
+        await audit(db, session.uid, 'invite_approve_failed', `${invite.email_prefix}（ACCOUNT_EXISTS）`);
         return c.json(
           {
             error: 'invite approve failed',
-            detail: `邮箱前缀「${invite.email_prefix}」已被占用，邀请保持待审批；请拒绝后重新邀请（M1 不支持改前缀）`,
+            detail: `邮箱前缀「${invite.email_prefix}」已被占用，邀请保持待审批；请刷新确认是否另一位管理员已批准同名申请；确需占用请到邮件后台处理同名账号后重批`,
           },
           409,
         );
@@ -375,6 +378,13 @@ async function approveInvite(
       // ACCOUNT_NOT_FOUND→409（人话指向 Stalwart 后台）、认证失败（HTTP 401/403）→502+API Key 指引、
       // 其它→502 透传原因；detail 均保 #114 的「邮箱开户失败：…，邀请保持待审批」人话外壳。
       const failure = classifyProvisionerFailure(error, invite.email_prefix);
+      // #190：approve 失败路径落审计（此前只有成功路径有）——失败无人知晓是 B7 的前车之鉴。
+      await audit(
+        db,
+        session.uid,
+        'invite_approve_failed',
+        `${invite.email_prefix}（${failure.status}）：${error instanceof Error ? error.message : String(error)}`,
+      );
       return c.json(
         {
           error: 'invite approve failed',
@@ -399,10 +409,18 @@ async function approveInvite(
           .bind(userId, userId, invite.display_name, workEmail, invite.personal_email),
         db
           .prepare('INSERT INTO builtin_credentials (user_id, username, password_hash) VALUES (?, ?, ?)')
-          .bind(userId, creds.username, creds.password_hash),
+          .bind(userId, creds.username.toLowerCase(), creds.password_hash),
       ]);
     } catch (error) {
       if (error instanceof Error && error.message.includes('UNIQUE')) {
+        // #190 B7：Stalwart 已预建号、库里用户名撞 UNIQUE——邮箱侧留孤儿账号。
+        // 落审计（事后可查）+ 给管理员可执行的回收步骤（在 Stalwart 删号）。
+        await audit(
+          db,
+          session.uid,
+          'invite_approve_failed',
+          `${creds.username}（UNIQUE 冲突，邮箱账号已预创建待回收）`,
+        );
         return c.json(
           {
             error: 'invite approve failed',

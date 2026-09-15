@@ -178,10 +178,13 @@ export async function updateInviteApplication(
   if (result.meta.changes === 0) {
     return false;
   }
-  // 内置注册凭证（issue-A）：独立表 INSERT，一链接至多一行；未填用户名则不落行
-  if (application.username !== undefined && application.proof !== undefined && application.salt !== undefined) {
-    await saveInviteCredentials(db, tokenHash, application.username, await buildStoredCredential(application.salt, application.proof));
+  // 内置注册凭证（issue-A）：独立表 INSERT，一链接至多一行；重提交不填用户名 → 删旧凭证行
+  // （#190 B8：先带后不带重提交，批准时不得再按旧凭证开内置账号）。
+  if (application.username === undefined || application.proof === undefined || application.salt === undefined) {
+    await db.prepare('DELETE FROM invite_credentials WHERE token_hash = ?').bind(tokenHash).run();
+    return true;
   }
+  await saveInviteCredentials(db, tokenHash, application.username, await buildStoredCredential(application.salt, application.proof));
   return true;
 }
 
