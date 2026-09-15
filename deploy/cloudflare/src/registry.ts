@@ -88,7 +88,6 @@ export function sqlString(value: string): string {
 /** 选中模块的 upsert 语句参数（--json 命令数组形态）。 */
 export function registryUpsertCommand(input: {
   manifest: ModuleManifest;
-  dbPathHint?: never;
 }): { sql: string; binds: [string, number, string, string] } {
   const { manifest } = input;
   const manifestJson = JSON.stringify(manifest);

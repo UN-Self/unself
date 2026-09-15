@@ -221,7 +221,6 @@ describe('provisionAll（③ shell 每次部署重建，#73）', () => {
         config: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } } as UnselfConfig,
         modules: [],
         dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
-        keypair: { existing: true },
         wrangler: {} as unknown as Wrangler,
         log: () => {},
         buildShell,

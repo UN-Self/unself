@@ -14,7 +14,6 @@ import { dirname, join } from 'node:path';
 import { build } from 'esbuild';
 import type { UnselfConfig } from './config';
 import type { ModuleRef } from './config';
-import type { InstanceKeyPair } from './es256';
 import type { Wrangler } from './wrangler';
 
 export type RelPath = string;
@@ -23,8 +22,6 @@ export type RelPath = string;
 export interface Provisioned {
   /** 装配产物根（绝对路径，<root>/.deploy/cloudflare）。 */
   outDir: string;
-  /** 实例对外 base URL（https://domain 或 workers.dev）。 */
-  baseUrl: string;
   /** core Worker 名。 */
   coreName: string;
   /** 生成的 core 部署配置相对路径。 */
@@ -71,7 +68,6 @@ export async function provisionAll(options: {
   config: UnselfConfig;
   modules: ModuleRef[];
   dbIds: { core: string; modules: string };
-  keypair: InstanceKeyPair | { existing: true };
   wrangler: Wrangler;
   log?: (msg: string) => void;
   /**
@@ -94,16 +90,6 @@ export async function provisionAll(options: {
   const shellAssets = join(outDir, 'assets/shell');
   await rm(shellAssets);
   await cp(shellDist, shellAssets, { recursive: true });
-
-  // ---- 实例 base URL（workers.dev 回退）----
-  const coreName = 'unself-core-api';
-  let baseUrl: string;
-  if (config.domain) {
-    baseUrl = `https://${config.domain}`;
-  } else {
-    // workers.dev 路径：URL 由步骤③后的 resolveBaseUrl 从真实 deploy 输出回填
-    baseUrl = '';
-  }
 
   // ---- 步骤④ 构建侧：模块 ----
   const sdkEntry = join(rootDir, 'packages/module-sdk/src/index.ts');
@@ -136,9 +122,11 @@ export async function provisionAll(options: {
     });
   }
 
+  // ---- core Worker 名（baseUrl 由 steps.ts 的 resolveBaseUrl 决策，不在此估算）----
+  const coreName = 'unself-core-api';
+
   return {
     outDir,
-    baseUrl,
     coreName,
     coreConfig: 'core.wrangler.jsonc',
     modules: moduleProvisions,
