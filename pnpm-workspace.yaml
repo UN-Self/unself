@@ -2,6 +2,7 @@ packages:
   - apps/*
   - services/*
   - modules/*
+  - modules/*/frontend
   - packages/*
   - adapters/*
   - adapters/provisioning/*
