@@ -8,6 +8,9 @@
  */
 import type { MailSender } from '@unself/mail-smtp';
 import { MailProvisionerError, createFakeMailProvisioner } from '@unself/contracts';
+import { readdirSync, readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';
@@ -382,6 +385,13 @@ describe('邀请域 HTTP（#18）', () => {
     expect(body.error).toBe('invite approve failed');
     expect(body.detail).toContain('已被占用');
     expect(body.detail).toContain('u_new');
+    // #190 B6：文案指向真实出路（刷新确认 / 到邮件后台处理同名账号），不再教「拒绝后重新邀请」死循环
+    expect(body.detail).toContain('邮件后台');
+    expect(body.detail).not.toContain('重新邀请');
+    // #190：approve 失败路径落审计（此前只有成功路径有）
+    expect(
+      db.first("SELECT COUNT(*) AS count FROM audit_log WHERE action = 'invite_approve_failed'"),
+    ).toEqual({ count: 1 });
 
     expect(provisioner.calls).toEqual([
       { method: 'createAccount', input: { emailPrefix: 'u_new', displayName: '新人' } },
@@ -393,6 +403,123 @@ describe('邀请域 HTTP（#18）', () => {
       count: 0,
     });
     expect(db.query("SELECT id FROM notifications WHERE type = 'account_ready'")).toEqual([]);
+  });
+
+  it('#190 B8：先带后不带 username 重提交 → 旧凭证行被清除，批准走 OIDC 路径（不再按旧凭证开内置号）', async () => {
+    const provisioner = createFakeMailProvisioner();
+    const app = createApp({ createMailProvisioner: () => provisioner });
+    const { env, db, adminCookie } = await envFor(true);
+    const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+
+    // 第一次：带 username 提交
+    expect(
+      (
+        await app.request(
+          `https://team.example.com/api/invite/${token}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              displayName: '新人',
+              emailPrefix: 'u_new',
+              personalEmail: 'new@personal.example',
+              username: 'oldname',
+              salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+              proof: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+            }),
+          },
+          env,
+        )
+      ).status,
+    ).toBe(200);
+    expect(db.first('SELECT username FROM invite_credentials WHERE token_hash = ?', tokenHash)).toEqual({
+      username: 'oldname',
+    });
+
+    // 第二次：不带 username 重提交 → 旧凭证行必须被删
+    expect(
+      (
+        await app.request(
+          `https://team.example.com/api/invite/${token}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              displayName: '新人',
+              emailPrefix: 'u_new',
+              personalEmail: 'new@personal.example',
+            }),
+          },
+          env,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      db.first('SELECT username FROM invite_credentials WHERE token_hash = ?', tokenHash),
+    ).toEqual(null);
+
+    // 批准 → 走 OIDC 路径：不落内置 users 行、不落内置凭证
+    expect(
+      (
+        await app.request(
+          `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+          { method: 'POST', headers: { cookie: adminCookie } },
+          env,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      db.first("SELECT issuer FROM users WHERE personal_email = 'new@personal.example'"),
+    ).toEqual(null);
+  });
+
+  it('#190 B9：内置注册批准落库 username 统一小写（大小写变体经 0007 唯一索引硬闸）', async () => {
+    const provisioner = createFakeMailProvisioner();
+    const app = createApp({ createMailProvisioner: () => provisioner });
+    const { env, db, adminCookie } = await envFor(true);
+    const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+    expect(
+      (
+        await app.request(
+          `https://team.example.com/api/invite/${token}`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              displayName: '新人',
+              emailPrefix: 'u_new',
+              personalEmail: 'new@personal.example',
+              username: 'MiXeDCase',
+              salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+              proof: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+            }),
+          },
+          env,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.request(
+          `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+          { method: 'POST', headers: { cookie: adminCookie } },
+          env,
+        )
+      ).status,
+    ).toBe(200);
+    // 库里是小写（0007 lower(username) 唯一索引的口径）
+    expect(
+      db.first<{ username: string }>(
+        'SELECT username FROM builtin_credentials WHERE username = ?',
+        'mixedcase',
+      ),
+    ).toEqual({ username: 'mixedcase' });
+    expect(
+      db.first<{ username: string }>(
+        'SELECT username FROM builtin_credentials WHERE username = ?',
+        'MiXeDCase',
+      ),
+    ).toEqual(null);
   });
 
   it('#149 弱化实例公开填表：只带 displayName（+可选内置凭证）即 200，email 字段落空串；status 端点暴露 mailEnabled:false；批准后成员行 email 为 NULL', async () => {
@@ -787,6 +914,13 @@ describe('邀请域 HTTP（#18）', () => {
     const body = (await approved.json()) as { error: string; detail: string };
     expect(body.detail).toContain('已被占用');
     expect(body.detail).toContain('邮箱账号已预创建');
+    // #190 B7：撞 UNIQUE 分支落审计（含用户名 + 回收提示），不再无痕
+    const b7audit = db.first<{ action: string; target: string }>(
+      "SELECT action, target FROM audit_log WHERE action = 'invite_approve_failed' ORDER BY id DESC LIMIT 1",
+    );
+    expect(b7audit?.action).toBe('invite_approve_failed');
+    expect(b7audit?.target).toContain('heidi');
+    expect(b7audit?.target).toContain('UNIQUE');
     // 重排后硬闸发生在开户之后：Stalwart 已建号（u_new@example.com）
     expect(provisioner.accounts.has('u_new@example.com')).toBe(true);
     // 邀请仍 pending，本单不做回滚
@@ -883,6 +1017,70 @@ describe('邀请域 HTTP（#18）', () => {
     );
     expect(approveRejected.status).toBe(409);
     expect(((await approveRejected.json()) as { detail: string }).detail).toContain('已拒绝');
+  });
+
+  it('#190 B9 迁移 0007：老库（0001-0005）先预检后升级——既有数据不炸，lower(username) 唯一索引挡大小写变体', () => {
+    const dir = fileURLToPath(new URL('../migrations/core/', import.meta.url));
+    const files = readdirSync(dir)
+      .filter((file) => file.endsWith('.sql'))
+      .sort();
+    const legacy = files.filter((file) => file < '0007_');
+    const added = files.filter((file) => file >= '0007_');
+    // 本单只准新增 0007 一个迁移号；老库 = 0001-0006 已应用但未应用 0007
+    expect(legacy).toEqual([
+      '0001_init.sql',
+      '0002_setup_oidc.sql',
+      '0003_registry_index.sql',
+      '0004_invite_activations.sql',
+      '0005_builtin_identity.sql',
+      '0006_login_attempts.sql',
+    ]);
+    expect(added).toEqual(['0007_invite_identity_normalization.sql']);
+
+    const sqlite = new DatabaseSync(':memory:');
+    try {
+      for (const file of legacy) {
+        sqlite.exec(readFileSync(`${dir}/${file}`, 'utf8'));
+      }
+      // 老库既有数据（与生产预检同形）：1 用户 email NULL + 1 内置账号（用户名已小写）
+      sqlite.exec(
+        "INSERT INTO users (id, issuer, sub, display_name, email, role) VALUES ('u_1', 'builtin', 'u_1', '管理员', NULL, 'admin')",
+      );
+      sqlite.exec("INSERT INTO builtin_credentials (user_id, username, password_hash) VALUES ('u_1', 'asdasd', 'x')");
+
+      // 预检 SQL（升级前跑）：三处大小写变体计数必须为 0，否则须先人工清理再应用
+      const precheck = (table: string, column: string) =>
+        (
+          sqlite
+            .prepare(
+              `SELECT COUNT(*) AS n FROM (SELECT lower(${column}) FROM ${table} GROUP BY lower(${column}) HAVING COUNT(*) > 1)`,
+            )
+            .get() as { n: number }
+        ).n;
+      expect(precheck('users', 'email')).toBe(0);
+      expect(precheck('builtin_credentials', 'username')).toBe(0);
+      expect(precheck('invite_credentials', 'username')).toBe(0);
+
+      // 应用 0007：既有行不动、索引可重复应用（IF NOT EXISTS）
+      for (const file of added) {
+        sqlite.exec(readFileSync(`${dir}/${file}`, 'utf8'));
+      }
+      sqlite.exec("UPDATE builtin_credentials SET username = 'asdasd' WHERE user_id = 'u_1'");
+      expect(
+        sqlite
+          .prepare('SELECT COUNT(*) AS n FROM sqlite_master WHERE type = ? AND name = ?')
+          .get('index', 'idx_builtin_credentials_username_lower'),
+      ).toEqual({ n: 1 });
+
+      // 硬闸：大小写变体撞车被数据库拒（老索引只挡同形 'asdasd'）
+      expect(() =>
+        sqlite.exec(
+          "INSERT INTO builtin_credentials (user_id, username, password_hash) VALUES ('u_2', 'ASDASD', 'x')",
+        ),
+      ).toThrow(/UNIQUE/);
+    } finally {
+      sqlite.close();
+    }
   });
 
   it('鉴权边界：公开端点错令牌 404，管理端点无会话 401、普通成员 403', async () => {

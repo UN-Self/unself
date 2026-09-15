@@ -1,0 +1,33 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
+-- unself-core：邀请/身份唯一性归一（#190 B9）
+--
+-- 背景（issue #190 B9）：
+-- - builtin_credentials.username 的唯一索引（0005）大小写敏感 → 注册软闸挡在提交时点，
+--   批准前存在 TOCTOU：两条 pending 同名（含大小写变体）可同时走到落库。
+--   本迁移补 lower(username) 唯一索引，把硬闸下沉到「批准落库」那一刻，且大小写不敏感。
+-- - users.email / invites.personal_email / invite_credentials.username 的存储大小写不归一走
+--   应用层（src/services/{users,invites}.ts 的 normalizeEmail / updateInviteApplication），
+--   本迁移不改数据、不做数据清理。
+--
+-- 为什么 users.email 不加唯一索引（取舍留档，见 PR #190 的「已知限制」）：
+--   email 在本产品是联系方式不是身份（PRODUCT_SPEC 身份原则）；同邮箱不同 sub 的双档案是
+--   #49 的刻意行为（services/core-api/test/auth-routes.test.ts「同邮箱并发首登」用例断言两条
+--   users 行）。加 lower(email) 唯一索引会让第二次 JIT 建档 500，而纠偏点（auth.ts 回调）在
+--   本单白名单外，只能越界改；故本单只做存储归一，唯一性硬闸只给登录标识（builtin username）。
+--   若后续拍板「email 全局唯一」，加索引前须先解决上述用例与回调的错误映射。
+--
+-- 迁移安全性（AGENTS.md：迁移按文件名记账，已应用文件禁改；新迁移要能上老库）：
+--   CREATE UNIQUE INDEX 在既有数据存在大小写变体重复时会失败（fail loud，不静默改数据）。
+--   改登录标识名（去重）是人工决策（会影响当事人下次登录），故本迁移不做自动清理。
+--   升级前预检 SQL：
+--     SELECT COUNT(*) FROM (SELECT lower(email) FROM users WHERE email IS NOT NULL GROUP BY lower(email) HAVING COUNT(*) > 1);
+--     SELECT COUNT(*) FROM (SELECT lower(username) FROM builtin_credentials GROUP BY lower(username) HAVING COUNT(*) > 1);
+--     SELECT COUNT(*) FROM (SELECT lower(username) FROM invite_credentials GROUP BY lower(username) HAVING COUNT(*) > 1);
+--   生产 D1 预检（2026-09-15，wrangler d1 execute unself-core --remote，只读实测）：
+--     users_total=1 / users_email_null=1 / users_lower_email_dup=0 / invites_total=0
+--     builtin_credentials_total=1（username='asdasd'，已小写）/ builtin_lower_username_dup=0
+--     invite_credentials_total=0 / invite_credentials_lower_dup=0
+--   → 三处预检均为 0，索引可直接应用。
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_builtin_credentials_username_lower
+  ON builtin_credentials (lower(username));

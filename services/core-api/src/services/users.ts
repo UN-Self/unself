@@ -32,6 +32,8 @@ export async function upsertUser(
   db: D1Database,
   identity: { issuer: string; sub: string; name: string; email?: string },
 ): Promise<{ id: string; created: boolean }> {
+  // #190 B9 存储归一：email 落库统一小写（联系方式比较/去重都按小写口径）；展示仍用 users.display_name。
+  const email = identity.email === undefined ? undefined : identity.email.toLowerCase();
   const existing = await db
     .prepare('SELECT id FROM users WHERE issuer = ? AND sub = ?')
     .bind(identity.issuer, identity.sub)
@@ -39,14 +41,14 @@ export async function upsertUser(
   if (existing) {
     await db
       .prepare('UPDATE users SET display_name = ?, email = COALESCE(?, email) WHERE id = ?')
-      .bind(identity.name, identity.email ?? null, existing.id)
+      .bind(identity.name, email ?? null, existing.id)
       .run();
     return { id: existing.id, created: false };
   }
   const id = `u_${crypto.randomUUID().replace(/-/g, '')}`;
   await db
     .prepare('INSERT INTO users (id, issuer, sub, display_name, email, role) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(id, identity.issuer, identity.sub, identity.name, identity.email ?? null, 'user')
+    .bind(id, identity.issuer, identity.sub, identity.name, email ?? null, 'user')
     .run();
   return { id, created: true };
 }
