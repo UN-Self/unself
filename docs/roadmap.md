@@ -27,7 +27,7 @@
 
 M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tailwind + zod + jose + pnpm workspaces + Vitest。
 | **M1** | 入职闭环与可用性：管理界面（成员/模块/审计/设置）、邀请→审批→邀请页三态自助激活全链、通知类型表+运行时邮件配置、Stalwart 瘦适配（MailProvisioner 接口 + JMAP 实现） | 完整版：真实邀请一人，从填表到登录全程不碰 Stalwart 后台；最小版：内置账号+无邮件实例邀请审批闭环可用，且邀请页三态自助激活可达（#134）；手机同页可审批 |
-| **M2** | 聊天（EdgeChat 模块化）：token 化认证、manifest 包装、前端 mobile-first 重写、逐条已读回执 | 仅启用聊天的实例可完整使用消息与已读回执，手机端消息流可用 |
+| **M2** | 聊天（EdgeChat 模块化）：token 化认证、manifest 包装、前端自研（mobile-first）+ 后端搬运适配、逐条已读回执 | 仅启用聊天的实例可完整使用消息与已读回执，手机端消息流可用 |
 | **M3** | Git 联动 + Docker 等价：Gitea webhook 通知内部化、Git 开户入链路 1、workerd 路径 Docker 部署 | Git 事件进通知中心；同一份配置 Docker 跑通核心链路 |
 | **M4** | 日历/会议/会议记录：tsdav + CalDAV、P2P iframe、转写两档（本地默认、云端显式 opt-in） | 日历建会一键入会；会后纪要生成；音频存档不出自有机 |
 | **M5** | 文档、看板、R2/S3 存储适配层 | 文档可写可读，看板可用，任务截止与日历联动，文件直传用户配置的存储 |
@@ -49,6 +49,7 @@ M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tail
 | #152 resend-activation 改造（后台化/失败保留旧令牌/语境文案） | M2 |
 | #135 服务器侧邮件轮询发送器 | M2 |
 | #121 zxcvbn 前端强度计 / workerd PBKDF2 上限跟进 | M2 备忘 |
+| chat 专属存储收口豁免（chat- 前缀 D1/KV/R2 由装配器直接供给，不经 modules 库/SDK 收口） | M2 · 决策 #50 |
 | #21 「邮箱凭据页」A2 占位 | M6 |
 | 登录限速口径（用户名轴 5 次/15 分，含正确密码也被拦 → 知情者可 DoS） | **待用户拍板** A 保持 / B 放宽到 10 / C 只按 IP；现按 A 上线 |
 
