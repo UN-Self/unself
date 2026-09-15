@@ -334,8 +334,12 @@ describe('管理端成员生命周期（#49）', () => {
     const failureRows = db.query<{ actor: string; action: string; target: string | null }>(
       "SELECT actor, action, target FROM audit_log WHERE action IN ('member_disable_failed', 'member_enable_failed') ORDER BY id",
     );
-    expect(failureRows).toHaveLength(6);
+    expect(failureRows).toHaveLength(10);
     expect(failureRows.map((row) => row.action)).toEqual([
+      'member_disable_failed',
+      'member_enable_failed',
+      'member_disable_failed',
+      'member_enable_failed',
       'member_disable_failed',
       'member_enable_failed',
       'member_disable_failed',
@@ -345,18 +349,20 @@ describe('管理端成员生命周期（#49）', () => {
     ]);
     expect(failureRows.every((row) => row.actor === 'u_admin')).toBe(true);
     expect(failureRows.every((row) => row.target?.includes('member@example.com'))).toBe(true);
-    // 三类错误的分类都进 target 文本（409 账户不存在 / 502 认证 / 502 其它）
+    // 五类错误分类都进 target 文本（409 账户不存在 / 502 认证（结构化+兑底）/ 502 超时 / 502 其它）
     expect(failureRows[0]?.target).toContain('HTTP 409');
     expect(failureRows[0]?.target).toContain('Stalwart 中找不到账户');
-    expect(failureRows[2]?.target).toContain('HTTP 502');
-    expect(failureRows[2]?.target).toContain('HTTP 401 Unauthorized');
-    expect(failureRows[4]?.target).toContain('网络错误');
+    expect(failureRows[4]?.target).toContain('HTTP 502');
+    expect(failureRows[4]?.target).toContain('调用超时');
+    expect(failureRows[6]?.target).toContain('HTTP 502');
+    expect(failureRows[6]?.target).toContain('HTTP 401 Unauthorized');
+    expect(failureRows[8]?.target).toContain('网络错误');
     // 状态翻转的成功审计仍在（失败审计是额外一行，不替掉原行）
     expect(
       db.first<{ count: number }>(
         "SELECT COUNT(*) AS count FROM audit_log WHERE action IN ('member_disabled', 'member_enabled')",
       ),
-    ).toEqual({ count: 6 });
+    ).toEqual({ count: 10 });
   });
 
   it('#188 S4：重发激活邮件：站内 payload 只有脱敏标记，邮件正文拿到真链接（重签旧令牌作废）', async () => {
