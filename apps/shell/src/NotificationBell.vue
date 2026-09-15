@@ -249,6 +249,13 @@ function summarize(item: NotificationItem): string {
 }
 
 /* 窄屏：下拉全宽挂在顶栏下方（与 App.vue .shell-topbar 高度 48px 对齐） */
+/* #181：窄屏铃铛点击区 ≥44px（原 32px）；图标尺寸不变、仅扩热区 */
+@media (max-width: 768px) {
+  .notification-bell-trigger {
+    width: var(--unself-touch-target);
+    height: var(--unself-touch-target);
+  }
+}
 @media (max-width: 768px) {
   .notification-bell-panel {
     position: fixed;

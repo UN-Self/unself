@@ -632,7 +632,7 @@ function onTabClick(item: NavItem) {
   align-items: center;
   justify-content: center;
   gap: var(--unself-space-2);
-  height: 40px;
+  min-height: var(--unself-touch-target);
   border-radius: var(--unself-radius-md);
   background: var(--unself-color-surface);
   color: var(--unself-color-text-secondary);

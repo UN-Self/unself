@@ -207,12 +207,20 @@ onMounted(async () => {
     display: flex;
     gap: var(--unself-space-1);
     overflow-x: auto;
+    /* #180：可横滑 + 右侧渐隐提示「还有内容」+ 细滚动条，末项不再贴边被裁 */
+    padding-right: var(--unself-space-4);
+    scroll-padding-right: var(--unself-space-4);
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+    /* black 是掩码不透明度用色，非主题色（无令牌对应） */
+    mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
   }
   .admin-topnav-item {
     display: inline-flex;
     align-items: center;
     gap: var(--unself-space-1);
-    height: 32px;
+    /* #181：触屏目标 ≥44px（原 32px，手指点不准） */
+    min-height: var(--unself-touch-target);
     padding: 0 var(--unself-space-3);
     border-radius: var(--unself-radius-md);
     color: var(--unself-color-text-secondary);

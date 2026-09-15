@@ -68,6 +68,8 @@
   --unself-duration-fast: 150ms;
   --unself-duration-normal: 250ms;
   --unself-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* 触屏目标下限（#192 #181）：窄屏可点元素的最小高度——iOS HIG/Material 共同口径 44px */
+  --unself-touch-target: 44px;
   /* #191：基元动画时长（u-shake/u-spin/u-shimmer）——同属内部默认值，不进契约 JSON */
   --unself-duration-shake: 450ms;
   --unself-duration-spin: 800ms;
