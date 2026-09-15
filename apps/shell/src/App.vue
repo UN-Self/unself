@@ -530,7 +530,7 @@ function onTabClick(item: NavItem) {
   display: none;
 }
 
-@media (max-width: 768px) {
+@media (--unself-bp-md) {
   .shell {
     flex-direction: column;
   }

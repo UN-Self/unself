@@ -123,6 +123,8 @@ describe('AdminLayout 守卫（#17）', () => {
 
 describe('MembersPage 停用/启用（#17 + #192 F6）', () => {
   beforeEach(() => {
+    // 调用史清零：上一例的 setMemberStatus/resetMemberPassword 调用不得泄漏到下一例的「未调用」断言
+    vi.clearAllMocks()
     // 每例新对象：用例内的状态翻转不得泄漏到下一例
     vi.mocked(fetchMembers).mockResolvedValue([{ ...adminMember }])
     vi.mocked(setMemberStatus).mockResolvedValue({})
@@ -711,7 +713,8 @@ describe('InvitesPage 审批与生成（#18）', () => {
   })
 
   it('生成弹层：打开焦点入内 + Esc 关闭（#192 F5）', async () => {
-    const wrapper = mount(InvitesPage)
+    // attachTo：焦点断言需要 document.activeElement 生效，游离节点上 focus() 在 jsdom 里是空操作
+    const wrapper = mount(InvitesPage, { attachTo: document.body })
     await flushPromises()
 
     const openBtn = wrapper.findAll('button').find((b) => b.text().includes('生成邀请'))!
@@ -728,6 +731,7 @@ describe('InvitesPage 审批与生成（#18）', () => {
     await flushPromises()
 
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('生成：默认 7 天 → createInvite(7) → 链接与一次性提示可见', async () => {
