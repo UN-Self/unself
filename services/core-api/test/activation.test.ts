@@ -183,14 +183,18 @@ describe('激活域 HTTP（#18）', () => {
     const { activateUrl, activateToken } = activationFromMail(sent);
     expect(activateUrl.startsWith('https://team.example.com/activate/')).toBe(true);
 
-    // 站内通知同样悬挂个人邮箱，payload.activateUrl 与邮件链接一致
+    // 站内通知同样悬挂个人邮箱；payload 已脱敏（#188 S4）——邮件才拿得到 activateUrl，
+    // 库里只留「链接已生成」标记。
     const pending = db.first<{
       user_id: string | null;
       invited_email: string | null;
       payload: string;
     }>("SELECT user_id, invited_email, payload FROM notifications WHERE type = 'account_ready'");
     expect(pending).toMatchObject({ user_id: null, invited_email: 'new@personal.example' });
-    expect(JSON.parse(pending!.payload)).toEqual({ email: 'u_new@example.com', activateUrl });
+    expect(JSON.parse(pending!.payload)).toEqual({
+      email: 'u_new@example.com',
+      activateLinkGenerated: true,
+    });
 
     // GET 只验不消费
     const read = await app.request(`https://team.example.com/api/activate/${activateToken}`, {}, env);
