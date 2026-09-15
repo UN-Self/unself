@@ -1,5 +1,10 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// ⚠️ 占位文件——不可直接用来手动部署（#194 D6）。
+// 这里的 database_id 是 REPLACE_ME 占位符，`wrangler deploy` 照它跑必然失败；
+// 生产部署一律走装配器：`node deploy/cloudflare/bin.ts`（它会用真实 database_id
+// 在 .deploy/cloudflare/ 生成 core.wrangler.jsonc，见 deploy/cloudflare/src/assemble.ts）。
+// 本文件仅保留给 core-api 本地开发参考（如 wrangler dev / d1 migrations 本地调试）。
 {
-  // SPDX-License-Identifier: AGPL-3.0-only
   "name": "unself-core-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
