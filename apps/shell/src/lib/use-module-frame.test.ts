@@ -27,7 +27,7 @@ describe('isDisabledFrameError（#83 停用判定唯一真值 = token 接口 403
     expect(isDisabledFrameError('此模块已停用')).toBe(false)
   })
 
-  it('超时常量仍是 15s（§6.5 契约）', () => {
+  it('超时常量仍是 15s（模块加载异常规范「加载中麒麟 → 失败卡」的握手时限，真值 docs/PRODUCT_SPEC.md 模块加载异常规范）', () => {
     expect(HANDSHAKE_TIMEOUT_MS).toBe(15_000)
   })
 })

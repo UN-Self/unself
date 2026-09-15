@@ -6,12 +6,10 @@ import {
   DEFAULT_THEME,
   THEME_TOKEN_CSS_NAMES,
   THEME_TOKEN_KEYS,
-  ThemePackageSchema,
   analyzeTokenUsage,
   parseThemePackage,
   resolveThemePackage,
   tokenCssName,
-  type ThemeTokens,
 } from '../src/theme';
 
 /** SPEC §6.5.2 语义令牌清单（锁死「只增不改」；真值在 docs/PRODUCT_SPEC.md，此处为契约镜像）。 */
@@ -179,13 +177,3 @@ describe('var() 引用体检（§6.5.8 未解析即红）', () => {
     expect(used).toEqual([]);
   });
 });
-
-/** 样例主题包（测试 fixture：值来自默认包与主题包协议示例）。 */
-const FIXTURE_PACKAGE = {
-  schemaVersion: 1,
-  name: 'handywote-brand',
-  tokens: { 'unself.color.primary': '#0f62fe' } as ThemeTokens,
-};
-
-void FIXTURE_PACKAGE;
-void ThemePackageSchema;

@@ -1,41 +1,66 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // @vitest-environment jsdom
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import {
   DEFAULT_THEME,
-  THEME_TOKEN_CSS_NAMES,
-  THEME_TOKEN_KEYS,
-  tokenCssName,
 } from '@unself/contracts'
 
 import { attachFrameTokens, FRAME_TOKENS_STYLE_ID, tokensStyleSource } from './frame-tokens'
 
 describe('tokensStyleSource（通道 A 注入的 style 文本，§6.5.5）', () => {
-  it('以 :root { 开头、} 结尾，包含全部契约令牌的 CSS 名与对应值', () => {
+  /** 从 style 文本解析出的「声明名 → 值」映射（jsdom 不解析 var() 计算，改验声明本身落地）。 */
+  function declaredMap(source: string): Map<string, string> {
+    const map = new Map<string, string>()
+    for (const m of source.matchAll(/\s*(--unself-[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
+      map.set(m[1]!, m[2]!.trim())
+    }
+    return map
+  }
+
+  /** 契约独立来源：tokens.css :root 块（壳自身消费的同一份真值，非被测函数输出）。 */
+  async function shellTokensCss(): Promise<Map<string, string>> {
+    // jsdom 的 import.meta.url 是 http(s) 方案，readFile 只收 file:// ——vitest cwd = apps/shell
+    const css = await readFile(pathToFileURL(join(process.cwd(), 'src/tokens.css')), 'utf8')
+    const rootBlock = css.match(/:root\s*\{([\s\S]*?)\}/)![1]!
+    const map = new Map<string, string>()
+    for (const m of rootBlock.matchAll(/(--unself-[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
+      map.set(m[1]!, m[2]!.trim())
+    }
+    return map
+  }
+
+  /** 平台内部令牌（动效/焦点环）：tokens.css 声明但不在契约包内（通道注入只投契约令牌，
+   *  scripts/verify-tokens.mjs 规则二口径）。交叉校验只比对两处都有的键。 */
+  const PLATFORM_ONLY = new Set(['--unself-duration-fast', '--unself-duration-normal', '--unself-ease-out', '--unself-focus-ring'])
+
+  it('默认包注入文本与壳 tokens.css 逐项同值（同一契约两处实现不漂移）', async () => {
+    // 交叉校验（非自证）：被测对象 = tokensStyleSource(DEFAULT_THEME) 的产出；
+    // 对照真值 = apps/shell/src/tokens.css 的 :root 声明（壳自身启动依赖的独立来源）。
+    // DEFAULT_THEME 若与壳实际注入的值漂移（改名/改值漏同步），这里必红。
+    const declared = declaredMap(tokensStyleSource(DEFAULT_THEME))
+    const shell = await shellTokensCss()
+    expect(declared.size).toBeGreaterThan(0)
+    for (const [name, value] of shell) {
+      if (PLATFORM_ONLY.has(name)) continue
+      expect(declared.get(name), `${name} 在通道 A 注入文本中缺失或值漂移`).toBe(value)
+    }
+  })
+
+  it('声明名全部 --unself- 前缀、无重复键、行形状合法（:root 块 + 分号结尾）', () => {
     const src = tokensStyleSource(DEFAULT_THEME)
     expect(src.startsWith(':root {')).toBe(true)
     expect(src.trimEnd().endsWith('}')).toBe(true)
-    for (const key of THEME_TOKEN_KEYS) {
-      expect(src).toContain(`${tokenCssName(key)}: ${DEFAULT_THEME[key]};`)
+    const lines = src.split('\n').slice(1, -1)
+    for (const line of lines) {
+      expect(line).toMatch(/^  --unself-[a-z0-9-]+: .+;$/)
     }
-    for (const cssName of THEME_TOKEN_CSS_NAMES) {
-      expect(src).toContain(cssName)
-    }
-  })
-
-  it('每行是合法 CSS 声明：两空格缩进、以分号结尾、行数 = 契约全量', () => {
-    const body = tokensStyleSource(DEFAULT_THEME).split('\n').slice(1, -1)
-    expect(body).toHaveLength(THEME_TOKEN_KEYS.length)
-    for (const line of body) {
-      expect(line).toMatch(/^  --[a-z0-9-]+: .+;$/)
-    }
-  })
-
-  it('输出稳定：同一 tokens 两次调用产出相同字符串（按键名排序）', () => {
-    const first = tokensStyleSource(DEFAULT_THEME)
-    const second = tokensStyleSource(DEFAULT_THEME)
-    expect(second).toBe(first)
+    const names = lines.map((l) => /^  (--unself-[a-z0-9-]+):/.exec(l)![1]!)
+    expect(new Set(names).size).toBe(names.length) // 无重复键
   })
 })
 
@@ -55,7 +80,7 @@ describe('attachFrameTokens（same-origin 直注，§6.5.5 通道 A）', () => {
     const style = iframe.contentDocument!.getElementById(FRAME_TOKENS_STYLE_ID)
     expect(style).not.toBeNull()
     expect(style!.textContent).toContain(
-      `${tokenCssName('unself.color.primary')}: ${DEFAULT_THEME['unself.color.primary']};`,
+      `--unself-color-primary: ${DEFAULT_THEME['unself.color.primary']};`,
     )
     iframe.remove()
     handle!.detach()
