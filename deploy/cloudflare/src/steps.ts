@@ -2,7 +2,7 @@
 /**
  * 幂等九步编排（PRODUCT_SPEC §5.5，#14）：
  * ① 两 D1 → ② 迁移 → ③ Shell Worker → ④ 模块构建/上传/路由绑定（含未选模块路由删除）
- * → ⑤ registry → ⑥ R2 → ⑦ OIDC（无操作，setup 向导录入）→ ⑧ setup token → ⑨ 冒烟 + 主题体检。
+ * → ⑤ registry → ⑥ R2 → ⑦ OIDC（无操作，setup 向导录入）→ ⑧ 本地签发 setup token → ⑨ 冒烟 + 主题体检。
  * 所有资源查漏后补建：连跑两次收敛（#14 验收）。
  */
 import { readFile } from 'node:fs/promises';
@@ -30,7 +30,7 @@ import {
 } from './dns';
 import { ensureDatabases, ensureR2Bucket, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
 import { registryCommands, sqlString } from './registry';
-import { checkModuleThemes, fetchSetupToken, parseWorkersDevFromDeployOutput, smokeCheck } from './smoke';
+import { checkModuleThemes, parseWorkersDevFromDeployOutput, provisionSetupToken, smokeCheck } from './smoke';
 import type { ThemeCheckResult } from './smoke';
 import type { Wrangler } from './wrangler';
 
@@ -85,11 +85,11 @@ export async function runNineSteps(input: {
   wrangler: Wrangler;
   reporter?: StepReporter;
   /**
-   * @internal 仅供测试注入（steps.test.ts）：跳过真实 HTTP（冒烟/setup token/主题体检）。
+   * @internal 仅供测试注入（steps.test.ts）：跳过真实 HTTP（冒烟/主题体检）。
    * 生产路径一律走 smoke.ts 的真实实现；smokeCheck/checkModuleThemes 由 smoke.test.ts 直测。
+   * 步骤⑧（#165 方案 B）不再走 HTTP：由 provisionSetupToken 本地签发 + d1 写入（fake wrangler 可覆盖）。
    */
   http?: {
-    setupToken(baseUrl: string): Promise<{ token: string; setupUrl: string } | { sealed: true }>;
     smoke(baseUrl: string, moduleIds: string[]): Promise<Array<{ name: string; url: string; ok: boolean; status: number; detail?: string }>>;
     /** 可选：主题体检注入（§6.5.8）。缺省 = 跳过（保持既有测试语义，不请求网络）。 */
     themeCheck?: (baseUrl: string, moduleIds: string[]) => Promise<ThemeCheckResult[]>;
@@ -361,11 +361,16 @@ export async function runNineSteps(input: {
   rep.step(7, 'OIDC 配置（不在脚本/配置文件中——部署后在 setup 向导填写）');
   rep.log('跳过：OIDC 凭证由部署者在 setup 向导录入，存 core 库（§5.5 已知缺口见 spec）');
 
-  // ⑧ setup token
-  rep.step(8, '生成一次性 setup token');
-  const setup = input.http
-    ? await input.http.setupToken(baseUrl)
-    : await fetchSetupToken({ baseUrl, log: rep.log });
+  // ⑧ setup token（#165 方案 B：本地生成 + d1 写入，公开签发端点已删）
+  rep.step(8, '本地生成一次性 setup token 并写入 core 库');
+  const setup = await provisionSetupToken({
+    wrangler,
+    configPath: coreMigrateCfg,
+    log: rep.log,
+  });
+  if ('setupUrl' in setup) {
+    rep.log(`一次性激活链接：${baseUrl}${setup.setupUrl}`);
+  }
 
   // ⑨ 冒烟 + 主题体检（§6.5.8 验产物）
   rep.step(9, '冒烟检查 /api/health 与各模块 health + 主题体检');

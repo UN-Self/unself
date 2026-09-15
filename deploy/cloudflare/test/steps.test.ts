@@ -21,12 +21,22 @@ function runSteps(input: Parameters<typeof runNineSteps>[0]) {
  * 录制型 fake wrangler：以「账户状态」模拟 D1/R2/secret 的存在性，
  * 记录全部命令，供幂等（连跑两次收敛）断言。
  */
-function makeFakeWrangler(options?: { existingD1?: string[]; existingBuckets?: string[]; hasSecret?: boolean }) {
+function makeFakeWrangler(options?: {
+  existingD1?: string[];
+  existingBuckets?: string[];
+  hasSecret?: boolean;
+  /** 模拟 core 库 instance_config.setup_done（步骤⑧探测 → sealed）。 */
+  setupDone?: boolean;
+  /** 模拟已存在且未消费的 setup token（重跑幂等复用）。 */
+  existingSetupToken?: string;
+}) {
   const state = {
     d1: new Set(options?.existingD1 ?? []),
     buckets: new Set(options?.existingBuckets ?? []),
     secrets: new Set<string>(options?.hasSecret ? ['JWT_PRIVATE_KEY'] : []),
     secretsPut: 0,
+    setupDone: options?.setupDone ?? false,
+    setupToken: options?.existingSetupToken ?? null,
     commands: [] as string[],
   };
   const uuid = 'a1b2c3d4-0000-0000-0000-000000000001';
@@ -50,7 +60,24 @@ function makeFakeWrangler(options?: { existingD1?: string[]; existingBuckets?: s
         state.d1.add(name);
         return json([{ name, uuid }]);
       }
-      // migrations apply / execute：接受一切
+      if (sub === 'execute') {
+        const commandIdx = rest.indexOf('--command');
+        const sql = commandIdx >= 0 ? (rest[commandIdx + 1] ?? '') : '';
+        // 步骤⑧探测：回真 wrangler v4 `--json` 形状（顶层数组 + results）
+        if (sql.includes('instance_config')) {
+          return json([
+            {
+              results: [{ sealed: state.setupDone ? 1 : 0, token: state.setupToken }],
+              success: true,
+              meta: { duration: 0 },
+            },
+          ]);
+        }
+        const inserted = /INSERT INTO setup_tokens \(token\) VALUES \('([^']+)'\)/.exec(sql);
+        if (inserted) state.setupToken = inserted[1]!;
+        return json([{ results: [], success: true, meta: { duration: 0 } }]);
+      }
+      // migrations apply / list / create 以外：接受一切
       return okOut('');
     }
     if (cmd === 'r2') {
@@ -115,7 +142,6 @@ const FIXED_JWKS = JSON.stringify({
 });
 
 const SMOKE_OK = {
-  setupToken: async () => ({ token: 't', setupUrl: '/setup?token=t' }),
   smoke: async (b: string, ids: string[]) =>
     ([{ name: 'core-api', url: `${b}/api/health`, ok: true, status: 200 }] as Array<{
       name: string;
@@ -161,11 +187,22 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     expect(first.state.secretsPut).toBe(1);
     expect(first.state.commands.some((c) => c.includes("VALUES 'hello'") || c.includes('module_registry'))).toBe(true);
 
-    // 二跑（同一 fake 账户状态延续）
+    // 步骤⑧（#165 方案 B）：本地签发直插 core 库（生成配置的真实 database_id），不再 POST 公开端点
+    const insert = first.state.commands.find((c) => c.includes('INSERT INTO setup_tokens'));
+    expect(insert).toBeDefined();
+    expect(insert).toContain('--remote');
+    expect(insert).toContain('--config');
+    expect(insert).toContain('.deploy/cloudflare/migrate/core.wrangler.jsonc');
+    const issuedToken = first.state.setupToken;
+    expect(issuedToken).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(summary1.setup).toEqual({ setupUrl: `/setup?token=${issuedToken}` });
+
+    // 二跑（同一 fake 账户状态延续；token 已签发但未消费）
     const second = makeFakeWrangler({
       existingD1: ['unself-core', 'unself-modules'],
       existingBuckets: ['unself-storage'],
       hasSecret: true,
+      existingSetupToken: issuedToken!,
     });
     const summary2 = await runSteps({
       rootDir: ROOT,
@@ -180,12 +217,14 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     expect(second.state.commands.some((c) => c.startsWith('r2 bucket create'))).toBe(false);
     expect(second.state.secretsPut).toBe(0);
     expect(second.state.commands.some((c) => c.includes('module_registry'))).toBe(true);
+    // 二跑幂等：复用未消费 token（不重复 INSERT），摘要逐字一致
+    expect(second.state.commands.some((c) => c.includes('INSERT INTO setup_tokens'))).toBe(false);
     expect(summary2.setup).toEqual(summary1.setup);
     expect(summary2.keypairAction).toBe('existing');
     expect(summary1.keypairAction).toBe('created');
   });
 
-  it('九步顺序：D1→迁移→deploy→registry→R2→（⑦无命令）→HTTP ⑧⑨', { timeout: 120_000 }, async () => {
+  it('九步顺序：D1→迁移→deploy→registry→R2→（⑦无命令）→d1 签发 ⑧→HTTP ⑨', { timeout: 120_000 }, async () => {
     const fake = makeFakeWrangler({
       existingD1: ['unself-core', 'unself-modules'],
       hasSecret: true,
@@ -205,6 +244,8 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     expect(idxOf(/^deploy/)).toBeGreaterThan(idxOf(/^d1 migrations apply MODULES_DB/));
     expect(idxOf(/module_registry/)).toBeGreaterThan(idxOf(/^deploy/));
     expect(idxOf(/^r2 bucket create unself-storage/)).toBeGreaterThan(idxOf(/module_registry/));
+    // ⑧ 本地签发在 ⑥/⑦ 之后（d1 execute 写 setup_tokens）
+    expect(idxOf(/INSERT INTO setup_tokens/)).toBeGreaterThan(idxOf(/^r2 bucket create unself-storage/));
     // registry 终态：只 upsert hello（未选模块集为空时不产生 disable）
     expect(cmds.filter((c) => c.includes('UPDATE module_registry'))).toHaveLength(0);
   });
@@ -317,7 +358,6 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
       configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
         wrangler: fake.wrangler,
         http: {
-          setupToken: SMOKE_OK.setupToken,
           smoke: async () => [{ name: 'core-api', url: 'x', ok: false, status: 503, detail: 'HTTP 503' }],
         },
         resolveBaseUrl: async () => 'https://x.example',
@@ -326,17 +366,23 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     ).rejects.toThrow(/冒烟失败/);
   });
 
-  it('setup 已封死（409）→ 摘要记录 sealed 且不失败', async () => {
-    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], hasSecret: true });
+  it('setup 已封死（#165 本地探测）→ 不签发 token、摘要记录 sealed 且不失败', async () => {
+    const fake = makeFakeWrangler({
+      existingD1: ['unself-core', 'unself-modules'],
+      hasSecret: true,
+      setupDone: true,
+    });
     const summary = await runSteps({
       rootDir: ROOT,
       configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
       wrangler: fake.wrangler,
-      http: { setupToken: async () => ({ sealed: true }), smoke: SMOKE_OK.smoke },
+      http: SMOKE_OK,
       resolveBaseUrl: async () => 'https://x.example',
       fetchJwks: async () => FIXED_JWKS,
     });
     expect(summary.setup).toEqual({ sealed: true });
+    expect(fake.state.commands.some((c) => c.includes('INSERT INTO setup_tokens'))).toBe(false);
+    expect(fake.state.setupToken).toBeNull();
   });
 
   it('分支 A：首部署（无 secret）→ vars.CORE_JWKS_JSON 用本运行公钥，不调用 fetchJwks', { timeout: 120_000 }, async () => {
