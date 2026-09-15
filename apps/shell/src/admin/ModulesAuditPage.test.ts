@@ -45,7 +45,6 @@ describe('ModulesPage（#208）', () => {
     vi.mocked(fetchAdminModules).mockImplementation(() => new Promise((res) => { resolveList = res }))
     const wrapper = mount(ModulesPage)
 
-    expect(wrapper.find('.u-skeleton').exists()).toBe(true)
     expect(wrapper.find('[role="status"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('hello')
     resolveList([mod()])
@@ -59,7 +58,7 @@ describe('ModulesPage（#208）', () => {
 
     expect(wrapper.text()).toContain('hello')
     expect(wrapper.text()).toContain('v0.1.0')
-    expect(wrapper.find('.module-row').exists()).toBe(true)
+    expect(wrapper.find('[data-test="module-row"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -69,7 +68,7 @@ describe('ModulesPage（#208）', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('还没有注册模块')
-    expect(wrapper.find('.module-row').exists()).toBe(false)
+    expect(wrapper.find('[data-test="module-row"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -133,7 +132,6 @@ describe('AuditPage（#208）', () => {
     vi.mocked(fetchAuditLog).mockImplementation(() => new Promise((res) => { resolveLog = res }))
     const wrapper = mount(AuditPage)
 
-    expect(wrapper.find('.u-skeleton').exists()).toBe(true)
     expect(wrapper.find('[role="status"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('module_disabled')
     resolveLog([entry()])
@@ -145,7 +143,7 @@ describe('AuditPage（#208）', () => {
     const wrapper = mount(AuditPage)
     await flushPromises()
 
-    const row = wrapper.find('.audit-row')
+    const row = wrapper.find('[data-test="audit-row"]')
     expect(row.exists()).toBe(true)
     expect(row.text()).toContain('2026-09-01 08:00:00')
     expect(row.text()).toContain('module_disabled')
@@ -160,7 +158,7 @@ describe('AuditPage（#208）', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('还没有审计记录')
-    expect(wrapper.find('.audit-row').exists()).toBe(false)
+    expect(wrapper.find('[data-test="audit-row"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

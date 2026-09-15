@@ -32,7 +32,7 @@ const { phase, loadError, data: entries } = useAsyncLoad<AuditEntry[]>(fetchAudi
       <p v-if="entries.length === 0" class="page-empty">还没有审计记录</p>
 
       <div v-else class="audit-list">
-        <div v-for="entry in entries" :key="entry.id" class="audit-row">
+        <div v-for="entry in entries" :key="entry.id" class="audit-row" data-test="audit-row">
           <span class="audit-time">{{ entry.created_at }}</span>
           <span class="audit-action">{{ entry.action }}</span>
           <span class="audit-actor">{{ entry.actor }}</span>
