@@ -10,6 +10,8 @@ import type {
   Channel,
   Dm,
   Message,
+  ReadReceiptBy,
+  ReadReceiptsSummary,
   RoomKind,
   UserSummary,
 } from './types'
@@ -112,8 +114,24 @@ export function buildMockWorld(): MockWorld {
     ...over,
   })
 
+  /** 回执摘要快捷构造（mock 数据面；发件人恒已读口径 = readBy 不含发件人）。 */
+  const receipts = (count: number, readBy: ReadReceiptBy[]): ReadReceiptsSummary => ({ count, readBy })
+  const r = (userId: number, who: UserSummary, readAt: string): ReadReceiptBy => ({
+    userId,
+    username: who.username,
+    displayName: who.displayName,
+    readAt,
+  })
+
   put('public', 1, [
-    mk({ id: 3, content: '早上好，今天发布窗口开着。', roomId: 1, createdAt: '2026-09-15 09:30:00' }),
+    mk({
+      id: 3,
+      content: '早上好，今天发布窗口开着。',
+      roomId: 1,
+      createdAt: '2026-09-15 09:30:00',
+      // 发小林的消息：老王已读（memberCount=3 含发件人，可达收件人=2）
+      readReceipts: receipts(1, [r(3, laowang, '2026-09-15 09:31:00')]),
+    }),
     mk({
       id: 2,
       content: '@张三 部署手册我放到附件了。',
@@ -128,6 +146,7 @@ export function buildMockWorld(): MockWorld {
         size: 204800,
         url: '#mock-file',
       },
+      readReceipts: receipts(1, [r(3, laowang, '2026-09-15 09:25:00')]),
     }),
     mk({
       id: 1,
@@ -135,6 +154,8 @@ export function buildMockWorld(): MockWorld {
       roomId: 1,
       createdAt: '2026-09-15 09:10:00',
       sender: me as unknown as MockMessageRow['sender'],
+      // 我发的消息：小林已读（老王没读过）→ 气泡「已读 1/2」
+      readReceipts: receipts(1, [r(2, xiaolin, '2026-09-15 09:15:00')]),
     }),
   ])
 
@@ -146,8 +167,9 @@ export function buildMockWorld(): MockWorld {
       createdAt: '2026-09-15 10:00:00',
       mentionUserIds: [1],
       mentions: [{ userId: 1, username: 'zhang', displayName: '张三' }],
+      readReceipts: receipts(0, []),
     }),
-    mk({ id: 11, content: '周五团建报名接龙～', roomId: 2, createdAt: '2026-09-15 09:50:00' }),
+    mk({ id: 11, content: '周五团建报名接龙～', roomId: 2, createdAt: '2026-09-15 09:50:00', readReceipts: receipts(0, []) }),
   ])
 
   const voiceAttachment: Attachment = {
@@ -167,24 +189,29 @@ export function buildMockWorld(): MockWorld {
       roomId: 101,
       createdAt: '2026-09-15 11:00:00',
       attachment: voiceAttachment,
+      // 小林发的语音：我已读（DM 可达收件人=1，全读）
+      readReceipts: receipts(1, [r(1, me, '2026-09-15 11:01:00')]),
     }),
     mk({
       id: 101,
       content: '在吗？对一下接口形状。',
       roomId: 101,
       createdAt: '2026-09-15 10:40:00',
+      readReceipts: receipts(1, [r(1, me, '2026-09-15 10:45:00')]),
     }),
   ])
 
   return { me, channels, dms, contacts, messagesByRoom }
 }
 
-/** room socket 的 mock 句柄：测试/走查用它向客户端推帧。 */
+/** room socket 的 mock 句柄：测试/走查用它向客户端推帧、读客户端上行帧。 */
 export interface MockRoomSocket {
   /** 服务端视角推送一帧（前端按 WS 帧解析处理）。 */
   serverPush(frame: unknown): void
   handlers: Parameters<ChatApi['openRoomSocket']>[0]
   closed: boolean
+  /** 客户端上行帧记录（#220：token_refresh 控制帧的断言面）。 */
+  outbox: string[]
 }
 
 /** 创建 mock 版 ChatApi：数据/广播全部在内存世界内闭环。 */
@@ -292,6 +319,39 @@ export function createMockChatApi(
     return { created: true, message: rowToMessage(created) }
   }
 
+  // #220 已读上报：内存生效（逐条幂等落行；成功后新读也广播 read_receipts，同真实 DO 语义）
+  api.reportMessagesRead = async (kind, roomId, messageIds) => {
+    const rows = listRoom(kind, roomId)
+    const readAt = new Date().toISOString().slice(0, 19).replace('T', ' ')
+    const freshIds: number[] = []
+    for (const id of new Set(messageIds)) {
+      const row = rows.find((m) => m.id === id)
+      if (!row) continue
+      const summary = row.readReceipts ?? { count: 0, readBy: [] }
+      if (summary.readBy.some((r) => r.userId === world.me.id)) continue
+      summary.count += 1
+      summary.readBy.push({
+        userId: world.me.id,
+        username: world.me.username,
+        displayName: world.me.displayName,
+        readAt,
+      })
+      row.readReceipts = summary
+      freshIds.push(id)
+    }
+    // 与真实 DO 一致：有新增才广播；本人帧由 store 忽略，其他端可对齐
+    if (freshIds.length > 0 && api.lastSocket && !api.lastSocket.closed) {
+      api.lastSocket.serverPush({
+        protocolVersion: 1,
+        type: 'read_receipts',
+        messageId: Math.max(...freshIds),
+        userId: world.me.id,
+        readAt,
+        messageIds: freshIds,
+      })
+    }
+  }
+
   api.uploadFile = async (file: File) => {
     const attachment: Attachment = {
       key: `chat/mock/${Date.now()}-${file.name}`,
@@ -310,6 +370,7 @@ export function createMockChatApi(
         if (!socket.closed) handlers.onMessage(frame)
       },
       closed: false,
+      outbox: [],
     }
     api.lastSocket = socket
     // 与真服务端一致：连上先发 ready 帧
@@ -321,6 +382,15 @@ export function createMockChatApi(
       close() {
         socket.closed = true
         handlers.onStatus('closed')
+      },
+      // #220：mock socket 不验 token，控制帧照收（outbox 记录供断言；回环给 onMessage 模拟 DO ack）
+      send(text: string) {
+        socket.outbox.push(text)
+        try {
+          handlers.onMessage(JSON.parse(text) as unknown)
+        } catch {
+          /* 非 JSON 帧静默丢弃（与真实 WS 行为一致：发出去即不管） */
+        }
       },
     }
   }

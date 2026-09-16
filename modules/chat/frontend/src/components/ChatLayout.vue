@@ -26,16 +26,29 @@ export interface ChatLayoutProps {
   loadingMessages: boolean
   loadingEarlier: boolean
   noEarlier: boolean
+  /** 当前会话是否私聊（#220：透传给 MessageList/气泡，DM 回执 = 已读 ✓✓）。 */
+  isDm?: boolean
+  /** 可达收件人数（#220 分母：房间成员−发件人；未知传 0，气泡只显示已读数或未读）。 */
+  audienceSize?: number
+  /** 回执摘要唯一真值（#220 store.state.readReceipts；缺省 = 旧格式无回执面）。 */
+  readReceipts?: Record<number, import('../lib/types').ReadReceiptsSummary>
 }
 
 const props = withDefaults(defineProps<ChatLayoutProps>(), {
   activeRoom: null,
+  isDm: false,
+  audienceSize: 0,
+  readReceipts: () => ({})
 })
 
 const emit = defineEmits<{
   select: [room: { kind: RoomKind; id: number }]
   back: []
   'load-earlier': []
+  /** 点击 mine 气泡回执标签 → 根层开已读名单浮层（#220）。 */
+  'show-receipts': [message: Message]
+  /** 他人消息进入视口 → 根层批量上报已读（#220）。 */
+  'visible-read': [messageIds: number[]]
 }>()
 
 /** 响应式窄屏判定：跟随 matchMedia 翻转并回调；无 matchMedia 环境降级恒 false（桌面布局）。 */
@@ -134,7 +147,12 @@ const roomIcon = computed(() => {
         :current-user-id="currentUserId"
         :loading-earlier="loadingEarlier"
         :no-earlier="noEarlier"
+        :is-dm="isDm"
+        :audience-size="audienceSize"
+        :read-receipts="readReceipts"
         @load-earlier="emit('load-earlier')"
+        @show-receipts="emit('show-receipts', $event)"
+        @visible-read="emit('visible-read', $event)"
       />
 
       <!-- composer 插槽：T4/T5 填充（发送/@/文件/语音入口） -->
