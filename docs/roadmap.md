@@ -38,7 +38,7 @@ M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tail
 1. M0 垂直切片已验收：七步剧本全绿（部署出 setup 链接 → 首个管理员 → hello 全链路 → 启停 → 移除）。
 2. M1 已验收（2026-09-14，双版本实机走查，见 docs/m1-acceptance.md；复核阶段 7 项已修并入 M2 波次 0）。
 3. M1 收官复核（45 条遗留）已清零（2026-09-15）：按职责域分 11 个 issue 全部关闭（#186-#196），复核审计中发现的 5 条无归属项补清（#208-#210）；文档重排为一文件一职责（AGENTS ≤60 行）、协作机制①-⑤ 落地。
-4. M2 走查完成（2026-09-16，本地执行分级 + 未证实登记，见 docs/m2-acceptance.md）：仅启用 chat 的装配 dry-run、消息收发与 375px 手机消息流通过；**「逐条已读回执」在 live 前端不通过（#229：myUserId 恒 0 → mine/回执面不可见，M2 收官阻塞项）**；同批发现 #230（@ 提及与 core 身份不兼容）、#231（SESSIONS KV 残件仍有写入：明文 JWT 落 KV 7 天）。M2 关单待 #229 修复并复验后按机制⑤判定。Docker 等价部署在 M3。
+4. M2 走查完成（2026-09-16，本地执行分级 + 未证实登记，见 docs/m2-acceptance.md）：仅启用 chat 的装配 dry-run、消息收发（REST 面）与 375px 手机消息流通过；同批发现 #230（@ 提及与 core 身份不兼容）、#231（SESSIONS KV 残件仍有写入：明文 JWT 落 KV 7 天）。**#229（live `myUserId` 恒 0 → mine/回执面不可见）已修复并经 #234 复验：mine 判定、自读过滤、`count ≤ total` 均通过**；但复验中发现 **#235：live WS 帧未解析（`api.ts:162` 透传 `event.data` 字符串）→ 实时消息/实时已读回执全失效（历史补拉才能看到）**，故「逐条已读回执」live 前端仍不成立，**M2 关单仍阻塞**（待 #235 修复并复验后按机制⑤判定）。Docker 等价部署在 M3。
 
 ## 未决与交接
 
@@ -46,12 +46,13 @@ M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tail
 
 | 项 | 归属 |
 |---|---|
-| #229 live 前端 myUserId 恒 0 → 本人消息不判 mine → 已读回执面不可见（**M2 收官阻塞**） | M2 修复 + 复验 |
+| ~~#229~~ live 前端 myUserId 恒 0 → 本人消息不判 mine → 已读回执面不可见 | **已修复并复验通过（#234，基线 `57a649a`）：mine 判定/自读过滤/服务端口径** |
+| #235 live WS 帧未解析（`modules/chat/frontend/src/lib/api.ts:162` 透传 `event.data` 字符串）→ 实时消息/实时已读回执/未读投影全失效（**M2 收官阻塞**；另含修好后暴露的自消息回显竞态） | M2 修复 + 复验（docs/m2-acceptance.md §4 步骤③④/§7.6） |
 | #230 @ 提及与 `core:` 身份不兼容（mentionUserIds 恒空 / 中文名无法过滤） | M2 |
 | #231 SESSIONS KV 残件仍有写入（PATCH profile 落明文 JWT，TTL 7 天） | M2 |
 | 真实 CF 装配 + 真机端到端走查（含登录壳 → iframe 握手、/m/chat/ 路由与 registry 启停、移除后路由消失） | 下次真机走查（部署者持 token；口径见 docs/m2-acceptance.md §7.1/7.2） |
 | GC cron（SCHEDULER DO 驱动）真实周期核验 | M3 前（继承 #219 遗留 2） |
-| 三端真机互读（含真机触摸/软键盘/横屏） | #229 修复复验时 |
+| 三端真机互读（含真机触摸/软键盘/横屏） | #235 修复复验时 |
 | chat 前端产物含 `dev-shim.html`（dev-only 页面随 assets 部署，低危） | M2 收口时清（docs/m2-acceptance.md §8） |
 | #152 resend-activation 改造（后台化/失败保留旧令牌/语境文案） | M2 |
 | #135 服务器侧邮件轮询发送器 | M2 |
@@ -71,7 +72,7 @@ M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tail
 | Stalwart 终态只能采信服务端自述 | 复核环境无管理凭据（决策 #48 取消独立核验）；独立验证 = 重装实例 |
 | 触屏目标 44px 未做真机命中率验证 | 值取自 iOS HIG / Material 共同下限，来自 CSS 产物实测而非真机点触（#192） |
 | chat 模块「用户未停用」复查无写入方（停用踢出实为 token 到期） | #221 本地走查：模块侧 `401 账号已停用` / WS `1008` 实测通过，但触发源是直接改 chat 库；chat 库 `users.is_disabled` 全仓只有读、没有写（core 停用只写 core 库）。真实上限 = 模块 token 时效（≤10 分钟），与上一行同源；requirements 该项未勾 |
-| 聊天文件/语音失败无用户可见提示 | #221 走查：未绑 R2 时 `POST /api/upload` 503、headless 无麦克风时 `record-start` 抛未捕获错误，界面均无提示（pending 文件保留）；错误态静默，待 M2 收口（同批 #229/#230/#231） |
+| 聊天文件/语音失败无用户可见提示 | #221 走查：未绑 R2 时 `POST /api/upload` 503、headless 无麦克风时 `record-start` 抛未捕获错误，界面均无提示（pending 文件保留）；错误态静默，待 M2 收口（同批 #230/#231/#235） |
 
 ## 风险与决策点
 
