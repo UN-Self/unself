@@ -57,16 +57,50 @@
 ## 已知裁剪影响
 
 - **admin 面整体下线**：`registerAdminRoutes` 未挂载；但 DM/频道 API 内部的 `/api/admin/dms`、`/api/admin/channels*` 端点函数仍留在原文件（只删不改红线，路由不挂载即不可达）
+- **typecheck 集成遗留**：worker 的 .ts 文件（contacts/user-blocks/user-profile/channel-deletion 等）为上游原样，在仓库 tsconfig 下会报类型错误；`test/*.ts`（并行 worker B 面）对 index 默认导出的调用假设与上游 `export default { fetch, scheduled }` 形状不一致。两者均不在本任务边界内，需 worker B/后续 issue 处理
 - **storage-statistics.js 暂无调用方**：上游仅 `api/admin.js` 引用它（admin 存储统计入口已裁）；文件保留，供后续 upload 统计复用
 - **maintenance API 不再暴露**：`registerMaintenanceRoutes` 调用删除（原挂 `/api/admin/maintenance`）；`maintenance/` 三个模块保留（do-health 仍被 ChannelRoom.js 引用，system-check/schema-contract 供后续复用）
 - **注册邀请**：入口路由与数据层文件已裁；`registration_invites`/`registration_invite_uses` 表仍在基线 schema（保留上游终态结构，不裁业务表）
 - **external 消息通路保留**：`external-message-submission.js` 与 ChannelRoom 的 `receiveExternalMessage` 是 verified internal 协议面（上游唯一生产方是 Telegram webhook），原样保留，归 #217 评估
 - **消息外链头像**：external 发送者 avatarUrl 一律取 `external_sender_avatar_url`（`/api/integrations/telegram/avatar/…` 代理路径已随桥裁掉）
 - **存储归类行为差异**：`telegram/` 前缀对象不再归 `system:telegram`，会落入 `system:unknown`（无存量数据，仅统计归类语义变化）
-- **typecheck 集成遗留**：worker 的 .ts 文件（contacts/user-blocks/user-profile/channel-deletion 等）为上游原样，在仓库 tsconfig 下会报类型错误；`test/*.ts`（并行 worker B 面）对 index 默认导出的调用假设与上游 `export default { fetch, scheduled }` 形状不一致。两者均不在本任务边界内，需 worker B/后续 issue 处理
+
+## #217 认证适配（unself 集成层）
+
+### 本地认证面裁剪（对上游 worker 的删除清单）
+
+- `index.js`：删 `POST /api/auth/login`、`GET /api/auth/session`、`POST /api/auth/logout`、`POST /api/auth/change-password` 四个路由块及 createSession/putSession/deleteSession/hashPassword/verifyPassword/updateCurrentDeviceSessionVersion/isUserDisabled/getUserByUsername 等 import；增 `GET /api/me`（返回内部数字 id + `core:<sub>` 用户名 + display_name）
+- `api/v1.js`：删 `POST /api/v1/auth/login|refresh|logout`（移动端设备会话）与 `POST /api/v1/realtime/tickets`、`GET /api/v1/realtime/ws`（票券 WS 通道）；房间 sync/messages/read/uploads/legacy 代理全保留。JWT 直连 `GET /api/ws/:kind/:id`（`?token=`）取代票券
+- **整文件删除（上游件删除，记录在案）**：`worker/src/mobile-session.js`（移动设备会话/刷新令牌）、`worker/src/realtime-tickets.js`（一次性 WS 票券）——两者唯一生产方就是上列被裁端点
+- 上游残件保留：`auth.js`（密码哈希/会话 KV 读写）、`session.js`（validateSession）——调用点已全部裁撤，文件不动（上游件只删不改红线；测试工厂 createSeedUser 仍引用 hashPassword）。`SESSIONS` KV 绑定与两者仍留在 wrangler.jsonc（避免动部署装配面；后续清理归装配侧）
+
+### 验签接线（core → chat）
+
+- `worker/src/core-auth.js`（新增，unself 集成层）：`verifyAccessToken(env, token)` → `{ok, claims}|{ok:false,status,message}`。复用 `@unself/module-sdk` 的 `verifyModuleToken`（jose createLocalJWKSet + jwtVerify(audience) + contracts 解析，**不手搓**）；aud 常量 `AUDIENCE='chat'`（红灯验证点）；`CORE_JWKS_JSON` 空 → 503 `'jwks not provisioned'`（与 hello 口径一致）；任何验签失败 → 401 人话 `'请先登录'`（不回显 jose 细节）；`CORE_ISSUER` 非空时额外校验 iss（可选）
+- token 形状（签发侧源码已核，基线 2ab19ef）：`services/core-api/src/token.ts` issueModuleToken——ES256 + kid（RFC7638 指纹），claims `iss='unself-core'` / `sub=<core users.id>` / `aud=<模块id>` / `iat` / `exp=iat+600`，JWKS 经 `GET /.well-known/jwks.json`。部署装配期由 deploy steps 注入 vars `CORE_JWKS_JSON`（wrangler.jsonc 已声明空默认值）
+
+### JIT 建档
+
+- `worker/src/jit-users.js`（新增）：`coreUsername = 'core:' + sub`（users.username UNIQUE 冲突即幂等锚点，与本地注册命名空间天然隔离）→ INSERT OR IGNORE + core_identities 映射行 → 反查 users 行；display_name 仅空行时回填 claims.name（不逐请求 UPDATE）；停用复查（is_disabled/disabled_until/deleted_at）→ 401 `'账号已停用'`
+- `schema-baseline.sql` 尾部 #217 增补 `core_identities(issuer, sub, user_id UNIQUE)` 表（决策 #12 issuer+sub 映射的显式落库）；general 入席由既有 `add_new_user_to_general` 触发器兜底
+
+### WS token 续期协议（决策 #51 定案 C + 按消息重验）
+
+- socket meta 不再存 token 字符串：`{principal:{userId,isAdmin,claims}, room}`，claims 随 serializeAttachment 持久化（JSON 可序列化）
+- 建连：verified 内部通道优先（HTTP 面 middleware 已验签+JIT，头带内部数字 id，行为不变）；否则 `?token=` JWT → verify → jit → authorizeRoom → 101
+- 续期帧：客户端发 `{type:'token_refresh', token:<新token>}` → DO 当场验签+JIT+房间授权 → 原子换绑（connections+serializeAttachment）→ ack `{protocolVersion:1,type:'token_refreshed'}`；任一步失败 → `closeUnauthorizedSocket`（1008 'Unauthorized'）。**允许旧绑定已过期时刷新**（这正是续期场景）
+- 按消息重验：每条业务帧先 `revalidateConnection`——claims.exp ≥ now + jit 停用复查 + authorizeRoom；任一不过 → 1008。上游「按消息重验 → policy violation 关闭」骨架原样保留，只把「验会话」换成「验 JWT 绑定」
+- 定案理由：零附加有效窗口（宽限/双 token 都让旧 token 多活一段，与「短时效是主要吊销手段」冲突）；SDK onToken 钩子现成，协议只加一种控制帧。live 前端接线归 #225 后续波次
+
+### 测试/脚本
+
+- `test/chat-core-auth.test.ts`：正例（验签→JIT→API）+ 负例族（无 token/乱串/错签/错 aud/过期 → 401；缺 JWKS → 503）+ JIT 幂等/停用；真 ES256 keypair 手法抄 `modules/hello/test/hello.test.ts`
+- `test/chat-ws-renewal.test.ts`：建连 101/ready/meta、token_refresh 换绑不断连、无效 refresh 1008、停用/过期下一帧 1008；`test/ws-stub.ts` 提供 WebSocketPair/Response(101) 最小运行时垫片（替运行时面，业务全走真类）
+- `test/chat-messages.test.ts`：login() 助手换成 jose mint token（断言不变，username 变为 `core:<sub>` 形状）
+- `scripts/mint-token.mjs`：dev 自测签发（生成/复用 keypair → 打印 CORE_JWKS_JSON 与 10 分钟 token），替代被裁的本地 dev 登录入口；keypair 缓存 `.mint-token-keys.json` 已 gitignore，dev-only 不进 worker bundle
+- `package.json`：dependencies 增 `@unself/module-sdk: workspace:*`；devDependencies 增 `jose: ^6.1.0`（测试/脚本签名用）；仓库根 pnpm-lock.yaml 被动更新（#218 cd0051a 同款，PR 明示）
 
 ## 验收 grep 约定（自检 1）
-
 `grep -rni "telegram|capacitor" modules/chat/` 的预期命中仅限三类说明性文字，无业务代码命中：
 1. 本文件（MIGRATION-NOTES.md）：搬运/裁剪记录本身必然提及被裁对象
 2. `worker/schema-baseline.sql` 头两行出处注释：说明基线相对上游删了哪些表

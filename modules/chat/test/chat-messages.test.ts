@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it } from 'vitest';
+import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT } from 'jose';
 
 import { app, setEnv } from './worker-app';
 import { installRoomDo } from './do-stub';
 import {
   createChatDb,
-  createSeedUser,
   MemoryKv,
   TEST_VARS,
   type ChatTestDb,
@@ -14,7 +14,7 @@ import {
 
 /**
  * 消息收发主链路（真库集成，路由级 app.request）：
- * 种子 2 用户 → 登录拿 token → bootstrap → 发消息 → 读回。
+ * mint core 形状 token（#217：认证走模块 JWT 验签 + JIT 建档，本地登录已裁）→ bootstrap → 发消息 → 读回。
  * 覆盖：general 频道种子触发器、消息内容/发送者/分页、private 频道 403、未带 token 401。
  */
 
@@ -33,23 +33,21 @@ beforeEach(() => {
   setEnv(env);
 });
 
-/** 种子两个用户（真 hashPassword 哈希入库）。 */
-async function seedUsers(): Promise<void> {
-  await createSeedUser(db, { username: 'admin', password: 'admin-pass-1', displayName: '管理员', isAdmin: true });
-  await createSeedUser(db, { username: 'bob', password: 'bob-pass-12', displayName: '阿鲍' });
-}
-
-/** 登录拿 token（走真 login 路由：真哈希比对 + session 落 KV）。 */
-async function login(username: string, password: string): Promise<string> {
-  const res = await app.request('https://chat.example/api/auth/login', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+/** 每用例一把新 ES256 keypair + CORE_JWKS_JSON 注入；回 token 造函数（#217 认证，签发形状同 core）。 */
+async function mintSetup(): Promise<(overrides?: Record<string, unknown>) => Promise<string>> {
+  const pair = await generateKeyPair('ES256', { extractable: true });
+  const publicJwk = await exportJWK(pair.publicKey);
+  const kid = await calculateJwkThumbprint(publicJwk);
+  env.CORE_JWKS_JSON = JSON.stringify({
+    keys: [{ ...publicJwk, kid, use: 'sig', alg: 'ES256' }],
   });
-  expect(res.status).toBe(200);
-  const body = (await res.json()) as { token?: string };
-  if (!body.token) throw new Error(`login failed: ${JSON.stringify(body)}`);
-  return body.token;
+
+  return (overrides: Record<string, unknown> = {}) =>
+    new SignJWT({ iss: 'unself-core', sub: 'u_1', aud: 'chat', name: '黄一', ...overrides })
+      .setProtectedHeader({ alg: 'ES256', kid })
+      .setIssuedAt()
+      .setExpirationTime('10m')
+      .sign(pair.privateKey);
 }
 
 /** bootstrap：确保 general 存在且当前用户入席，回当前可见频道。 */
@@ -103,9 +101,9 @@ async function listMessages(
 }
 
 describe('chat 消息收发主链路（真库集成）', () => {
-  it('登录 → bootstrap 保证 general 频道 → 发消息 → 读回内容/发送者真值一致', async () => {
-    await seedUsers();
-    const token = await login('admin', 'admin-pass-1');
+  it('建档 → bootstrap 保证 general 频道 → 发消息 → 读回内容/发送者真值一致', async () => {
+    const makeToken = await mintSetup();
+    const token = await makeToken({ sub: 'u_admin', name: '管理员' });
 
     // bootstrap：general 频道种子触发器应保证全新库也有频道且用户已入席
     const boot = await bootstrap(token);
@@ -120,7 +118,7 @@ describe('chat 消息收发主链路（真库集成）', () => {
     expect(sent.json.created).toBe(true);
     const message = sent.json.message as Message;
     expect(message.content).toBe('第一条消息'); // 返回给调用方的是明文
-    expect(message.sender.username).toBe('admin');
+    expect(message.sender.username).toBe('core:u_admin');
     expect(message.sender.displayName).toBe('管理员');
 
     // 落库的是密文（直查真库）：明文与密文不同、明文不出现在存储层
@@ -135,12 +133,12 @@ describe('chat 消息收发主链路（真库集成）', () => {
     const mine = list.messages.find((item) => item.id === message.id);
     expect(mine).toBeDefined();
     expect(mine!.content).toBe('第一条消息');
-    expect(mine!.sender.username).toBe('admin');
+    expect(mine!.sender.username).toBe('core:u_admin');
   });
 
   it('分页：limit=1 只回最新 1 条（不回更早那条），before 翻页可读到旧消息', async () => {
-    await seedUsers();
-    const token = await login('admin', 'admin-pass-1');
+    const makeToken = await mintSetup();
+    const token = await makeToken({ sub: 'u_admin', name: '管理员' });
     await bootstrap(token);
 
     const ids: number[] = [];
@@ -162,10 +160,10 @@ describe('chat 消息收发主链路（真库集成）', () => {
   });
 
   it('非成员读 private 频道消息 → 403（权限只信服务端成员关系判定）', async () => {
-    await seedUsers();
+    const makeToken = await mintSetup();
 
     // admin 建 private 频道（自己成为 owner）
-    const adminToken = await login('admin', 'admin-pass-1');
+    const adminToken = await makeToken({ sub: 'u_admin', name: '管理员' });
     await bootstrap(adminToken);
     const created = await app.request('https://chat.example/api/channels', {
       method: 'POST',
@@ -183,7 +181,7 @@ describe('chat 消息收发主链路（真库集成）', () => {
     expect(ownerView.status).toBe(200);
 
     // bob（非成员）→ 403
-    const bobToken = await login('bob', 'bob-pass-12');
+    const bobToken = await makeToken({ sub: 'u_bob', name: '阿鲍' });
     const forbidden = await app.request(
       `https://chat.example/api/messages?kind=private&roomId=${channelId}`,
       { headers: { authorization: `Bearer ${bobToken}` } },
@@ -192,7 +190,7 @@ describe('chat 消息收发主链路（真库集成）', () => {
   });
 
   it('未带 token 访问 bootstrap / messages → 401', async () => {
-    await seedUsers();
+    await mintSetup();
     const boot = await app.request('https://chat.example/api/bootstrap');
     expect(boot.status).toBe(401);
     const list = await app.request('https://chat.example/api/messages?kind=public&roomId=1');

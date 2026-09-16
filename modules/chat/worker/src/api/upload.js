@@ -8,7 +8,10 @@ import {
 } from '../data/uploaded-files.js';
 import { decryptAttachment, encryptAttachment } from '../encryption.js';
 import { normalizeContentType, sanitizeFilename } from '../attachment-metadata.js';
-import { validateSession } from '../session.js';
+// #217 认证适配：/files/:key 的 token 校验从本地会话换成模块 JWT 验签 + JIT（对外行为不变：
+// 无效/缺 token 按未认证走 canAccessFile 公开件判定；有效 token 解出内部 userId 后同规）。
+import { verifyAccessToken } from '../core-auth.js';
+import { jitEnsureUser } from '../jit-users.js';
 import { errorResponse, requestBodyTooLarge } from '../utils.js';
 
 const FILE_RESPONSE_CACHE_CONTROL = 'private, no-store';
@@ -108,8 +111,15 @@ export function registerUploadRoutes(app) {
     const token = authorization.startsWith('Bearer ')
       ? authorization.slice('Bearer '.length).trim()
       : new URL(c.req.url).searchParams.get('token') || '';
-    const auth = token ? await validateSession(c.env, token) : null;
-    const canRead = await canAccessFile(c.env.DB, key, auth?.ok ? auth.session.userId : null);
+    const auth = token ? await verifyAccessToken(c.env, token) : null;
+    let viewerUserId = null;
+    if (auth?.ok) {
+      const ensured = await jitEnsureUser(c.env.DB, auth.claims);
+      if (ensured.ok) {
+        viewerUserId = ensured.user.id;
+      }
+    }
+    const canRead = await canAccessFile(c.env.DB, key, viewerUserId);
     if (!canRead) {
       return new Response('Forbidden', { status: 403 });
     }
