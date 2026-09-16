@@ -8,7 +8,7 @@
  * shell 每次部署都重建（vite build），不复用 apps/shell/dist 旧产物（#73）：部署器职责=始终搬运当前源码树。
  */
 import { spawn } from 'node:child_process';
-import { cp, mkdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { build } from 'esbuild';
@@ -44,9 +44,20 @@ export interface ModuleProvision {
 /** 装配产物目录名（.deploy，gitignore）。 */
 export const DEPLOY_DIR = '.deploy/cloudflare';
 
-function runTool(cmd: string, args: string[], cwd: string): Promise<void> {
+/** 子进程工具执行（shell=false，参数数组；stderr 尾部随错误抛出）。 */
+export function runTool(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  opts?: { env?: Record<string, string> },
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(cmd, args, {
+      cwd,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: opts?.env ? { ...process.env, ...opts.env } : process.env,
+    });
     let stderr = '';
     child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
     child.on('error', reject);
@@ -97,10 +108,12 @@ export async function provisionAll(options: {
   for (const mod of modules.filter((m) => m.selected)) {
     const modOut = join(outDir, 'modules', mod.id);
     await mkdir(modOut, { recursive: true });
-    // Worker 入口（依赖打进单文件：模块部署单元自包含）
+    // Worker 入口（依赖打进单文件：模块部署单元自包含）。
+    // 入口约定：包 package.json main（hello=src/index.ts、chat=worker/src/index.js）；
+    // 无包描述的裸目录回退 src/index.ts（最小仓库场景）。
     const workerEntry = join(modOut, 'app.js');
     await build({
-      entryPoints: [join(mod.dir, 'src/index.ts')],
+      entryPoints: [await moduleWorkerEntry(mod.dir)],
       outfile: workerEntry,
       bundle: true,
       format: 'esm',
@@ -137,6 +150,31 @@ export async function provisionAll(options: {
 async function rm(path: string): Promise<void> {
   if (existsSync(path)) {
     await import('node:fs/promises').then((fs) => fs.rm(path, { recursive: true, force: true }));
+  }
+}
+
+/**
+ * 模块 Worker 打包入口解析（#219）：包 package.json main 优先（hello=src/index.ts、
+ * chat=worker/src/index.js），缺失回退 src/index.ts（裸目录最小场景）。
+ * main 指向的文件不存在 → 人话报错（不在 esbuild 里炸难懂错）。
+ */
+export async function moduleWorkerEntry(moduleDir: string): Promise<string> {
+  const fallback = join(moduleDir, 'src/index.ts');
+  const pkgPath = join(moduleDir, 'package.json');
+  if (!existsSync(pkgPath)) return fallback;
+  try {
+    const pkg = JSON.parse(await readFile(pkgPath, 'utf8')) as { main?: string };
+    if (!pkg.main) return fallback;
+    const main = join(moduleDir, pkg.main);
+    if (!existsSync(main)) {
+      throw new Error(`模块包 package.json main 指向的文件不存在：${pkg.main}`);
+    }
+    return main;
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new Error(`模块包 package.json 不是合法 JSON：${pkgPath}`);
+    }
+    throw err;
   }
 }
 
