@@ -572,3 +572,16 @@ CREATE TABLE IF NOT EXISTS core_identities (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (issuer, sub)
 );
+
+-- #220 增补（unself 集成层）：逐条已读回执（flows.md 链路 2 落地）；message_reads 频道级游标保持并存不互改。
+CREATE TABLE IF NOT EXISTS read_receipts (
+  message_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (message_id, user_id),
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_read_receipts_message
+  ON read_receipts(message_id, read_at);
