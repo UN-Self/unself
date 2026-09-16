@@ -112,3 +112,12 @@
 
 - 58 个未改文件：剥去 2 行文件头后与上游对应文件 `diff` 全部为空
 - 6 个接线改动文件（index.js、ChannelRoom.js、messages.js、storage-statistics.js、channel-deletion.ts、unread.js）+ attachment-encryption-route.test.js：diff 仅含上表所列删除
+
+## #220 已读回执（unself 集成层）
+
+- **schema-baseline.sql** 尾部 #220 增补：`read_receipts(message_id, user_id, read_at)`，主键(message_id,user_id)=幂等锚点，`messages ON DELETE CASCADE`；与 `message_reads` 频道级游标并存不互改。chat 无升级链包袱（#216 定案），基线直改
+- **worker/src/data/read-receipts.js**（新增）：recordReadReceipts（INSERT OR IGNORE + 批内去重 + 跨房消息过滤，回新增行 diff）/ listReadReceipts（每页一条 IN 查询不 N+1）/ countReachableRecipients（listRoomMemberIds 口径：成员∧未删∧active）
+- **worker/src/api/messages.js**：POST /api/messages/read 扩展批量 `{kind, roomId, messageIds[]}`（≤200 413、批内去重、幂等；未入房 403；留旧 messageId 单值兼容）；DO 是唯一写者（落行+diff+广播），DO 不可达降级本地直写；GET /api/messages 每条消息富化 `readReceipts{count, readBy[], total}`——**分母=可达收件人（发件人恒已读不计）**（决策 #52）
+- **worker/src/do-bridge.js / do/ChannelRoom.js**：内部路由 POST /receipts（verified internal，同 /client-action 形状）+ GET /receipts/snapshot（最新30条聚合兜底，json_object 键 userId/readAt 与前端帧同形）；实际新增>0 才聚合广播 `{protocolVersion:1, type:'read_receipts', messageId(批内最大), userId, readAt, messageIds[]}`；上游广播机制零改动（回执事件=新增）
+- **前端**（自研件，非上游）：MessageBubble 回执标签（DM=已读✓✓/群聊=已读 n/m）、ReadReceipts 名单浮层（Teleport+Esc/遮罩/钮关闭）、chat-store readReceipts 真值+read_receipts 帧合并+recordVisibleRead 可见性上报（IntersectionObserver 批量）、session onTokenRenewed → store.refreshSocketToken（WS 控制帧换绑，决策 #51——**#225 遗留 live 接线在本 issue 补验**）
+- **测试**：worker `test/chat-read-receipts.test.ts`（11 用例：上报/幂等零事件/403/413/口径/跨房/DO 帧形+兜底快照）；frontend `test/read-receipts.test.ts`（15 用例：标签/浮层/帧幂等/上报去重/live api 契约/续期接线）；红灯证据 M1–M5 见 /tmp/tasks/evidence-220-worker.md（M1/M3 亦录 PR 描述）
