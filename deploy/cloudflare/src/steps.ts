@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * 幂等九步编排（PRODUCT_SPEC §5.5，#14）：
- * ① 两 D1 → ② 迁移 → ③ Shell Worker → ④ 模块构建/上传/路由绑定（含未选模块路由删除）
+ * ① 两 D1（chat 选中时含专属 D1/KV/R2，#219 决策 #50）→ ② 迁移（chat 走基线 schema）
+ * → ③ Shell Worker → ④ 模块构建/上传/路由绑定（含未选模块路由删除；chat 含前端产物与密钥环 Secret）
  * → ⑤ registry → ⑥ R2 → ⑦ OIDC（无操作，setup 向导录入）→ ⑧ 本地签发 setup token → ⑨ 冒烟 + 主题体检。
  * 所有资源查漏后补建：连跑两次收敛（#14 验收）。
  */
@@ -20,7 +21,7 @@ import {
 } from './assemble';
 import { loadUnselfConfig, type ModuleRef, type UnselfConfig } from './config';
 import { domainProblem } from './interactive';
-import { createKeypair, detectExistingSecret, publicJwksJson, putSecret } from './keypair';
+import { createKeypair, detectExistingSecret, detectWorkerSecret, JWT_SECRET_NAME, publicJwksJson, putSecret, putWorkerSecret } from './keypair';
 import {
   ensureTotalTls,
   ensureZoneRecord,
@@ -30,6 +31,20 @@ import {
   removeModuleRoutes,
 } from './dns';
 import { ensureDatabases, ensureR2Bucket, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
+import {
+  applyChatSchema,
+  CHAT_DB_NAME,
+  CHAT_KEYRING_SECRET,
+  CHAT_MODULE_ID,
+  CHAT_KV_NAME,
+  CHAT_R2_NAME,
+  chatWranglerConfig,
+  ensureChatResources,
+  ensureChatR2Bucket,
+  generateChatKeyring,
+  readChatPackageConfig,
+} from './chat-provision';
+import { buildChatFrontendAssets } from './chat-frontend';
 import { registryCommands, sqlString } from './registry';
 import { checkModuleThemes, parseWorkersDevFromDeployOutput, provisionSetupToken, smokeCheck } from './smoke';
 import type { ThemeCheckResult } from './smoke';
@@ -115,10 +130,12 @@ export async function runNineSteps(input: {
   ensureTotalTls?: () => Promise<void>;
   /** 测试注入口：覆盖 unself.config.jsonc（默认 loadUnselfConfig(rootDir)）。 */
   configOverride?: UnselfConfig;
-  /** 测试注入口：拦截 secret put（默认走真实 spawn）。 */
-  putSecret?: (workerName: string, value: string) => Promise<void>;
+  /** 测试注入口：拦截 secret put（默认走真实 spawn；secretName 区分 core JWT 与 chat 密钥环）。 */
+  putSecret?: (workerName: string, value: string, secretName: string) => Promise<void>;
   /** 测试注入口：拦截 shell 构建（默认真实 pnpm --filter @unself/shell build；#73 每次部署重建）。 */
   buildShell?: (rootDir: string) => Promise<void>;
+  /** 测试注入口：拦截 chat 前端构建（默认真实 vite build；返回产物相对 outDir/modules/ 路径）。 */
+  buildChatFrontend?: (input: { rootDir: string; outDir: string; log: (msg: string) => void }) => Promise<string>;
   /**
    * @internal 仅供测试注入（steps.test.ts）：跳过公网 JWKS 抓取（fake wrangler 无真实部署）。
    * 生产路径一律走 defaultFetchJwks（真实 fetch GET <baseUrl>/.well-known/jwks.json）。
@@ -141,10 +158,21 @@ export async function runNineSteps(input: {
   validateS3Storage(config);
   const modules = await discoverModules(rootDir, config.modules);
   const selected = modules.filter((m) => m.selected);
+  /** chat 密钥环动作（选中 chat 时在步骤④赋值；未选中 undefined）。 */
+  let chatKeyringAction: 'created' | 'existing' | undefined;
 
-  // ① D1
-  rep.step(1, '确保 core/modules 两个 D1 存在');
+  // ① D1（chat 选中时：包配置先过一道形状检查，再补建专属 D1/KV/R2 —— #219 决策 #50）
+  rep.step(1, '确保 core/modules 两个 D1 存在（chat 选中时含专属 D1/KV/R2）');
   const dbIds = await ensureDatabases(wrangler, rep.log);
+  const chatMod = selected.find((m) => m.id === CHAT_MODULE_ID);
+  let chatResources: { dbId: string; kvId: string } | null = null;
+  let chatPkg: Awaited<ReturnType<typeof readChatPackageConfig>> | null = null;
+  if (chatMod) {
+    // 包配置/基线 schema 形状先验：坏了在创建任何资源前就人话报错
+    chatPkg = await readChatPackageConfig(chatMod.dir);
+    chatResources = await ensureChatResources(wrangler, rep.log);
+    await ensureChatR2Bucket(wrangler, rep.log);
+  }
 
   // ② 迁移（core + 各选中模块；未选模块不动数据）
   rep.step(2, '跑核心迁移与选中模块迁移（表前缀版本化）');
@@ -161,6 +189,22 @@ export async function runNineSteps(input: {
   rep.log('core 迁移已应用（unself-core）');
   for (const mod of selected) {
     const cfg = join(migrateDir, `${mod.id}.wrangler.jsonc`);
+    if (mod.id === CHAT_MODULE_ID && chatResources && chatPkg) {
+      // #219：chat 不走 d1 migrations 链——基线 schema 一次性灌入（全 IF NOT EXISTS + OR IGNORE，首建即收敛）
+      await writeConfig(cfg, migrationWranglerConfig({
+        binding: chatPkg.d1Binding,
+        databaseName: CHAT_DB_NAME,
+        databaseId: chatResources.dbId,
+        migrationsDir: `../../../modules/${mod.id}/migrations/${mod.id}`,
+      }));
+      await applyChatSchema({ wrangler, moduleDir: mod.dir, configPath: cfg, log: rep.log });
+      continue;
+    }
+    // 基线 schema 型模块（无 migrations/<id> 目录）跳过迁移链（chat 已在上面分支处理；未来同型模块在此豁免）
+    if (!existsSync(join(mod.dir, 'migrations', mod.id))) {
+      rep.log(`模块 ${mod.id} 无 migrations/${mod.id} 目录：跳过 d1 migrations`);
+      continue;
+    }
     await writeConfig(cfg, migrationWranglerConfig({
       binding: 'MODULES_DB',
       databaseName: MODULES_DB_NAME,
@@ -248,7 +292,7 @@ export async function runNineSteps(input: {
   await wrangler.run(['deploy', '--config', join(provisioned.outDir, 'core.wrangler.jsonc')]);
   if (freshPair) {
     if (input.putSecret) {
-      await input.putSecret(provisioned.coreName, freshPair.privateKeyPem);
+      await input.putSecret(provisioned.coreName, freshPair.privateKeyPem, JWT_SECRET_NAME);
       rep.log('写入 secret JWT_PRIVATE_KEY（测试注入口）');
     } else {
       // secret put（值经 stdin 管道喂入）：正式部署路径；测试走上面的 putSecret 注入口，不进这里。
@@ -299,15 +343,34 @@ export async function runNineSteps(input: {
     rep.log('已获取 Core 公钥 JWKS（部署期注入模块 vars）');
   }
   for (const mod of provisioned.modules) {
+    const isChat = mod.id === CHAT_MODULE_ID;
+    // chat：前端构建产物随模块 worker 部署（vite build --base=./ → 搬进装配产物；每次部署重建，#73 同款）
+    const chatAssetsDir = isChat
+      ? await (input.buildChatFrontend ?? buildChatFrontendAssets)({
+          rootDir,
+          outDir: provisioned.outDir,
+          log: rep.log,
+        })
+      : undefined;
     await writeConfig(
       join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`),
-      moduleWranglerConfig({
-        config,
-        dbIds: { modules: dbIds.modules },
-        mod,
-        jwksJson,
-        zoneName: resolvedZone?.name,
-      }),
+      isChat && chatResources && chatPkg
+        ? chatWranglerConfig({
+            config,
+            dbIds: { modules: dbIds.modules, chat: chatResources.dbId },
+            kvId: chatResources.kvId,
+            jwksJson,
+            zoneName: resolvedZone?.name,
+            pkg: chatPkg,
+            assetsDir: chatAssetsDir!,
+          })
+        : moduleWranglerConfig({
+            config,
+            dbIds: { modules: dbIds.modules },
+            mod,
+            jwksJson,
+            zoneName: resolvedZone?.name,
+          }),
     );
     // wrapper 每次重写（内容确定，幂等）：它独占 worker.js（main 入口），bundle 在 app.js
     await writeConfig(
@@ -315,7 +378,26 @@ export async function runNineSteps(input: {
       prefixStripWrapperSource(mod.id),
     );
     await wrangler.run(['deploy', '--config', join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`)]);
-    rep.log(`模块 ${mod.id} 已部署（zone 路径路由 /m/${mod.id}/*）`);
+    rep.log(`模块 ${mod.id} 已部署（zone 路径路由 /m/${mod.id}/*${isChat ? '，含前端产物 assets' : ''}）`);
+    if (isChat) {
+      // 加密密钥环 Secret：已有绝不覆盖（幂等核心，与 core JWT_PRIVATE_KEY 同款纪律）；
+      // secret put 触发重部署使值生效 → 仅首次注入后补一次 deploy（二跑零 put 零重部署）
+      const hasKeyring = await detectWorkerSecret(wrangler, `unself-module-${mod.id}`, CHAT_KEYRING_SECRET);
+      if (!hasKeyring) {
+        const keyring = generateChatKeyring();
+        if (input.putSecret) {
+          await input.putSecret(`unself-module-${mod.id}`, keyring, CHAT_KEYRING_SECRET);
+          rep.log(`写入 secret ${CHAT_KEYRING_SECRET}（测试注入口）`);
+        } else {
+          await putWorkerSecret(wranglerBin(rootDir), rootDir, `unself-module-${mod.id}`, keyring, CHAT_KEYRING_SECRET, rep.log);
+        }
+        await wrangler.run(['deploy', '--config', join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`)]);
+        chatKeyringAction = 'created';
+      } else {
+        rep.log(`${CHAT_KEYRING_SECRET} 已配置：沿用现有加密密钥环`);
+        chatKeyringAction = 'existing';
+      }
+    }
   }
 
   // ④′ 未选模块（config.modules 未列出但已存在）：删除其 zone 路由 /m/<id>/*。
@@ -427,6 +509,14 @@ export async function runNineSteps(input: {
     modules: provisioned.modules.map((m) => ({ id: m.id, config: m.config })),
     d1: dbIds,
     r2Bucket: provisioned.r2Bucket,
+    chat: chatMod
+      ? {
+          db: CHAT_DB_NAME,
+          kv: CHAT_KV_NAME,
+          r2: CHAT_R2_NAME,
+          keyringAction: chatKeyringAction!,
+        }
+      : undefined,
     setup: 'sealed' in setup ? { sealed: true as const } : { setupUrl: setup.setupUrl },
     keypairAction: freshPair ? 'created' : 'existing',
     themeChecks,
@@ -530,8 +620,16 @@ export interface Summary {
   r2Bucket?: string;
   setup: { sealed: true } | { setupUrl: string };
   keypairAction: 'created' | 'existing';
+  /** chat 专属供给摘要（未选 chat 时 undefined；#219）。 */
+  chat?: {
+    db: string;
+    kv: string;
+    r2: string;
+    /** 密钥环 Secret 动作：首部署生成注入 / 沿用既有（幂等）。 */
+    keyringAction: 'created' | 'existing';
+  };
   /** 部署期主题体检结果（§6.5.8）；测试注入无 themeCheck 时为 []。 */
   themeChecks: ThemeCheckResult[];
 }
 
-export { CORE_DB_NAME, MODULES_DB_NAME, DEPLOY_DIR };
+export { CORE_DB_NAME, MODULES_DB_NAME, DEPLOY_DIR, CHAT_DB_NAME, CHAT_KV_NAME, CHAT_R2_NAME };

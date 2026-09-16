@@ -7,13 +7,14 @@
 import { execFile } from 'node:child_process';
 import { generateInstanceKeyPair, type InstanceKeyPair } from './es256';
 
-/** core Worker 的 secret 名（core-api Bindings 契约）。 */
+/** core Worker 的默认 secret 名（core-api Bindings 契约）。 */
 export const JWT_SECRET_NAME = 'JWT_PRIVATE_KEY';
 
-/** 探测 Worker 是否已配置签名私钥 secret。Worker 不存在 → 视为缺失。 */
-export async function detectExistingSecret(
+/** 探测 Worker 是否已配置指定名字的 secret（workerName + secretName 可选，缺省同旧签名；#219 chat 密钥环复用）。Worker 不存在 → 视为缺失。 */
+export async function detectWorkerSecret(
   wrangler: { tryRun(args: string[]): Promise<{ ok: boolean; stdout: string }> },
   workerName: string,
+  secretName: string = JWT_SECRET_NAME,
 ): Promise<boolean> {
   const res = await wrangler.tryRun(['secret', 'list', '--name', workerName]);
   if (!res.ok) return false;
@@ -22,12 +23,20 @@ export async function detectExistingSecret(
     const start = res.stdout.lastIndexOf('[');
     const parsed: unknown = JSON.parse(start >= 0 ? res.stdout.slice(start) : res.stdout.trim() || '[]');
     if (Array.isArray(parsed)) {
-      return parsed.some((s) => (s as Record<string, unknown>).name === JWT_SECRET_NAME);
+      return parsed.some((s) => (s as Record<string, unknown>).name === secretName);
     }
   } catch {
     // 解析失败按缺失处理（后续 put 幂等覆盖）
   }
   return false;
+}
+
+/** core 签名私钥探测（既有调用面：secret 名固定 JWT_PRIVATE_KEY）。 */
+export function detectExistingSecret(
+  wrangler: { tryRun(args: string[]): Promise<{ ok: boolean; stdout: string }> },
+  workerName: string,
+): Promise<boolean> {
+  return detectWorkerSecret(wrangler, workerName, JWT_SECRET_NAME);
 }
 
 /** 生成新 ES256 密钥对（本地 WebCrypto；仅缺失时调用）。 */
@@ -48,24 +57,36 @@ export function publicJwksJson(pair: InstanceKeyPair): string {
 
 /**
  * wrangler secret put（值经 stdin 管道喂入：不出现在 argv/日志/落盘）。
- * 返回 secret 的 sha256 指纹前 16 位（部署输出备查，不含密钥本体）。
+ * secretName 可选（缺省 JWT_PRIVATE_KEY；#219 chat 密钥环复用同款管道纪律）。
  */
-export async function putSecret(
+export async function putWorkerSecret(
   wranglerBin: string,
   cwd: string,
   workerName: string,
   value: string,
+  secretName: string = JWT_SECRET_NAME,
   log: (msg: string) => void = console.log,
 ): Promise<void> {
-  log(`写入 secret ${JWT_SECRET_NAME} → ${workerName}（值不落盘）`);
+  log(`写入 secret ${secretName} → ${workerName}（值不落盘）`);
   await new Promise<void>((resolve, reject) => {
     const child = execFile(
       wranglerBin,
-      ['secret', 'put', JWT_SECRET_NAME, '--name', workerName],
+      ['secret', 'put', secretName, '--name', workerName],
       { cwd, env: { ...process.env, WRANGLER_SEND_METRICS: 'false' } },
       (err) => (err ? reject(new Error(`secret put 失败：${err.message}`)) : resolve()),
     );
     child.stdin?.write(value);
     child.stdin?.end();
   });
+}
+
+/** core 签名私钥写入（既有调用面：secret 名固定 JWT_PRIVATE_KEY）。 */
+export function putSecret(
+  wranglerBin: string,
+  cwd: string,
+  workerName: string,
+  value: string,
+  log: (msg: string) => void = console.log,
+): Promise<void> {
+  return putWorkerSecret(wranglerBin, cwd, workerName, value, JWT_SECRET_NAME, log);
 }
