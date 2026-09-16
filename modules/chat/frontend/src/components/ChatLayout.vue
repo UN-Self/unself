@@ -32,13 +32,16 @@ export interface ChatLayoutProps {
   audienceSize?: number
   /** 回执摘要唯一真值（#220 store.state.readReceipts；缺省 = 旧格式无回执面）。 */
   readReceipts?: Record<number, import('../lib/types').ReadReceiptsSummary>
+  /** 会话列表加载失败人话（#221 走查补：错误态替代空态，不再静默吞错）。 */
+  loadError?: string | null
 }
 
 const props = withDefaults(defineProps<ChatLayoutProps>(), {
   activeRoom: null,
   isDm: false,
   audienceSize: 0,
-  readReceipts: () => ({})
+  readReceipts: () => ({}),
+  loadError: null,
 })
 
 const emit = defineEmits<{
@@ -112,6 +115,7 @@ const roomIcon = computed(() => {
       <RoomList
         :channels="channels"
         :dms="dms"
+        :load-error="loadError"
         :active-room="activeRoom ? { kind: activeRoom.kind, id: activeRoom.id } : null"
         :loading="loadingRooms"
         @select="emit('select', $event)"

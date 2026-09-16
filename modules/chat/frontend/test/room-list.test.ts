@@ -98,4 +98,19 @@ describe('RoomList（#218）', () => {
     expect(wrapper.text()).toContain('Alice')
     wrapper.unmount()
   })
+
+  // #221 走查补（行为）：加载失败时显示错误态而非空态；清空错误后回到空态
+  it('loadError 存在 → 错误态（role=alert）取代空态；清除后回到空态', async () => {
+    const wrapper = mountList({ loadError: '会话加载失败：请先登录' })
+    const error = wrapper.find('[data-test="rooms-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.attributes('role')).toBe('alert')
+    expect(error.text()).toContain('会话加载失败：请先登录')
+    expect(wrapper.find('[data-test="rooms-empty"]').exists()).toBe(false)
+
+    await wrapper.setProps({ loadError: null })
+    expect(wrapper.find('[data-test="rooms-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="rooms-empty"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
 })

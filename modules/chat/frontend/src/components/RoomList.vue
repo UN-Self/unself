@@ -16,11 +16,14 @@ export interface RoomListProps {
   /** 当前选中房间 {kind, id}；null = 未选中（窄屏首屏态）。 */
   activeRoom: { kind: RoomKind; id: number } | null
   loading: boolean
+  /** 加载失败人话提示（live 401/网络故障等）：错误态替代「暂无会话」空态（#221 走查补）。 */
+  loadError?: string | null
 }
 
 const props = withDefaults(defineProps<RoomListProps>(), {
   activeRoom: null,
   loading: false,
+  loadError: null,
 })
 
 const emit = defineEmits<{
@@ -40,7 +43,12 @@ function isActive(kind: RoomKind, id: number): boolean {
     <USkeleton v-if="loading" :lines="5" />
 
     <template v-else>
-      <div v-if="!hasAny" class="rooms-empty" data-test="rooms-empty">
+      <div v-if="props.loadError" class="rooms-empty" data-test="rooms-error" role="alert">
+        <MessageCircle :size="20" aria-hidden="true" />
+        <span>{{ props.loadError }}</span>
+      </div>
+
+      <div v-else-if="!hasAny" class="rooms-empty" data-test="rooms-empty">
         <MessageCircle :size="20" aria-hidden="true" />
         <span>暂无会话</span>
       </div>
