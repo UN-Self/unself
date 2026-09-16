@@ -84,6 +84,20 @@ export function submitClientRoomAction(env, { room, principal, action }) {
   });
 }
 
+// #220 已读回执：同 /client-action 形状的 verified internal 转发（DO 是唯一写者：落行+diff+广播）。
+export function submitRoomReceipts(env, { room, principal, messageIds }) {
+  return forwardVerifiedRequest({
+    stub: getChannelRoomStub(env, room.kind, room.id),
+    request: new Request(`${INTERNAL_ORIGIN}/receipts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room, messageIds })
+    }),
+    pathname: '/receipts',
+    principal
+  });
+}
+
 export async function submitExternalRoomMessage(env, payload) {
 	const room = payload.room;
 	return getChannelRoomStub(env, room.kind, room.id).fetch(
