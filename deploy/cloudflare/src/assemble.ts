@@ -99,7 +99,7 @@ export async function provisionAll(options: {
   log('构建 shell（vite build）…');
   await buildShell(rootDir);
   const shellAssets = join(outDir, 'assets/shell');
-  await rm(shellAssets);
+  await ensureEmptyDir(shellAssets);
   await cp(shellDist, shellAssets, { recursive: true });
 
   // ---- 步骤④ 构建侧：模块 ----
@@ -151,6 +151,12 @@ async function rm(path: string): Promise<void> {
   if (existsSync(path)) {
     await import('node:fs/promises').then((fs) => fs.rm(path, { recursive: true, force: true }));
   }
+}
+
+/** 确保目录为空壳（先删后建；并发/重入下的 mkdir EEXIST 竞态免疫，#219 装配测试实证）。 */
+async function ensureEmptyDir(path: string): Promise<void> {
+  await rm(path);
+  await mkdir(path, { recursive: true });
 }
 
 /**

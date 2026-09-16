@@ -8,6 +8,7 @@
  * 源码零修改（VITE_CHAT_API 双模式为 #218 预留的既有约定）。
  */
 import { cp, mkdir, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { runTool } from './assemble';
 
 export const CHAT_FRONTEND_FILTER = '@unself/module-chat-frontend';
@@ -32,11 +33,15 @@ export async function buildChatFrontendAssets(input: {
   ], input.rootDir, { env: { VITE_CHAT_API: 'live' } });
   const assetsDir = 'chat/assets/frontend';
   const dest = `${input.outDir}/modules/${assetsDir}`;
+  const dist = `${input.rootDir}/modules/chat/frontend/dist`;
+  if (!existsSync(dist)) {
+    throw new Error(`chat 前端构建产物缺失（${dist}）：vite build 报成功但无 dist，先查 frontend 构建`);
+  }
   // 无条件重写（#162 同款纪律）：旧哈希命中的残留 chunk 不留给升级部署
   await rm(dest, { recursive: true, force: true });
   await mkdir(dest, { recursive: true });
   await cp(
-    `${input.rootDir}/modules/chat/frontend/dist`,
+    dist,
     dest,
     { recursive: true },
   );
