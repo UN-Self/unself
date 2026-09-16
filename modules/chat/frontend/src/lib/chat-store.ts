@@ -11,7 +11,17 @@
  * - 发送走 REST 幂等端点（clientMessageId 去重回显），socket 只收广播不承担提交。
  */
 import { reactive } from 'vue'
-import type { Channel, Dm, Message, MessagesPage, RoomFrame, RoomKind, UserSummary, WsRoomMessageNotice } from './types'
+import type {
+  Channel,
+  Dm,
+  Message,
+  MessagesPage,
+  ReadReceiptsSummary,
+  RoomFrame,
+  RoomKind,
+  UserSummary,
+  WsRoomMessageNotice,
+} from './types'
 import type { ChatApi } from './api'
 import type { ChatStorage } from './storage'
 
@@ -48,6 +58,8 @@ export interface ChatStore {
   dms: Dm[]
   dmsState: LoadState
   contacts: UserSummary[]
+  /** 逐条已读回执（#220）：消息 id → 摘要（气泡回执面与名单浮层的唯一真值）。 */
+  readReceipts: Record<number, ReadReceiptsSummary>
   /** 房间实时连接状态投影。 */
   realtimeStatus: ChatStoreInternals['realtimeStatus']
   /** 当前用户 id（token claims 解出 / mock 注入）。 */
@@ -64,6 +76,12 @@ export interface ChatStore {
   sendMessage(input: SendMessageInput): Promise<void>
   /** 接收一帧房间消息（live 由 socket 回调驱动；测试直呼注入）。 */
   receiveRoomFrame(frame: RoomFrame): void
+  /** 可见性上报（#220）：过滤已上报与本人消息后批量 POST；失败不伤状态，可随下次可见重试。 */
+  recordVisibleRead(messageIds: number[]): Promise<void>
+  /** 参照实现（#220）：把一批消息作为「本人已见」上报（视图层入口，测试盯请求面）。 */
+  sendReadReport(messages: Message[]): Promise<void>
+  /** token 静默续期换新后由会话层调用：向房间 socket 发 token_refresh 控制帧（决策 #51）。 */
+  refreshSocketToken(token: string): void
   /** 接收一帧收件箱通知。 */
   receiveInboxFrame(frame: WsRoomMessageNotice): void
   /** 关闭实时连接（卸载时）。 */
@@ -91,6 +109,7 @@ export interface ChatStoreInternals {
   contacts: UserSummary[]
   realtimeStatus: 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error'
   myUserId: number
+  readReceipts: Record<number, ReadReceiptsSummary>
 }
 
 export interface CreateChatStoreOptions {
@@ -124,9 +143,11 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     contacts: [],
     realtimeStatus: 'idle',
     myUserId: 0,
+    readReceipts: {},
   })
 
-  let roomSocket: { close(): void } | null = null
+  /** 房间 socket 句柄（close 必备，send 为可选控制帧上行——#220 token_refresh）。 */
+  let roomSocket: { close(): void; send?(text: string): void } | null = null
   let inboxSocket: { close(): void } | null = null
   /** 已知最早消息 id（历史分页游标）。 */
   let oldestMessageId = Number.POSITIVE_INFINITY
@@ -134,11 +155,33 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
   let homeLoaded = false
   /** 已见消息 id（WS 广播 vs REST 回包 去重）。 */
   const seenMessageIds = new Set<number>()
+  /** 已成功上报已读的消息 id（#220 幂等去重：同消息在会话内只报一次）。 */
+  const reportedReadIds = new Set<number>()
+  /** 本人发出的消息 id（上报跳过——发件人恒已读，不计回执）。 */
+  const mySentMessageIds = new Set<number>()
 
   const rememberMessage = (message: Message): boolean => {
     if (seenMessageIds.has(message.id)) return false
     seenMessageIds.add(message.id)
     return true
+  }
+
+  /** 记录单条消息的回执摘要（#220）：有则覆盖，无则不动（旧格式兼容）。 */
+  const rememberReceipts = (message: Message): void => {
+    if (!message.readReceipts) return
+    state.readReceipts[message.id] = message.readReceipts
+  }
+
+  /** 逐条合并他人已读（#220）：已读过该消息的用户不重复计数/不重复名单。 */
+  const applyReceiptFromUser = (messageId: number, userId: number, readAt: string): void => {
+    const summary = state.readReceipts[messageId]
+    if (summary && summary.readBy.some((r) => r.userId === userId)) return
+    if (summary) {
+      summary.count += 1
+      summary.readBy.push({ userId, username: '', displayName: '', readAt })
+      return
+    }
+    state.readReceipts[messageId] = { count: 1, readBy: [{ userId, username: '', displayName: '', readAt }] }
   }
 
   const findRoomList = (room: RoomKey): { unreadCount: number; mentionUnreadCount: number } | null => {
@@ -156,6 +199,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
 
   const handleMessage = (message: Message): void => {
     if (!rememberMessage(message)) return
+    if (message.sender.id === state.myUserId) mySentMessageIds.add(message.id)
     state.messages.push(message)
     oldestMessageId = Math.min(oldestMessageId, message.id)
   }
@@ -200,6 +244,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       state.roomName = displayName
       state.messages = []
       seenMessageIds.clear()
+      state.readReceipts = {}
       oldestMessageId = Number.POSITIVE_INFINITY
       homeLoaded = false
       state.hasMoreHistory = true
@@ -211,7 +256,10 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
         const page: MessagesPage = await api.getMessages(room.kind, room.id)
         // 焦点已切走的迟到回包：丢弃（防串房）
         if (state.currentRoom && roomKeyString(state.currentRoom) === roomKeyString(room)) {
-          for (const message of page.messages) rememberMessage(message)
+          for (const message of page.messages) {
+            rememberMessage(message)
+            rememberReceipts(message)
+          }
           state.messages = [...page.messages]
           oldestMessageId = page.messages.length
             ? Math.min(...page.messages.map((m) => m.id))
@@ -220,6 +268,8 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
           state.hasMoreHistory = page.messages.length >= HISTORY_PAGE_SIZE
           state.loadingHistory = 'ready'
           clearUnread(room)
+          // 首页就绪即对可见消息做一次已读上报（链路 2 ③；失败静默，滚回可见再触发）
+          void store.recordVisibleRead(page.messages.filter((m) => m.sender.id !== state.myUserId).map((m) => m.id))
         }
       } catch (error) {
         state.loadingHistory = 'error'
@@ -260,6 +310,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
         const page = await api.getMessages(room.kind, room.id, before)
         if (state.currentRoom && roomKeyString(state.currentRoom) === roomKeyString(room)) {
           const fresh = page.messages.filter((m) => rememberMessage(m))
+          for (const message of fresh) rememberReceipts(message)
           state.messages.unshift(...fresh)
           if (fresh.length) oldestMessageId = Math.min(oldestMessageId, ...fresh.map((m) => m.id))
           state.hasMoreHistory = page.messages.length >= HISTORY_PAGE_SIZE
@@ -312,9 +363,19 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
         if (message.sender.id === state.myUserId) {
           // 本人消息：REST 回包已插入，这里只登记去重（WS 广播回显）
           rememberMessage(message)
+          rememberReceipts(message)
           return
         }
         handleMessage(message)
+        // 他人新消息到达即视为可见（当前在房内）：立即上报已读（链路 2 ③）
+        void store.recordVisibleRead([message.id])
+        return
+      }
+      // #220 他人已读回执推送：只更新当前房间的摘要；本人帧忽略（上报者本人不需要被告知）
+      if (frame.type === 'read_receipts') {
+        if (frame.userId === state.myUserId) return
+        if (!state.currentRoom) return
+        for (const messageId of frame.messageIds) applyReceiptFromUser(messageId, frame.userId, frame.readAt)
       }
     },
 
@@ -337,6 +398,33 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     },
 
     uploadFile: (file) => api.uploadFile(file).then((r) => r.file),
+
+    recordVisibleRead: async (messageIds) => {
+      const room = state.currentRoom
+      if (!room || messageIds.length === 0) return
+      const pending = messageIds.filter(
+        (id) => !reportedReadIds.has(id) && !mySentMessageIds.has(id),
+      )
+      if (pending.length === 0) return
+      try {
+        await api.reportMessagesRead(room.kind, room.id, pending)
+      } catch {
+        return // 上报失败不伤本地状态；未入 Set，下次可见即自动重试
+      }
+      for (const id of pending) {
+        reportedReadIds.add(id)
+        mySentMessageIds.add(id) // 服务端不分发本人上报，防御本地重发（无需再试）
+      }
+    },
+
+    sendReadReport: (messages) => store.recordVisibleRead(messages.map((m) => m.id)),
+
+    refreshSocketToken: (token) => {
+      // 决策 #51：静默续期拿到新 token 后经房间 socket 发控制帧换绑（DO 回 token_refreshed ack）。
+      // token 未就绪（握手前）不会被调用；socket 未开/句柄无 send（测试替身）时静默忽略，
+      // 断线重连自带新 token（openRoomSocket 每次 openRoom 都取 getToken() 最新值）。
+      roomSocket?.send?.(JSON.stringify({ type: 'token_refresh', token }))
+    },
   }
 
   state.myUserId = myUserId()

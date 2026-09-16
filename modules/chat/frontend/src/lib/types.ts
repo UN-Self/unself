@@ -89,6 +89,21 @@ export interface MessageSender {
   source: string
 }
 
+/** 逐条已读回执（#220）：单条消息的已读名单与计数（服务端可选下发，旧格式缺省）。 */
+export interface ReadReceiptBy {
+  userId: number
+  username: string
+  displayName: string
+  /** ISO 时间串（服务端 read_at）。 */
+  readAt: string
+}
+
+/** 已读回执摘要（GET /api/messages 出参 message.readReceipts）。 */
+export interface ReadReceiptsSummary {
+  count: number
+  readBy: ReadReceiptBy[]
+}
+
 /** 消息（GET /api/messages 与 WS message 帧共用的形状）。 */
 export interface Message {
   id: number
@@ -103,6 +118,8 @@ export interface Message {
   clientMessageId?: string
   replyToMessageId?: number
   replyTo?: Message | { id: number; deleted: boolean }
+  /** 已读回执摘要（#220；缺省 = 旧格式历史消息，无回执面）。 */
+  readReceipts?: ReadReceiptsSummary
 }
 
 /** GET /api/messages 出参（room + 当前页消息 + 置顶）。 */
@@ -147,7 +164,21 @@ export interface WsRoomMessageNotice {
   sender: MessageSender
 }
 
-export type RoomFrame = WsReadyFrame | WsMessageFrame | WsErrorFrame
+/** 房间已读回执推送帧（#220；批量合并防刷屏，批内 messageId 取最大）。 */
+export interface WsReadReceiptsFrame {
+  protocolVersion: 1
+  type: 'read_receipts'
+  /** 批内最大消息 id（帧级主键）。 */
+  messageId: number
+  /** 刚读完这批消息的用户。 */
+  userId: number
+  /** 批内最新已读时间。 */
+  readAt: string
+  /** 本批全部消息 id（逐条更新用）。 */
+  messageIds: number[]
+}
+
+export type RoomFrame = WsReadyFrame | WsMessageFrame | WsErrorFrame | WsReadReceiptsFrame
 export type InboxFrame = { protocolVersion: 1; type: 'ready' } | WsRoomMessageNotice
 
 /** WS 连接状态。 */

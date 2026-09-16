@@ -85,6 +85,8 @@ export interface ChatApi {
   openDm(userId: number): Promise<OpenDmResult>
   joinChannel(channelId: number): Promise<{ ok: true }>
   getMessages(kind: RoomKind, roomId: number, before?: number | null): Promise<MessagesPage>
+  /** 已读上报（#220）：HTTP 批量端点，幂等；空数组不发请求。 */
+  reportMessagesRead(kind: RoomKind, roomId: number, messageIds: number[]): Promise<void>
   sendMessage(input: {
     kind: RoomKind
     roomId: number
@@ -94,14 +96,14 @@ export interface ChatApi {
     mentionUserIds?: number[]
   }): Promise<{ created: boolean; message: Message }>
   uploadFile(file: File): Promise<{ file: Attachment }>
-  /** WS 建连回调形态：测试传内存 socket，live 走 URL。 */
+  /** WS 建连回调形态：测试传内存 socket，live 走 URL。返回句柄含可选 send（控制帧上行，#220）。 */
   openRoomSocket(handlers: {
     kind: RoomKind
     roomId: number
     token: string
     onMessage: (frame: unknown) => void
     onStatus: (status: 'connecting' | 'open' | 'closed' | 'error') => void
-  }): { close(): void }
+  }): { close(): void; send?(text: string): void }
 }
 
 export interface CreateChatApiOptions {
@@ -162,6 +164,10 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
         close() {
           socket?.close()
         },
+        // #220 token 续期控制帧上行（决策 #51：控制帧换绑，不重连不断流）
+        send(text: string) {
+          if (socket && socket.readyState === WebSocket.OPEN) socket.send(text)
+        },
       }
     })
 
@@ -186,6 +192,12 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
     joinChannel: (channelId) => postJson<{ ok: true }>(`/channels/${channelId}/join`, {}),
     getMessages: (kind, roomId, before) =>
       get<MessagesPage>(`/messages${query({ kind, roomId, before: before ?? undefined })}`),
+    // #220 已读上报走 HTTP（决策：回执批量/幂等语义在 REST 端点闭环，socket 只收广播）
+    reportMessagesRead: async (kind, roomId, messageIds) => {
+      const deduped = [...new Set(messageIds)]
+      if (deduped.length === 0) return
+      await postJson('/messages/read', { kind, roomId, messageIds: deduped })
+    },
     sendMessage: (input) =>
       requestJson<{ created: boolean; message: Message }>(`/v1/rooms/${input.kind}/${input.roomId}/messages`, {
         method: 'POST',

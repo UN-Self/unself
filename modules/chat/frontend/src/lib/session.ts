@@ -29,6 +29,13 @@ export interface ChatSession {
 export interface CreateChatSessionOptions {
   /** 模块 id（manifest 契约，aud=chat）。 */
   moduleId?: string
+  /**
+   * 静默续期换新回调（#220/#225 live 接线）：除首个 token 外，每次续期拿到的新
+   * token 都会通知此回调（首个 token 由 handshake() resolve 承担，不重复触发）。
+   * 典型用途：store.refreshSocketToken 发 WS 控制帧换绑（决策 #51）。
+   * 缺省不传 = 行为与 #218 完全一致（向后兼容）。
+   */
+  onTokenRenewed?: (token: string) => void
 }
 
 /** 握手默认超时：与壳模块加载异常规范同量级（15s）。 */
@@ -55,6 +62,8 @@ export function createChatSession(options: CreateChatSessionOptions = {}): ChatS
   let latestToken: string | null = null
   let latestUserId = 0
   let waiter: ((token: string) => void) | null = null
+  const onRenewed = options.onTokenRenewed
+  let firstAdopted = false
 
   const adopt = (token: string): void => {
     latestToken = token
@@ -65,6 +74,9 @@ export function createChatSession(options: CreateChatSessionOptions = {}): ChatS
     } catch {
       latestUserId = 0
     }
+    // #220：首个 token = 握手成功（handshake resolve）；之后的每次 adopt 都是续期换新 → 通知回调
+    if (firstAdopted) onRenewed?.(token)
+    firstAdopted = true
     waiter?.(token)
     waiter = null
   }

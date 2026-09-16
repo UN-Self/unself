@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 
 import ChatLayout from './components/ChatLayout.vue'
 import Composer from './components/Composer.vue'
+import ReadReceipts from './components/ReadReceipts.vue'
 import { createChatApi, type ChatApi } from './lib/api'
 import { createChatStore, roomKeyString } from './lib/chat-store'
 import { createMockChatApi } from './lib/mock-api'
@@ -16,11 +17,20 @@ import type { Message, RoomKind, UserSummary } from './lib/types'
  * - 默认 mock：#216 worker 未部署时的全链路走查（数据内存闭环 + WS 广播语义一致）。
  * - live：VITE_CHAT_API=live 构建变量切换（Bearer=模块 token，同源 /api/*）。
  * 握手：SDK ready → token → startTokenLoop 静默续期；token 失效时重新握手换新后重试一次。
+ * #220：静默续期换新 → store.refreshSocketToken（WS 控制帧换绑，决策 #51）；
+ * 可见性上报（visible-read）与已读名单浮层（ReadReceipts）在此装配。
  */
 const MODE: 'mock' | 'live' = import.meta.env.VITE_CHAT_API === 'live' ? 'live' : 'mock'
 
-const session = createChatSession()
+// session 先建：store 的 refreshSocketToken 依赖其续期回调链（先 store 后 session 会丢首次接线）
 const storage = createChatStorage()
+
+// 先建占位引用（装配顺序：session 回调 → store；见下方接线）
+let storeRef: ReturnType<typeof createChatStore> | null = null
+const session = createChatSession({
+  // #220/#225 live 接线：静默续期拿到新 token → 房间 socket 发 token_refresh 控制帧换绑
+  onTokenRenewed: (token) => storeRef?.refreshSocketToken(token),
+})
 
 const chatApi: ChatApi =
   MODE === 'live'
@@ -37,6 +47,7 @@ const store = createChatStore({
   },
   getToken: () => session.getToken(),
 })
+storeRef = store
 
 // ---------- 握手生命周期 ----------
 
@@ -92,6 +103,37 @@ function onBack(): void {
   store.closeSockets()
   store.state.currentRoom = null
 }
+
+// ---------- #220 已读回执：可见性上报 + 名单浮层 ----------
+
+function onVisibleRead(messageIds: number[]): void {
+  void store.recordVisibleRead(messageIds)
+}
+
+/** 浮层开关状态由根层持有（子组件只 emit close）。 */
+const receiptsOpen = ref(false)
+const receiptTarget = ref<Message | null>(null)
+
+function onShowReceipts(message: Message): void {
+  receiptTarget.value = message
+  receiptsOpen.value = true
+}
+
+function closeReceipts(): void {
+  receiptsOpen.value = false
+}
+
+/** 当前会话是否私聊（DM 回执 = ✓✓已读 口径）。 */
+const isDm = computed(() => store.state.currentRoom?.kind === 'dm')
+
+/** 可达收件人数（分母 = 房间成员 − 发件人）：频道取 memberCount−1；DM 恒 1。 */
+const audienceSize = computed(() => {
+  const room = store.state.currentRoom
+  if (!room) return 0
+  if (room.kind === 'dm') return 1
+  const channel = store.state.channels.find((c) => c.id === room.id)
+  return Math.max(0, (channel?.memberCount ?? 0) - 1)
+})
 
 // ---------- composer 编排 ----------
 
@@ -180,9 +222,14 @@ const contextKey = computed(() =>
         store.state.loadingHistory === 'loading' && store.state.messages.length > 0
       "
       :no-earlier="!store.state.hasMoreHistory"
+      :is-dm="isDm"
+      :audience-size="audienceSize"
+      :read-receipts="store.state.readReceipts"
       @select="onSelect"
       @back="onBack"
       @load-earlier="onLoadEarlier"
+      @show-receipts="onShowReceipts"
+      @visible-read="onVisibleRead"
     >
       <template #composer>
         <Composer
@@ -203,7 +250,17 @@ const contextKey = computed(() =>
       </template>
     </ChatLayout>
 
-    <div v-else class="chat-root-boot" data-test="handshaking" aria-busy="true">
+    <!-- #220 已读名单浮层：Teleport 到 body；关闭路径（Esc/遮罩/钮）在浮层组件内 -->
+    <ReadReceipts
+      v-if="handshakeReady"
+      :open="receiptsOpen"
+      :summary="receiptTarget ? store.state.readReceipts[receiptTarget.id] ?? null : null"
+      :audience-size="audienceSize"
+      :room-name="store.state.roomName"
+      @close="closeReceipts"
+    />
+
+    <div v-if="!handshakeError && !handshakeReady" class="chat-root-boot" data-test="handshaking" aria-busy="true">
       <p>正在连接模块…</p>
     </div>
   </div>
