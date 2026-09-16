@@ -213,6 +213,10 @@ export class MemoryKv {
 export interface ChatTestEnv {
   DB: ChatD1Database;
   SESSIONS: MemoryKv;
+  /** #217 认证：core 公钥 JWKS JSON（验签用，每用例注入）；空串 = 未配（验签面 503）。 */
+  CORE_JWKS_JSON?: string;
+  /** #217 可选 iss 校验（默认不设，以 aud 锁定为主）。 */
+  CORE_ISSUER?: string;
   EDGECHAT_ENCRYPTION_KEYRING: string;
   ADMIN_USERNAMES: string;
   MESSAGE_RETENTION_DAYS: string;

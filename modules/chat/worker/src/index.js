@@ -1,18 +1,10 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import {
-  createSession,
-  deleteSession,
-  hashPassword,
-  isConfiguredAdminUsername,
-  putSession,
-  verifyPassword
-} from './auth.js';
 import { listVisibleChannels } from './data/channels.js';
 import { listUserDms } from './data/dm-queries.js';
 import { ensureGeneralChannelMembership } from './data/general-channel.js';
 import { getSiteSettings } from './data/site-settings.js';
-import { getUserByUsername, listActiveUsers } from './data/users.js';
+import { listActiveUsers } from './data/users.js';
 import { ApiError } from './errors.js';
 import { adminMiddleware, authMiddleware } from './middleware.js';
 import { registerChannelRoutes } from './api/channels.js';
@@ -28,12 +20,9 @@ import { Scheduler } from './do/Scheduler.js';
 import { UserInbox } from './do/UserInbox.js';
 import { forwardInboxConnection, forwardRoomConnection } from './do-bridge.js';
 import { runScheduledGc } from './gc.js';
-import { isUserDisabled } from './user-status.js';
-import { updateCurrentDeviceSessionVersion } from './mobile-session.js';
 import {
   errorCodeForStatus,
   errorResponse,
-  parseJsonRequest,
   requestBodyTooLarge,
   v1ErrorResponse
 } from './utils.js';
@@ -65,122 +54,20 @@ app.get('/api/site', async (c) => {
   return c.json({ site });
 });
 
-app.post('/api/auth/login', async (c) => {
-  const payload = await parseJsonRequest(c.req.raw);
-  const username = String(payload.username || '').trim();
-  const password = String(payload.password || '');
-  if (!username || !password) {
-    return errorResponse('请输入用户名和密码');
-  }
-
-  const user = await getUserByUsername(c.env.DB, username);
-  if (!user || isUserDisabled(user)) {
-    return errorResponse('账号或密码错误', 401);
-  }
-
-  const valid = await verifyPassword(password, user.password_hash, user.password_salt);
-  if (!valid) {
-    return errorResponse('账号或密码错误', 401);
-  }
-
-  const session = await createSession(c.env, user);
-  return c.json({
-    token: session.token,
-    session
-  });
-});
-
 registerV1Routes(app);
 
 app.use('/api/*', authMiddleware);
 
-app.get('/api/auth/session', async (c) => {
+// #217：本地登录已裁，身份由 core 签发的模块 token 经验签 + JIT 建档给出（middleware.js）。
+app.get('/api/me', (c) => {
   const session = c.get('session');
-  const user = await c.env.DB.prepare(
-    `SELECT display_name, avatar_key, bio, is_disabled, disabled_until
-     FROM users
-     WHERE id = ?
-       AND deleted_at IS NULL
-     LIMIT 1`
-  )
-    .bind(session.userId)
-    .all();
-
-  if (!user.results[0] || isUserDisabled(user.results[0])) {
-    await deleteSession(c.env, session.token);
-    return errorResponse('账号已不可用', 401);
-  }
-
-  const freshSession = {
-    ...session,
-    displayName: user.results[0].display_name,
-    bio: user.results[0].bio,
-    avatarUrl: user.results[0].avatar_key ? `/files/${encodeURIComponent(user.results[0].avatar_key)}` : ''
-  };
-  await putSession(c.env, freshSession);
-
-  return c.json({ session: freshSession });
-});
-
-app.post('/api/auth/logout', async (c) => {
-  const session = c.get('session');
-  await deleteSession(c.env, session.token);
-  return c.json({ ok: true });
-});
-
-app.post('/api/auth/change-password', async (c) => {
-  const session = c.get('session');
-  const payload = await parseJsonRequest(c.req.raw);
-  const currentPassword = String(payload.currentPassword || '');
-  const newPassword = String(payload.newPassword || '');
-  if (!currentPassword || !newPassword) {
-    return errorResponse('请填写完整密码');
-  }
-
-  const user = await c.env.DB.prepare(
-    `SELECT password_hash, password_salt
-     FROM users
-     WHERE id = ?
-       AND deleted_at IS NULL
-     LIMIT 1`
-  )
-    .bind(session.userId)
-    .all();
-
-  if (!user.results[0]) {
-    return errorResponse('用户不存在', 404);
-  }
-
-  const valid = await verifyPassword(
-    currentPassword,
-    user.results[0].password_hash,
-    user.results[0].password_salt
-  );
-  if (!valid) {
-    return errorResponse('当前密码不正确', 400);
-  }
-
-  const hashed = await hashPassword(newPassword);
-  await c.env.DB.prepare(
-    `UPDATE users
-     SET password_hash = ?,
-          password_salt = ?,
-          session_version = session_version + 1,
-          updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?
-       AND deleted_at IS NULL`
-  )
-    .bind(hashed.hash, hashed.salt, session.userId)
-    .run();
-
-  const nextSession = {
-    ...session,
-    sessionVersion: Number(session.sessionVersion || 0) + 1
-  };
-  await updateCurrentDeviceSessionVersion(c.env, session, nextSession.sessionVersion);
-  await putSession(c.env, nextSession);
-
-  return c.json({ ok: true });
+  return c.json({
+    user: {
+      id: session.userId,
+      username: session.username,
+      displayName: session.displayName
+    }
+  });
 });
 
 app.get('/api/users', async (c) => {
