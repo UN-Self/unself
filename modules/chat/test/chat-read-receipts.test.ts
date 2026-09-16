@@ -474,3 +474,58 @@ describe('chat 已读回执（#220：上报/幂等/口径/推送/兜底）', () 
     });
   });
 });
+
+describe('chat 已读回执服务端兜底（#229：发件人自读恒不计）', () => {
+  it('发件人上报自己的消息：HTTP 200 但零落行、零广播（决策 #52 口径的强制面）', async () => {
+    const mint = await mintSetup();
+    makeToken = mint;
+    const aliceId = await joinGeneral('u_alice229', '爱丽丝');
+    const bobId = await joinGeneral('u_bob229', '阿鲍');
+    const messageId = await sendMessage('u_alice229', '爱丽丝', 'public', 1);
+
+    // 发件人本人上报自己的消息（正常客户端不会发，但客户端缺陷——如 #229 的 myUserId=0——会发）
+    const { status, json } = await reportRead(await makeToken({ sub: 'u_alice229', name: '爱丽丝' }), {
+      kind: 'public',
+      roomId: 1,
+      messageIds: [messageId],
+    });
+    expect(status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.receipts).toHaveLength(0); // 自读零新增 → 零广播素材
+
+    // 库里只有「阿鲍后来读」的行；甲的自读行不存在
+    const row = db.first<{ user_id: number }>(
+      'SELECT user_id FROM read_receipts WHERE message_id = ? AND user_id = ?',
+      messageId,
+      aliceId,
+    );
+    expect(row).toBeNull();
+    void bobId;
+  });
+
+  it('对照组：同一批里他人消息正常落行，发件人自己的消息被跳过（过滤只作用于自读）', async () => {
+    const mint = await mintSetup();
+    makeToken = mint;
+    const aliceId = await joinGeneral('u_alice229b', '爱丽丝');
+    void aliceId;
+    await joinGeneral('u_bob229b', '阿鲍');
+    const myMsg = await sendMessage('u_alice229b', '爱丽丝', 'public', 1);
+    const bobMsg = await sendMessage('u_bob229b', '阿鲍', 'public', 1);
+
+    // 爱丽丝上报「自己的 + 鲍勃的」两条（客户端分母失真场景的修复面）
+    const { status, json } = await reportRead(await makeToken({ sub: 'u_alice229b', name: '爱丽丝' }), {
+      kind: 'public',
+      roomId: 1,
+      messageIds: [myMsg, bobMsg],
+    });
+    expect(status).toBe(200);
+    expect(json.receipts?.map((r) => r.messageId)).toEqual([bobMsg]); // 只剩鲍勃的
+
+    const mine = db.first<{ user_id: number }>(
+      'SELECT user_id FROM read_receipts WHERE message_id = ? AND user_id = ?',
+      myMsg,
+      aliceId,
+    );
+    expect(mine).toBeNull();
+  });
+});

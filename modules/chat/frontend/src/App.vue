@@ -29,7 +29,11 @@ const storage = createChatStorage()
 let storeRef: ReturnType<typeof createChatStore> | null = null
 const session = createChatSession({
   // #220/#225 live 接线：静默续期拿到新 token → 房间 socket 发 token_refresh 控制帧换绑
-  onTokenRenewed: (token) => storeRef?.refreshSocketToken(token),
+  onTokenRenewed: (token) => {
+    storeRef?.refreshSocketToken(token)
+    // #229：续期换新不影响 sub，但保险起见同步身份（token 过渡期保持 mine 判定连续）
+    storeRef?.refreshMyUserId()
+  },
 })
 
 const chatApi: ChatApi =
@@ -40,6 +44,8 @@ const chatApi: ChatApi =
 const store = createChatStore({
   api: chatApi,
   storage,
+  // #229：工厂内延迟求值（不再同步拍快照）。live：握手后 claims.sub 可用；
+  // mock：主角 id 直接可用。chat 侧 id 由工厂经 contacts 解析（core:<sub> → id）。
   myUserId: () => {
     const id = userIdFromToken((token) => session.sdk.decodeContext(token), session.getToken())
     if (id) return id
@@ -58,6 +64,9 @@ async function bootstrap(): Promise<void> {
   try {
     await session.handshake()
     handshakeReady.value = true
+    // #229：token 到位后重算本人身份（此前一次性求值早于握手 → live 恒 0）。
+    // contacts 未载入时解析结果仍为 0，载入完成后（loadContacts 内）再重算一次。
+    store.refreshMyUserId()
     void store.loadChannels()
     void store.loadDms()
     void store.loadContacts()
