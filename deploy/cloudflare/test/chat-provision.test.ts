@@ -180,6 +180,8 @@ describe('chatWranglerConfig（部署配置生成）', () => {
     expect(cfg.main).toBe('chat/worker.js');
     expect(cfg.routes).toEqual([{ pattern: 'team.example.com/m/chat/*', zone_name: undefined }]);
     expect(cfg.d1_databases).toEqual([{ binding: 'DB', database_name: CHAT_DB_NAME, database_id: 'chat-uuid' }]);
+    // #231：SESSIONS KV 已无 worker 写入/读取方（本地会话下架 + PATCH profile 停写），
+    // 绑定暂由生成配置代持到 M3 清退（取舍见 chat-provision.ts CHAT_KV_NAME 注释）。
     expect(cfg.kv_namespaces).toEqual([{ binding: 'SESSIONS', id: 'kv-uuid' }]);
     expect(cfg.r2_buckets).toEqual([{ binding: 'FILES', bucket_name: CHAT_R2_NAME }]);
     expect(cfg.durable_objects.bindings).toEqual([{ name: 'CHANNEL_ROOM', class_name: 'ChannelRoom' }]);

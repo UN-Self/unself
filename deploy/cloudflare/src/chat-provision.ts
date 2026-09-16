@@ -22,12 +22,22 @@ import type { Wrangler } from './wrangler';
 /** chat 专属资源名（chat- 前缀，决策 #50）。 */
 export const CHAT_MODULE_ID = 'chat';
 export const CHAT_DB_NAME = 'unself-chat';
+/**
+ * SESSIONS KV namespace（#231 状态：**无写入方**）。
+ * #217 把本地会话读取面换成 core 模块 JWT + JIT 后，`worker/src/session.js` 已下架；
+ * #231 又停掉 `PATCH /api/me/profile` 的 putSession 回写，worker 侧再无 `env.SESSIONS` 写入。
+ * 唯一残留读取是 `maintenance/system-check.ts` 的探针（`registerMaintenanceRoutes` 未挂载，路由不可达）。
+ * 绑定仍保留是**过渡决定**：彻底移除需同时改 `modules/chat/wrangler.jsonc`
+ * （`readChatPackageConfig` 的形状校验与 dev 绑定）+ `steps.ts` 的摘要面，两者不在 #231
+ * 所有权内；待 M3 随本地会话残件一并清退（含删本命名空间）。
+ */
 export const CHAT_KV_NAME = 'unself-chat-sessions';
 export const CHAT_R2_NAME = 'unself-chat-files';
 /** chat worker 的加密密钥环 secret 名（上游 Bindings 契约，EDGECHAT_ 前缀）。 */
 export const CHAT_KEYRING_SECRET = 'EDGECHAT_ENCRYPTION_KEYRING';
 
-/** worker 侧 KV 绑定名（modules/chat/wrangler.jsonc）。 */
+/** worker 侧 KV 绑定名（modules/chat/wrangler.jsonc）。
+ * #231：worker 已无 SESSIONS 消费方（见 CHAT_KV_NAME 注释），生成配置暂时代持至 M3 清退。 */
 const KV_BINDING = 'SESSIONS';
 /** worker 侧 R2 绑定名（可选增强；装配端始终供给，缺绑定降级逻辑不再触发）。 */
 const R2_BINDING = 'FILES';

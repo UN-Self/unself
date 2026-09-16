@@ -2,7 +2,6 @@
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/api/user-profile.ts（GPL-3.0-only，裁剪版）
 import type { Hono } from "hono";
 import { validateBio, parseLocalUserId } from "../../../shared/user-profile.ts";
-import { putSession } from "../auth.js";
 import { resolveAvatarKeyUpdate, isR2ObjectUnavailableError } from "../avatar-policy.js";
 import { getUserProfile } from "../data/users.js";
 import { errorResponse, parseJsonRequest } from "../utils.js";
@@ -60,11 +59,12 @@ export function registerUserProfileRoutes(app: Hono) {
 			}
 		}
 		// 从 D1 重读完整资料，不能用可能过期的 KV 快照补齐未提交字段。
+		// #231：不再 putSession 回写 SESSIONS KV——本地会话读取面已死（#217），
+		// 回写只会把模块 JWT 明文在 KV 里多留 7 天（与「明文令牌不落库」相悖）。
 		const profile = await getUserProfile(c.env.DB, session.userId);
 		if (!profile) return errorResponse("用户资料不可用", 404);
 		const { id: _id, ...fields } = profile;
 		const merged = { ...session, ...fields };
-		await putSession(c.env, merged);
 		return c.json({ session: merged });
 	});
 }
