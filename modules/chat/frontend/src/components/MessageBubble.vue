@@ -4,12 +4,14 @@ import { computed } from 'vue'
 import { Paperclip } from 'lucide-vue-next'
 
 import VoiceBubble from './VoiceBubble.vue'
-import type { Message } from '../lib/types'
+import type { Message, ReadReceiptsSummary } from '../lib/types'
 
 /**
  * 单条消息气泡（#218 消息流）：头像/作者/时间/正文/附件。
  * 正文为纯文本渲染（markdown 富文本由 T4 的 composer/markdown 环节统一处理，此处不做 HTML 注入）。
  * 非文本附件（文件）渲染「不可预览」占位 + 原始文件名；语音附件转发 VoiceBubble。
+ * #220 已读回执：mine 气泡下缘回执标签（DM=已读✓✓；群聊=已读 n/m），点击发 show-receipts
+ * 由父层开名单浮层（本组件不渲染浮层）。
  */
 export interface MessageBubbleProps {
   message: Message
@@ -21,9 +23,22 @@ export interface MessageBubbleProps {
   replyDeleted?: boolean
   /** 高亮（提及我/回复我）。 */
   highlighted?: boolean
+  /** 私聊会话（#220）：DM 且已读 → 「已读」标签（aria=对方已读）。 */
+  isDm?: boolean
+  /** 可达收件人数（#220 分母：房间成员−发件人，发件人恒已读）。 */
+  audienceSize?: number
+  /** 已读回执摘要（#220；缺省不显示回执面——旧格式历史消息兼容）。 */
+  readSummary?: ReadReceiptsSummary | null
 }
 
-const props = defineProps<MessageBubbleProps>()
+const props = withDefaults(defineProps<MessageBubbleProps>(), {
+  replyPreview: undefined,
+  replyDeleted: undefined,
+  highlighted: undefined,
+  isDm: false,
+  audienceSize: undefined,
+  readSummary: null,
+})
 
 const HHMM_RE = /(\d{2}:\d{2})/
 
@@ -35,6 +50,30 @@ const timeLabel = computed(() => {
 })
 
 const invalidTime = computed(() => timeLabel.value === '')
+
+const emit = defineEmits<{ /** 点击回执标签：请求父层打开已读名单浮层（#220）。 */
+  'show-receipts': [message: Message]
+}>()
+
+/** 回执面是否显示：仅 mine 气泡 + 有回执数据（旧格式/缺省不显示）。 */
+const showReceiptTag = computed(() => props.mine && props.readSummary !== null && props.readSummary !== undefined)
+
+/** DM：读1人即全读 → ✓✓「已读」；未读 → 「未读」（简化口径，无发送中态）。 */
+const dmRead = computed(() => (props.readSummary?.count ?? 0) > 0)
+
+/** 群聊标签文案：全部已读 → 「已读」；部分 → 「已读 n/m」；0 → 「未读」。 */
+const groupReceiptLabel = computed(() => {
+  const count = props.readSummary?.count ?? 0
+  const total = props.audienceSize ?? 0
+  if (total > 0 && count >= total) return '已读'
+  if (count > 0) return `已读 ${count}/${total}`
+  return '未读'
+})
+
+/** 标签 aria 文案（屏幕阅读器语义，不参与视觉断言）。 */
+const receiptAria = computed(() =>
+  props.isDm ? (dmRead.value ? '对方已读' : '对方未读') : '已读名单',
+)
 
 /** 时间兜底：非 ISO 串里的 HH:mm 直接抠出来（mock 数据容错）。 */
 const fallbackTime = computed(() => {
@@ -84,6 +123,23 @@ const fileAttachment = computed(() => {
           <span class="bubble-file-meta">{{ Math.max(1, Math.round((fileAttachment.size || 0) / 1024)) }} KB</span>
         </div>
       </div>
+
+      <!-- #220 已读回执标签（mine 尾部；DM=已读 ✓✓，群聊=已读 n/m）；点击开名单浮层（父层渲染） -->
+      <button
+        v-if="showReceiptTag"
+        type="button"
+        class="bubble-receipt"
+        data-test="bubble-receipt"
+        :aria-label="receiptAria"
+        @click="emit('show-receipts', message)"
+      >
+        <template v-if="isDm">
+          <span class="bubble-receipt-text" data-test="receipt-dm">{{ dmRead ? '已读 ✓✓' : '未读' }}</span>
+        </template>
+        <template v-else>
+          <span class="bubble-receipt-text" data-test="receipt-group">{{ groupReceiptLabel }}</span>
+        </template>
+      </button>
     </div>
   </div>
 </template>
@@ -198,6 +254,32 @@ const fileAttachment = computed(() => {
 .bubble-file-meta {
   flex-shrink: 0;
   opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+/* #220 已读回执标签：mine 气泡下缘；幽灵按钮（无底色），动效参数全取 tokens */
+.bubble-receipt {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--unself-space-1);
+  padding: 2px var(--unself-space-2);
+  border: none;
+  border-radius: var(--unself-radius-full);
+  background: transparent;
+  color: var(--unself-color-text-tertiary);
+  font-size: var(--unself-font-size-xs);
+  cursor: pointer;
+  transition: background-color var(--unself-duration-fast) var(--unself-ease-out);
+}
+.bubble-receipt:hover {
+  background: var(--unself-color-surface-hover);
+}
+.bubble-receipt:focus-visible {
+  outline: var(--unself-focus-ring);
+  outline-offset: 2px;
+}
+.bubble-receipt-text {
   font-variant-numeric: tabular-nums;
 }
 </style>
