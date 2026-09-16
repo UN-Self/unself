@@ -110,6 +110,12 @@ function onVisibleRead(messageIds: number[]): void {
   void store.recordVisibleRead(messageIds)
 }
 
+/** #221 走查补：会话列表加载失败 → 人话提示进列表位（错误态不再吞成空态）。 */
+const roomsError = computed(() => {
+  const st = store.state.channelsState === 'error' ? store.state.historyError : ''
+  return st ? `会话加载失败：${st}` : null
+})
+
 /** 浮层开关状态由根层持有（子组件只 emit close）。 */
 const receiptsOpen = ref(false)
 const receiptTarget = ref<Message | null>(null)
@@ -225,6 +231,7 @@ const contextKey = computed(() =>
       :is-dm="isDm"
       :audience-size="audienceSize"
       :read-receipts="store.state.readReceipts"
+      :load-error="roomsError"
       @select="onSelect"
       @back="onBack"
       @load-earlier="onLoadEarlier"
