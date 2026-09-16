@@ -6,6 +6,8 @@ import { activeUserSql } from "../user-status.js";
 /**
  * 批量落已读回执（幂等）：INSERT OR IGNORE + 批内去重（同批重复 messageId 只算一次）。
  * 先按「消息确属该频道且未删除」过滤（跨房上报=零写入），再逐条幂等落行。
+ * #229 服务端兜底：发件人自读直接跳过（决策 #52「发件人恒已读、不计入分母」的强制，
+ * 客户端 myUserId 失效时口径也不失真）。
  * 回 newlyRead = 本批真实新增的 {messageId, readAt}——重放=空数组，DO 据此决定是否广播。
  */
 export async function recordReadReceipts(db, { channelId, userId, messageIds }) {
@@ -18,16 +20,20 @@ export async function recordReadReceipts(db, { channelId, userId, messageIds }) 
 
 	const { results } = await db
 		.prepare(
-			`SELECT id FROM messages
+			`SELECT id, sender_id FROM messages
 			 WHERE channel_id = ? AND deleted_at IS NULL`,
 		)
 		.bind(Number(channelId))
 		.all();
 	const roomMessageIds = new Set(results.map((row) => Number(row.id)));
+	const senderByMessageId = new Map(results.map((row) => [Number(row.id), Number(row.sender_id)]));
 
 	const newlyRead = [];
 	for (const messageId of uniqueIds) {
 		if (!roomMessageIds.has(messageId)) {
+			continue;
+		}
+		if (senderByMessageId.get(messageId) === Number(userId)) {
 			continue;
 		}
 		const result = await db

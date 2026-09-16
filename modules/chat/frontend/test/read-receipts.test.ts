@@ -377,3 +377,98 @@ async function storelessObserve(
   await api.reportMessagesRead('public', 2, [12])
   handle.close()
 }
+
+describe('本人身份解析（#229：coreUserId × contacts 双源，迟到就绪不丢判定）', () => {
+  it('live 身份空间：contacts 含 core: 命名空间 → 必须精确映射 core:<sub>→id；映射缺失保持 0 不误判', async () => {
+    const api = createMockChatApi(buildMockWorld())
+    // 模拟 live：sub=9001，chat 内部 id=7（两个身份空间不同），JIT 用户 username=core:9001
+    api.world.contacts.push({ id: 7, username: 'core:9001', displayName: '走查甲', avatarUrl: '' })
+    api.world.contacts.push({ id: 8, username: 'core:9002', displayName: '走查乙', avatarUrl: '' })
+    const store = createChatStore({
+      api,
+      storage: createChatStorageInert(),
+      myUserId: () => 0, // 握手前：token 未就绪 → 0（#229 现场时序）
+      getToken: () => 'mock-token',
+    })
+    // 握手前：0（不误判）
+    expect(store.state.myUserId).toBe(0)
+
+    // 握手完成（sub=9001），contacts 尚未载入 → 降级透出 core id（旧语义尽力窗口：
+    // 大 sub 与小 chat id 无碰撞时已可用；载入 contacts 后切精确映射）
+    const storeWithToken = createChatStore({
+      api,
+      storage: createChatStorageInert(),
+      myUserId: () => 9001,
+      getToken: () => 'mock-token',
+    })
+    expect(storeWithToken.state.coreUserId).toBe(9001)
+    expect(storeWithToken.state.myUserId).toBe(9001)
+
+    // contacts 载入（loadContacts 内触发 refreshMyUserId）→ 精确映射 9001→7
+    await storeWithToken.loadContacts()
+    expect(storeWithToken.state.myUserId).toBe(7)
+    storeWithToken.closeSockets()
+    store.closeSockets()
+  })
+
+  it('迟到身份：openRoom 早于身份解析 → 身份就绪后 refreshMyUserId 补判 mine（不再误报自读）', async () => {
+    const api = createMockChatApi(buildMockWorld())
+    const postSpy = vi.spyOn(api, 'reportMessagesRead')
+    let currentCore = 0 // 模拟握手前 token 未就绪；后置 1 模拟握手+同构建档完成
+    const store = createChatStore({
+      api,
+      storage: createChatStorageInert(),
+      myUserId: () => currentCore,
+      getToken: () => 'mock-token',
+    })
+    await store.openRoom({ kind: 'public', id: 1 }, 'general')
+    await flushPromises()
+    // 病灶：身份 0 → 连本人消息 id 1 也上报了（服务端 #229 兜底拦截）
+    expect(postSpy.mock.calls[0]?.[2]).toContain(1)
+
+    // 修复面：身份晚到（sub=1，同构世界）→ App 调 refreshMyUserId
+    currentCore = 1
+    store.refreshMyUserId()
+    expect(store.state.myUserId).toBe(1)
+
+    // 补判验证：本人迟到消息（WS 帧）→ 走 mine 分支：去重登记不触发上报；
+    // 他人新消息照常帧内自动上报
+    const callsBefore = postSpy.mock.calls.length
+    store.receiveRoomFrame({
+      protocolVersion: 1,
+      type: 'message',
+      message: baseMessage({
+        id: 9,
+        sender: { kind: 'local', id: 1, username: 'zhang', displayName: '张三', avatarUrl: '', source: 'local' },
+      }),
+    })
+    await flushPromises()
+    expect(postSpy.mock.calls.length).toBe(callsBefore) // 本人消息零上报
+
+    store.receiveRoomFrame({
+      protocolVersion: 1,
+      type: 'message',
+      message: baseMessage({
+        id: 10,
+        sender: { kind: 'local', id: 2, username: 'xiaolin', displayName: '小林', avatarUrl: '', source: 'local' },
+      }),
+    })
+    await flushPromises()
+    const last = postSpy.mock.calls[postSpy.mock.calls.length - 1]?.[2] ?? []
+    expect(last).toEqual([10]) // 他人消息正常上报（帧内自动上报）
+    store.closeSockets()
+  })
+
+  it('mock 同构世界：contacts 无 core: 命名空间 → 按 id 同构对上（旧行为兼容）', async () => {
+    const api = createMockChatApi(buildMockWorld())
+    const store = createChatStore({
+      api,
+      storage: createChatStorageInert(),
+      myUserId: () => api.world.me.id,
+      getToken: () => 'mock-token',
+    })
+    await store.loadContacts()
+    expect(store.state.myUserId).toBe(api.world.me.id)
+    store.closeSockets()
+  })
+})
