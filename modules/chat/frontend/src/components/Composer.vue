@@ -62,11 +62,41 @@ const textarea = ref<HTMLTextAreaElement | null>(null)
 /** 提及状态：随文本编辑同步增删（本次文本中真实被 @ 的联系人集合）。 */
 const mentionUserIds = ref<number[]>([])
 
+/**
+ * #230 提及词边界：行首/行尾算边界，正文中 `@` 前与提及名后需落在空白或标点。
+ * 口径对齐 worker/src/data/mentions.js 的 isMentionBoundary（服务端按 content 含
+ * username 复核提及），避免 `@core` 粘连 `@core:2`、`@bob` 粘连 `@bobby`。
+ */
+const MENTION_BOUNDARY = /[\s，。！？、：；,.!?()[\]{}<>"'“”‘’《》〈〉「」【】…—～`|/\\*+=&%$#^]/
+
+function isMentionBoundary(char: string | undefined): boolean {
+  return char === undefined || MENTION_BOUNDARY.test(char)
+}
+
+/** value 中是否出现被边界包裹的 `@name`（逐位置比较，天然支持冒号与中文）。 */
+function textMentionsName(value: string, name: string): boolean {
+  const target = name.toLowerCase()
+  if (!target) return false
+  for (let start = value.indexOf('@'); start !== -1; start = value.indexOf('@', start + 1)) {
+    if (start > 0 && !isMentionBoundary(value[start - 1])) continue
+    const end = start + 1 + target.length
+    if (end > value.length) continue
+    if (value.slice(start + 1, end).toLowerCase() !== target) continue
+    if (isMentionBoundary(value[end])) return true
+  }
+  return false
+}
+
+/**
+ * #230 回填：core JIT 身份下 username=`core:<sub>`（含冒号），展示名为中文。
+ * 旧的 `/@([a-zA-Z0-9_-]+)/` 只吃到 `core`，与 username 不等 → mentionUserIds 恒空。
+ * 现按联系人的 username / displayName 直接匹配文本（#230 验收：两种输入都产出 id）。
+ */
 function syncMentionsFromText(value: string): void {
-  const matches = [...value.matchAll(/@([a-zA-Z0-9_-]+)/g)].map((m) => m[1] ?? '')
   const valid = new Set<number>()
   for (const contact of props.contacts) {
-    if (matches.includes(contact.username)) valid.add(contact.id)
+    const names = [contact.username, contact.displayName]
+    if (names.some((name) => textMentionsName(value, name))) valid.add(contact.id)
   }
   mentionUserIds.value = [...valid]
 }
@@ -103,6 +133,8 @@ const mentionQuery = ref('')
 const mentionActiveIndex = ref(0)
 const mentionTriggerPos = ref(-1)
 
+// #230：username / displayName 双向匹配——core 身份下 username=`core:<sub>`（含冒号）、
+// 展示名为中文，查询片段对任一字段前缀命中即出候选。
 const mentionCandidates = computed(() => {
   const query = mentionQuery.value.toLowerCase()
   return props.contacts.filter((contact) => {
@@ -116,7 +148,8 @@ const mentionCandidates = computed(() => {
 
 function maybeOpenMentionMenu(value: string, caret: number): void {
   const before = value.slice(0, caret)
-  const match = /(?:^|\s)@([a-zA-Z0-9_]*)$/.exec(before)
+  // #230：query 取 `@` 之后任意非空白片段（放行冒号与非 ASCII；旧 ASCII 白名单会让 `@走` 关浮层）。
+  const match = /(?:^|\s)@([^\s@]*)$/.exec(before)
   if (match) {
     mentionTriggerPos.value = caret - (match[1]?.length ?? 0) - 1
     mentionQuery.value = match[1] ?? ''
@@ -134,6 +167,8 @@ function applyMention(contact: UserSummary): void {
   const caret = el?.selectionStart ?? text.value.length
   const head = text.value.slice(0, mentionTriggerPos.value >= 0 ? mentionTriggerPos.value : caret)
   const tail = text.value.slice(caret)
+  // 插入 username 而非展示名：worker/src/data/mentions.js 按 content 是否含 `@<username>`
+  // 复核提及，展示名插入会在服务端被过滤掉（#230 取舍与后续项见 PR）。
   const inserted = `@${contact.username} `
   text.value = head + inserted + tail
   const nextCaret = head.length + inserted.length
