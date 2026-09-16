@@ -247,8 +247,8 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
     expect(idxOf(/^r2 bucket create unself-storage/)).toBeGreaterThan(idxOf(/module_registry/));
     // ⑧ 本地签发在 ⑥/⑦ 之后（d1 execute 写 setup_tokens）
     expect(idxOf(/INSERT INTO setup_tokens/)).toBeGreaterThan(idxOf(/^r2 bucket create unself-storage/));
-    // registry 终态：只 upsert hello（未选模块集为空时不产生 disable）
-    expect(cmds.filter((c) => c.includes('UPDATE module_registry'))).toHaveLength(0);
+    // registry 终态：hello 未选 → disable；modules/chat 等已选/在仓模块按 discoverModules 全集收敛（#219 重写断言面）
+    expect(cmds.filter((c) => c.includes('UPDATE module_registry'))).toHaveLength(1);
   });
 
   it('domain 设定时：core 部署后立即 ensureDns（先于 registry 与冒烟）', { timeout: 120_000 }, async () => {
@@ -315,12 +315,12 @@ describe('runNineSteps（九步编排 · 幂等收敛）', () => {
         fake.state.commands.push(`__ensureDns:${domain}`);
       },
     });
-    // 删除动作：未选 hello、zone/domain 与部署期解析一致
+    // 删除动作：zone/domain 与部署期解析一致；moduleIds 为在仓全集（hello + chat，#219 重写断言面）
     expect(routeCalls).toHaveLength(1);
     expect(routeCalls[0]).toMatchObject({
       zoneId: 'zone-1',
       domain: 'demo.handywote.top',
-      moduleIds: ['hello'],
+      moduleIds: ['chat', 'hello'],
       hasLog: true,
     });
     const cmds = fake.state.commands;
