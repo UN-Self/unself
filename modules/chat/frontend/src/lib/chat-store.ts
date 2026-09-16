@@ -62,7 +62,15 @@ export interface ChatStore {
   readReceipts: Record<number, ReadReceiptsSummary>
   /** 房间实时连接状态投影。 */
   realtimeStatus: ChatStoreInternals['realtimeStatus']
-  /** 当前用户 id（token claims 解出 / mock 注入）。 */
+  /** 当前用户 id（token claims 解出 / mock 注入）。
+   * #229 重定义：这是 core 用户 id（claims.sub / mock 主角 id），仅用于 mock 主角判定；
+   * 与 chat 消息 sender.id（chat 内部 users.id）分属两个身份空间，禁直接比较。
+   * chat 侧本人判定一律走 myUserId（core:sub → chat id 映射，见下）。
+   */
+  coreUserId: number
+  /** 本人 chat 内部 id（#229）：由 coreUserId 经 contacts（username=core:<sub>）解析；
+   * 未握手/联系人未就绪时为 0（不误判），载入或续期后自动重算。
+   */
   myUserId: number
 
   loadChannels(): Promise<void>
@@ -82,6 +90,8 @@ export interface ChatStore {
   sendReadReport(messages: Message[]): Promise<void>
   /** token 静默续期换新后由会话层调用：向房间 socket 发 token_refresh 控制帧（决策 #51）。 */
   refreshSocketToken(token: string): void
+  /** #229：重算本人身份（握手/续期/contacts 载入后调用；coreUserId+contacts 就绪即生效）。 */
+  refreshMyUserId(): void
   /** 接收一帧收件箱通知。 */
   receiveInboxFrame(frame: WsRoomMessageNotice): void
   /** 关闭实时连接（卸载时）。 */
@@ -108,6 +118,9 @@ export interface ChatStoreInternals {
   dmsState: LoadState
   contacts: UserSummary[]
   realtimeStatus: 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error'
+  /** core 用户 id（#229：仅 mock 主角判定；勿与 sender.id 比较——身份空间不同）。 */
+  coreUserId: number
+  /** 本人 chat 内部 id（core:sub → contacts 解析；未就绪=0）。 */
   myUserId: number
   readReceipts: Record<number, ReadReceiptsSummary>
 }
@@ -115,7 +128,7 @@ export interface ChatStoreInternals {
 export interface CreateChatStoreOptions {
   api: ChatApi
   storage: ChatStorage
-  /** 当前用户 id（握手 token claims 解出，或 mock 注入）。 */
+  /** 当前 core 用户 id（握手 token claims.sub 解出，或 mock 注入）。#229 起仅为 mock 主角判定/身份空间源。 */
   myUserId: () => number
   /** 已就绪 token（socket 建连用）。 */
   getToken: () => string | null
@@ -125,7 +138,7 @@ const HISTORY_PAGE_SIZE = 30
 
 /** 创建聊天状态中枢（工厂注入边界替身，测试多实例互不干扰）。 */
 export function createChatStore(options: CreateChatStoreOptions): ChatStore {
-  const { api, storage, myUserId, getToken } = options
+  const { api, storage, myUserId: coreUserId, getToken } = options
 
   const state = reactive<ChatStoreInternals>({
     currentRoom: null,
@@ -142,6 +155,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     dmsState: 'loading',
     contacts: [],
     realtimeStatus: 'idle',
+    coreUserId: 0,
     myUserId: 0,
     readReceipts: {},
   })
@@ -159,6 +173,38 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
   const reportedReadIds = new Set<number>()
   /** 本人发出的消息 id（上报跳过——发件人恒已读，不计回执）。 */
   const mySentMessageIds = new Set<number>()
+
+  /**
+   * #229 本人身份解析：claims.sub（core id）→ chat 内部 users.id。
+   * 上游 JIT 建档（#217）用 username=`core:<sub>` 保证幂等，这里反向解析；
+   * mock 模式无 core 命名空间，直接用主角 id。未就绪保持 0（不误判，宁可不判 mine）。
+   */
+  const resolveMyUserId = (): number => {
+    const coreId = coreUserId()
+    if (!coreId) return 0
+    const contacts = state.contacts
+    // 联系人未载入（含测试替身/mock 早期）：身份空间视为同构，直接透出 core id（旧行为兼容）；
+    // 若世界里有 core: 命名空间（live JIT 用户），必须精确映射，禁止同构假设
+    if (contacts.length === 0) return coreId
+    if (contacts.some((u) => u.username.startsWith('core:'))) {
+      return contacts.find((u) => u.username === `core:${coreId}`)?.id ?? 0
+    }
+    // mock 世界（无 core: 命名空间）：身份空间同构，按 id 对上
+    return contacts.find((u) => u.id === coreId)?.id ?? 0
+  }
+
+  /** 解析结果重算（身份两个来源就绪后调用：contacts 载入/握手/续期）。 */
+  const refreshMyUserId = (): void => {
+    state.coreUserId = coreUserId()
+    const next = resolveMyUserId()
+    if (next === state.myUserId) return
+    state.myUserId = next
+    // 身份到位后重扫本房消息：迟到消息（此前无法判定 mine）补登记，
+    // 并把「非本人」可见消息纳入上报（含此前被误判为本人而跳过的）
+    for (const message of state.messages) {
+      if (message.sender.id === state.myUserId) mySentMessageIds.add(message.id)
+    }
+  }
 
   const rememberMessage = (message: Message): boolean => {
     if (seenMessageIds.has(message.id)) return false
@@ -235,6 +281,8 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     loadContacts: async () => {
       const result = await api.listContacts()
       state.contacts = result.users
+      // #229：联系人就绪后重算本人 chat id（core:sub → id 映射此时才可解析）
+      refreshMyUserId()
     },
 
     openRoom: async (room, displayName) => {
@@ -425,9 +473,18 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       // 断线重连自带新 token（openRoomSocket 每次 openRoom 都取 getToken() 最新值）。
       roomSocket?.send?.(JSON.stringify({ type: 'token_refresh', token }))
     },
+
+    /** #229：身份重算入口（握手后/续期后/contacts 载入后由调用方触发）。 */
+    refreshMyUserId: () => refreshMyUserId(),
   }
 
-  state.myUserId = myUserId()
+  // #229：不再一次性求值 myUserId（旧实现在握手前同步执行，live 下 token 未就绪 → 恒 0）。
+  // 初始化时先求一次（mock/测试同构场景立即生效）；live 的真实到位分两步：
+  // 握手后 coreUserId 可解（App bootstrap 调 refreshMyUserId），contacts 载入后 chat id 可映射
+  //（loadContacts 内再调一次）。两段都就绪前保持 0（不误判 mine）。
+  state.coreUserId = coreUserId()
+  refreshMyUserId()
+
   // 收件箱 socket 由壳侧/根组件装配（此处只暴露注入点）
   void inboxSocket
   return store
