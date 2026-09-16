@@ -126,6 +126,22 @@ function query(params: Record<string, string | number | undefined>): string {
   return qs ? `?${qs}` : ''
 }
 
+/**
+ * WS 文本帧解析（#235）：event.data（字符串）→ 对象。
+ * 返回 undefined = 不可用帧（非 JSON / 非对象如 `42`/`null`），调用方静默丢弃。
+ * mock（mock-api）与 live 共用同一入参契约：上层 onMessage 只见已解析对象。
+ */
+export function parseSocketFrame(data: unknown): Record<string, unknown> | undefined {
+  if (typeof data !== 'string') return undefined
+  try {
+    const parsed: unknown = JSON.parse(data)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+    return parsed as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
 /** 组装 chat API（依赖注入 transport/token/socket；行为对齐上游调用面）。 */
 export function createChatApi(options: CreateChatApiOptions): ChatApi {
   const transport = options.transport ?? createLiveTransport()
@@ -159,7 +175,13 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
       socket.addEventListener('open', () => handlers.onStatus('open'))
       socket.addEventListener('close', () => handlers.onStatus('closed'))
       socket.addEventListener('error', () => handlers.onStatus('error'))
-      socket.addEventListener('message', (event) => handlers.onMessage(event.data))
+      socket.addEventListener('message', (event) => {
+        // #235：浏览器文本帧 event.data = JSON 字符串，必须先解析再上抛——
+        // onMessage 契约恒收对象（与 mock 实现同参，store 按对象判型）；
+        // 非 JSON 或非对象帧（心跳/二进制等）静默丢弃，不污染上层状态机
+        const frame = parseSocketFrame(event.data)
+        if (frame !== undefined) handlers.onMessage(frame)
+      })
       return {
         close() {
           socket?.close()
