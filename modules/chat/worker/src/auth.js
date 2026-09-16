@@ -1,8 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/auth.js（GPL-3.0-only，裁剪版）
+//
+// #231 下架记录：本地会话机制（SESSIONS KV opaque token）已被 core 模块 JWT + JIT 取代
+// （#217：middleware.js → core-auth.js + jit-users.js，session.js 读取面已死）。但残留写入面
+// 仍把模块 JWT 明文写进 KV（PATCH /api/me/profile → putSession，TTL 7 天 > token 10 分钟），
+// 与「明文令牌不落库」纪律相悖。本文件删除本地会话四函数（putSession/getSession/
+// deleteSession/createSession）及其私有 helper（SESSION_TTL_SECONDS/toSessionVersion/
+// resolveSessionTtl）；worker/src/session.js 一并删除（validateSession 已无任何 import）。
+//
+// 保留项（不删理由）：
+// - hashPassword/verifyPassword：test/chat-test-factory.ts 种子用户依赖真 PBKDF2 实现
+//   （禁手搓哈希桩）；M3 登录面若开路由，这是唯一哈希实现。
+// - isAdminUser：权限判定唯一依据（DB is_admin）的单点定义；adminMiddleware 语义文档位。
+// - isConfiguredAdminUsername：注册阶段的同名占用检查（防钓鱼），待 M3 登录/注册面复用。
 const encoder = new TextEncoder();
-
-export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 
 function toBase64Url(bytes) {
   const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
@@ -59,11 +70,6 @@ export async function verifyPassword(password, passwordHash, passwordSalt) {
   return timingSafeEqual(derived.hash, passwordHash);
 }
 
-function toSessionVersion(value) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : 0;
-}
-
 function parseAdminUsernames(env) {
   return String(env.ADMIN_USERNAMES || '')
     .split(',')
@@ -81,63 +87,4 @@ export function isConfiguredAdminUsername(env, username) {
 // 权限判定唯一依据：数据库中的 is_admin 字段，不再比对用户名。
 export function isAdminUser(_env, user) {
   return Boolean(Number(user?.is_admin));
-}
-
-function resolveSessionTtl(session, fallback) {
-  const expiresAt = Date.parse(String(session?.expiresAt || ''));
-  if (!Number.isFinite(expiresAt)) {
-    return fallback;
-  }
-  return Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000));
-}
-
-export async function putSession(env, session, { ttlSeconds = SESSION_TTL_SECONDS } = {}) {
-  await env.SESSIONS.put(session.token, JSON.stringify(session), {
-    // 移动端 access token 的寿命短于网页会话；刷新资料时必须保留原到期时间，不能被普通写回延长。
-    expirationTtl: resolveSessionTtl(session, ttlSeconds)
-  });
-}
-
-export async function createSession(env, user) {
-  const token = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
-  const session = {
-    token,
-    userId: Number(user.id),
-    username: user.username,
-    displayName: user.display_name,
-    bio: user.bio ?? '',
-    avatarUrl: user.avatar_key ? `/files/${encodeURIComponent(user.avatar_key)}` : '',
-    isAdmin: isAdminUser(env, user),
-    sessionVersion: toSessionVersion(user.session_version)
-  };
-
-  await putSession(env, session);
-
-  return session;
-}
-
-export async function getSession(env, token) {
-  if (!token) {
-    return null;
-  }
-  const raw = await env.SESSIONS.get(token);
-  if (!raw) {
-    return null;
-  }
-  const session = JSON.parse(raw);
-  session.token = token;
-  if (session.sessionVersion === undefined) {
-    session.sessionVersion = 0;
-  }
-  if (session.isAdmin === undefined) {
-    session.isAdmin = false;
-  }
-  return session;
-}
-
-export async function deleteSession(env, token) {
-  if (!token) {
-    return;
-  }
-  await env.SESSIONS.delete(token);
 }
