@@ -1,0 +1,3 @@
+# 本地生成物：mint-token.mjs 的 keypair 缓存（勿入库）
+.mint-token-keys.json
+.t4-*.mjs

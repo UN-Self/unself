@@ -40,6 +40,8 @@
     "GC_D1_STATEMENT_BUDGET": "1200",
     "GC_R2_OPERATION_BUDGET": "300",
     "SITE_ORIGINS": "",
+    "CORE_JWKS_JSON": "",
+    "CORE_ISSUER": "",
     "R2_DELETE_MAX_RETRY": "8",
     "ORPHAN_UPLOAD_RETENTION_DAYS": "1",
     "ALLOWED_FILE_TYPES": "image/,video/,audio/,application/pdf,text/",
@@ -50,4 +52,8 @@
   // - 不配 [assets]：前端壳由装配层（core-api /modules 路由）负责。
   // - 不配 crons：避免 wrangler dev 本地自测时定时触发 GC；GC 由 SCHEDULER DO 内部驱动。
   // - SESSIONS 的 id 为占位：wrangler dev 用本地模拟 KV，不需要真实 namespace id。
+  // - CORE_JWKS_JSON：部署装配期注入核心 JWKS JSON（core GET /.well-known/jwks.json 响应体，
+  //   #217 模块 JWT 验签用）；空 = 未配，所有需认证接口回 503 'jwks not provisioned'。
+  //   wrangler dev 自测：modules/chat/scripts/mint-token.mjs 生成 keypair，输出贴进 .dev.vars。
+  // - CORE_ISSUER：可选；非空时额外校验 token iss（M0 以 aud=chat 锁定为主）。
 }

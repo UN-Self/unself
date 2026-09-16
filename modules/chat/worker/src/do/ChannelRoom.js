@@ -13,18 +13,24 @@ import {
 } from '../message-pinning.js';
 import { submitExternalMessage } from '../external-message-submission.js';
 import { isGroupChannelKind } from '../../../shared/group-channel.ts';
+import { verifyAccessToken } from '../core-auth.js';
+import { jitEnsureUser, jitResolveUser } from '../jit-users.js';
 import { authorizeRoom } from '../room-access.js';
-import { validateSession } from '../session.js';
 import { projectUnreadMessage } from '../unread-projection.js';
 import { isVerifiedInternalRequest, parseVerifiedPrincipal } from '../verified-identity.js';
 import { durableObjectHealth } from '../maintenance/do-health.ts';
 
 const MESSAGE_SIZE_LIMIT = 10 * 1024;
 
-function socketMeta(token, principal, room) {
+// #217：socket 元数据改为携带已验签的 claims（JSON 可序列化，随 attachment 持久化），
+// 不再存 token 字符串（短时效 JWT 存 DO 内存无意义，且按消息重验只需 exp/iss/sub）。
+function socketMeta(claims, principal, room) {
   return {
-    token,
-    principal,
+    principal: {
+      userId: principal.userId,
+      isAdmin: principal.isAdmin === true,
+      claims
+    },
     room
   };
 }
@@ -89,39 +95,62 @@ export class ChannelRoom {
   }
 
   async revalidateConnection(ws, meta) {
-    if (!meta?.token) {
-      return null;
-    }
-
-    const auth = await validateSession(this.env, meta.token);
-    if (!auth.ok) {
+    // #217 按消息重验：验「当前绑定的 JWT」而非本地会话——
+    // ① claims 未过期（exp ≥ now）；② jit 停用复查（issuer+sub → users 行）；③ 房间授权。
+    const claims = meta?.principal?.claims;
+    const exp = Number(claims?.exp);
+    if (!claims || !Number.isFinite(exp) || exp * 1000 <= Date.now()) {
       this.closeUnauthorizedSocket(ws);
       return null;
     }
 
-    const access = await authorizeRoom(
-      this.env.DB,
-      auth.session,
-      meta.room.kind,
-      meta.room.id
-    );
+    const ensured = await jitResolveUser(this.env.DB, claims);
+    if (!ensured.ok) {
+      this.closeUnauthorizedSocket(ws);
+      return null;
+    }
+
+    const principal = { userId: ensured.user.id, isAdmin: false };
+    const access = await authorizeRoom(this.env.DB, principal, meta.room.kind, meta.room.id);
     if (!access.ok) {
       this.closeUnauthorizedSocket(ws);
       return null;
     }
 
-    const { room } = access;
-
-    const nextMeta = socketMeta(
-      meta.token,
-      {
-        userId: auth.session.userId,
-        isAdmin: auth.session.isAdmin
-      },
-      room
-    );
+    const nextMeta = socketMeta(claims, principal, access.room);
     this.connections.set(ws, nextMeta);
     ws.serializeAttachment(nextMeta);
+    return nextMeta;
+  }
+
+  // #217 token 续期（决策 #51 定案 C）：已建连 socket 收到新 token → 当场验签 + JIT + 房间授权 →
+  // 原子换绑（connections + serializeAttachment）→ ack；任一步失败回 null，由调用方 closeUnauthorizedSocket。
+  // 允许当前绑定已过期时刷新（这正是续期场景）——过期核查只发生在按消息重验里。
+  async refreshSocketToken(ws, meta, payload) {
+    const token = typeof payload?.token === 'string' ? payload.token : '';
+    const verified = await verifyAccessToken(this.env, token);
+    if (!verified.ok) {
+      return null;
+    }
+    const ensured = await jitEnsureUser(this.env.DB, verified.claims);
+    if (!ensured.ok) {
+      return null;
+    }
+    const principal = { userId: ensured.user.id, isAdmin: false };
+    const access = await authorizeRoom(
+      this.env.DB,
+      principal,
+      meta.room?.kind,
+      meta.room?.id
+    );
+    if (!access.ok) {
+      return null;
+    }
+
+    const nextMeta = socketMeta(verified.claims, principal, access.room);
+    this.connections.set(ws, nextMeta);
+    ws.serializeAttachment(nextMeta);
+    ws.send(JSON.stringify({ protocolVersion: 1, type: 'token_refreshed' }));
     return nextMeta;
   }
 
@@ -285,18 +314,26 @@ export class ChannelRoom {
     const kind = url.searchParams.get('kind') || '';
     const roomId = Number(url.searchParams.get('id') || '');
 
+    // #217 认证适配：两种通道都先验模块 JWT（本地验签，零网络）——
+    // claims 必须落 meta（按消息重验 + 续期换绑都依赖它，实测 #217：内部通道若不带 claims，首条业务帧即 1008）：
+    // ① 内部通道（HTTP 面 middleware 已验签+JIT，头带内部数字 id；do-bridge 同帧透传 ?token=）；
+    // ② 直连 ?token=（JWT → verify → jitEnsure → 内部 id）。
+    const verified = await verifyAccessToken(this.env, token);
+    if (!verified.ok) {
+      return new Response('Unauthorized', { status: verified.status });
+    }
     let principal = parseVerifiedPrincipal(request);
     if (!principal) {
-      const auth = await validateSession(this.env, token);
-      if (!auth.ok) {
-        return new Response('Unauthorized', { status: 401 });
+      const ensured = await jitEnsureUser(this.env.DB, verified.claims);
+      if (!ensured.ok) {
+        return new Response('Unauthorized', { status: ensured.status });
       }
-
       principal = {
-        userId: auth.session.userId,
-        isAdmin: auth.session.isAdmin
+        userId: ensured.user.id,
+        isAdmin: false
       };
     }
+    const claims = verified.claims;
 
     const access = await authorizeRoom(this.env.DB, principal, kind, roomId);
 
@@ -308,7 +345,7 @@ export class ChannelRoom {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.state.acceptWebSocket(server);
-    const meta = socketMeta(token, principal, room);
+    const meta = socketMeta(claims, principal, room);
     server.serializeAttachment(meta);
     this.connections.set(server, meta);
     server.send(
@@ -339,6 +376,16 @@ export class ChannelRoom {
 
     const payload = this.parsePayload(ws, normalizeWebSocketMessage(message));
     if (!payload) {
+      return;
+    }
+
+    // #217 token 续期控制帧：先于一切业务类型判定（决策 #51 定案 C）。
+    // 允许当前绑定已过期时刷新（这正是续期场景），但 socket 必须已有 meta（已建连）。
+    if (payload.type === 'token_refresh') {
+      const nextMeta = await this.refreshSocketToken(ws, meta, payload);
+      if (!nextMeta) {
+        this.closeUnauthorizedSocket(ws);
+      }
       return;
     }
 

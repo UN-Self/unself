@@ -563,3 +563,12 @@ CREATE INDEX IF NOT EXISTS idx_realtime_tickets_expiry
 
 CREATE INDEX IF NOT EXISTS idx_message_events_channel_sequence
   ON message_events(channel_id, sequence);
+
+-- #217 增补（unself 集成层）：core issuer+sub → 内部数字 id 唯一映射（JIT 建档锚点，决策 #12）。
+CREATE TABLE IF NOT EXISTS core_identities (
+  issuer TEXT NOT NULL,
+  sub TEXT NOT NULL,
+  user_id INTEGER NOT NULL UNIQUE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (issuer, sub)
+);
