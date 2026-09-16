@@ -409,8 +409,10 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       if (frame.type === 'message') {
         const message = frame.message
         if (message.sender.id === state.myUserId) {
-          // 本人消息：REST 回包已插入，这里只登记去重（WS 广播回显）
-          rememberMessage(message)
+          // 本人消息（#235 竞态修复）：WS 回显可能先于 REST 回包，也走幂等入列——
+          // handleMessage 按 id 去重，REST 回包后到会被 seenMessageIds 挡住，零重复；
+          // 旧实现只登记不入列 → 回显先到时本人气泡不上屏（回执到了气泡却没到）
+          handleMessage(message)
           rememberReceipts(message)
           return
         }
