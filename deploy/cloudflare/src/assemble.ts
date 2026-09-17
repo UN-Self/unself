@@ -339,6 +339,26 @@ export function migrationWranglerConfig(input: {
   return `${JSON.stringify(cfg, null, 2)}\n`;
 }
 
+/**
+ * core Worker 入口打包（REST 化后无 wrangler deploy 的隐式 bundle，自打包）。
+ * 必须在 core-worker.js 模板写盘【之后】调用（entry 是它的产物——探针曾因错序用到上一轮陈旧入口，测试已锁）。
+ */
+export async function bundleCoreWorker(entry: string, outfile: string): Promise<void> {
+  await build({
+    entryPoints: [entry],
+    outfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'neutral',
+    target: 'es2022',
+    conditions: ['workerd', 'import'],
+    external: ['@cloudflare/workers-types', 'cloudflare:sockets', 'cloudflare:email'],
+    legalComments: 'inline',
+    banner: { js: '// SPDX-License-Identifier: AGPL-3.0-only' },
+    logLevel: 'silent',
+  });
+}
+
 /** 写文件（自动建目录）。 */
 export async function writeConfig(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });

@@ -81,6 +81,10 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     expect(first.state.secretPuts).toEqual([{ worker: 'unself-core-api', name: 'JWT_PRIVATE_KEY' }]);
     expect(first.state.registry.get('hello')).toBeDefined();
     expect(first.state.registry.get('hello')?.enabled).toBe(1);
+    // assets 契约（真机 2026-09-18）：manifest key 以 / 开头（否则 CF 10304）+ hash 为 32 位 hex（wrangler hash.ts 同款）
+    const shellManifest = first.state.assetManifests.find((m) => Object.keys(m).some((k) => k.startsWith('/index.html')))!;
+    expect(Object.keys(shellManifest).every((k) => k.startsWith('/'))).toBe(true);
+    expect(Object.values(shellManifest).every((e) => /^[0-9a-f]{32}$/.test(e.hash))).toBe(true);
     // 迁移：import 进 core 库 + 模块记账独立（unself_migrations_core / unself_migrations_hello）
     expect(first.state.importEtags.size).toBeGreaterThan(0);
     expect(first.state.ledgerTables.has('unself_migrations_core')).toBe(true);

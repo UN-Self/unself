@@ -50,6 +50,11 @@ export class RestClient {
     return this.#fetch;
   }
 
+  /** 凭证只读暴露（assets 会话端点走裸 fetch 组头时用；不落日志）。 */
+  get token(): string {
+    return this.#token;
+  }
+
   constructor(opts: RestClientOptions) {
     this.#token = opts.token;
     this.#fetch = opts.fetchImpl ?? fetch;
