@@ -2,31 +2,55 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  compareContractVersion,
+  CONTRACT_VERSION,
   ExportBundleSchema,
   HealthSchema,
+  type ModuleManifest,
   ModuleManifestSchema,
+  MODULE_PERMISSIONS,
+  ModulePermissionSchema,
   ModuleTokenClaimsSchema,
   SdkMessageSchema,
   type ExportBundle,
   type ModuleLifecycle,
 } from '../src/index';
 
-const validManifest = {
+const validManifest: ModuleManifest = {
   id: 'hello-world',
   route: '/m/hello-world',
   entry: 'https://unself.example.com/hello-world/worker.js',
-  runtime: 'worker',
-  requires: ['identity'],
-  capabilities: ['notify'],
+  runtimes: ['worker'],
   version: '1.0.0',
 };
 
-describe('ModuleManifestSchema', () => {
+describe('契约版本与词表（决策 #57/#56）', () => {
+  it('CONTRACT_VERSION 与 docs/modules.md §3 定稿一致', () => {
+    expect(CONTRACT_VERSION).toBe('1.0');
+  });
+
+  it('MODULE_PERMISSIONS 首版词表六项、次序冻结', () => {
+    expect(MODULE_PERMISSIONS).toEqual(['storage', 'acl', 'notify', 'ai', 'realtime', 'mail']);
+  });
+
+  it('ModulePermissionSchema 拒绝词表外的值（未知能力安装时拒绝，不静默忽略）', () => {
+    expect(() => ModulePermissionSchema.parse('chat')).toThrow();
+    expect(() => ModulePermissionSchema.parse('demo')).toThrow();
+    expect(ModulePermissionSchema.parse('storage')).toBe('storage');
+  });
+
+  it('compareContractVersion 语义正确（x.y 比较，非字符串字典序）', () => {
+    expect(compareContractVersion('1.0', '1.0')).toBe(0);
+    expect(compareContractVersion('0.9', '1.0')).toBeLessThan(0);
+    expect(compareContractVersion('1.10', '1.9')).toBeGreaterThan(0);
+  });
+});
+
+describe('ModuleManifestSchema（契约 v1 字段冻结）', () => {
   it('accepts a valid manifest', () => {
     const manifest = ModuleManifestSchema.parse(validManifest);
     expect(manifest.id).toBe('hello-world');
-    expect(manifest.runtime).toBe('worker');
-    expect(manifest.requires).toEqual(['identity']);
+    expect(manifest.runtimes).toEqual(['worker']);
   });
 
   it('accepts an optional description', () => {
@@ -71,9 +95,15 @@ describe('ModuleManifestSchema', () => {
     ).toThrow();
   });
 
-  it('rejects an invalid runtime', () => {
+  it('rejects an invalid runtime word', () => {
     expect(() =>
-      ModuleManifestSchema.parse({ ...validManifest, runtime: 'edge' }),
+      ModuleManifestSchema.parse({ ...validManifest, runtimes: ['edge'] }),
+    ).toThrow();
+  });
+
+  it('rejects an empty runtimes list', () => {
+    expect(() =>
+      ModuleManifestSchema.parse({ ...validManifest, runtimes: [] }),
     ).toThrow();
   });
 
@@ -83,22 +113,56 @@ describe('ModuleManifestSchema', () => {
     ).toThrow();
   });
 
-  it('rejects an empty requires list', () => {
+  it('rejects a single-item permission outside the vocabulary (未知权限 schema 层直接拒绝)', () => {
     expect(() =>
-      ModuleManifestSchema.parse({ ...validManifest, requires: [] }),
+      ModuleManifestSchema.parse({ ...validManifest, permissions: ['chat'] }),
+    ).toThrow();
+  });
+
+  it('accepts declared vocabulary permissions', () => {
+    const manifest = ModuleManifestSchema.parse({
+      ...validManifest,
+      permissions: ['storage', 'notify'],
+    });
+    expect(manifest.permissions).toEqual(['storage', 'notify']);
+  });
+
+  it('shared 护栏：storage.accepts 含 shared 必须申报 tables', () => {
+    expect(() =>
+      ModuleManifestSchema.parse({
+        ...validManifest,
+        storage: { accepts: ['shared'] },
+      }),
+    ).toThrow(/tables/);
+  });
+
+  it('preferred 不在 accepts 内 → 拒绝', () => {
+    expect(() =>
+      ModuleManifestSchema.parse({
+        ...validManifest,
+        storage: { accepts: ['dedicated'], preferred: 'shared' },
+      }),
+    ).toThrow(/preferred/);
+  });
+
+  it('compat.min > compat.max → 拒绝', () => {
+    expect(() =>
+      ModuleManifestSchema.parse({ ...validManifest, compat: { min: '1.1', max: '1.0' } }),
     ).toThrow();
   });
 });
 
 describe('ModuleTokenClaimsSchema', () => {
-  it('parses claims without act/caps（语义对齐实现：sub=核心用户 uid、aud=模块 id）', () => {
-    const claims = ModuleTokenClaimsSchema.parse({
-      iss: 'unself-core',
-      sub: 'u_1a2b3c4d',
-      aud: 'mod-a',
-      iat: 1_700_000_000,
-      exp: 1_800_000_000,
-    });
+  const baseClaims = {
+    iss: 'unself-core',
+    sub: 'u_1a2b3c4d',
+    aud: 'mod-a',
+    iat: 1_700_000_000,
+    exp: 1_800_000_000,
+  };
+
+  it('parses claims without act（语义对齐实现：sub=核心用户 uid、aud=模块 id）', () => {
+    const claims = ModuleTokenClaimsSchema.parse({ ...baseClaims });
     expect(claims.sub).toBe('u_1a2b3c4d');
     expect(claims.aud).toBe('mod-a');
     expect(claims.act).toBeUndefined();
@@ -106,28 +170,20 @@ describe('ModuleTokenClaimsSchema', () => {
 
   it('parses claims containing act（保留契约字段，Core 未签发过）', () => {
     const claims = ModuleTokenClaimsSchema.parse({
-      iss: 'unself-core',
-      sub: 'u_1a2b3c4d',
-      aud: 'mod-a',
-      iat: 1_700_000_000,
-      exp: 1_800_000_000,
+      ...baseClaims,
       act: { sub: 'mod-b' },
-      caps: ['notify', 'navigate'],
     });
     expect(claims.act?.sub).toBe('mod-b');
-    expect(claims.caps).toEqual(['notify', 'navigate']);
   });
 
   it('accepts optional name（会话展示名；旧 token 无此字段向后兼容）', () => {
-    const claims = ModuleTokenClaimsSchema.parse({
-      iss: 'unself-core',
-      sub: 'u_1a2b3c4d',
-      aud: 'mod-a',
-      iat: 1_700_000_000,
-      exp: 1_800_000_000,
-      name: '黄一',
-    });
+    const claims = ModuleTokenClaimsSchema.parse({ ...baseClaims, name: '黄一' });
     expect(claims.name).toBe('黄一');
+  });
+
+  it('caps claim 已删除（#56）：带 caps 的 token claims 解析时剥离、契约层不再承诺', () => {
+    const claims = ModuleTokenClaimsSchema.parse({ ...baseClaims, caps: ['notify'] });
+    expect('caps' in claims).toBe(false);
   });
 });
 
