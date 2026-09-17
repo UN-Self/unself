@@ -388,7 +388,7 @@ export function echoControl(flag: '-echo' | 'echo'): { restore: () => void } | n
  * - 可重试 + 预校验：askSecret 形态检查，最多 3 次，全部失败返回 null（bin.ts 走退出指引）。
  * - 独立 asker 生命周期归本函数：用完即 close，出栈路径必恢复回显（finally 兜底）。
  */
-export async function collectToken(io: { ask: (q: string) => Promise<string>; out: (line: string) => void }, ttyIn: boolean): Promise<string | null> {
+export async function collectToken(io: { out: (line: string) => void }, ttyIn: boolean): Promise<string | null> {
   const echoOff = ttyIn ? echoControl('-echo') : null;
   const asker = createAsker({});
   try {
