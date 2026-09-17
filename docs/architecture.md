@@ -157,67 +157,87 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 启停（toggle）     注册表开关 + token 门禁 —— 运行时秒级生效
 ```
 
-**装配器 = 产品核心交互**：「选模块 → 得到你的团队软件」就是 Unself 的商店结账页。交互稿（实现于 deploy/cloudflare，教程见 docs/deploy.md）：
+**装配器 = 产品核心交互**：「选模块 → 得到你的团队软件」就是 Unself 的商店结账页。交互稿六段流语义不变，**载体自 2026-09-17 起由「终端内 CLI」改为「本地 Web 向导」**（#53/#70；CLI 保留为逃生门与 CI，教程见 docs/deploy.md）：
 
 ```text
-① 检测 CLOUDFLARE_API_TOKEN：缺失时打印预填好权限的 CF 深链接（不报裸错误）
-② 域名三选：workers.dev 免费域 / 自有域 / 配置文件（显式第一选项，非隐性回退）
-③ 模块确认：列出候选模块，回车=全部
-④ 九步进度编号输出；每步失败给三要素：原因 / 归属（token 权限·DNS·代码）/ 修复
+① 认证：优先 OAuth（浏览器授权，零复制粘贴）；缺失时给预填权限的 CF 深链接 → token 填向导密码框（掩码/可校验/可重试）
+② 域名：列出账户内 zone 供选（免手输）；workers.dev 仍为显式第一选项
+③ 模块：从来源解析候选包，逐个展示版本/发布者/sha512/声明（permissions、storage、config）并确认
+④ 九步进度编号输出；每步失败给三要素：原因 / 归属（凭证·DNS·网络·代码）/ 修复
 ⑤ 收尾「下一步」指引：setup 链接 → 首个管理员 → 邀请拉人 → 邮件轴（可选）
 ⑥ 幂等重跑标语：任何时候重跑收敛同一终态
 ```
 
-非交互（CI/`-y`）：走配置与环境变量。**一键入口（Deploy to Cloudflare 按钮 + Workers Builds）为路线图项**——当前正式路径 = 交互式 CLI；README 不写「一键」。
+非交互（CI/`-y`）：走配置与环境变量。**一键入口（Deploy to Cloudflare 按钮 + Workers Builds）在当前架构下不可行**（monorepo 多 Worker 不能一并部署、仓库必须 public、且与 #165 冲突）→ 需重定案（#68）；README 不写「一键」。
 
-**装配引擎 = wrangler 幂等脚本**（deploy/cloudflare），读唯一配置文件 `unself.config.jsonc`：
+**装配引擎 = 自建 Cloudflare REST 客户端**（#65；原「wrangler 幂等脚本」由 #69 取代——装配器不安装也不调用 wrangler），读唯一配置文件 `unself.config.jsonc`：
 
 ```jsonc
 {
   "domain": "team.example.com",
-  "modules": ["chat", "meet", "docs"],
+  "modules": ["chat", { "id": "todo", "source": "npm:@acme/unself-todo@1.2.0", "mode": "docker" }],
   "storage": { "provider": "r2" }
 }
 ```
 
 脚本九步：① 确保 core/modules 两个 D1 存在；② 跑核心迁移与选中模块迁移（表前缀版本化）；③ 构建上传 Shell Worker；④ 每个选中模块构建、上传、绑 `/m/<id>/*` 路由与存储绑定；⑤ 注册表写入（选中 enabled，未选 not_deployed）；⑥ 建 R2 桶或接收外部 S3 参数；⑦ OIDC 不进配置文件——部署后在 setup 向导填写并存 core 库；⑧ 生成一次性 setup token 打印在部署输出末尾；⑨ 冒烟检查 `/api/health` 与各模块 health。
 
+**模块来源与包契约（#58/#59/#60）**：模块不再只能来自仓库 `modules/` 目录。来源协议 `official:` / `npm:` / `github:` / `https:` / `file:`；**远端一律要求已打包**——安装器直接从 registry 取 tarball 解包，不走 `npm install`，不执行任何第三方构建脚本；仅 `file:` 本地目录允许源码 + 本地构建。全局唯一身份是包名/来源，`manifest.id` 只是实例内名字（安装时可改）。worker 依赖全部 bundle 进 `worker.js`；docker 模块 manifest 写 tag、`unself.lock` 钉 digest，哈希不匹配直接拒绝。包格式与 `validate` 清单见 docs/modules.md。
+
+**模块数据四级（#55/#71）**：`core`（默认，经 Core API 代理，仅 get/put/delete/list）/ `shared`（共享 modules 库自建表，零隔离，需三护栏与知情同意）/ `dedicated`（装配器供给独立 D1/KV/R2）/ `external`（模块自备外部库）。模块声明 `storage.accepts` + `preferred`，**由用户在安装时选**；选了声明之外的模式即拒绝安装。
+
+**部署目标与混杂部署（#54/#63）**：一个实例 = 一个逻辑 core；模块落点内部两轴 `provisioned`（cloudflare / docker）/ `connected`，对外只暴露 `mode: cloudflare / docker / connect`。三种部署形态（纯 CF / 纯 Docker / 混杂）= 同一模型的取值；混杂部署的动机是把只有 CF 能做的事（DO / AI）留在免费额度内，其余放自有机器。
+
+**跨域与 hybrid 可达性（#63/#73）**：非 CF 模块由用户提供 `publicUrl`（强制 https）；外壳 CSP 的 `frame-src` 按注册表动态生成，模块页必须带 `frame-ancestors`，Core API 按注册表 origin 开 CORS。**「模块恒挂根路径」是不变式**——前缀剥离归宿主（CF wrapper / 反代 / 独立域名各自负责）。四个可达方向：浏览器→模块、浏览器→core、模块→core、core→模块。
+
+**控制面与后端解耦（#64/#65）**：装配器写注册表与一次性 setup token 经 `ControlPlane` 接口（CF 直敲 D1 / Docker 走 `node:sqlite`），SQL 与校验收在 core 与装配器共用模块；迁移记账按模块独立（#55 三护栏之一）。
+
 **升级纪律（拍板）**：已入主的迁移文件永不修改；schema 演进一律新增迁移文件（`000N_*.sql`），`migrations apply` 幂等收敛——替代 M0「直改 init.sql」的做法，真实用户升级不丢数据。运行时进程不持有任何 CF API 凭证。
 
 **运行时启停**：已部署模块由注册表开关控制——`enabled=false` 即边栏隐藏、core 停发对应 aud 的 token，存量 token 10 分钟内自然过期，数据原地保留。新增/移除模块 = 改 config → push → 自动重部署。
 
-**失败与回滚**：脚本幂等，重跑收敛；回滚 = git revert + push（CF 亦保留 Worker 历史版本可秒回滚）；卸载走保留/导出删除/直接删除三选一。
+**失败与回滚（#61/#62）**：脚本幂等，重跑收敛。迁移失败**停住并指出「模块 / 文件 / 语句」**，不自动重试、不自动回滚（D1 无事务）。升级前把旧 `unself.lock` 存一份到 `generated/history/`（兼审计），回滚 = 拷回快照重跑；降级允许但警告；fail-safe——新容器健康才切旧，CF 覆盖式部署。卸载走保留/导出删除/直接删除三选一。
 
-**Docker 等价**：同一份 `unself.config.jsonc` → compose 服务 + openresty location + init 迁移容器。
+**Docker 等价**：同一份 `unself.config.jsonc`；`mode: docker` 的模块由安装器渲染 compose + 反代片段（Caddy/nginx）+ 初始化迁移容器，core 自身也可落在 Docker。DO 平替与真落地属下一阶段。
 
 **已知缺口**：setup 向导录入的 OIDC client secret 存于 core D1（无字段级加密），审计记录读取行为；字段级加密为远期选项。
 
 
-#### 第三方模块发布契约（用户拍板，2026-09-09）
+#### 第三方模块发布契约（用户拍板，2026-09-09；落地形态 2026-09-17 补 #72）
 
 模块作者**不部署，只发布**；部署永远是实例侧动作。
 
 ```text
-模块作者（独立仓库）            实例侧（部署器 · 九步脚本）          运行时
+模块作者（独立仓库 / registry）      实例侧（安装器 · 九步）            运行时
 ┌─────────────────────┐      ┌────────────────────────────┐      ┌─────────────┐
-│ 写代码               │      │ 读 config：modules:[{id,     │      │ 壳 + 模块页 │
-│ 产出「模块包」       │──发布─▶│  source, version}]          │      │ 同实例共存   │
-│ (manifest + 产物)    │ npm/  │ 拉包 → 构建 → 绑 /m/<id>/*  │      └─────────────┘
-└─────────────────────┘  git  │ 注册表 upsert → 冒烟         │
-                               └────────────────────────────┘
+│ 构建 + 打包          │      │ 读 config：modules:[{id,     │      │ 壳 + 模块页 │
+│ 产出「模块包」       │──发布─▶│  source, mode}]            │      │ 同实例共存   │
+│ (预构建产物)         │ npm/  │ 取包 → 校验 → 注册 → 绑路由 │      └─────────────┘
+└─────────────────────┘ git/  │ 注册表 upsert → 冒烟         │
+                        url   └────────────────────────────┘
 ```
 
-**模块包内容**：
+**模块包内容**（由 `unself module pack` 产出；确切版本与哈希记在实例侧 `unself.lock`，不写在 config 里）：
 
 ```
-mail-1.2.0.tar.gz
-├─ manifest.json     id、requires、capabilities、entry、构建说明（已有 schema）
-├─ worker.js         构建产物（或源码 + build 脚本）
+unself-todo-1.2.0.tgz
+├─ manifest.json     契约声明：id / version / runtimes / storage / config / tables / compat / permissions / icon
+├─ worker.js         预构建、自包含（依赖已 bundle；模块不自带 SDK 浏览器侧资产）
 ├─ assets/           模块页静态文件（只含 var() 名字，不含值）
-└─ theme.json        可选：模块自己皮肤（默认跟随实例主题）
+├─ migrations/       可选：表前缀命名的迁移（仅 shared/dedicated 模式需要）
+├─ config.schema     可选：配置页字段声明（schema 驱动，安装器渲染）
+├─ theme.json        可选：模块自己皮肤（默认跟随实例主题）
+├─ docker/           可选：runtime=docker 时的镜像声明 / 端口 / 健康检查
+└─ LICENSE / NOTICE  许可证随包走（GPL 类必须自带）
 ```
 
-**信任无分级（拍板）**：不区分官方/认证/任意。写部署脚本的人 = 信任决策者——他选择装哪个包，就已经做出了选择。官方模块直接显示官方；其他来源不做任何标注，不引入额外机制。
+**信任无分级（拍板）**：#42 不变——不区分官方/认证/任意，写部署脚本的人 = 信任决策者。但**「无分级」不等于「无信息」**：安装时展示版本、发布者、`sha512`、声明的 `permissions` 与 `storage`，由部署者知情确认。
+
+**信任边界（#58/#72）**：远端来源一律**要求已打包**；安装器直接从 registry 取 tarball 解包（不走 `npm install`，`postinstall` 无执行机会），**不执行任何第三方构建脚本**；只有 `file:` 本地目录允许源码 + 本地构建——作者的构建发生在**作者自己的 CI**。
+
+**主题与部署解耦**：模块产物里只有语义令牌名字（`var(--unself-*)`），没有值。部署时零令牌；值只在运行时由壳统一下发（见本文档「注入双通道」）。换主题不重部署模块。
+
+> 完整字段表、`validate` 清单与发布流程见 [docs/modules.md](modules.md)。
 
 **主题与部署解耦**：模块产物里只有语义令牌名字（`var(--unself-*)`），没有值。部署时零令牌；值只在运行时由壳统一下发（见本文档「注入双通道」）。换主题不重部署模块。
 
@@ -489,8 +509,8 @@ hello 页  身份行（token claims 姓名/邮箱）+ 计数按钮并排：
 6. **P2P 媒体与信令分离**：Worker 承载会议鉴权、房间与信令，WebRTC 直接传媒体；TURN/SFU/录制按需放入 Docker 或外部基础设施。
 7. **许可证按代码和构建产物隔离**：不通过目录名称假设许可证隔离，必须保留独立依赖、构建和服务边界。
 8. **模块契约三通道**：壳与模块之间只有 manifest、module-sdk、Core API；模块默认 iframe 装载于 `/m/<模块id>/`，第一方同域同规，第三方可换独立域名 entry，契约不变；安全靠短时 token 验签，不靠 origin 隔离。
-9. **数据边界靠契约不靠物理**：core 库独立护住平台数据；模块业务数据共居 modules 库，表前缀隔离，SDK 收口访问；模块必须实现 export/purge 生命周期接口。
-10. **装配与启停分离**：装配只在部署时由 wrangler 幂等脚本执行，运行时进程不持有 Cloudflare 凭证；已部署模块的启停是注册表开关，秒级生效，免重部署。
+9. **数据边界按四级声明**（#55）：core 库独立护住平台数据；模块业务数据按 `core`/`shared`/`dedicated`/`external` 四级由部署者选择，`shared` 靠表前缀隔离 + SDK 收口 + 三护栏；模块必须实现 export/purge 生命周期接口。
+10. **装配与启停分离**：装配只在部署时由自建 REST 客户端执行（#65），运行时进程不持有 Cloudflare 凭证；已部署模块的启停是注册表开关，秒级生效，免重部署。
 11. **跨模块协作走核心**：模块互通只经核心代调（act claim 双主体）；资源级权限记核心通用 ACL；AI、存储等基础设施能力由核心配置、SDK 供给。
 
 ### 技术选型与复用调研（v2：二次开发缝合路线）
