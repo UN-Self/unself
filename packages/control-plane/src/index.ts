@@ -8,3 +8,4 @@ export * from './sql';
 export * from './sqlite-probe';
 export * from './sqlite';
 export * from './d1';
+export * from './rest';
