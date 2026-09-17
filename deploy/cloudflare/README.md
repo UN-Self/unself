@@ -32,7 +32,10 @@ pnpm --filter @unself/deploy-cloudflare exec deploy-cloudflare
 # 或：node deploy/cloudflare/bin.ts（仓库根执行）
 ```
 
-前置：API Token（主路径）。权限清单：
+凭证（两种，优先级同官方：`CLOUDFLARE_API_TOKEN` > API key/email > OAuth）：
+
+- **OAuth（推荐）**：`wrangler login` 浏览器授权，零复制粘贴。**2026-09-17 用 wrangler 4.129.0 实测**：OAuth 覆盖 D1 建库/读写/迁移、R2 建桶/列举、KV 建命名空间、Workers 部署、secret 写入、zone 路由增/改/删；**唯一不可用的是 Total TLS（ACM）**，只有多级子域（比 zone 深两级以上）才需要它。
+- **API Token（兜底）**：需要 Total TLS、偏好 token、或跑 CI 时使用。权限清单：
 
 | 范围 | 权限 |
 |------|------|
@@ -42,8 +45,7 @@ pnpm --filter @unself/deploy-cloudflare exec deploy-cloudflare
 设置方式：`export CLOUDFLARE_API_TOKEN=...`——不落盘，脚本不持久化凭证；JWT 私钥经
 `wrangler secret put` 写入 Worker，不落盘（仅打印指纹备份提示）。
 
-`wrangler login` 的 OAuth 凭证对 zone 路由（zones/.../workers/routes）授权不足，
-PUT zone 路由报 10405——zone 路由必须用 API Token。
+> **历史更正（2026-09-17）**：本文件原写「`wrangler login` 的 OAuth 凭证对 zone 路由授权不足，PUT zone 路由报 10405——zone 路由必须用 API Token」。该结论在 **wrangler 4.129.0** 实测下失效：授予的 scope 集含 `workers_routes:write`，路由新建（POST）/更新（PUT）/删除（DELETE）全部通过。旧结论来自更早版本的 wrangler。
 
 ## 路由形态（§5.3 zone 路径路由，真机实证）
 
