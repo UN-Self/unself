@@ -41,6 +41,35 @@ M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tail
 3. M1 收官复核（45 条遗留）已清零（2026-09-15）：按职责域分 11 个 issue 全部关闭（#186-#196），复核审计中发现的 5 条无归属项补清（#208-#210）；文档重排为一文件一职责（AGENTS ≤60 行）、协作机制①-⑤ 落地。
 4. **M2 本地收官达成（2026-09-16，机制⑤材料齐备）**。走查（#221）→ 修复波次全部合并并复验：#229 身份面（PR #233，#234 复验）、#235 live WS 帧解析+自消息竞态（PR #237）、#230 @ 提及 core 身份（PR #238）、#231 SESSIONS KV 明文 JWT 残件清除（PR #238）。**#239 终验（基线 `bb9b679`）全链实测通过**：实时消息上屏、实时已读回执递增、@ 提及落库、DM ✓✓、375px——全部「不重开房间」取证（docs/m2-acceptance.md §3.5 + audit 239）。M2 名下 issue 清零；未证实 5 条全部为真机/真云项（§7），不阻塞代码收官，待部署者走查回填。三件套 975 passed。Docker 等价部署在 M3。
 
+## M2 增补：模块化链路（2026-09-17 立项）
+
+M2 原范围（聊天模块化）已收官；本轮在其上**增补「模块化整条链路」的打磨**——把「装不了第三方模块」与「必须克隆仓库」两个根因解决掉。issue 全部挂 M2 里程碑（#241–#249）。
+
+**范围（本阶段做）**：零克隆安装器（本地 Web 向导）· 模块契约 v1（`permissions` 门禁 + `validate`）· 自建 CF REST 客户端（不依赖 wrangler）· 模块来源与 `unself.lock` · 认证双路径（OAuth 主 + API Token 兜底）· `connect` 跨域模块打通 · 数据四级与迁移契约 · 诊断可见性 · 文档落档。
+
+**范围外（下一阶段）**：Docker target 真落地 · DO/realtime 平替 · Deploy Button 一键入口重定案 · 无 Node 环境兜底 · 模块市场/索引。
+
+**验收闭环（8 条，缺一不可）**
+
+1. **零克隆安装**：干净机器（只装 Node）跑 `npx @unself/installer`，一路回车 → 出可登录的 workers.dev 实例；全程不出现 `git clone` / `pnpm install`（#242）
+2. **模块契约 v1 冻结**：`manifest.json` 字段定稿；`unself module validate` 拦住六类错（id / `storage.accepts` / `tables` / LICENSE / 未知 capability / `compat`）（#243）
+3. **builtin 与第三方同一条路**：官方模块也以「包」形式被消费；换成同内容的本地 tarball 结果一致（#245）
+4. **第三方可装可卸**：npm / git / tarball 三种来源各装一个；卸载走生命周期端点导出与清理，**验完库里无残留表**（#245/#248）
+5. **`connect` 模块真跑起来**：注册一个自托管 URL 的模块，壳能 iframe 加载 + token 握手 + 主题走通道 B（hybrid 地基）（#247）
+6. **控制面解耦**：`ControlPlane` 两实现（CF / `node:sqlite`），「core 库不在 CF 时注册表与 setup token 能写成功」有测试（#244）
+7. **诊断可见性**：`--help` 可用、未知参数报错、域名连错两次不再静默回退、token 输入掩码（#249）
+8. **文档**：README 保持短动线（是什么/为什么 + 一条命令 + 我适合吗 + 第三方怎么来 + 求助）；新增 `docs/modules.md`（#241）
+
+**待定 / 留档**
+
+| 项 | 去向 |
+|---|---|
+| 发版约定（破坏性变更定义、弃用周期、`CONTRACT_VERSION` bump、CI 卡点） | 留档待定（决策 #57） |
+| 一键入口（Deploy Button + Workers Builds）重定案 | 决策 #68 登记；本阶段不实现 |
+| Docker target 真落地、DO/realtime 平替 | M3 |
+| 无 Node 环境（`npx` 都不可用）的兜底 | 更后；Docker 方向 |
+| `--scopes` 最小 scope 集、`node:sqlite` 免 flag 的 Node 下限、Total TLS（多级子域需 API Token） | 实现时顺手定 |
+
 ## 未决与交接
 
 （承接 docs/m1-acceptance.md「未决与交接」，其余待办：）
