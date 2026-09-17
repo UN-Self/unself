@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * smokeCheck（§5.3 单域名路径制）行为测试。
- * 只 stub 网络层（vi.stubGlobal('fetch', ...)）捕获请求 URL，真实调用 src/smoke.ts 的 smokeCheck：
- * - URL 形态：domain 与 workers.dev 两种 baseUrl 均走 <baseUrl>/api/health 与 <baseUrl>/m/<id>/api/health
- *   （无 <id>. 子域分支），core 在前、模块按 moduleIds 顺序；
- * - 行为：200+ok:true、200 缺 ok:true（detail「响应体缺 ok:true」）、非 200（detail「HTTP 503」且不解析 JSON）、
- *   fetch 抛错（detail 以「不可达：」开头、status=0）、多模块混合按 moduleIds 顺序返回且失败项不影响成功项。
+ * smoke（§5.3 单域名路径制）行为测试（#244 REST 化后）：
+ * - smokeCheck / checkModuleThemes：stub 网络层，守 URL 形态与成败判定；
+ * - generateSetupToken：24B → 32 字符 base64url 随机性；
+ * - issueSetupToken 三态（created/reused/sealed）：经 ControlPlane-over-sqlite 直测（#244 迁出 wrangler）。
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Mock } from 'vitest';
-import { checkModuleThemes, generateSetupToken, parseD1Rows, parseWorkersDevFromDeployOutput, provisionSetupToken, smokeCheck } from '../src/smoke';
-import type { Wrangler } from '../src/wrangler';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { checkModuleThemes, generateSetupToken, smokeCheck } from '../src/smoke';
+import { SqliteControlPlane } from '@unself/control-plane';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -22,7 +19,7 @@ function jsonResponse(status: number, body: unknown): Response {
 
 function stubFetch(
   impl: (input: Parameters<typeof fetch>[0]) => Promise<Response>,
-): Mock<(input: Parameters<typeof fetch>[0]) => Promise<Response>> {
+) {
   const m = vi.fn(impl);
   vi.stubGlobal('fetch', m);
   return m;
@@ -119,34 +116,7 @@ describe('smokeCheck 行为断言', () => {
   });
 });
 
-describe('步骤⑧ 本地签发（#165 方案 B：不再 POST /api/admin/setup-token）', () => {
-  beforeEach(() => {
-    // 硬边界：步骤⑧ 全程不发起 HTTP（签发已收归装配器 + d1 execute）
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => {
-        throw new Error('步骤⑧不应发起 HTTP');
-      }),
-    );
-  });
-
-  /** 真 wrangler v4.129.0 `d1 execute --json` 形状（本地 D1 实测夹具）。 */
-  const d1Json = (rows: Array<Record<string, unknown>>) =>
-    JSON.stringify([{ results: rows, success: true, meta: { duration: 0 } }]);
-
-  /** 录制型 stub wrangler：按调用序回放 stdout。 */
-  function stubWrangler(outputs: string[]): { wrangler: Wrangler; commands: string[] } {
-    const commands: string[] = [];
-    let i = 0;
-    const run = async (args: string[]) => {
-      commands.push(args.join(' '));
-      const stdout = outputs[Math.min(i, outputs.length - 1)] ?? '';
-      i++;
-      return { ok: true, code: 0, stdout, stderr: '' };
-    };
-    return { wrangler: { run, tryRun: run }, commands };
-  }
-
+describe('步骤⑧ 本地签发（#165 方案 B：ControlPlane 直签）', () => {
   it('generateSetupToken：24B → 32 字符 base64url（URL 安全、无填充、两次不同）', () => {
     const a = generateSetupToken();
     const b = generateSetupToken();
@@ -155,48 +125,22 @@ describe('步骤⑧ 本地签发（#165 方案 B：不再 POST /api/admin/setup-
     expect(a).not.toBe(b);
   });
 
-  it('未封箱且无既有 token：INSERT 写入 core 库（--remote + 生成配置 + --json），返回相对 setupUrl', async () => {
-    const { wrangler, commands } = stubWrangler([d1Json([{ sealed: 0, token: null }]), d1Json([])]);
-    const result = await provisionSetupToken({ wrangler, configPath: '/repo/.deploy/migrate/core.wrangler.jsonc' });
-    expect(result).toMatchObject({ setupUrl: expect.stringMatching(/^\/setup\?token=[A-Za-z0-9_-]{32}$/) });
-    const token = 'token' in result ? result.token : '';
-    expect(commands[0]).toContain('SELECT');
-    expect(commands[0]).toContain('--remote');
-    expect(commands[0]).toContain('--config /repo/.deploy/migrate/core.wrangler.jsonc');
-    expect(commands[1]).toBe(
-      `d1 execute CORE_DB --command INSERT INTO setup_tokens (token) VALUES ('${token}') -y --remote --config /repo/.deploy/migrate/core.wrangler.jsonc --json`,
-    );
+  it('未封箱且无既有 token：created + INSERT 写入；再问 reuse', async () => {
+    const cp = SqliteControlPlane.open(':memory:');
+    const first = await cp.issueSetupToken(generateSetupToken);
+    expect(first.status).toBe('created');
+    expect(first.status === 'created' && first.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    const again = await cp.issueSetupToken(generateSetupToken);
+    expect(again.status).toBe('reused');
+    const againToken = again.status === 'reused' ? again.token : '';
+    expect(againToken === (first.status === 'created' ? first.token : '')).toBe(true);
   });
 
-  it('已有未消费 token：复用且不再 INSERT（重跑幂等，链接不变）', async () => {
-    const { wrangler, commands } = stubWrangler([d1Json([{ sealed: 0, token: 'tok-existing' }])]);
-    const result = await provisionSetupToken({ wrangler, configPath: '/cfg.jsonc' });
-    expect(result).toEqual({ token: 'tok-existing', setupUrl: '/setup?token=tok-existing' });
-    expect(commands).toHaveLength(1);
-  });
-
-  it('已封箱：回 sealed，且不 INSERT', async () => {
-    const { wrangler, commands } = stubWrangler([d1Json([{ sealed: 1, token: null }])]);
-    const result = await provisionSetupToken({ wrangler, configPath: '/cfg.jsonc' });
-    expect(result).toEqual({ sealed: true });
-    expect(commands).toHaveLength(1);
-  });
-
-  it('标准输出带前缀日志行：仍能解析出 results（不误判为未封箱）', async () => {
-    expect(parseD1Rows(`Cloudflare 登录提示\n${d1Json([{ sealed: 1, token: null }])}`)).toEqual([
-      { sealed: 1, token: null },
-    ]);
-    const { wrangler, commands } = stubWrangler([`日志行\n${d1Json([{ sealed: 1, token: null }])}`]);
-    expect(await provisionSetupToken({ wrangler, configPath: '/cfg.jsonc' })).toEqual({ sealed: true });
-    expect(commands).toHaveLength(1);
-  });
-
-  it('空/不可解析输出：按未封箱处理并签发（不阻断新部署）', async () => {
-    expect(parseD1Rows('')).toEqual([]);
-    const { wrangler, commands } = stubWrangler(['', d1Json([])]);
-    const result = await provisionSetupToken({ wrangler, configPath: '/cfg.jsonc' });
-    expect('token' in result).toBe(true);
-    expect(commands).toHaveLength(2);
+  it('已封箱：sealed 且不签发（setup_done=1 后）', async () => {
+    const cp = SqliteControlPlane.open(':memory:');
+    cp.db.exec("INSERT INTO instance_config (key, value) VALUES ('setup_done', '1')");
+    const result = await cp.issueSetupToken(generateSetupToken);
+    expect(result).toEqual({ status: 'sealed' });
   });
 });
 
@@ -270,62 +214,4 @@ describe('checkModuleThemes（部署期主题体检 · §6.5.8 验产物，不�
   });
 });
 
-describe('parseWorkersDevFromDeployOutput（workers.dev 主路径直测，T3）', () => {
-  it('wrangler v4 真实部署输出形状：Deployed … https://<name>.workers.dev → 抓到完整 URL', () => {
-    // wrangler v4.129.x `wrangler deploy` 实际 stdout（fake wrangler 回放同款，steps.test.ts 部署行）
-    const stdout = [
-      '⛅️ wrangler v4.29.1',
-      '------------------',
-      'Total Upload: 123.45 KiB / Compression: 34.56 KiB',
-      'Uploaded unself-core-api (3.41 sec)',
-      'Deployed unself-core-api triggers (1.18 sec)',
-      '  https://unself-core-api.test-subdomain.workers.dev',
-      '',
-    ].join('\n');
-    expect(parseWorkersDevFromDeployOutput(stdout)).toBe(
-      'https://unself-core-api.test-subdomain.workers.dev',
-    );
-  });
 
-  it('输出含多行日志与杂项 URL：仍只抓 .workers.dev 域（不误抓 dash/others）', () => {
-    const stdout = [
-      '🌀 Building list of candidate versions...',
-      '🌎 ⚠️ No custom domain detected, using workers.dev',
-      '参考文档: https://developers.cloudflare.com/workers/',
-      'Deployed unself-core-api triggers',
-      '  https://unself-core-api.a1b2c3d4.workers.dev',
-    ].join('\n');
-    expect(parseWorkersDevFromDeployOutput(stdout)).toBe(
-      'https://unself-core-api.a1b2c3d4.workers.dev',
-    );
-  });
-
-  it('输出无 workers.dev URL（如仅报错/登录提示）→ null（调用方走「无法解析」人话分支）', () => {
-    expect(parseWorkersDevFromDeployOutput('⛅️ wrangler v4.29.1\nNot logged in, run `wrangler login`')).toBeNull();
-    expect(parseWorkersDevFromDeployOutput('')).toBeNull();
-  });
-});
-
-describe('provisionSetupToken 生产默认路径（wrangler 失败即硬失败，T3）', () => {
-  it('探测命令非零退出（wrangler 报错）→ WranglerError 带命令与 stderr 硬失败（不静默误签）', async () => {
-    // 生产真实路径：run() 对非零退出抛 WranglerError（wrangler.ts）。探测失败必须硬失败——
-    // 若误把「探测失败」当「空输出」，会按未封箱处理在错误账户上凭空 INSERT。
-    // 这里用真实 WranglerError 形状（非 fake 回放）验证错误面含命令与 stderr 人话。
-    const commands: string[] = [];
-    const wrangler: Wrangler = {
-      run: async (args) => {
-        commands.push(args.join(' '));
-        throw Object.assign(new Error('d1 execute 失败（1）\n  命令: wrangler d1 execute CORE_DB --command SELECT ...\n  stderr: failed to fetch D1: network unreachable'), { name: 'WranglerError' });
-      },
-      tryRun: async (args) => {
-        commands.push(args.join(' '));
-        return { ok: false, code: 1, stdout: '', stderr: 'x' };
-      },
-    };
-    await expect(
-      provisionSetupToken({ wrangler, configPath: '/cfg.jsonc' }),
-    ).rejects.toThrow(/failed to fetch D1: network unreachable/);
-    expect(commands).toHaveLength(1);
-    expect(commands[0]).toContain('SELECT');
-  });
-});

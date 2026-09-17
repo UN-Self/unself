@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 冒烟、setup token 与部署期主题体检（步骤⑧⑨，§5.5 / §6.5.8）：
- * ⑧ 本地生成一次性 setup token → `wrangler d1 execute --remote` 写入 core 库 → 返回激活链接
- *    （#165 方案 B：`/api/admin/setup-token` 公开签发口已删，签发权收归装配器）；
+ * 冒烟与部署期主题体检（步骤⑨，§5.5 / §6.5.8；#244 后步骤⑧的 setup token 走 ControlPlane）：
  * ⑨ GET /api/health + 各选中模块 /m/<id>/api/health（经实例域路径路由）；
  *    主题体检 = GET /m/<id>/ 模块页产物，查 --unself-* 引用是否全部在契约白名单（§6.5.8）。
  */
 import { analyzeTokenUsage } from '@unself/contracts';
-
-import type { Wrangler } from './wrangler';
 
 export interface SmokeResult {
   name: string;
@@ -21,11 +17,6 @@ export interface SmokeResult {
 /** setup token 随机长度（字节）；形状与 services/core-api/src/setup.ts 对齐（24B → base64url 无填充）。 */
 const SETUP_TOKEN_BYTES = 24;
 
-/** 步骤⑧探测 SQL：一次往返拿「是否已封箱」+「可复用的未消费 token」（重跑幂等）。 */
-export const SETUP_STATUS_SQL =
-  "SELECT (SELECT COUNT(*) FROM instance_config WHERE key = 'setup_done' AND value = '1') AS sealed, " +
-  '(SELECT token FROM setup_tokens WHERE used_at IS NULL ORDER BY created_at LIMIT 1) AS token';
-
 /** 本地生成一次性 setup token（#165 方案 B：签发在装配器，不再有公开签发端点）。 */
 export function generateSetupToken(): string {
   const buf = new Uint8Array(SETUP_TOKEN_BYTES);
@@ -35,66 +26,6 @@ export function generateSetupToken(): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-/** wrangler d1 execute --json 输出 → 行数组。v4.129.0 本地 D1 实测形状：顶层数组，
- *  元素 `{ results, success, meta }`；容忍前置日志行；空/不可解析输出回 []（不得误判为已封箱）。 */
-export function parseD1Rows(stdout: string): Array<Record<string, unknown>> {
-  const text = stdout.trim();
-  if (!text) return [];
-  const candidates = [text, ...text.split('\n').reverse().map((line) => line.trim())];
-  for (const candidate of candidates) {
-    if (!candidate.startsWith('[') && !candidate.startsWith('{')) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(candidate);
-    } catch {
-      continue;
-    }
-    for (const block of Array.isArray(parsed) ? parsed : [parsed]) {
-      const results = (block as { results?: unknown }).results;
-      if (Array.isArray(results)) return results as Array<Record<string, unknown>>;
-    }
-  }
-  return [];
-}
-
-/**
- * 步骤⑧（#165 方案 B）：查封箱 → 复用未消费 token（重跑幂等，已打印过的链接仍可）或
- * 本地新生成 → `wrangler d1 execute --remote` 插入 core 库 → 返回 setupUrl。
- * 用生成配置（真实 database_id）而非包内占位符配置——同步骤②迁移的已知坑。
- */
-export async function provisionSetupToken(input: {
-  wrangler: Wrangler;
-  /** 生成配置路径（d1_databases 绑定 CORE_DB → 真实 database_id）。 */
-  configPath: string;
-  /** 生成配置里的 D1 绑定名（缺省 CORE_DB）。 */
-  dbBinding?: string;
-  log?: (msg: string) => void;
-}): Promise<{ token: string; setupUrl: string } | { sealed: true }> {
-  const log = input.log ?? console.log;
-  const db = input.dbBinding ?? 'CORE_DB';
-  const d1 = (sql: string) =>
-    input.wrangler.run(
-      ['d1', 'execute', db, '--command', sql, '-y', '--remote', '--config', input.configPath, '--json'],
-      { silent: true },
-    );
-
-  const status = await d1(SETUP_STATUS_SQL);
-  const row = parseD1Rows(status.stdout)[0] ?? {};
-  if (Number(row.sealed) > 0) {
-    log('setup 已完成（实例已封死激活入口）——跳过 token 签发');
-    return { sealed: true };
-  }
-  const existing = typeof row.token === 'string' && row.token.length > 0 ? row.token : null;
-  if (existing) {
-    log('复用未消费的一次性 setup token（重跑幂等）');
-    return { token: existing, setupUrl: `/setup?token=${existing}` };
-  }
-  const token = generateSetupToken();
-  const literal = `'${token.replaceAll("'", "''")}'`;
-  await d1(`INSERT INTO setup_tokens (token) VALUES (${literal})`);
-  log('一次性 setup token 已写入 core 库');
-  return { token, setupUrl: `/setup?token=${token}` };
-}
 
 /** 主题体检结果（§6.5.8）：模块页产物的 --unself-* 引用解析情况。 */
 export interface ThemeCheckResult {
@@ -189,8 +120,3 @@ export async function smokeCheck(input: {
   return results;
 }
 
-/** Wrangler 探测当前 workers.dev 域名（config.domain 为空时步骤③部署完解析用）。 */
-export function parseWorkersDevFromDeployOutput(stdout: string): string | null {
-  const m = /https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.workers\.dev/i.exec(stdout);
-  return m ? m[0] : null;
-}

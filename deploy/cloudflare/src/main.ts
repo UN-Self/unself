@@ -7,7 +7,6 @@
  * 装配主流程 = runNineSteps 整包调用，行为与既有部署完全一致；本文件只做交互编排与输出。
  */
 import { runNineSteps, type Summary } from './steps';
-import { realWrangler } from './wrangler';
 import { loadUnselfConfig, type UnselfConfig } from './config';
 import {
   buildTokenDeepLink,
@@ -131,7 +130,6 @@ export async function main(argv: string[] = []): Promise<Summary> {
   try {
     summary = await runNineSteps({
       rootDir,
-      wrangler: realWrangler(rootDir),
       reporter: tracker.reporter,
       configOverride: effective,
     });
