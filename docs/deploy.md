@@ -8,7 +8,7 @@
 git clone https://github.com/UN-Self/unself.git && cd unself
 pnpm install
 
-# ① 启动装配器：打印一个建 token 的链接 → 浏览器点两下 → token 粘回终端
+# ① 启动装配器：浏览器授权（推荐，OAuth）或粘贴 CF API Token
 node deploy/cloudflare/bin.ts
 
 # ② 按提示选域名（回车 = workers.dev 免费域名）、确认模块（回车 = 默认）
@@ -24,9 +24,13 @@ node deploy/cloudflare/bin.ts
 
 | 现象 | 修复 |
 |---|---|
-| `10405`（权限不足） | 重跑 ① 重建 token（权限没勾全），再继续 |
+| `10405`（权限不足） | 凭证缺 zone 级权限：改用 CF 深链接建的 API Token（6 项勾全），再继续 |
+| 需要 Total TLS（多级子域证书） | OAuth 覆盖不到（2026-09-17 实测），改用 API Token |
 | DNS 报错 | 等 60 秒，重跑同一条命令 |
 | 其他任何失败 | 直接重跑 ①——幂等，不会重复建资源 |
+
+看实时日志：`cd deploy/cloudflare && npx wrangler tail unself-core-api`。
+仍卡住 → [开 issue](https://github.com/UN-Self/unself/issues)，附上终端里的三要素报错原文。
 
 ## 升级已有实例
 
@@ -52,7 +56,7 @@ Cloudflare 免费套餐足够 10 人左右的团队：Workers 10 万请求/天�
 
 ## 附：每步在干什么（不用读，卡住了再看）
 
-- **① 深链接**：Cloudflare 要求程序化部署用 API Token（wrangler login 的 OAuth 对 zone 路由授权不足）。链接已预填全部 5 项权限，起个名 → Continue → Create → 复制，粘回终端即可。token 只在本次进程内存里用，不落盘。
+- **① 凭证**：优先 `wrangler login` 的 OAuth（浏览器授权，零复制粘贴）。**2026-09-17 用 wrangler 4.129.0 实测**：OAuth 覆盖 D1 建库/读写/迁移、R2 建桶/列举、KV 建命名空间、Workers 部署、secret 写入、zone 路由增/改/删；**唯一覆盖不到的是 Total TLS（ACM）**，只有多级子域（比 zone 深两级以上）才需要它。需要 Total TLS、偏好 token、或跑 CI 时，用 CF 深链接建 API Token（权限已预填全部 **6** 项：Account 3 + Zone 3），粘回终端即可。token 只在本次进程内存里用，不落盘。
 - **② 域名**：workers.dev 免费域名即刻可用；自有域名需 DNS 已托管在 Cloudflare，装配器会自动补代理记录和证书。
 - **③ 九步**：建两个数据库（core/modules）→ 跑迁移 → 构建 Shell → 部署 core-api → 部署各模块 → 写模块注册表 → 建 R2 桶 → 生成一次性 setup token → 冒烟检查。幂等：任何时候重跑，只补没完成的部分。
 - **④ setup 链接**：一次性，设的第一个账号即管理员。默认内置账号（用户名+密码）；团队有 SSO 可在向导里展开接 OIDC。
