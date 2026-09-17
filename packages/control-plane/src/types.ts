@@ -74,8 +74,8 @@ export interface ApplyReport {
 
 /** 迁移记账表名前缀：`unself_migrations_<module>`（#55 护栏①：模块独立记账）。 */
 export function migrationsTableFor(module: string): string {
-  if (!/^[a-z][a-z0-9-]*$/.test(module)) {
-    throw new Error(`模块 id 非法（需 ^[a-z][a-z0-9-]*$）："${module}"`);
+  if (!/^[a-z][a-z0-9-]+$/.test(module)) {
+    throw new Error(`模块 id 非法（需 ^[a-z][a-z0-9-]+$）："${module}"`);
   }
   return `unself_migrations_${module.replaceAll('-', '_')}`;
 }
