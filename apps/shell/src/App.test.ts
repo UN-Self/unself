@@ -30,7 +30,7 @@ const { TOKEN, MODULE, REJECTED } = vi.hoisted(() => {
       id: 'hello',
       route: '/m/hello/',
       entry: '/m/hello/',
-      runtime: 'vue',
+      runtimes: ['worker'],
       version: '0.1.0',
     },
   }

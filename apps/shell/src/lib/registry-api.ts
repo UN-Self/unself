@@ -19,8 +19,8 @@ export interface RegistryModule {
     id: string
     route: string
     entry: string
-    runtime: string
-    capabilities?: string[]
+    runtimes: string[]
+    permissions?: string[]
     version: string
     description?: string
     icon?: string

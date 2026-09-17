@@ -14,7 +14,7 @@ describe('moduleFrameSrc（iframe 装载地址解析）', () => {
       id: 'hello',
       route: '/m/hello',
       entry,
-      runtime: 'worker',
+      runtimes: ['worker'],
       version: '1.0.0',
     },
   })

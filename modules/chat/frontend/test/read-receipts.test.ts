@@ -30,9 +30,12 @@ const baseMessage = (over: Partial<Message> = {}): Message => ({
   ...over,
 })
 
+/** readAt 动态取「今天 10:00」（本地时区）：formatMessageTime 当天返回 HH:mm，测试不随真实日期漂移。 */
+const READ_AT = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}T10:00:00`
+
 const summary = (count: number, userIds: number[] = []): ReadReceiptsSummary => ({
   count,
-  readBy: userIds.map((userId) => ({ userId, username: `u${userId}`, displayName: `用户${userId}`, readAt: '2026-09-16T10:00:00' })),
+  readBy: userIds.map((userId) => ({ userId, username: `u${userId}`, displayName: `用户${userId}`, readAt: READ_AT })),
 })
 
 describe('气泡回执标签（#220）', () => {
@@ -110,7 +113,7 @@ describe('已读名单浮层（#220）', () => {
     expect(document.querySelector('[data-test="receipt-title"]')?.textContent).toContain('general')
     expect(document.querySelectorAll('[data-test="receipt-row-read"]')).toHaveLength(2)
     expect(document.body.textContent).toContain('用户2')
-    expect(document.body.textContent).toContain('10:00')
+    expect(document.body.textContent).toContain('10:00') // 当天 10:00 → HH:mm（不带日期前缀）
     expect(document.querySelector('[data-test="receipt-row-unread"]')?.textContent).toContain('未读 2 人')
 
     // Teleport 内容在 body 下（wrapper 树外）：直接 DOM 事件面触发点击

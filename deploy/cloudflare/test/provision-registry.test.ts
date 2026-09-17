@@ -9,11 +9,10 @@ const HELLO_MANIFEST = `# SPDX-License-Identifier: AGPL-3.0-only
 id: hello
 route: /m/hello
 entry: http://localhost:8790/ # 占位
-runtime: worker
-requires:
-  - identity
-capabilities:
-  - demo
+runtimes:
+  - worker
+permissions:
+  - storage
 version: 0.1.0
 `;
 

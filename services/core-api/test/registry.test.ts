@@ -11,9 +11,7 @@ const helloManifest = {
   id: 'hello',
   route: '/m/hello',
   entry: 'https://team.example.com/m/hello/',
-  runtime: 'worker',
-  requires: ['identity'],
-  capabilities: ['counter'],
+  runtimes: ['worker'],
   version: '1.0.0',
   icon: 'inbox',
 };
@@ -93,7 +91,7 @@ describe('registry CRUD 与启停语义（#7）', () => {
       version: '1.0.0',
       manifest_json: expect.any(String),
     });
-    expect(JSON.parse(row!.manifest_json).capabilities).toEqual(['counter']);
+    expect(JSON.parse(row!.manifest_json)).toMatchObject({ id: 'hello', version: '1.0.0' });
   });
 
   it('重复注册 upsert：刷新快照不炸（deploy 脚本幂等重跑）', async () => {

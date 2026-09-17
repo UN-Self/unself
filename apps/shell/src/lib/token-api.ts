@@ -20,7 +20,7 @@ export interface IssuedToken {
     aud: string
     iat: number
     exp: number
-    caps?: string[]
+    name?: string
   }
 }
 
