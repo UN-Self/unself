@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "@unself/contracts": "workspace:*",
+    "@unself/control-plane": "workspace:*",
+    "blake3-wasm": "2.1.5",
     "esbuild": "^0.28.0",
     "jose": "^6.1.0",
     "tsx": "^4.19.0",

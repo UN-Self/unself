@@ -90,6 +90,12 @@ importers:
       '@unself/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@unself/control-plane':
+        specifier: workspace:*
+        version: link:../../packages/control-plane
+      blake3-wasm:
+        specifier: 2.1.5
+        version: 2.1.5
       esbuild:
         specifier: ^0.28.0
         version: 0.28.2
