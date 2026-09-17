@@ -14,6 +14,7 @@ describe('core D1 migration', () => {
         { type: 'account_ready' },
         { type: 'invite_pending' },
         { type: 'invite_result' },
+        { type: 'module_notify' }, // #243：模块通知（站内渠道）
         { type: 'module_toggled' },
       ]);
     } finally {

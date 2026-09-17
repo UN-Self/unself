@@ -3,11 +3,13 @@ import { Hono } from 'hono';
 
 import { requireAdmin } from './middleware/admin';
 import { requireActiveMember, type SessionGuardVariables } from './middleware/session-guard';
+import type { ModuleAuthVariables } from './token';
 import { registerActivateRoutes } from './routes/activate';
 import { registerAuditRoutes } from './routes/audit';
 import { registerAuthRoutes } from './routes/auth';
 import { registerInviteRoutes } from './routes/invites';
 import { registerMemberRoutes } from './routes/members';
+import { registerModuleApiRoutes } from './routes/module-api';
 import { registerModuleRoutes } from './routes/modules';
 import { registerNotificationRoutes } from './routes/notifications';
 import { registerSettingsRoutes } from './routes/settings';
@@ -99,6 +101,9 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   // 激活域：公开 /api/activate/<token>（#18；登录态无关，链接双证之一）
   registerActivateRoutes(routes, dependencies);
   registerModuleRoutes(routes);
+  // 模块后端面（决策 #56）：/api/module-api/* 走 Bearer 模块 token + permissions 门禁，
+  // 与用户会话守卫分层（调用者是模块 Worker/SDK 代理，不是浏览器会话）。
+  registerModuleApiRoutes(app as unknown as Hono<{ Bindings: Bindings; Variables: ModuleAuthVariables }>);
   registerNotificationRoutes(routes);
   registerAuditRoutes(routes);
   registerSettingsRoutes(routes);

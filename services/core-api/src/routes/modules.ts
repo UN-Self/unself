@@ -4,12 +4,7 @@ import type { Context } from 'hono';
 import { z } from 'zod';
 
 import { getSigningRuntime } from '../keys';
-import {
-  capsFromManifest,
-  checkTokenGate,
-  issueModuleToken,
-  MODULE_TOKEN_ISSUER,
-} from '../token';
+import { checkTokenGate, issueModuleToken, MODULE_TOKEN_ISSUER } from '../token';
 import { listModules, ModuleRegistrationSchema, toggleModule, upsertModule } from '../registry';
 import { audit } from '../services/audit';
 import { configuredMailSender, deliverNotification } from '../services/notifications';
@@ -76,7 +71,7 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
     const issued = await issueModuleToken(
       runtime,
       { userId: session.uid, moduleId, name: session.name },
-      { issuer: MODULE_TOKEN_ISSUER, caps: capsFromManifest(gate.manifest!.manifest_json) },
+      { issuer: MODULE_TOKEN_ISSUER },
     );
     return c.json(issued);
   });

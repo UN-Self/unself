@@ -32,9 +32,7 @@ const helloManifest = {
   id: 'hello',
   route: '/m/hello',
   entry: 'https://team.example.com/m/hello/',
-  runtime: 'worker',
-  requires: ['identity'],
-  capabilities: ['counter'],
+  runtimes: ['worker'],
   version: '1.0.0',
 };
 
@@ -87,7 +85,7 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
     expect(await res.json()).toEqual({ error: 'module disabled' });
   });
 
-  it('合法请求签出 ES256 JWT：claims 正确、JWKS 可验、caps 进 payload', async () => {
+  it('合法请求签出 ES256 JWT：claims 正确、JWKS 可验、无 caps claim（#56 删除）', async () => {
     const env = await envWith();
     const db = createCoreDb();
     const cookie = await sessionCookieFor(env.JWT_PRIVATE_KEY, db);
@@ -101,18 +99,18 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
     const body = (await res.json()) as {
       token: string;
       expiresIn: number;
-      claims: { iss: string; sub: string; aud: string; caps: string[]; exp: number; iat: number };
+      claims: { iss: string; sub: string; aud: string; exp: number; iat: number };
     };
     expect(body.expiresIn).toBe(600);
     expect(body.claims.aud).toBe('hello'); // aud = 模块 id，不跨模块重放
     expect(body.claims.sub).toBe('u_1'); // sub = 核心内部用户 id
-    // caps 来自真库 manifest_json（不是替身手造行；真库行与响应 claims 必须一致）
+    // #56：caps claim 已删（连带 capsFromManifest）；签出面不再依赖 manifest.capabilities
+    expect(body.claims).not.toHaveProperty('caps');
     const row = db.first<{ manifest_json: string }>(
       'SELECT manifest_json FROM module_registry WHERE id = ?',
       'hello',
     );
     expect(row).not.toBeNull();
-    expect(body.claims.caps).toEqual(JSON.parse(row!.manifest_json).capabilities);
     expect(body.claims.exp - body.claims.iat).toBe(600); // 10 分钟
 
     // JWT 结构 + kid 头
@@ -135,7 +133,7 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
     const key = await importJWK(pub, 'ES256');
     const verified = await jwtVerify(body.token, key, { audience: 'hello' });
     expect(verified.payload.sub).toBe('u_1');
-    expect(verified.payload.caps).toEqual(['counter']);
+    expect(verified.payload).not.toHaveProperty('caps');
     expect(verified.protectedHeader.kid).toBe(header.kid);
   });
 
