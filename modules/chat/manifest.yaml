@@ -1,10 +1,37 @@
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: GPL-3.0-only
+# 模块契约 v1（docs/modules.md §3 字段冻结；决策 #56/#57）
+# entry 为占位：装配器覆写为实例内地址（§3）
+# storage=dedicated（决策 #55/#74）：专属 D1/KV/DO，tables 申报与 worker/schema-baseline.sql 一致
 id: chat
 route: /m/chat
-entry: http://localhost:8791/ # 占位：M0 后由 core-api 注册的运行时地址
-runtime: worker
-requires:
-  - identity
-capabilities:
-  - chat
+entry: http://localhost:8791/
+runtimes:
+  - worker
 version: 0.1.0
+description: EdgeChat 频道聊天（fork 自 aozorae/Edgechat，GPL-3.0-only）
+permissions:
+  - storage
+  - notify
+storage:
+  accepts:
+    - dedicated
+  preferred: dedicated
+tables:
+  - users
+  - channels
+  - channel_members
+  - messages
+  - user_blocks
+  - channel_pins
+  - message_reads
+  - site_settings
+  - registration_invites
+  - registration_invite_uses
+  - uploaded_files
+  - device_sessions
+  - realtime_tickets
+  - message_events
+  - message_event_compaction
+  - pending_r2_delete
+  - core_identities
+  - read_receipts
