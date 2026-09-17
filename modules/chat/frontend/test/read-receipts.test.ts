@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import MessageBubble from '../src/components/MessageBubble.vue'
@@ -36,6 +36,15 @@ const READ_AT = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1)
 const summary = (count: number, userIds: number[] = []): ReadReceiptsSummary => ({
   count,
   readBy: userIds.map((userId) => ({ userId, username: `u${userId}`, displayName: `用户${userId}`, readAt: READ_AT })),
+})
+
+// 夹具时间锚定（防日期漂移红）：readAt 固定 2026-09-16，时钟不钉则跨日后 formatMessageTime
+// 走「更早」分支渲染「9月16日」而非「10:00」——钉死 now 使断言与时钟解耦（2026-09-18 实锤）。
+beforeEach(() => {
+  vi.setSystemTime(new Date('2026-09-16T10:00:00'))
+})
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('气泡回执标签（#220）', () => {
