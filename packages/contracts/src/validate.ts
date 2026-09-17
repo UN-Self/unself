@@ -25,6 +25,10 @@ import {
   type ModuleManifest,
   type ModulePermission,
 } from './index';
+import { manifestYamlToCandidate, parseManifestYamlFields, type ManifestCandidate } from './manifest-yaml';
+
+export { manifestYamlToCandidate, parseManifestYamlFields };
+export type { ManifestCandidate };
 
 /** license 证据缺失或非法时的兜底标签。 */
 export const LICENSE_REQUIRED = 'LICENSE';
@@ -68,9 +72,14 @@ export function tableNamesFromSql(sql: string): string[] {
   return [...names];
 }
 
+/** manifest.yaml 文本（模块作者书写格式）→ 契约候选对象（§3 字段名，schema 直接入参）。 */
+export function manifestFromYamlText(manifestText: string): ManifestCandidate {
+  return manifestYamlToCandidate(parseManifestYamlFields(manifestText));
+}
+
 /** validate 输入：模块包在磁盘上的样子（目录 or 解包后的 tarball）。 */
 export interface ModulePackageInput {
-  /** manifest 原始 JSON 文本（先 raw-parse 出诊断，再做语义检查）。 */
+  /** manifest 声明文本：JSON（包内 manifest.json）或 YAML（仓库内 manifest.yaml）自动判别。 */
   manifestText: string;
   /** 包名（tarball 名 / 目录名 / source 里的 id 部分）；缺省 = 跳过一致性比对。 */
   packageName?: string;
@@ -82,21 +91,34 @@ export interface ModulePackageInput {
   workerText?: string;
 }
 
+/** JSON 解析失败转 Error 返回（不抛出，统一走诊断流）。 */
+function safeJsonParse(text: string): unknown | Error {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    return new Error(
+      `manifest.json 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 /** raw manifest 解析结果：schema 诊断 +（成功时的）manifest 对象。 */
 function parseManifestWithDiagnostics(manifestText: string): {
   diagnostics: ValidateDiagnostic[];
   manifest?: ModuleManifest;
 } {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(manifestText);
-  } catch (error) {
+  const trimmed = manifestText.trim();
+  const raw: unknown =
+    trimmed.startsWith('{')
+      ? safeJsonParse(manifestText)
+      : manifestFromYamlText(manifestText);
+  if (raw instanceof Error) {
     return {
       diagnostics: [
         {
           level: 'error',
           check: 'schema',
-          message: `manifest.json 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`,
+          message: `manifest 解析失败：${raw.message}`,
         },
       ],
     };
@@ -253,8 +275,10 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
   }
 
   // 增量变更不拦人（#57）：未知字段出 warning
-  try {
-    const raw = JSON.parse(input.manifestText) as Record<string, unknown>;
+  const rawRecord = input.manifestText.trim().startsWith('{')
+    ? safeJsonParse(input.manifestText)
+    : manifestFromYamlText(input.manifestText);
+  if (!(rawRecord instanceof Error) && typeof rawRecord === 'object' && rawRecord !== null) {
     const known = new Set([
       'id',
       'version',
@@ -269,7 +293,7 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
       'description',
       'icon',
     ]);
-    const unknown = Object.keys(raw).filter((k) => !known.has(k));
+    const unknown = Object.keys(rawRecord).filter((k) => !known.has(k));
     if (unknown.length > 0) {
       warnings.push({
         level: 'warning',
@@ -277,8 +301,6 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
         message: `未知字段被忽略（增量变更不拦人，#57）：${unknown.join(', ')}`,
       });
     }
-  } catch {
-    // JSON 已在上游报错
   }
 
   return { ok: errors.length === 0, errors, warnings };
