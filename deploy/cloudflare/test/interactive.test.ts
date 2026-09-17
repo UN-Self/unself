@@ -401,7 +401,7 @@ describe('collectToken（掩码采集，#249）', () => {
     const input = installFakeTtyAndStty(sink);
     let resolveToken: (v: string | null) => void = () => undefined;
     const done = new Promise<string | null>((r) => (resolveToken = r));
-    void collectToken({ ask: undefined as never, out: () => undefined }, true).then((v) => {
+    void collectToken({ out: () => undefined }, true).then((v) => {
       resolveToken(v);
       return v;
     });
@@ -414,7 +414,7 @@ describe('collectToken（掩码采集，#249）', () => {
   it('三次无效 → null；stty echo 仍在 finally 里恢复', { timeout: 10_000 }, async () => {
     const sink: { calls: string[][] } = { calls: [] };
     const input = installFakeTtyAndStty(sink);
-    const p = collectToken({ ask: undefined as never, out: () => undefined }, true);
+    const p = collectToken({ out: () => undefined }, true);
     await new Promise((r) => setTimeout(r, 120));
     for (const bad of ['x@y.z', '1'.repeat(40), '3'.repeat(40)]) {
       input.write(`${bad}\n`);
@@ -427,7 +427,7 @@ describe('collectToken（掩码采集，#249）', () => {
   it('ttyIn=false → 完全不碰终端（无 stty 调用）', { timeout: 10_000 }, async () => {
     const sink: { calls: string[][] } = { calls: [] };
     const input = installFakeTtyAndStty(sink);
-    const p = collectToken({ ask: undefined as never, out: () => undefined }, false);
+    const p = collectToken({ out: () => undefined }, false);
     await new Promise((r) => setTimeout(r, 60));
     input.write(`${TOKEN}\n`);
     expect(await p).toBe(TOKEN);
