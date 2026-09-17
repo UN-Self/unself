@@ -220,12 +220,6 @@ export function tokenProblem(token: string): string | null {
   return null;
 }
 
-/** 掩码提示文案：按回车前终端只显示前 4 位 + 长度，不回显明文（#249）。 */
-export function maskSecret(token: string): string {
-  const t = token.trim();
-  return `${t.slice(0, 4)}…（${t.length} 位，已隐藏）`;
-}
-
 /** CF token 深链接（官方模板 URL 格式，硬编码权限集，§5.5 ①）。 */
 const TOKEN_PERMISSIONS = [
   { key: 'workers_scripts', type: 'edit' },
