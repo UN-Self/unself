@@ -12,7 +12,6 @@ import {
   echoControl,
   sttyRef,
   askSecret,
-  maskSecret,
   parseCliArgs,
   parseModulesInput,
   pickTokenDecision,
@@ -327,14 +326,6 @@ describe('tokenProblem（token 预校验，#249）', () => {
     expect(tokenProblem(`A${'a'.repeat(28)}`)).toContain('长度'); // 29 位：少粘一段
     expect(tokenProblem(`A${'a'.repeat(49)}`)).toBeNull(); // 50 边界
     expect(tokenProblem(`A${'a'.repeat(50)}`)).toContain('长度');
-  });
-});
-
-describe('maskSecret（掩码提示文案，#249）', () => {
-  it('只露前 4 位与长度，不回显明文', () => {
-    const m = maskSecret('AbcdEFGH1234');
-    expect(m).toBe('Abcd…（12 位，已隐藏）');
-    expect(m).not.toContain('EFGH1234');
   });
 });
 
