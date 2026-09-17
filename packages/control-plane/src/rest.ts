@@ -60,7 +60,7 @@ export class RestD1ControlPlane implements ControlPlane {
 
   async issueSetupToken(generate: () => string): Promise<SetupTokenIssue> {
     const { results } = await this.exec.query<{ sealed: unknown; token: unknown }>(SETUP_STATUS_SQL);
-    const row = results[0] ?? {};
+    const row: { sealed: unknown; token: unknown } = results[0] ?? { sealed: 0, token: null };
     if (Number(row.sealed ?? 0) > 0) return { status: 'sealed' };
     const existing = typeof row.token === 'string' && row.token.length > 0 ? row.token : null;
     if (existing) return { status: 'reused', token: existing };
