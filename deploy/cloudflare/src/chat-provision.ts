@@ -7,17 +7,17 @@
  * - KV `unself-chat-sessions`：会话/实时票券（worker 绑定名 SESSIONS）；
  * - R2 `unself-chat-files`：附件（worker 绑定名 FILES；可选增强，缺绑定时代码判空降级）；
  * - Secret `EDGECHAT_ENCRYPTION_KEYRING`：AES-256-GCM 消息加密密钥环，缺失时本地生成注入
- *   （已有绝不覆盖——与 core JWT_PRIVATE_KEY 同款幂等纪律）；
- * - 部署配置 `.deploy/cloudflare/modules/chat.wrangler.jsonc`：无条件重写（#162/#194 纪律）。
+ *   （已有绝不覆盖——与 core JWT_PRIVATE_KEY 同款幂等纪律）。
+ * #244：供给全部走 CF REST（#65），部署配置仅作生成物核对（不再是 wrangler 的输入）。
  */
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { ensureR2Bucket } from './provision';
+import { ensureD1, ensureKvNamespace, ensureR2Bucket } from './rest';
+import type { RestClient } from './rest';
 import { stripJsonc } from './config';
 import type { UnselfConfig } from './config';
-import type { Wrangler } from './wrangler';
 
 /** chat 专属资源名（chat- 前缀，决策 #50）。 */
 export const CHAT_MODULE_ID = 'chat';
@@ -42,95 +42,42 @@ const KV_BINDING = 'SESSIONS';
 /** worker 侧 R2 绑定名（可选增强；装配端始终供给，缺绑定降级逻辑不再触发）。 */
 const R2_BINDING = 'FILES';
 
-/** chat D1 描述（parseD1List 同形状）。 */
-export interface NamedId {
-  name: string;
-  uuid: string;
-}
-
-/** 解析 `wrangler kv namespace list` 输出：JSON 数组 [{id, title}]；容忍日志前缀与空。 */
-export function parseKvNamespaceList(stdout: string): NamedId[] {
-  const start = stdout.lastIndexOf('[');
-  if (start < 0) return [];
-  try {
-    const parsed: unknown = JSON.parse(stdout.slice(start));
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((row) => row as Record<string, unknown>)
-      .filter((row) => typeof row.title === 'string' && typeof row.id === 'string')
-      .map((row) => ({ name: row.title as string, uuid: row.id as string }));
-  } catch {
-    return [];
-  }
-}
-
-/** 解析 `wrangler kv namespace create` 输出抓 namespace id（36 位 uuid）。 */
-export function parseKvCreateId(stdout: string): string | null {
-  return /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(stdout)?.[1] ?? null;
-}
-
 /**
- * 确保 chat 专属 D1/KV 存在，返回 id。已存在（list 命中）→ 不创建（幂等）；
- * create 撞车（并发/瞬时 list 失败）→ 回查列表自愈。
+ * 确保 chat 专属 D1/KV 存在，返回 id（REST 查漏补建，幂等）。
  */
 export async function ensureChatResources(
-  wrangler: Wrangler,
+  client: RestClient,
+  accountId: string,
   log: (msg: string) => void,
 ): Promise<{ dbId: string; kvId: string }> {
-  // ---- D1 ----
-  const d1Res = await wrangler.tryRun(['d1', 'list', '--json']);
-  const { parseD1List } = await import('./provision');
-  const dbs = d1Res.ok ? parseD1List(d1Res.stdout) : [];
-  let dbId = dbs.find((db) => db.name === CHAT_DB_NAME)?.uuid ?? '';
-  if (dbId) {
-    log(`D1 ${CHAT_DB_NAME} 已存在（${dbId}）`);
-  } else {
-    const created = await wrangler.run(['d1', 'create', CHAT_DB_NAME]);
-    dbId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(created.stdout)?.[1]
-      ?? parseD1List(created.stdout)[0]?.uuid
-      ?? '';
-    if (!dbId) throw new Error(`D1 ${CHAT_DB_NAME} 创建输出未含 database_id`);
-    log(`D1 ${CHAT_DB_NAME} 已创建（${dbId}）`);
-  }
-
-  // ---- KV ----
-  const kvRes = await wrangler.tryRun(['kv', 'namespace', 'list']);
-  const kvs = kvRes.ok ? parseKvNamespaceList(kvRes.stdout) : [];
-  let kvId = kvs.find((ns) => ns.name === CHAT_KV_NAME)?.uuid ?? '';
-  if (kvId) {
-    log(`KV ${CHAT_KV_NAME} 已存在（${kvId}）`);
-  } else {
-    const created = await wrangler.run(['kv', 'namespace', 'create', CHAT_KV_NAME]);
-    kvId = parseKvCreateId(created.stdout) ?? '';
-    if (!kvId) throw new Error(`KV ${CHAT_KV_NAME} 创建输出未含 namespace_id`);
-    log(`KV ${CHAT_KV_NAME} 已创建（${kvId}）`);
-  }
+  const dbId = await ensureD1(client, accountId, CHAT_DB_NAME, log);
+  const kvId = await ensureKvNamespace(client, accountId, CHAT_KV_NAME, log);
   return { dbId, kvId };
 }
 
-/** 首建灌基线 schema：`d1 execute --file schema-baseline.sql --remote`（幂等：全 IF NOT EXISTS + OR IGNORE 种子）。 */
+/** chat 专属 R2 桶查漏（与平台桶同款纪律：只建不绑消费）。 */
+export async function ensureChatR2Bucket(
+  client: RestClient,
+  accountId: string,
+  log: (msg: string) => void,
+): Promise<'exists' | 'created'> {
+  return ensureR2Bucket(client, accountId, CHAT_R2_NAME, log);
+}
+
+/** 基线 schema 灌入（REST import，幂等：全 IF NOT EXISTS + OR IGNORE 种子）。 */
 export async function applyChatSchema(input: {
-  wrangler: Wrangler;
+  client: RestClient;
+  accountId: string;
+  chatDbId: string;
   /** 模块包根（modules/chat）。 */
   moduleDir: string;
-  /** 生成迁移配置路径（真实 database_id；migrations_dir 仅占位不使用）。 */
-  configPath: string;
   log: (msg: string) => void;
 }): Promise<void> {
   const schemaPath = join(input.moduleDir, 'worker', 'schema-baseline.sql');
-  await input.wrangler.run([
-    'd1', 'execute', CHAT_DB_NAME, '--remote', '--config', input.configPath,
-    '-y', '--file', schemaPath, '--json',
-  ], { silent: true });
-  input.log(`chat 基线 schema 已应用（${CHAT_DB_NAME} ← worker/schema-baseline.sql）`);
-}
-
-/** chat 专属 R2 桶查漏（与平台桶同款纪律：只建不绑消费，缺附件桶 worker 判空降级）。 */
-export function ensureChatR2Bucket(
-  wrangler: Wrangler,
-  log: (msg: string) => void,
-): Promise<'exists' | 'created'> {
-  return ensureR2Bucket(wrangler, CHAT_R2_NAME, log);
+  const { d1Import } = await import('./rest');
+  const sqlText = await readFile(schemaPath, 'utf8');
+  const report = await d1Import(input.client, input.accountId, input.chatDbId, sqlText);
+  input.log(`chat 基线 schema 已应用（${CHAT_DB_NAME} ← worker/schema-baseline.sql，${report.numQueries} 条语句）`);
 }
 
 /**
@@ -183,7 +130,7 @@ export async function readChatPackageConfig(moduleDir: string): Promise<ChatPack
 }
 
 /**
- * 生成 chat 部署配置（`.deploy/cloudflare/modules/chat.wrangler.jsonc`，调用方无条件重写）：
+ * 生成 chat 部署描述（`.deploy/cloudflare/modules/chat.wrangler.jsonc`，调用方无条件重写）：
  * 与 hello 同款骨架（wrapper main/ASSETS/zone 路由/CORE_JWKS_JSON），专属差异：
  * D1=chat 库、KV=会话命名空间、R2=附件桶、DO 三绑定 + SQLite 迁移、vars=包配置直通。
  * 同输入字节级一致（确定性 = 幂等前提）。

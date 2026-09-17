@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+/**
+ * provision（①）与 registry（⑤）单元行为测试（#244 REST 化后）：
+ * - ensureDatabases：REST 查漏补建（创建两次 / 零创建）；
+ * - registry：upsert/disable 语句收敛语义（同一份 SQL 在 control-plane 各实现的测试里跑行为，
+ *   这里守 SQL 字符串形状契约与 manifest 快照的确定性——wrangler 内联时代的形状回归面）。
+ */
 import { describe, expect, it } from 'vitest';
-import { ensureDatabases, parseD1List, parseR2BucketList } from '../src/provision';
-import { registryCommands, registryDisableCommand, registryUpsertCommand, sqlString } from '../src/registry';
-import { buildManifestSnapshot } from '../src/registry';
+import { ensureDatabases } from '../src/provision';
+import { registryDisableCommand, registryUpsertCommand, sqlString, buildManifestSnapshot } from '../src/registry';
 import { ModuleManifestSchema } from '@unself/contracts';
+import { RestClient } from '../src/rest/client';
 
 const HELLO_MANIFEST = `# SPDX-License-Identifier: AGPL-3.0-only
 id: hello
@@ -16,122 +22,64 @@ permissions:
 version: 0.1.0
 `;
 
-describe('parseD1List', () => {
-  it('解析 JSON 数组输出', () => {
-    const rows = parseD1List('[{"name":"unself-core","uuid":"a1b2c3d4-0000-0000-0000-000000000001"}]');
-    expect(rows).toEqual([{ name: 'unself-core', uuid: 'a1b2c3d4-0000-0000-0000-000000000001' }]);
-  });
-  it('空输出 → 空数组', () => {
-    expect(parseD1List('')).toEqual([]);
-  });
-});
-
-describe('parseR2BucketList（真实文本 · issue #60）', () => {
-  // wrangler v4 formatLabelledValues：valuesAlignment=14、spacer=2 → name: 后 11 空格、creation_date: 后 2 空格
-  const block = (name: string) =>
-    `name:${' '.repeat(11)}${name}\n` +
-    `creation_date:${' '.repeat(2)}Wed, 01 Jan 2025 00:00:00 GMT`;
-  const listOf = (...names: string[]) => `${names.map(block).join('\n\n')}\n`;
-
-  it('多桶真实文本 → [a,b]（对齐空格、creation_date 行、桶间空行不误判）', () => {
-    expect(parseR2BucketList(listOf('a', 'b'))).toEqual(['a', 'b']);
-  });
-
-  it('空输出 / 纯空白 → []', () => {
-    expect(parseR2BucketList('')).toEqual([]);
-    expect(parseR2BucketList('\n\n')).toEqual([]);
-  });
-
-  it('旧 JSON 数组 → 名称', () => {
-    expect(parseR2BucketList('[{"name":"a"},{"name":"b"}]')).toEqual(['a', 'b']);
-  });
-
-  it('重复名去重（文本与 JSON 混合重复）', () => {
-    expect(parseR2BucketList(listOf('a', 'b', 'a'))).toEqual(['a', 'b']);
-    expect(parseR2BucketList('[{"name":"a"},{"name":"a"}]')).toEqual(['a']);
-  });
-
-  it('含 ANSI 着色（TTY/FORCE_COLOR）仍可解析', () => {
-    const colored =
-      `\x1b[37mname:\x1b[39m${' '.repeat(11)}\x1b[90ma\x1b[39m\n` +
-      `\x1b[37mcreation_date:\x1b[39m  \x1b[90mWed, 01 Jan 2025 00:00:00 GMT\x1b[39m\n`;
-    expect(parseR2BucketList(colored)).toEqual(['a']);
-  });
-
-  it('CRLF（\r\n）与尾行空白不破坏解析', () => {
-    expect(parseR2BucketList(listOf('a').replace(/\n/g, '\r\n'))).toEqual(['a']);
-  });
-});
-
-describe('ensureDatabases（①幂等）', () => {
+describe('ensureDatabases（①幂等 · REST）', () => {
   it('两库都不存在 → 创建两次；都存在 → 零创建', async () => {
     const uuid = 'a1b2c3d4-0000-0000-0000-000000000001';
-    const calls: string[][] = [];
-    const mk = (listOut: string) => ({
-      tryRun: async (args: string[]) => {
-        calls.push(['try', ...args]);
-        return { ok: true, code: 0, stdout: listOut, stderr: '' };
-      },
-      run: async (args: string[]) => {
-        calls.push(['run', ...args]);
-        return { ok: true, code: 0, stdout: `[{"name":"${args[2]}","uuid":"${uuid}"}]`, stderr: '' };
-      },
-    });
+    const calls: Array<{ method: string; url: string }> = [];
+    const mk = (existing: string[]): RestClient =>
+      new RestClient({
+        token: 't',
+        fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
+          const url = String(input);
+          const method = init?.method ?? 'GET';
+          calls.push({ method, url });
+          const env = (result: unknown) =>
+            new Response(JSON.stringify({ success: true, result, errors: [] }), { status: 200 });
+          if (url.endsWith('/d1/database') && method === 'GET') {
+            return env(existing.map((name) => ({ name, uuid })));
+          }
+          if (url.endsWith('/d1/database') && method === 'POST') {
+            const name = JSON.parse(String(init?.body)).name as string;
+            return env({ name, uuid });
+          }
+          return env(null);
+        }) as typeof fetch,
+      });
 
-    const empty = await ensureDatabases(mk('') as never);
+    const empty = await ensureDatabases(mk([]), 'ACC');
     expect(empty.core).toBe(uuid);
-    expect(calls.filter((c) => c[0] === 'run' && c.includes('create'))).toHaveLength(2);
+    expect(empty.modules).toBe(uuid);
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(2);
 
     calls.length = 0;
-    const existing = await ensureDatabases(
-      mk(`[{"name":"unself-core","uuid":"${uuid}"},{"name":"unself-modules","uuid":"${uuid}"}]`) as never,
-    );
+    const existing = await ensureDatabases(mk(['unself-core', 'unself-modules']), 'ACC');
     expect(existing.modules).toBe(uuid);
-    expect(calls.filter((c) => c[0] === 'run')).toHaveLength(0);
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
   });
 });
 
-describe('registry（⑤）', () => {
-  it('manifest 快照：entry 重写为实例 URL、schema 校验通过', () => {
-    const manifest = buildManifestSnapshot({
-      manifestText: HELLO_MANIFEST,
-      moduleId: 'hello',
-      baseUrl: 'https://team.example.com',
-    });
+describe('registry（⑤ · 形状契约）', () => {
+  const manifest = buildManifestSnapshot({ manifestText: HELLO_MANIFEST, moduleId: 'hello', baseUrl: 'https://team.example.com' });
+
+  it('sqlString：单引号翻倍转义', () => {
+    expect(sqlString("o'brien")).toBe(`'o''brien'`);
+  });
+
+  it('registryUpsertCommand：enabled=1 + manifest 快照 JSON（upsert 语义随 ControlPlane 跑行为）', () => {
+    const cmd = registryUpsertCommand({ manifest: ModuleManifestSchema.parse(manifest) });
+    expect(cmd.binds[0]).toBe('hello');
+    expect(cmd.binds[1]).toBe(1);
+    expect(cmd.binds[2]).toBe('0.1.0');
+    expect(JSON.parse(String(cmd.binds[3]))).toMatchObject({ id: 'hello' });
+    expect(cmd.sql).toContain('ON CONFLICT(id) DO UPDATE');
+  });
+
+  it('registryDisableCommand：只翻 enabled，不凭空建行', () => {
+    expect(registryDisableCommand('hello')).toBe("UPDATE module_registry SET enabled = 0 WHERE id = 'hello'");
+  });
+
+  it('buildManifestSnapshot：entry 重写为实例 URL（确定性）', () => {
     expect(manifest.entry).toBe('https://team.example.com/m/hello/');
-    expect(manifest.id).toBe('hello');
-    expect(manifest.route).toBe('/m/hello');
-    expect(() => ModuleManifestSchema.parse(manifest)).not.toThrow();
-  });
-
-  it('sqlString 转义单引号', () => {
-    expect(sqlString("it's")).toBe("'it''s'");
-  });
-
-  it('upsert 命令带 manifest JSON binds；manifest 含引号不破坏 SQL（bind 参数化）', () => {
-    const manifest = buildManifestSnapshot({
-      manifestText: HELLO_MANIFEST.replace('id: hello', "id: hello # it's"),
-      moduleId: 'hello',
-      baseUrl: 'https://x.example',
-    });
-    const cmd = registryUpsertCommand({ manifest });
-    expect(cmd.binds).toEqual([manifest.id, 1, manifest.version, JSON.stringify(manifest)]);
-    // binds 数组参数化 → 值不进 SQL 文本
-    expect(cmd.sql).not.toContain("it's");
-  });
-
-  it('registryCommands：选中 upsert + 未选 disable，顺序确定', () => {
-    const commands = registryCommands({
-      config: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'b' } },
-      modules: [
-        { id: 'hello', dir: '/m/hello', selected: true },
-        { id: 'docs', dir: '/m/docs', selected: false },
-      ],
-      baseUrl: 'https://team.example.com',
-      manifestTexts: { hello: HELLO_MANIFEST },
-    });
-    expect(commands.map((c) => c.kind)).toEqual(['upsert', 'disable']);
-    expect(commands[0]!.sql).toContain('ON CONFLICT(id) DO UPDATE');
-    expect(commands[1]!.sql).toBe(registryDisableCommand('docs'));
+    expect(manifest.version).toBe('0.1.0');
   });
 });

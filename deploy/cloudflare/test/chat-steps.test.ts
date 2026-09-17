@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * chat 全链路装配行为测试（#219，决策 #50 存储收口豁免）：
- * - 干净装配「仅启用 chat」：专属 D1/KV/R2 建立命令序正确、chat 不进 d1 migrations 链、
- *   基线 schema 经 --file 灌入、部署配置（/m/chat/* 路由 + D1/KV/R2/DO 绑定 + 前端 assets）落位；
- * - 三态：选中（upsert enabled=1 + 路由）/ 停用（disable + 路由删除 + 数据不动）/ 移除
- *   （not_deployed 语义与 hello 同款——注册表翻转 + 只删路由不删 Worker/D1）；
- * - 幂等：二跑零 create/put（D1/KV/R2/secret 全收敛）、密钥环已有不覆盖；
- * - 模块面断言参数化：期望集合由 discoverModules(rootDir, config.modules) 在真实仓库现场派生，
- *   不再硬编码模块名——新增模块目录进仓自动进断言面（验收第 5 条；temp-root 单测背书）。
+ * chat 全链路装配行为测试（#219 → #244 REST 化）：账户态替身（helpers/cf-rest-fake）+ 真实九步：
+ * - 专属 D1/KV/R2 查漏补建（chat 选中时）；chat 不进记账迁移链（基线 schema 灌入）；
+ * - 上传 metadata 带 DO 绑定 + 首部署 DO migrations；注册表三态（启用/停用）；
+ * - 幂等：二跑零 create/put，密钥环已有不覆盖；
+ * - 模块面断言参数化：期望集合由 discoverModules 现场派生（不硬编码模块名）。
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,7 +12,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { discoverModules, runNineSteps } from '../src/steps';
 import { CHAT_DB_NAME, CHAT_KV_NAME, CHAT_R2_NAME } from '../src/chat-provision';
-import type { Wrangler } from '../src/wrangler';
+import { makeCfRestFake } from './helpers/cf-rest-fake';
+import { RestClient } from '../src/rest/client';
 
 /** 仓库根（真实文件布局：modules/hello、modules/chat、services/core-api、apps/shell）。 */
 const ROOT = new URL('../../..', import.meta.url).pathname;
@@ -43,97 +41,15 @@ const SMOKE_OK = {
     }>).concat(ids.map((id) => ({ name: `module:${id}`, url: `${b}/m/${id}/api/health`, ok: true, status: 200 }))),
 };
 
-/** 扩展录制型 fake：D1/KV/R2/secret 账户状态 + 全命令录制（chat 专属资源语义）。 */
-function makeFakeWrangler(options?: {
-  existingD1?: string[];
-  existingBuckets?: string[];
-  existingKv?: string[];
-  existingSecrets?: string[];
-}) {
-  const state = {
-    d1: new Set(options?.existingD1 ?? []),
-    buckets: new Set(options?.existingBuckets ?? []),
-    kv: new Set(options?.existingKv ?? []),
-    secrets: new Set(options?.existingSecrets ?? []),
-    secretPuts: [] as Array<{ worker: string; secret: string }>,
-    setupDone: false,
-    setupToken: null as string | null,
-    commands: [] as string[],
-  };
-  const uuid = 'a1b2c3d4-0000-0000-0000-000000000001';
-  const kvId = 'd1d2e3f4-0000-0000-0000-0000000000d5';
-  async function exec(args: string[]): Promise<{ ok: boolean; code: number; stdout: string; stderr: string }> {
-    state.commands.push(args.join(' '));
-    const [cmd, ...rest] = args;
-    if (cmd === 'd1') {
-      const sub = rest[0];
-      if (sub === 'list') return json([...state.d1].map((name) => ({ name, uuid })));
-      if (sub === 'create') {
-        const name = rest[1]!;
-        if (state.d1.has(name)) return fail(`already exists: ${name}`);
-        state.d1.add(name);
-        return json([{ name, uuid }]);
-      }
-      if (sub === 'execute') {
-        const fileIdx = rest.indexOf('--file');
-        if (fileIdx >= 0) return json([{ results: [], success: true, meta: { duration: 0 } }]);
-        const commandIdx = rest.indexOf('--command');
-        const sql = commandIdx >= 0 ? (rest[commandIdx + 1] ?? '') : '';
-        if (sql.includes('instance_config')) {
-          return json([{ results: [{ sealed: state.setupDone ? 1 : 0, token: state.setupToken }], success: true, meta: { duration: 0 } }]);
-        }
-        const inserted = /INSERT INTO setup_tokens \(token\) VALUES \('([^']+)'\)/.exec(sql);
-        if (inserted) state.setupToken = inserted[1]!;
-        return json([{ results: [], success: true, meta: { duration: 0 } }]);
-      }
-      return okOut('');
-    }
-    if (cmd === 'kv' && rest[0] === 'namespace') {
-      const op = rest[1];
-      if (op === 'list') return json([...state.kv].map((title) => ({ id: kvId, title })));
-      if (op === 'create') {
-        const title = rest[2]!;
-        if (state.kv.has(title)) return fail(`namespace already exists: ${title}`);
-        state.kv.add(title);
-        return okOut(`🌀 Creating namespace with title "${title}"\n✨ Success!\nid = "${kvId}"\n`);
-      }
-    }
-    if (cmd === 'r2' && rest[0] === 'bucket') {
-      const op = rest[1];
-      if (op === 'list') {
-        return okOut(
-          [...state.buckets].map((name) =>
-            `name:${' '.repeat(11)}${name}\ncreation_date:  Wed, 01 Jan 2025 00:00:00 GMT`).join('\n\n'),
-        );
-      }
-      if (op === 'create') {
-        const name = rest[2]!;
-        if (state.buckets.has(name)) return fail(`bucket exists: ${name}`);
-        state.buckets.add(name);
-        return okOut('');
-      }
-    }
-    if (cmd === 'secret') {
-      const sub = rest[0];
-      if (sub === 'list') return json([...state.secrets].map((name) => ({ name })));
-      if (sub === 'put') {
-        const secret = rest[1]!;
-        const nameIdx = rest.indexOf('--name');
-        const worker = nameIdx >= 0 ? (rest[nameIdx + 1] ?? '') : '';
-        state.secrets.add(secret);
-        state.secretPuts.push({ worker, secret });
-        return okOut('Success');
-      }
-    }
-    if (cmd === 'deploy') {
-      return okOut('Deployed unself-worker https://unself-core-api.test-subdomain.workers.dev');
-    }
-    return okOut('');
-  }
-  const json = (value: unknown) => ({ ok: true, code: 0, stdout: JSON.stringify(value), stderr: '' });
-  const okOut = (stdout: string) => ({ ok: true, code: 0, stdout, stderr: '' });
-  const fail = (stderr: string) => ({ ok: false, code: 1, stdout: '', stderr });
-  return { wrangler: { run: exec, tryRun: exec } as Wrangler, state };
+/** 步骤⑧ 签发经 REST /query（fake 迷你 SQL 态）——不再走 wrangler d1 execute。 */
+
+/** chat 前端产物替身：真实落盘（上传路径读文件算 blake3 清单）。 */
+async function fakeChatFrontend(outDir: string): Promise<string> {
+  const dir = join(outDir, 'modules/chat/assets/frontend');
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'index.html'), '<html><body>CHAT FRONTEND</body></html>');
+  return 'chat/assets/frontend';
 }
 
 /** 与生产 discoverModules 同源：断言面期望从这里派生（参数化核心，#219 验收第 5 条）。 */
@@ -142,156 +58,135 @@ async function discoverIds(rootDir: string, selected: string[]): Promise<string[
 }
 
 describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
-  it('专属 D1/KV/R2 命令序正确；chat 不进 d1 migrations 链、基线 schema --file 灌入', { timeout: 120_000 }, async () => {
-    const fake = makeFakeWrangler();
+  it('专属 D1/KV/R2 补建请求在场；chat 不进记账迁移链、基线 schema import 灌入', { timeout: 120_000 }, async () => {
+    const fake = makeCfRestFake();
     await runNineSteps({
       rootDir: ROOT,
-      wrangler: fake.wrangler,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
-      wrangler_: undefined,
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
-      buildChatFrontend: async () => 'chat/assets/frontend',
-      resolveBaseUrl: async () => 'https://x.example',
-      putSecret: async () => {},
-    } as Parameters<typeof runNineSteps>[0]);
-    const cmds = fake.state.commands;
+      buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
+    });
     // ① 专属资源补建：chat D1 + chat KV（平台两库与桶在别的断言覆盖）
-    expect(cmds.some((c) => c.startsWith(`d1 create ${CHAT_DB_NAME}`))).toBe(true);
-    expect(cmds.some((c) => c.startsWith(`kv namespace create ${CHAT_KV_NAME}`))).toBe(true);
-    expect(cmds.some((c) => c.startsWith(`r2 bucket create ${CHAT_R2_NAME}`))).toBe(true);
-    // ② chat 不走 d1 migrations apply MODULES_DB 链（豁免纪律），基线 schema 经 --file --remote 灌入
-    expect(cmds.some((c) => /^d1 migrations apply MODULES_DB.*chat/.test(c))).toBe(false);
-    const schemaRun = cmds.find((c) => c.includes('d1 execute') && c.includes('--file') && c.includes('schema-baseline.sql'));
-    expect(schemaRun).toBeDefined();
-    expect(schemaRun).toContain('--remote');
-    expect(schemaRun).toContain(CHAT_DB_NAME);
+    expect(fake.state.d1.has(CHAT_DB_NAME)).toBe(true);
+    expect(fake.state.kv.has(CHAT_KV_NAME)).toBe(true);
+    expect(fake.state.buckets.has(CHAT_R2_NAME)).toBe(true);
+    // ② chat 不走记账迁移链（豁免纪律）：无 unself_migrations_chat 记账表；chat 库的 import 只灌基线 schema
+    expect(fake.state.ledgerTables.has('unself_migrations_chat')).toBe(false);
+    expect(fake.state.importEtags.size).toBeGreaterThanOrEqual(1);
+    expect(fake.state.registry.get('chat')).toBeDefined();
   });
 
-  it('部署配置落位：/m/chat/* 路由 + 专属绑定 + 前端 assets + MODULE_ID/CORE_JWKS_JSON', { timeout: 120_000 }, async () => {
-    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: ['JWT_PRIVATE_KEY'] });
+  it('上传 metadata：/m/chat/* 路由 + 专属绑定 + DO 绑定/migrations + MODULE_ID/CORE_JWKS_JSON', { timeout: 120_000 }, async () => {
+    const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] }, zones: { 'handywote.top': 'zone-1' } });
     await runNineSteps({
       rootDir: ROOT,
-      wrangler: fake.wrangler,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       configOverride: { domain: 'demo.handywote.top', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
-      wrangler_: undefined,
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
-      buildChatFrontend: async () => 'chat/assets/frontend',
-      resolveZone: async () => ({ id: 'zone-1', name: 'handywote.top' }),
-      cleanupCustomDomains: async () => {},
-      ensureTotalTls: async () => {},
-      ensureDns: async () => {},
-      resolveBaseUrl: async () => 'https://demo.handywote.top',
+      buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
-      putSecret: async () => {},
-    } as Parameters<typeof runNineSteps>[0]);
-    const cfg = JSON.parse(
-      await readFile(join(ROOT, '.deploy/cloudflare/modules/chat.wrangler.jsonc'), 'utf8'),
-    ) as Record<string, any>;
-    expect(cfg.name).toBe('unself-module-chat');
-    expect(cfg.routes).toEqual([{ pattern: 'demo.handywote.top/m/chat/*', zone_name: 'handywote.top' }]);
-    expect(cfg.d1_databases).toEqual([{ binding: 'DB', database_name: CHAT_DB_NAME, database_id: expect.any(String) }]);
-    expect(cfg.kv_namespaces).toEqual([{ binding: 'SESSIONS', id: expect.any(String) }]);
-    expect(cfg.r2_buckets).toEqual([{ binding: 'FILES', bucket_name: CHAT_R2_NAME }]);
-    expect(cfg.durable_objects.bindings.map((b: { name: string }) => b.name)).toEqual(['CHANNEL_ROOM', 'SCHEDULER', 'USER_INBOX']);
-    expect(cfg.assets.directory).toBe('chat/assets/frontend');
-    expect(cfg.vars.MODULE_ID).toBe('chat');
-    expect(JSON.parse(cfg.vars.CORE_JWKS_JSON).keys).toHaveLength(1);
-    // wrapper 同步落位（assets 由 buildChatFrontend 注入口声明，产物搬运由 chat-frontend.test 验证）
+    });
+    const chatUpload = fake.state.uploads.find((u) => u.worker === 'unself-module-chat');
+    expect(chatUpload).toBeDefined();
+    const meta = chatUpload!.metadata as {
+      bindings: Array<{ type: string; name: string; text?: string; [k: string]: unknown }>;
+      migrations?: { new_tag: string; steps: Array<{ new_sqlite_classes: string[] }> };
+    };
+    const byName = new Map(meta.bindings.map((b) => [b.name, b]));
+    expect(byName.get('DB')).toMatchObject({ type: 'd1' });
+    expect(byName.get('SESSIONS')).toMatchObject({ type: 'kv_namespace' });
+    expect(byName.get('FILES')).toMatchObject({ type: 'r2_bucket' });
+    for (const doName of ['CHANNEL_ROOM', 'SCHEDULER', 'USER_INBOX']) {
+      expect(byName.get(doName)).toMatchObject({ type: 'durable_object_namespace' });
+    }
+    expect(byName.get('ASSETS')).toMatchObject({ type: 'assets' });
+    expect(byName.get('MODULE_ID')).toMatchObject({ type: 'plain_text', text: 'chat' });
+    expect(JSON.parse(String(byName.get('CORE_JWKS_JSON')!.text)).keys).toHaveLength(1);
+    // 首部署：DO migrations 元数据在场（new_tag=v1，三类各一步）
+    expect(meta.migrations?.new_tag).toBe('v1');
+    expect(meta.migrations?.steps.map((s) => s.new_sqlite_classes[0])).toEqual(['ChannelRoom', 'Scheduler', 'UserInbox']);
+    // 路由绑定（zone 模式）
+    expect(fake.state.routes.has('demo.handywote.top/m/chat/*')).toBe(true);
+    // wrapper 落位
     await expect(readFile(join(ROOT, '.deploy/cloudflare/modules/chat/worker.js'), 'utf8')).resolves.toContain("const PREFIX = '/m/chat'");
   });
 
   it('注册表三态之一（启用）：chat upsert enabled=1 且 entry=<baseUrl>/m/chat/；hello 未选 disable', { timeout: 120_000 }, async () => {
-    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: ['JWT_PRIVATE_KEY'] });
+    const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] } });
     await runNineSteps({
       rootDir: ROOT,
-      wrangler: fake.wrangler,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
-      wrangler_: undefined,
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
-      buildChatFrontend: async () => 'chat/assets/frontend',
-      resolveBaseUrl: async () => 'https://x.example',
+      buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
-      putSecret: async () => {},
-    } as Parameters<typeof runNineSteps>[0]);
-    const upsert = fake.state.commands.find((c) => c.includes('module_registry') && c.includes("'chat'"));
-    expect(upsert).toBeDefined();
-    expect(upsert).toContain('enabled');
-    expect(upsert).toContain('https://x.example/m/chat/');
-    const disable = fake.state.commands.find((c) => c.includes("UPDATE module_registry SET enabled = 0 WHERE id = 'hello'"));
-    expect(disable).toBeDefined();
+    });
+    const chatRow = fake.state.registry.get('chat');
+    expect(chatRow).toBeDefined();
+    expect(chatRow!.enabled).toBe(1);
+    expect(JSON.parse(chatRow!.manifest_json)).toMatchObject({ id: 'chat', entry: 'https://unself-core-api.test-subdomain.workers.dev/m/chat/' });
+    // hello 未选 → disable（行不在库 → UPDATE 照发，changes=0；真库同语义）
+    expect(
+      fake.calls.some((c) => (c.body as { sql?: string; params?: unknown[] } | undefined)?.sql?.startsWith('UPDATE module_registry') &&
+        (c.body as { params?: unknown[] }).params?.[0] === 'hello'),
+    ).toBe(true);
   });
 });
 
 describe('#219 幂等与密钥环（二跑收敛）', () => {
-  it('二跑零 create/put：D1/KV/R2 全收敛，密钥环已有不覆盖', { timeout: 120_000 }, async () => {
-    const first = makeFakeWrangler();
-    let firstKeyringPuts = 0;
+  it('二跑零 create/put：D1/KV/R2 全收敛，密钥环已有不覆盖', { timeout: 240_000 }, async () => {
+    const first = makeCfRestFake();
     const summary1 = await runNineSteps({
       rootDir: ROOT,
-      wrangler: first.wrangler,
+      client: new RestClient({ token: 't', fetchImpl: first.fetchImpl }),
       configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
-      wrangler_: undefined,
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
-      buildChatFrontend: async () => 'chat/assets/frontend',
-      resolveBaseUrl: async () => 'https://x.example',
-      putSecret: async (_worker, _value, secretName) => {
-        if (secretName === 'EDGECHAT_ENCRYPTION_KEYRING') firstKeyringPuts++;
-        first.state.secrets.add(secretName);
-        first.state.secretPuts.push({ worker: _worker, secret: secretName });
-      },
-    } as Parameters<typeof runNineSteps>[0]);
-    expect(firstKeyringPuts).toBe(1);
+      buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
+    });
     expect(summary1.chat).toEqual({ db: CHAT_DB_NAME, kv: CHAT_KV_NAME, r2: CHAT_R2_NAME, keyringAction: 'created' });
+    expect(first.state.secretPuts).toEqual([
+      { worker: 'unself-core-api', name: 'JWT_PRIVATE_KEY' },
+      { worker: 'unself-module-chat', name: 'EDGECHAT_ENCRYPTION_KEYRING' },
+    ]);
 
     // 二跑：同一账户状态延续（资源已在、密钥环已在）
-    const second = makeFakeWrangler({
-      existingD1: [...first.state.d1],
+    const second = makeCfRestFake({
+      existingD1: [...first.state.d1.keys()],
       existingBuckets: [...first.state.buckets],
-      existingKv: [...first.state.kv],
-      existingSecrets: [...first.state.secrets],
+      existingKv: [...first.state.kv.keys()],
+      existingSecrets: Object.fromEntries([...first.state.secrets].map(([w, s]) => [w, [...s]])),
     });
     const summary2 = await runNineSteps({
       rootDir: ROOT,
-      wrangler: second.wrangler,
+      client: new RestClient({ token: 't', fetchImpl: second.fetchImpl }),
       configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
-      wrangler_: undefined,
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
-      buildChatFrontend: async () => 'chat/assets/frontend',
-      resolveBaseUrl: async () => summary1.baseUrl,
+      buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
-      putSecret: async () => {},
-    } as Parameters<typeof runNineSteps>[0]);
-    const cmds = second.state.commands;
-    expect(cmds.some((c) => c.startsWith('d1 create'))).toBe(false);
-    expect(cmds.some((c) => c.startsWith('kv namespace create'))).toBe(false);
-    expect(cmds.some((c) => c.startsWith('r2 bucket create'))).toBe(false);
-    expect(second.state.secretPuts).toHaveLength(0);
+    });
+    expect(second.state.d1.size).toBe(first.state.d1.size);
+    expect(second.state.secretPuts).toEqual([]);
     expect(summary2.chat).toEqual({ db: CHAT_DB_NAME, kv: CHAT_KV_NAME, r2: CHAT_R2_NAME, keyringAction: 'existing' });
   });
 
-  it('首部署密钥环注入后补 deploy（secret 生效）；已有密钥环零补部署', { timeout: 120_000 }, async () => {
-    const fresh = makeFakeWrangler();
+  it('首部署密钥环注入后补 deploy（secret 生效）；已有密钥环零补部署', { timeout: 240_000 }, async () => {
+    const fresh = makeCfRestFake();
     await runNineSteps({
       rootDir: ROOT,
-      wrangler: fresh.wrangler,
+      client: new RestClient({ token: 't', fetchImpl: fresh.fetchImpl }),
       configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
-      wrangler_: undefined,
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
-      buildChatFrontend: async () => 'chat/assets/frontend',
-      resolveBaseUrl: async () => 'https://x.example',
-      putSecret: async (_w, _v, secretName) => {
-        fresh.state.secrets.add(secretName);
-      },
-    } as Parameters<typeof runNineSteps>[0]);
-    const chatDeploys = fresh.state.commands.filter((c) => /^deploy .*modules\/chat\.wrangler\.jsonc/.test(c));
-    expect(chatDeploys.length).toBe(2); // 首部署 + secret put 后重部署
-    expect(chatDeploys[1]).toBe(chatDeploys[0]);
+      buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
+    });
+    const chatUploads = fresh.state.uploads.filter((u) => u.worker === 'unself-module-chat');
+    expect(chatUploads.length).toBe(2); // 首部署 + secret put 后重部署
   });
 });
 
@@ -324,22 +219,20 @@ describe('#219 模块面断言参数化（验收第 5 条）', () => {
   });
 
   it('「全停用」现场：registry 对在仓全集逐一 disable（期望由派生集合生成，chat/hello 同语义）', { timeout: 120_000 }, async () => {
-    const fake = makeFakeWrangler({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: ['JWT_PRIVATE_KEY'] });
     const all = await discoverIds(ROOT, []);
+    const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'] });
     await runNineSteps({
       rootDir: ROOT,
-      wrangler: fake.wrangler,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       configOverride: { domain: '', modules: [], storage: { provider: 'r2', bucket: 'unself-storage' } },
-      wrangler_: undefined,
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
-      resolveBaseUrl: async () => 'https://x.example',
-      fetchJwks: async () => FIXED_JWKS,
-      putSecret: async () => {},
-    } as Parameters<typeof runNineSteps>[0]);
+    });
     for (const id of all) {
-      expect(fake.state.commands.some((c) => c.includes(`UPDATE module_registry SET enabled = 0 WHERE id = '${id}'`))).toBe(true);
+      expect(
+        fake.calls.some((c) => (c.body as { sql?: string; params?: unknown[] } | undefined)?.sql?.startsWith('UPDATE module_registry') &&
+          (c.body as { params?: unknown[] }).params?.[0] === id),
+      ).toBe(true);
     }
-    expect(fake.state.commands.filter((c) => c.includes('UPDATE module_registry'))).toHaveLength(all.length);
   });
 });

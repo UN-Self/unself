@@ -8,6 +8,7 @@
 import { createRequire } from 'node:module';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, posix } from 'node:path';
+import type { RestClient } from './client';
 
 export interface AssetManifestEntry {
   hash: string;
@@ -64,21 +65,27 @@ export interface AssetUploadSession {
 }
 
 export async function startAssetSession(
-  client: { post<T>(path: string, body?: unknown): Promise<{ result: T }> },
+  client: { fetchImpl: typeof fetch },
   accountId: string,
   scriptName: string,
   manifest: AssetManifest,
 ): Promise<AssetUploadSession> {
-  const res = await client.post<AssetUploadSession>(
-    `/accounts/${accountId}/workers/scripts/${scriptName}/assets-upload-session`,
-    { manifest },
-  );
-  return res.result;
+  // 会话端点为裸响应（{jwt, buckets}，非 CF 信封——2026-09-17 真机探针实测）
+  const res = await client.fetchImpl(`${'https://api.cloudflare.com/client/v4'}/accounts/${accountId}/workers/scripts/${scriptName}/assets-upload-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manifest }),
+  });
+  const json = (await res.json()) as AssetUploadSession & { errors?: Array<{ message: string }> };
+  if (!res.ok || !json.jwt) {
+    throw new Error(`资产会话创建失败：HTTP ${res.status}`);
+  }
+  return json;
 }
 
 /** 批量上传缺失文件（base64 form，字段=哈希）；返回 completion JWT。 */
 export async function uploadMissingAssets(
-  client: RestClientCtor,
+  client: RestClient,
   accountId: string,
   session: AssetUploadSession,
   manifest: AssetManifest,
@@ -96,19 +103,18 @@ export async function uploadMissingAssets(
     const abs = join(dir, byHash.get(hash)!);
     form.append(hash, new Blob([readFileSync(abs).toString('base64')], { type: 'application/octet-stream' }), hash);
   }
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/assets/upload?base64=true`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${client.token}` },
-    body: form,
-  });
+  const res = await client.fetchImpl(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/assets/upload?base64=true`,
+    {
+      method: 'POST',
+      // 资产上传授权 = 会话 jwt（非账户 token，wrangler 同款）
+      headers: { Authorization: `Bearer ${session.jwt}` },
+      body: form,
+    },
+  );
   const json = (await res.json()) as { jwt?: string; success?: boolean; errors?: Array<{ message: string }> };
   if (!res.ok || !json.jwt) {
     throw new Error(`资产上传失败：HTTP ${res.status} ${JSON.stringify(json.errors ?? []).slice(0, 160)}`);
   }
   return json.jwt;
-}
-
-/** 客户端最小面（避免与 client.ts 循环依赖的轻量接口）。 */
-export interface RestClientCtor {
-  token: string;
 }

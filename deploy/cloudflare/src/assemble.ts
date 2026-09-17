@@ -14,7 +14,6 @@ import { dirname, join } from 'node:path';
 import { build } from 'esbuild';
 import type { UnselfConfig } from './config';
 import type { ModuleRef } from './config';
-import type { Wrangler } from './wrangler';
 
 export type RelPath = string;
 
@@ -39,6 +38,8 @@ export interface ModuleProvision {
   config: RelPath;
   /** Worker 入口相对路径。 */
   workerEntry: RelPath;
+  /** SDK/页面静态资产目录（相对 outDir；无资产模块 undefined）。 */
+  assetsDir?: string;
 }
 
 /** 装配产物目录名（.deploy，gitignore）。 */
@@ -79,7 +80,6 @@ export async function provisionAll(options: {
   config: UnselfConfig;
   modules: ModuleRef[];
   dbIds: { core: string; modules: string };
-  wrangler: Wrangler;
   log?: (msg: string) => void;
   /**
    * 测试注入口：拦截 shell 构建（默认真实跑 pnpm --filter @unself/shell build）。
@@ -132,6 +132,7 @@ export async function provisionAll(options: {
       dir: mod.dir,
       config: `modules/${mod.id}.wrangler.jsonc`,
       workerEntry: `modules/${mod.id}/app.js`,
+      assetsDir: `modules/${mod.id}/assets`,
     });
   }
 
