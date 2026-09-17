@@ -1,0 +1,101 @@
+# 实测记录：wrangler OAuth 覆盖范围与工具链体积（2026-09-17）
+
+> 环境：wrangler **4.129.0**（`node_modules/.pnpm/wrangler@4.129.0_@cloudflare+workers-types@4.20260702.1`）｜Node v26.8.2｜Linux x64｜账号 `f7351bdd…`｜zone `handywote.top`（Free Website 计划）
+> 全程**未设置** `CLOUDFLARE_API_TOKEN`。
+> 用途：修订 `docs/deploy.md` 与 `deploy/cloudflare/README.md` 中的 10405 结论，并作为决策 #65/#66 的证据。
+
+## 1. 先证明用的是 OAuth，不是残留 token
+
+证伪测试——把 wrangler 配置目录指向空目录（不碰真实凭据）：
+
+```
+$ XDG_CONFIG_HOME=/tmp/unself-empty-cfg node …/wrangler.js whoami
+You are not authenticated. Please run `wrangler login`.
+```
+
+指向空目录即变未登录 → 之前所有成功都来自那一份 OAuth 凭据。凭据来源排查：
+
+| 检查项 | 结果 |
+|---|---|
+| `~/.config/.wrangler/config/default.toml` 的字段 | 只有 `oauth_token` / `refresh_token` / `expiration_time` / `scopes` |
+| 其中 `api_token` 字段 | 0 处 |
+| `CLOUDFLARE_API_TOKEN` / `CF_API_TOKEN` / `CLOUDFLARE_API_KEY` | 全部 absent |
+| shell rc（bashrc/zshrc/profile）导出 | 无 |
+| 旧位置 `~/.wrangler/` | 不存在 |
+| 仓库内 `.env` / `.dev.vars` | 无 |
+| `wrangler auth token` 返回长度 | 93 字符（API token 为 40） |
+
+官方优先级是 `CLOUDFLARE_API_TOKEN` > API key/email > OAuth——**只要有任何残留 API token，空目录那次测试照样会认证成功**，它却报了未登录。两条来源一起被排除。
+
+测试期间该文件的 mtime 被刷新，是 OAuth `refresh_token` 自动续期的痕迹。
+
+授予的 scope（`default.toml` 的 `scopes`）：`user:read` `offline_access` `account:read` `workers:write` `workers_kv:write` `workers_routes:write` `workers_scripts:write` `workers_tail:read` `d1:write` `pages:write` `zone:read` `ssl_certs:write` `ai:write` …（**无任何 R2 条目**）。
+
+## 2. 覆盖矩阵
+
+探测资源一律 `unself-probe-*` 命名，测完删除。
+
+| 步骤 | 结果 |
+|---|---|
+| `whoami` / 列账户 / 列 zone | ✅ |
+| `d1 list` / `d1 create` | ✅ |
+| `d1 execute`（写 + 读回） | ✅ |
+| `d1 migrations apply` | ✅ |
+| `r2 bucket list` / `r2 bucket create` | ✅ |
+| `kv namespace create` | ✅ |
+| `wrangler deploy`（无路由 / 带 zone 路由） | ✅ ✅ |
+| `wrangler secret put` | ✅ |
+| zone 路由 **POST**（新建） | ✅ |
+| zone 路由 **PUT**（更新） | ✅ |
+| zone 路由 **DELETE** | ✅ |
+| Total TLS（`GET /zones/{z}/acm/total_tls`） | ❌ `10000 Authentication error` |
+
+**三个反直觉点**
+
+1. **zone 路由增/改/删全部通过**——推翻了仓库里记载的 10405 结论。授予的 scope 含 `workers_routes:write`，该 scope 在旧版本 wrangler 中不存在。
+2. **R2 建桶通过**——尽管 scope 列表里没有任何 R2 条目。机制未查明（推测 account 级 `workers:write` 顺带覆盖）。**来路不明 = 可能随上游变化**，故保留 API Token 兜底。
+3. **教训：从 scope 清单推断权限不可靠。** 本次先按 wrangler 源码里的 `DefaultScopes` / `CF_SCOPES` 推断「无 R2 scope → 建不了桶」，被实测推翻。官方文档也没有「scope × 操作」对照表——此类结论只能实测。
+
+## 3. 工具链体积（决策 #65 的证据）
+
+| 项 | 体积 |
+|---|---|
+| `npm install wrangler@4.129.0` | **213 MB** |
+| 其中 `workerd` 的平台二进制（`workerd/lib/downloaded-@cloudflare-workerd-linux-64-workerd`） | **147 MB** |
+| pnpm 布局（仓库现状） | 167 MB |
+| 仓库 `.git` | **21 MB** |
+
+**147 MB 无法剥离**——三次尝试全部失败：
+
+| 尝试 | 结果 |
+|---|---|
+| `npm install --omit=optional` | ❌ postinstall 仍把二进制下到 `workerd/lib/downloaded-*` |
+| `--omit=optional --ignore-scripts` | ❌ 平台包缺失，`workerd/lib/main.js` 模块解析失败 |
+| 装完手动删二进制 | ❌ 启动即崩：`Error: The package "@cloudflare/workerd-linux-64" could not be found, and is needed by workerd.`（由 `miniflare/dist/src/index.js` 在启动时 require） |
+
+即 **wrangler 是三合一（CLI + esbuild + 本地运行时 workerd）**：哪怕只调 API 命令，也必须带上本地运行时。
+
+## 4. 清理与残留复查
+
+| 资源 | 状态 |
+|---|---|
+| D1 `unself-probe-d1-*` | ✅ 已删，复查 0 残留 |
+| R2 `unself-probe-r2-*` | ✅ 已删，复查 0 残留 |
+| KV `unself-probe-kv-*` | ✅ 已删，复查 0 残留 |
+| Worker `unself-probe*-*` | ✅ 已删 |
+| zone 路由 `handywote.top/unself-probe*/*` | ✅ 已删；路由表仅剩真实条目 `team.handywote.top/*` 与 `team.handywote.top/m/hello/*` |
+| `/tmp` 临时目录 | ✅ 已删 |
+
+## 5. 影响
+
+- `deploy/cloudflare/README.md` 与 `docs/deploy.md` 的「`wrangler login` 的 OAuth 对 zone 路由授权不足、必须用 API Token」→ **作废**（决策 #66）。
+- 装配器**不再依赖 wrangler**（决策 #65）：自建 REST 客户端；OAuth 经 `wrangler auth token` 借用（官方文档明确支持 "for use with other tools and scripts"）。
+- 仍需 API Token 的场景收窄为：**Total TLS（多级子域）**、用户偏好、CI。
+
+## 6. 未测项（诚实登记）
+
+- **Durable Objects 部署**（chat 需要）：属 `workers_scripts` 范畴，很可能通过，但未跑。
+- **`wrangler login` 首次授权流程**：本次复用已有会话，未走完整授权。
+- **多账户环境下的账户选择**：本环境只有一个账户。
+- **Node 22 / 23 上 `node:sqlite` 是否仍需 `--experimental-sqlite`**：本机 Node 26 免 flag 可用，低版本未实测。
+- **`ssl_certs:write` 与 ACM 的真实关系**：Total TLS 读取报认证错误，未进一步区分是权限限制还是计划限制（本 zone 为 Free Website）。

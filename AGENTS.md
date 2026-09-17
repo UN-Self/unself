@@ -49,6 +49,10 @@
 - CF Workers 出站 TLS 平台不可用（决策 #31）：邮件=后台尽力增强
 - 明文令牌不落库；权限只信服务端会话
 - UI 纪律：样式只走 tokens、动效参数从 tokens 取，reduced-motion 降级 → docs/architecture.md
+- 多模块共用一个 DB 时迁移按**文件名**记账 → 每模块必须用独立记账表（`migrations_table`），否则同名迁移被静默跳过 → docs/modules.md
+- wrangler 版本漂移会改变结论：OAuth 能否绑 zone 路由在 4.129.0 已可（旧版报 10405）；契约/形状类定案必须注明 wrangler 版本 → docs/audit/oauth-coverage-2026-09-17.md
+- wrangler 完整安装 213MB，其中 workerd 二进制 147MB 无法剥离（miniflare 启动即 require）→ 装配器不依赖 wrangler（决策 #65）
+- 从 OAuth scope 清单推断权限不可靠（「无 R2 scope」实测仍能建桶）→ 权限类结论只能实测 → docs/audit/oauth-coverage-2026-09-17.md
 
 ## 与用户协作
 
