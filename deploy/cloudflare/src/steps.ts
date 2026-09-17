@@ -13,6 +13,7 @@ import { join, relative } from 'node:path';
 import { probeSqlite } from '@unself/control-plane';
 import {
   DEPLOY_DIR,
+  bundleCoreWorker,
   coreWranglerConfig,
   moduleWranglerConfig,
   prefixStripWrapperSource,
@@ -114,7 +115,7 @@ interface WorkerUploadSpec {
   compatibilityFlags: string[];
   observability: boolean;
   /** 静态资产目录（绝对路径）与 ASSETS 绑定名；无资产 undefined。 */
-  assets?: { dir: string; binding: string; notFoundHandling: string; runWorkerFirst: boolean | string[] };
+  assets?: { dir: string; binding: string; htmlHandling?: string; notFoundHandling: string; runWorkerFirst: boolean | string[] };
   /** DO 迁移（chat：首部署建 SQLite 类）。 */
   migrations?: { oldTag?: string; newTag: string; steps: Array<Record<string, unknown>> };
 }
@@ -287,13 +288,18 @@ export async function runNineSteps(input: {
     join(provisioned.outDir, 'core-worker.js'),
     coreWorkerEntrySource(provisioned.outDir, rootDir),
   );
+  // 入口模板落盘后立即自打包（wrangler 隐式 bundle 的替代；探针实证顺序反了会打到陈旧入口）
+  await bundleCoreWorker(
+    join(provisioned.outDir, 'core-worker.js'),
+    join(provisioned.outDir, 'core-worker.bundle.js'),
+  );
   // core 上传描述（secret 首部署后补写 → 同描述重传一次；幂等收敛）
   const coreVars: Record<string, string> = {};
   if (config.domain) coreVars.UNSELF_BASE_URL = `https://${config.domain}`;
   const coreSpec: WorkerUploadSpec = {
     name: provisioned.coreName,
-    mainModule: 'core-worker.js',
-    modules: [{ name: 'core-worker.js', content: await readFile(join(provisioned.outDir, 'core-worker.js'), 'utf8') }],
+    mainModule: 'core-worker.bundle.js',
+    modules: [{ name: 'core-worker.bundle.js', content: await readFile(join(provisioned.outDir, 'core-worker.bundle.js'), 'utf8') }],
     bindings: [
       { type: 'd1', name: 'CORE_DB', id: dbIds.core },
       { type: 'd1', name: 'MODULES_DB', id: dbIds.modules },
@@ -643,6 +649,7 @@ async function uploadWorkerSpec(
           assets: {
             jwt: assetsJwt,
             config: {
+              html_handling: spec.assets!.htmlHandling ?? 'auto-trailing-slash',
               not_found_handling: spec.assets!.notFoundHandling,
               run_worker_first: spec.assets!.runWorkerFirst,
             },

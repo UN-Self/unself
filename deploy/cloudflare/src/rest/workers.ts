@@ -28,6 +28,15 @@ export interface WorkerUpload {
     newTag: string;
     steps: Array<Record<string, unknown>>;
   };
+  /** 资产完成 JWT + 路由配置（会话+批量上传后取得；无资产省略）。 */
+  assets?: {
+    jwt: string;
+    config: {
+      html_handling?: string;
+      not_found_handling?: string;
+      run_worker_first?: boolean | string[];
+    };
+  };
 }
 
 const ESM_TYPE = 'application/javascript+module';
@@ -47,6 +56,9 @@ export async function putWorker(client: RestClient, accountId: string, upload: W
             steps: upload.migrations.steps,
           },
         }
+      : {}),
+    ...(upload.assets
+      ? { assets: { jwt: upload.assets.jwt, config: upload.assets.config } }
       : {}),
   };
   const form = new FormData();

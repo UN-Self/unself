@@ -198,6 +198,12 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
     // ---- assets ----
     if (path.endsWith('/assets-upload-session') && method === 'POST') {
       const manifest = (body as { manifest: Record<string, { hash: string }> }).manifest ?? {};
+      // 真机契约（2026-09-18 探针实测，错误码 10304）：manifest key 必须 / 开头
+      for (const key of Object.keys(manifest)) {
+        if (!key.startsWith('/')) {
+          return Response.json({ success: false, errors: [{ code: 10304, message: 'validation failed: assets manifest key must start with /' }] }, { status: 400 });
+        }
+      }
       state.assetManifests.push(manifest);
       // 全部哈希视为缺失 → 触发批量上传分支（真机首传同形）；裸响应非信封
       const hashes = Object.values(manifest).map((e) => e.hash);
