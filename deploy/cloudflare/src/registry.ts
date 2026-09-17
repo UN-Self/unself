@@ -4,7 +4,7 @@
  * 选中模块 upsert（enabled=1 + manifest 快照），未选/已存在模块翻转 enabled=0（not_deployed）。
  * 注册表 API（#7）持有管理员会话，装配期无会话 → 直写 module_registry（与 API 同构 upsert 语义）。
  */
-import { ModuleManifestSchema, type ModuleManifest } from '@unself/contracts';
+import { ModuleManifestSchema, manifestFromYamlText, type ModuleManifest } from '@unself/contracts';
 import type { UnselfConfig, ModuleRef } from './config';
 
 /** 注册表 upsert SQL（与 core-api upsertModule 相同的收敛语义）。 */
@@ -18,66 +18,28 @@ ON CONFLICT(id) DO UPDATE SET
 }
 
 /**
- * 最小 manifest.yaml 读取（§5.5 快照所需子集，不引入完整 YAML 解析）：
- * - 顶层标量 `key: value` 行（id/route/version/icon/description 等）；
- * - 缩进 list 项 `  - item`（requires/capabilities），归属最近一个「key: 空值」的顶层 key（行尾注释剥除）；
- * - flow 式 `key: [a, b]` 不支持——直接报错而非静默丢（#64：静默丢会致 token 授牌错误）。
+ * manifest.yaml 文本 → ModuleManifest（§5.5 快照 + §5.3 entry 重写为实例 URL）。
+ *
+ * #243：YAML 解析与字段映射收口到 @unself/contracts（manifestFromYamlText），
+ * 与 validate / 第三方 file: 安装共用同一份（防解析分叉致校验/授牌错位）。
+ * 未知能力词在 schema 层直接抛错（安装时拒绝，不静默忽略）。
  */
-function manifestTopLevelFields(
-  text: string,
-): { scalars: Record<string, string>; lists: Record<string, string[]> } {
-  const scalars: Record<string, string> = {};
-  const lists: Record<string, string[]> = {};
-  let currentListKey: string | null = null;
-  for (const line of text.split('\n')) {
-    const scalar = /^([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*(?:#.*)?$/.exec(line);
-    if (scalar) {
-      const value = scalar[2]!;
-      if (value.startsWith('[')) {
-        throw new Error(
-          `manifest: 不支持 flow 式 list「${scalar[1]}: ${value}」——改用 block 式多行（SPEC §5.4，#64）`,
-        );
-      }
-      if (value !== '') {
-        scalars[scalar[1]!] = value;
-        currentListKey = null;
-      } else {
-        // 顶层 key 空值 → 后续缩进 list 项归属该 key
-        currentListKey = scalar[1]!;
-      }
-      continue;
-    }
-    const item = /^\s*-\s+(.+?)\s*(?:#.*)?$/.exec(line);
-    if (item && currentListKey) {
-      (lists[currentListKey] ??= []).push(item[1]!);
-    }
-  }
-  return { scalars, lists };
-}
-
-/** manifest.yaml 文本 → ModuleManifest（§5.5 快照 + §5.3 entry 重写为实例 URL）。 */
 export function buildManifestSnapshot(input: {
   manifestText: string;
   moduleId: string;
   /** 实例 base URL（https://domain 或 workers.dev）；空字符串 = workers.dev 占位。 */
   baseUrl: string;
 }): ModuleManifest {
-  const { scalars: fields, lists } = manifestTopLevelFields(input.manifestText);
+  const candidate = manifestFromYamlText(input.manifestText) as Record<string, unknown>;
   const host = input.baseUrl || 'https://unself-module-placeholder.workers.dev';
-  const candidate = {
-    id: fields.id ?? input.moduleId,
-    route: fields.route ?? `/m/${input.moduleId}`,
+  return ModuleManifestSchema.parse({
+    ...candidate,
+    id: candidate.id ?? input.moduleId,
+    route: candidate.route ?? `/m/${input.moduleId}`,
     // 部署后模块实际从实例根相对路径装载（同域路径制 §5.3）
     entry: `${host}/m/${input.moduleId}/`,
-    runtime: 'worker' as const,
-    // 契约 requires min(1)：清单缺失时回退 identity；capabilities 缺失为空（不再硬编码 'demo'）
-    requires: (lists.requires?.length ? lists.requires : ['identity']) as Array<'identity'>,
-    capabilities: lists.capabilities ?? [],
-    version: fields.version ?? '0.0.0',
-    ...(fields.description ? { description: fields.description } : {}),
-    ...(fields.icon ? { icon: fields.icon } : {}),
-  };
-  return ModuleManifestSchema.parse(candidate);
+    version: candidate.version ?? '0.0.0',
+  });
 }
 
 /** SQL 字符串字面量（单引号翻倍）。 */

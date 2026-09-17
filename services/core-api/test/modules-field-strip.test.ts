@@ -22,9 +22,7 @@ const helloManifest = {
   id: 'hello',
   route: '/m/hello',
   entry: 'https://team.example.com/m/hello/',
-  runtime: 'worker',
-  requires: ['identity'],
-  capabilities: ['counter'],
+  runtimes: ['worker'],
   version: '1.0.0',
   icon: 'inbox',
 };
@@ -89,8 +87,8 @@ describe('S6 /api/modules 字段剥离回归（#208）', () => {
     const stored = JSON.parse(row!.manifest_json) as Record<string, unknown>;
     expect(stored).not.toHaveProperty('evil');
     expect(stored).not.toHaveProperty('admin');
-    // 已知字段原样保留（剥离只针对未知键，不做无差别清洗）
-    expect(stored.capabilities).toEqual(['counter']);
+    // 已知字段原样保留（剥离只针对未知键，不做无差别清洗）；capabilities 已删（#56）
+    expect(stored).not.toHaveProperty('capabilities');
   });
 
   it('注册 body 顶层未知字段 → 同样不入库不外泄', async () => {

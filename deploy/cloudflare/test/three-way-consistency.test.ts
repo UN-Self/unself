@@ -17,7 +17,7 @@ const CONFIG = {
   storage: { provider: 'r2', bucket: 'unself-storage' },
 } as UnselfConfig;
 
-const MANIFEST = 'id: hello\nversion: 0.1.0\n';
+const MANIFEST = 'id: hello\nruntimes:\n  - worker\nversion: 0.1.0\n';
 
 /** 合法公钥 JWKS 字符串（模块 vars.CORE_JWKS_JSON 注入值；测试只关心路由三方一致，不做验签）。 */
 const JWKS_JSON = JSON.stringify({

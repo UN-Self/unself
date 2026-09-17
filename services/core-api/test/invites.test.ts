@@ -1035,7 +1035,10 @@ describe('邀请域 HTTP（#18）', () => {
       '0005_builtin_identity.sql',
       '0006_login_attempts.sql',
     ]);
-    expect(added).toEqual(['0007_invite_identity_normalization.sql']);
+    expect(added).toEqual([
+      '0007_invite_identity_normalization.sql',
+      '0008_module_notify_type.sql', // #243：module_notify 通知类型（notify 词真实现的数据行）
+    ]);
 
     const sqlite = new DatabaseSync(':memory:');
     try {

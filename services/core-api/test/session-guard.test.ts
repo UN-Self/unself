@@ -28,9 +28,7 @@ const helloManifest = {
   id: 'hello',
   route: '/m/hello',
   entry: 'https://team.example.com/m/hello/',
-  runtime: 'worker',
-  requires: ['identity'],
-  capabilities: ['counter'],
+  runtimes: ['worker'],
   version: '1.0.0',
 };
 

@@ -59,7 +59,8 @@ describe('decodeJwtPayload', () => {
     const sdk = createModuleSDK({ moduleId: 'mod-a', coreOrigin: CORE_ORIGIN });
     const token = `${B64URL_HEADER}.${B64URL_PAYLOAD_WITH_ACT}.${B64URL_SIGNATURE}`;
     expect(sdk.decodeContext(token).act?.sub).toBe('mod-b');
-    expect(sdk.decodeContext(token).caps).toEqual(['notify']);
+    // #56：caps claim 已删，schema strip 后不再暴露（旧 token 里的 caps 被剥掉，不报错）
+    expect('caps' in sdk.decodeContext(token)).toBe(false);
   });
 });
 
