@@ -47,6 +47,14 @@ describe('RestClient 信封与错误映射', () => {
     expect((err as CloudflareApiError).message).toContain('9109');
   });
 
+  it('HTTP 200 但 success=false 信封 → 同样抛错（不误吞；#244 红灯点：只判状态码必红）', async () => {
+    const f = fakeFetch([{ status: 200, body: { success: false, result: null, errors: [{ code: 7502, message: 'already exists' }] } }]);
+    const client = new RestClient({ token: 't', fetchImpl: f.impl, retries: 0 });
+    const err = await client.get('/x').catch((e) => e);
+    expect(err).toBeInstanceOf(CloudflareApiError);
+    expect((err as CloudflareApiError).code).toBe(7502);
+  });
+
   it('携带 Bearer 头；429 按重试次数退避后成功', async () => {
     const f = fakeFetch([
       { status: 429, body: { success: false, result: null, errors: [{ code: 429, message: 'rate' }] } },
