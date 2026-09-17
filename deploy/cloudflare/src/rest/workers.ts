@@ -22,6 +22,12 @@ export interface WorkerUpload {
   compatibilityDate: string;
   compatibilityFlags?: string[];
   observability?: boolean;
+  /** DO 迁移元数据（chat 首部署建 SQLite 类；形状实测 wrangler 4.129.0）。 */
+  migrations?: {
+    oldTag?: string;
+    newTag: string;
+    steps: Array<Record<string, unknown>>;
+  };
 }
 
 const ESM_TYPE = 'application/javascript+module';
@@ -33,6 +39,15 @@ export async function putWorker(client: RestClient, accountId: string, upload: W
     ...(upload.compatibilityFlags?.length ? { compatibility_flags: upload.compatibilityFlags } : {}),
     ...(upload.bindings?.length ? { bindings: upload.bindings } : {}),
     ...(upload.observability ? { observability: { enabled: true } } : {}),
+    ...(upload.migrations
+      ? {
+          migrations: {
+            old_tag: upload.migrations.oldTag,
+            new_tag: upload.migrations.newTag,
+            steps: upload.migrations.steps,
+          },
+        }
+      : {}),
   };
   const form = new FormData();
   form.set('metadata', JSON.stringify(metadata));
@@ -44,6 +59,16 @@ export async function putWorker(client: RestClient, accountId: string, upload: W
     );
   }
   return client.putMultipart(`/accounts/${accountId}/workers/scripts/${upload.name}`, form);
+}
+
+/** 首部署判定：脚本不存在（404）→ DO migrations 元数据可带；已部署 → 省略（幂等重传）。 */
+export async function isWorkerNew(client: RestClient, accountId: string, name: string): Promise<boolean> {
+  try {
+    await getWorkerSettings(client, accountId, name);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 export async function deleteWorker(client: RestClient, accountId: string, name: string): Promise<void> {

@@ -9,7 +9,6 @@ import { buildModuleSdkAssets, coreWranglerConfig, moduleWranglerConfig, prefixS
 import { migrationWranglerConfig } from '../src/assemble';
 import { coreWorkerEntrySource } from '../src/steps';
 import type { UnselfConfig } from '../src/config';
-import type { Wrangler } from '../src/wrangler';
 
 /** 仓库根（测试进程从 deploy/cloudflare/test 起算）。 */
 const REPO_ROOT = new URL('../../..', import.meta.url).pathname;
@@ -221,7 +220,6 @@ describe('provisionAll（③ shell 每次部署重建，#73）', () => {
         config: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } } as UnselfConfig,
         modules: [],
         dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
-        wrangler: {} as unknown as Wrangler,
         log: () => {},
         buildShell,
       });
