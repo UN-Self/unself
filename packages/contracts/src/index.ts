@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 export * from './manifest';
 export * from './token';
+export * from './validate';
 export * from './messages';
 export * from './lifecycle';
 export * from './lifecycle-schema';

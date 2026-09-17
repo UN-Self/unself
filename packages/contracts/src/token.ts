@@ -22,8 +22,6 @@ export const ModuleTokenClaimsSchema = z.object({
   exp: z.number(),
   /** 代调上下文：核心代调时 = 发起模块 id（保留契约字段；Core 从未签发）。 */
   act: z.object({ sub: z.string() }).optional(),
-  /** 已授牌能力列表（可选）。 */
-  caps: z.array(z.string()).optional(),
   /** 会话展示名（可选；身份行展示用，避免前端再走一次用户查询）。 */
   name: z.string().optional(),
 });
