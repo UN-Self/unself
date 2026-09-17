@@ -174,6 +174,11 @@ unself module validate  # 跑第 7 节全部检查
 ## 9. 运行时契约
 
 - **身份**：模块只接受 core 签发的短时 token（`aud` = 模块 id），本地验签、零运行时网络取钥；公钥由装配器在部署期以 `vars.CORE_JWKS_JSON` 注入。
+- **模块后端面（Core API 代理）**：模块带 `Authorization: Bearer <模块 token>` 调 `/api/module-api/*`；权限真值取**服务端注册表快照**的 `permissions` 声明（token 不携带能力清单，决策 #56），**未声明即调用 → 403**。当前端点：
+  - `GET` / `PUT` / `DELETE` `/api/module-api/storage/:key`、`GET /api/module-api/storage/`（列键）= `core` 落点的 get/put/delete/list 四形状（**不承诺关系表**，决策 #55）
+  - `POST /api/module-api/notify` = `notify` 词（站内通知，`module_notify` 类型；模块触发通知不直接发邮件）
+  - `acl` / `ai` / `realtime` / `mail` 四个词**门禁已生效但端点未实现**（`501` 预留）
+  - 落地与收敛：端点与 `module_notify` 由 #243 落地；module-sdk 客户端收敛（消除「SDK 直连 D1」与「Core API 代理」两条并存）归 **#248**。
 - **`coreOrigin` 必填**：跨域模块必须显式配置，**禁止回落到 `'*'`**（决策 #63）。
 - **模块恒挂根路径**：模块代码按「部署在根路径」编写；`/m/<id>/` 前缀由**宿主**剥离（CF wrapper / 反代 / 独立域名本就挂根）。模块不要自己实现前缀逻辑。
 - **CSP / CORS**：自托管模块页必须带 `frame-ancestors <壳的 origin>`；Core API 按注册表 origin 白名单放行。
