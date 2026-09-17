@@ -5,6 +5,7 @@
  * 测试注入 fake ask/out 即可覆盖 TTY/非 TTY 全部分支，不碰真实终端。
  * 优先级铁律：CLI > 交互 > 配置文件；非 TTY 无参数 = 静默走配置（CI 安全）。
  */
+import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
 
@@ -13,24 +14,88 @@ export interface CliArgs {
   domain?: string;
   modules?: string[];
   yes: boolean;
+  /** 帮助/版本请求：bin.ts 短路打印后退出，不进入装配。 */
+  info?: 'help' | 'version';
 }
 
-/** 解析 --domain=<d> / --modules=<a,b> / -y|--yes；未知参数忽略；重复参数后者胜。 */
+/** 已知参数拼写建议表（did-you-mean 用）。 */
+const KNOWN_FLAGS = ['--domain', '--modules', '--yes', '-y', '--help', '-h', '--version'] as const;
+
+/** 抛错型解析：未知参数是人输入的拼错（如 --domian=），静默忽略会把错误配置静默吞掉（#249）。 */
+export class UnknownFlagError extends Error {}
+
+/** 编辑距离 ≤2 → 给最接近的已知参数；判不出 → 仅报未知。 */
+function nearestFlag(flag: string): string | null {
+  const d = (a: string, b: string): number => {
+    let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      const curr = [i, ...Array<number>(b.length).fill(0)];
+      for (let j = 1; j <= b.length; j++) {
+        curr[j] = Math.min(prev[j]! + 1, curr[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+      prev = curr;
+    }
+    return prev[b.length]!;
+  };
+  let best: string | null = null;
+  let bestD = 3;
+  for (const k of KNOWN_FLAGS) {
+    const dist = d(flag, k);
+    if (dist < bestD) {
+      bestD = dist;
+      best = k;
+    }
+  }
+  return bestD <= 2 ? best : null;
+}
+
+/**
+ * 解析 --domain=<d> / --modules=<a,b> / -y|--yes / --help|-h / --version；重复参数后者胜。
+ * 未知参数报错（#249）：静默忽略曾把 `--domian=x` 吞成「没设域名」，违背非隐性原则。
+ */
 export function parseCliArgs(argv: string[]): CliArgs {
   const args: CliArgs = { yes: false };
   for (const raw of argv) {
     if (raw === '-y' || raw === '--yes') {
       args.yes = true;
+    } else if (raw === '--help' || raw === '-h') {
+      args.info ??= 'help';
+    } else if (raw === '--version') {
+      args.info ??= 'version';
     } else if (raw.startsWith('--domain=')) {
       const v = raw.slice('--domain='.length).trim();
       if (v) args.domain = v;
     } else if (raw.startsWith('--modules=')) {
       const v = raw.slice('--modules='.length).trim();
       args.modules = v === '' ? [] : v.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    } else if (raw === '--domain' || raw === '--modules') {
+      throw new UnknownFlagError(`参数 ${raw} 需要等号取值：${raw}=<值>（如 --domain=team.example.com）`);
+    } else {
+      const flag = raw.split('=')[0]!;
+      const near = nearestFlag(flag);
+      throw new UnknownFlagError(`未知参数「${raw}」${near ? `：最接近的是 ${near}，是不是拼错了？` : ''}。可用参数见 --help`);
     }
-    // 未知参数忽略（禁过度防御：不报错不枚举）
   }
   return args;
+}
+
+/** --help 用法文本（bin.ts 打印；单处维护，测试断言关键行存在）。 */
+export function usageText(version: string): string[] {
+  return [
+    `unself deploy/cloudflare ${version} —— 幂等九步装配器（可随时重跑，不会重复创建资源）`,
+    '',
+    '用法：node deploy/cloudflare/bin.ts [参数]',
+    '',
+    '参数：',
+    '  --domain=<域名>    自有域名（如 team.example.com）；缺省 = 交互选择或 workers.dev 免费域名',
+    '  --modules=<a,b>    启用模块（逗号分隔）；缺省 = 交互确认或配置文件值',
+    '  -y, --yes          静默模式：跳过全部提问（CI 用），缺省值取配置文件',
+    '  -h, --help         显示本帮助后退出（不部署）',
+    '  --version          显示版本号后退出（不部署）',
+    '',
+    '凭证：优先环境变量 CLOUDFLARE_API_TOKEN；未设置时交互粘贴（仅本次进程内存，不落盘）。',
+    '文档：docs/deploy.md（失败三要素 / 域名与 DNS 说明）。',
+  ];
 }
 
 /**
@@ -79,7 +144,12 @@ export function domainProblem(domain: string): string | null {
   return null;
 }
 
-/** 域名三选交互（注入 ask/out；返回 null = workers.dev）。文案对齐 docs/deploy.md 第二步。 */
+/**
+ * 域名三选交互（注入 ask/out）。
+ * 选 [2] 自有域连错两次 → 显式抛错退出（#249，落实决策 #33 非隐性回退）：静默装到
+ * workers.dev 曾让用户以为装到了自己的域名；此时进程尚未创建任何资源，报错即安全退出。
+ * 顶级菜单连错两次 → 同样显式报错，不再代选 [1]。
+ */
 export async function chooseDomain(io: { ask: (q: string) => Promise<string>; out: (line: string) => void }): Promise<string | null> {
   const { ask, out } = io;
   out('① 团队入口域名：');
@@ -102,11 +172,16 @@ export async function chooseDomain(io: { ask: (q: string) => Promise<string>; ou
         }
         return domain;
       }
-      return null;
+      // 连错两次：显式失败（#33 非隐性回退）——不悄悄装到 workers.dev
+      throw new Error(
+        '自有域名连错两次，已停止装配（未创建任何资源）。'
+        + '重跑本命令可再来一次；若想先用 workers.dev 免费域名，重跑后选 [1]。',
+      );
     }
     out(`  无效选项「${raw}」，请输入 1 或 2。`);
   }
-  return null;
+  // 菜单连错两次：同样显式失败，不再代选 [1]
+  throw new Error('域名选项连错两次，已停止装配（未创建任何资源）。重跑本命令可再来一次（选 1 = workers.dev，选 2 = 自有域名）。');
 }
 
 /**
@@ -128,6 +203,27 @@ export function parseModulesInput(raw: string, available: string[]): { ids: stri
 /** token 第一屏决策：TTY → 粘贴；非 TTY → 打印人话后退出（exit 1 由调用方执行）。 */
 export function pickTokenDecision(tty: boolean): 'paste' | 'exit' {
   return tty ? 'paste' : 'exit';
+}
+
+/**
+ * token 预校验（#249）：粘贴后先做形态检查再出网，无效直接重问。
+ * CF API Token 形态 = 40 字符 base62（首位字母）——官方文档与实测 token 均如此。
+ * 只拦「明显不对」（少粘一段/带空格/粘了邮箱），不断言合法性：真伪以 CF 校验为准。
+ */
+export function tokenProblem(token: string): string | null {
+  const t = token.trim();
+  if (!t) return 'token 为空';
+  if (/\s/.test(t)) return 'token 里含空格/换行：可能是复制带了空白或粘了两段，请重新整段复制粘贴';
+  if (!/^[A-Za-z0-9_-]+$/.test(t)) return 'token 含字母数字以外的字符：请确认复制的是 API Token 本身（不是邮箱/Notation/密钥 JSON）';
+  if (!/^[A-Za-z]/.test(t)) return 'token 形态不像 CF API Token（应以字母开头的 40 位字母数字）：请确认复制完整';
+  if (t.length < 30 || t.length > 50) return `token 长度 ${t.length} 不像 CF API Token（应为 40 位左右）：请确认复制完整（现少粘或多粘）`;
+  return null;
+}
+
+/** 掩码提示文案：按回车前终端只显示前 4 位 + 长度，不回显明文（#249）。 */
+export function maskSecret(token: string): string {
+  const t = token.trim();
+  return `${t.slice(0, 4)}…（${t.length} 位，已隐藏）`;
 }
 
 /** CF token 深链接（官方模板 URL 格式，硬编码权限集，§5.5 ①）。 */
@@ -175,6 +271,22 @@ export function buildTokenFirstScreen(input: { deepLink: string | null; permissi
   lines.push(tty ? '或直接把 token 粘贴到下面回车继续（只留在本次进程内存，不落盘）：' : '非交互终端无法粘贴 token：请先 export CLOUDFLARE_API_TOKEN=... 后重跑。');
   if (tty) lines.push('也可先 export CLOUDFLARE_API_TOKEN 再重跑（之后不用每次粘贴），粘贴仅本次有效。');
   return lines;
+}
+
+/**
+ * token 粘贴收集（#249：可重试 + 预校验）。
+ * - 预校验：tokenProblem 形态检查，无效给一句人话后重问（最多 3 次），不出去联网试错。
+ * - 返回 null = 三次都没给有效 token（bin.ts 走退出指引）；重试全程不回显明文由 collectToken 掩码保证。
+ */
+export async function askSecret(io: { ask: (q: string) => Promise<string>; out: (line: string) => void }): Promise<string | null> {
+  for (let tries = 0; tries < 3; tries++) {
+    const answer = await io.ask(`粘贴 token 回车继续（输入不回显；${3 - tries} 次机会）→ `);
+    const token = answer.trim();
+    const problem = tokenProblem(token);
+    if (!problem) return token;
+    io.out(`  ${problem}，请重试。`);
+  }
+  return null;
 }
 
 /**
@@ -240,6 +352,51 @@ export function createAsker(streams: AskerStreams = {}): Asker {
     },
     close: () => rl.close(),
   };
+}
+
+/** stty 注入点（测试换成不发 ioctl 的假实现；生产 = 真 execFileSync）。 */
+export const sttyRef: { run: typeof execFileSync } = { run: execFileSync };
+
+/**
+ * 终端回显开关（token 掩码的手段层，#249）：`stty -echo` 关内核行规程回显，`stty echo` 还原。
+ * 只动 ECHO 位，不碰 raw/ISIG（Ctrl+C 仍可中断）；stty 不存在或 stdin 非 TTY 时返回 null，
+ * 调用方降级为「不回显靠 readline 哑 sink 兜底」，不阻断部署。
+ */
+export function echoControl(flag: '-echo' | 'echo'): { restore: () => void } | null {
+  try {
+    sttyRef.run('stty', [flag], { stdio: ['inherit', 'ignore', 'ignore'] });
+  } catch {
+    return null;
+  }
+  return {
+    restore: () => {
+      try {
+        sttyRef.run('stty', ['echo'], { stdio: ['inherit', 'ignore', 'ignore'] });
+      } catch {
+        // 还原失败无能为力：终端设置留给用户 shell 自行重置（settlep 不中断主流程）
+      }
+    },
+  };
+}
+
+/**
+ * 一次终端会话的 token 收集（#249：掩码 + 可重试 + 预校验）。
+ *
+ * - 掩码：建 asker 前对真实终端 `stty -echo`（内核不回显），asker 的 readline output 本就
+ *   指向哑 sink（#119②，readline 不代写）——双层保证粘贴的 token 不回显明文；
+ *   stty 失败（非 TTY/极简环境）降级为只剩哑 sink 层，不因掩码手段失败而中断部署。
+ * - 可重试 + 预校验：askSecret 形态检查，最多 3 次，全部失败返回 null（bin.ts 走退出指引）。
+ * - 独立 asker 生命周期归本函数：用完即 close，出栈路径必恢复回显（finally 兜底）。
+ */
+export async function collectToken(io: { ask: (q: string) => Promise<string>; out: (line: string) => void }, ttyIn: boolean): Promise<string | null> {
+  const echoOff = ttyIn ? echoControl('-echo') : null;
+  const asker = createAsker({});
+  try {
+    return await askSecret({ ask: asker.ask, out: io.out });
+  } finally {
+    asker.close();
+    echoOff?.restore();
+  }
 }
 
 /** TTY 探测（测试经参数/tty 注入，不直接依赖此函数）。 */
