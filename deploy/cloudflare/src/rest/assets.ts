@@ -5,7 +5,7 @@
  * 哈希/端点形状实测（wrangler 4.129.0 hash.ts/assets.ts + 2026-09-17 真机探针）。
  * blake3 取自 wrangler 同款 wasm（blake3-wasm 依赖，仅 devDependency 级体积）。
  */
-import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, posix } from 'node:path';
 
@@ -34,11 +34,11 @@ function urlSafe(s: string): string {
   return s.replaceAll('+', '-').replaceAll('/', '_');
 }
 
-/** blake3（同步 wasm 实现走 blake3-wasm；不可用时退 sha256——哈希只用于内容寻址去重，
- *  同一次部署内自洽即可；但跨工具 diff 语义以 blake3 为准，装配器固定用 blake3-wasm。 */
+/** blake3（与 wrangler 4.129.0 hash.ts 同款）：blake3-wasm（wrangler 已有传递依赖，本仓提升可解析）。 */
 function blake3Hash(input: string): string {
-  // blake3-wasm 与 wrangler 共享（node_modules 提升依赖）；动态 require 规避打包
-  const blake3 = (0, eval)('require')('blake3-wasm') as { hash(input: string): { toString(enc: string): string } };
+  const blake3 = createRequire(import.meta.url)('blake3-wasm') as {
+    hash(input: string): { toString(enc: string): string };
+  };
   return blake3.hash(input).toString('hex');
 }
 
@@ -111,9 +111,4 @@ export async function uploadMissingAssets(
 /** 客户端最小面（避免与 client.ts 循环依赖的轻量接口）。 */
 export interface RestClientCtor {
   token: string;
-}
-
-/** sha256 兜底导出（测试用）。 */
-export function sha256Hex(input: string): string {
-  return createHash('sha256').update(input).digest('hex');
 }
