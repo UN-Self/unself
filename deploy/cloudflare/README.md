@@ -34,7 +34,7 @@ pnpm --filter @unself/deploy-cloudflare exec deploy-cloudflare
 
 凭证（两种，优先级同官方：`CLOUDFLARE_API_TOKEN` > API key/email > OAuth）：
 
-- **OAuth（推荐）**：`wrangler login` 浏览器授权，零复制粘贴。**2026-09-17 用 wrangler 4.129.0 实测**：OAuth 覆盖 D1 建库/读写/迁移、R2 建桶/列举、KV 建命名空间、Workers 部署、secret 写入、zone 路由增/改/删；**唯一不可用的是 Total TLS（ACM）**，只有多级子域（比 zone 深两级以上）才需要它。
+- **OAuth（推荐）**：`wrangler login` 浏览器授权，零复制粘贴。**2026-09-17 用 wrangler 4.129.0 实测**（[原始记录](../../docs/audit/241-oauth覆盖实测-2026-09-17.md)）：OAuth 覆盖 D1 建库/读写/迁移、R2 建桶/列举、KV 建命名空间、Workers 部署、secret 写入、zone 路由增/改/删；**唯一不可用的是 Total TLS（ACM）**，只有多级子域（比 zone 深两级以上）才需要它。
 - **API Token（兜底）**：需要 Total TLS、偏好 token、或跑 CI 时使用。权限清单：
 
 | 范围 | 权限 |

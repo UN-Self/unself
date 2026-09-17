@@ -56,7 +56,7 @@ Cloudflare 免费套餐足够 10 人左右的团队：Workers 10 万请求/天�
 
 ## 附：每步在干什么（不用读，卡住了再看）
 
-- **① 凭证**：优先 `wrangler login` 的 OAuth（浏览器授权，零复制粘贴）。**2026-09-17 用 wrangler 4.129.0 实测**：OAuth 覆盖 D1 建库/读写/迁移、R2 建桶/列举、KV 建命名空间、Workers 部署、secret 写入、zone 路由增/改/删；**唯一覆盖不到的是 Total TLS（ACM）**，只有多级子域（比 zone 深两级以上）才需要它。需要 Total TLS、偏好 token、或跑 CI 时，用 CF 深链接建 API Token（权限已预填全部 **6** 项：Account 3 + Zone 3），粘回终端即可。token 只在本次进程内存里用，不落盘。
+- **① 凭证**：优先 `wrangler login` 的 OAuth（浏览器授权，零复制粘贴）。**2026-09-17 用 wrangler 4.129.0 实测**（[原始记录](audit/241-oauth覆盖实测-2026-09-17.md)）：OAuth 覆盖 D1 建库/读写/迁移、R2 建桶/列举、KV 建命名空间、Workers 部署、secret 写入、zone 路由增/改/删；**唯一覆盖不到的是 Total TLS（ACM）**，只有多级子域（比 zone 深两级以上）才需要它。需要 Total TLS、偏好 token、或跑 CI 时，用 CF 深链接建 API Token（权限已预填全部 **6** 项：Account 3 + Zone 3），粘回终端即可。token 只在本次进程内存里用，不落盘。
 - **② 域名**：workers.dev 免费域名即刻可用；自有域名需 DNS 已托管在 Cloudflare，装配器会自动补代理记录和证书。
 - **③ 九步**：建两个数据库（core/modules）→ 跑迁移 → 构建 Shell → 部署 core-api → 部署各模块 → 写模块注册表 → 建 R2 桶 → 生成一次性 setup token → 冒烟检查。幂等：任何时候重跑，只补没完成的部分。
 - **④ setup 链接**：一次性，设的第一个账号即管理员。默认内置账号（用户名+密码）；团队有 SSO 可在向导里展开接 OIDC。
