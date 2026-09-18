@@ -37,6 +37,12 @@ afterEach(async () => {
 /** 装配一个可执行的 wrapper 模块：假 ASSETS（命中表驱动）+ 假 worker（记录型，闭包通道）。 */
 async function loadWrapper(options: {
   moduleId: string;
+  /** 挂载前缀：缺省 `/m/<id>`（domain 形态）；'' = 根挂载（workers.dev 形态，#273）。 */
+  mount?: string;
+  /** 壳 origin（frame-ancestors 值）；缺省 undefined = 不发该头。 */
+  shellOrigin?: string | null;
+  /** 请求基原点（worker.dev 形态用模块自有子域）。缺省 team.example.com。 */
+  origin?: string;
   /** ASSETS.fetch 命中表：路径 → 响应体（未列出 = 404）。 */
   assets?: Record<string, string>;
 }): Promise<{
@@ -71,7 +77,10 @@ export default {
 };
 `,
   );
-  await writeFile(join(dir, 'worker.js'), prefixStripWrapperSource(options.moduleId));
+  await writeFile(join(dir, 'worker.js'), prefixStripWrapperSource(options.moduleId, {
+    mount: options.mount ?? `/m/${options.moduleId}`,
+    shellOrigin: options.shellOrigin ?? null,
+  }));
 
   const { recorder } = await import(pathToFileURL(join(dir, 'recorder.mjs')).href);
 
@@ -92,7 +101,7 @@ export default {
     workerCalls: recorder.workerCalls as WorkerCall[],
     fetch: (path: string, init?: RequestInit) =>
       mod.default.fetch(
-        new Request(`https://team.example.com${path}`, init),
+        new Request(`${options.origin ?? 'https://team.example.com'}${path}`, init),
         { ASSETS: fakeAssets },
         { waitUntil: () => {}, passThroughOnException: () => {} },
       ),
@@ -156,5 +165,57 @@ describe('prefixStripWrapper 真实执行（资产分支 / 预取 / duplex，T5�
     await w.fetch('/m/hello/life/x');
     expect(w.assetCalls).toHaveLength(0);
     expect(w.workerCalls).toEqual([{ pathname: '/life/x', method: 'GET', body: null }]);
+  });
+});
+
+describe('wrapper 形态化（#273）：workers.dev 根挂载 + 模块侧 frame-ancestors', () => {
+  const MODULE_ORIGIN = 'https://unself-module-hello.test-subdomain.workers.dev';
+
+  it('根挂载（mount=""）：/sdk/x.js 原路径命中 ASSETS，worker 不被调用', async () => {
+    const w = await loadWrapper({ moduleId: 'hello', mount: '', origin: MODULE_ORIGIN, assets: { '/sdk/x.js': '// sdk' } });
+    const res = await w.fetch('/sdk/x.js');
+    expect(res.status).toBe(200);
+    expect(w.assetCalls).toEqual([{ url: '/sdk/x.js', method: 'GET' }]);
+    expect(w.workerCalls).toHaveLength(0);
+  });
+
+  it('根挂载：/api/health 不剥前缀，worker 收到原路径（真实 URL 就是根挂载）', async () => {
+    const w = await loadWrapper({ moduleId: 'hello', mount: '', origin: MODULE_ORIGIN });
+    await w.fetch('/api/health');
+    expect(w.workerCalls).toEqual([{ pathname: '/api/health', method: 'GET', body: null }]);
+    expect(w.assetCalls).toHaveLength(0);
+  });
+
+  it('根挂载：/ 预取 /index.html 命中即返回，worker 不被调用', async () => {
+    const w = await loadWrapper({ moduleId: 'hello', mount: '', origin: MODULE_ORIGIN, assets: { '/index.html': '<html>module</html>' } });
+    const res = await w.fetch('/');
+    expect(await res.text()).toContain('module');
+    expect(w.assetCalls).toEqual([{ url: '/index.html', method: 'GET' }]);
+    expect(w.workerCalls).toHaveLength(0);
+  });
+
+  it('domain 挂载 + shellOrigin：模块响应带 CSP frame-ancestors = 壳 origin（决策 #63）', async () => {
+    const w = await loadWrapper({ moduleId: 'hello', shellOrigin: 'https://demo.handywote.top' });
+    const res = await w.fetch('/m/hello/');
+    expect(res.headers.get('content-security-policy')).toBe('frame-ancestors https://demo.handywote.top');
+  });
+
+  it('workers.dev 根挂载 + shellOrigin：模块响应带 frame-ancestors = core 子域 origin（跨子域 iframe 放行）', async () => {
+    const w = await loadWrapper({
+      moduleId: 'hello',
+      mount: '',
+      origin: MODULE_ORIGIN,
+      shellOrigin: 'https://unself-core-api.test-subdomain.workers.dev',
+    });
+    const res = await w.fetch('/');
+    expect(res.headers.get('content-security-policy')).toBe(
+      'frame-ancestors https://unself-core-api.test-subdomain.workers.dev',
+    );
+  });
+
+  it('shellOrigin 缺省（null）：不发 frame-ancestors（不凭空造宽带）', async () => {
+    const w = await loadWrapper({ moduleId: 'hello', shellOrigin: null });
+    const res = await w.fetch('/m/hello/');
+    expect(res.headers.has('content-security-policy')).toBe(false);
   });
 });

@@ -29,16 +29,23 @@ export function buildManifestSnapshot(input: {
   moduleId: string;
   /** 实例 base URL（https://domain 或 workers.dev）；空字符串 = workers.dev 占位。 */
   baseUrl: string;
+  /**
+   * 模块真实 entry（#273 按形态）：domain → `https://<domain>/m/<id>/`；
+   * workers.dev → `https://<module-worker>.<sub>.workers.dev/`（模块自有子域）。
+   * 缺省 = 回落旧的 `${baseUrl}/m/<id>/`（存量调用方/测试兼容）。
+   */
+  entry?: string;
   /** 已解析的 manifest（sourced 模块，#245）；缺省 = 从 manifestText（YAML）解析。 */
   manifest?: ModuleManifest;
 }): ModuleManifest {
   const host = input.baseUrl || 'https://unself-module-placeholder.workers.dev';
+  const entry = input.entry ?? `${host}/m/${input.moduleId}/`;
   if (input.manifest) {
     return ModuleManifestSchema.parse({
       ...input.manifest,
       id: input.manifest.id ?? input.moduleId,
       route: input.manifest.route ?? `/m/${input.moduleId}`,
-      entry: `${host}/m/${input.moduleId}/`,
+      entry,
       version: input.manifest.version ?? '0.0.0',
     });
   }
@@ -47,8 +54,8 @@ export function buildManifestSnapshot(input: {
     ...candidate,
     id: candidate.id ?? input.moduleId,
     route: candidate.route ?? `/m/${input.moduleId}`,
-    // 部署后模块实际从实例根相对路径装载（同域路径制 §5.3）
-    entry: `${host}/m/${input.moduleId}/`,
+    // 部署后模块实际从实例根相对路径装载（同域路径制 §5.3）；workers.dev 形态为模块自有子域（#273）
+    entry,
     version: candidate.version ?? '0.0.0',
   });
 }

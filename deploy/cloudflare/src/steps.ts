@@ -14,6 +14,7 @@ import { probeSqlite } from '@unself/control-plane';
 import {
   DEPLOY_DIR,
   bundleCoreWorker,
+  coreRunWorkerFirst,
   coreWranglerConfig,
   moduleWranglerConfig,
   prefixStripWrapperSource,
@@ -73,8 +74,16 @@ import {
 import { buildChatFrontendAssets } from './chat-frontend';
 import { buildManifestSnapshot } from './registry';
 import { checkModuleThemes, smokeCheck } from './smoke';
-import type { ThemeCheckResult } from './smoke';
+import type { ModuleTarget, ThemeCheckResult } from './smoke';
 import { generateSetupToken } from './smoke';
+import {
+  moduleBaseUrl,
+  moduleEntryUrl,
+  moduleRoutePattern,
+  mountShapeOf,
+  originOf,
+  parseWorkersDevSubdomain,
+} from './module-url';
 
 /** JWKS 端点路径（core-api 契约）。 */
 export const JWKS_PATH = '/.well-known/jwks.json';
@@ -244,12 +253,14 @@ export interface RunNineStepsOptions {
   reporter?: StepReporter;
   /**
    * @internal 仅供测试注入（steps.test.ts）：跳过真实 HTTP（冒烟/主题体检）。
+   * 签名与真实实现同形：core URL + 按形态算好的模块 target 列表（#273——
+   * 注入方拿到的就是生产要探的 URL，不另拼一套）。
    * 生产路径一律走 smoke.ts 的真实实现；smokeCheck/checkModuleThemes 由 smoke.test.ts 直测。
    */
   http?: {
-    smoke(baseUrl: string, moduleIds: string[]): Promise<Array<{ name: string; url: string; ok: boolean; status: number; detail?: string }>>;
+    smoke(coreUrl: string, modules: ModuleTarget[]): Promise<Array<{ name: string; url: string; ok: boolean; status: number; detail?: string }>>;
     /** 可选：主题体检注入（§6.5.8）。缺省 = 跳过（保持既有测试语义，不请求网络）。 */
-    themeCheck?: (baseUrl: string, moduleIds: string[]) => Promise<ThemeCheckResult[]>;
+    themeCheck?: (coreUrl: string, modules: ModuleTarget[]) => Promise<ThemeCheckResult[]>;
   };
   /** 测试注入口：跳过 workers.dev URL 解析。 */
   resolveBaseUrl?: (domain: string, workerName: string) => Promise<string>;
@@ -667,7 +678,8 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       dir: join(provisioned.outDir, 'assets/shell'),
       binding: 'ASSETS',
       notFoundHandling: 'single-page-application',
-      runWorkerFirst: ['/api/*', '/.well-known/*', '/setup*'],
+      // #273：workers.dev 形态 true——壳 HTML 必须经 worker 才能带按注册表生成的 frame-src 白名单
+      runWorkerFirst: coreRunWorkerFirst(config),
     },
   };
   await uploadWorkerSpec(input, client, accountId, rep, coreSpec);
@@ -695,6 +707,39 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     provisioned.coreName,
     rep,
   );
+
+  // 模块真实可达 URL（#273 唯一真值源）：注册表 entry / wrapper frame-ancestors / ⑨冒烟 / 主题体检四处共用。
+  // workers.dev 形态 = 模块自有子域（CF 为每个上传 Worker 免费提供，无需 DNS/zone 权限）；
+  // domain 形态 = zone 路径 `https://<domain>/m/<id>`。子域直接复用 resolveBaseUrl 已查到的值，不二次请求。
+  const shape = mountShapeOf(config.domain);
+  const workersDevAccountSubdomain =
+    shape === 'domain'
+      ? null
+      : (parseWorkersDevSubdomain(baseUrl, provisioned.coreName) ??
+        (await workersDevSubdomain(client, accountId)));
+  if (shape === 'workers-dev' && !workersDevAccountSubdomain) {
+    throw new Error(
+      'workers.dev 形态无法解析账号子域（GET /accounts/<id>/workers/subdomain 为空）：' +
+        '模块真实 URL 拼不出来——检查凭证权限，或在 unself.config.jsonc 配置 domain',
+    );
+  }
+  const moduleTargets: ModuleTarget[] = selected.map((m) => ({
+    id: m.id,
+    baseUrl: moduleBaseUrl({
+      domain: config.domain ?? '',
+      workersDevSubdomain: workersDevAccountSubdomain,
+      moduleId: m.id,
+      moduleWorkerName: moduleWorkerName(m.id),
+    }),
+  }));
+  const moduleBaseUrlOf = (id: string): string =>
+    moduleTargets.find((t) => t.id === id)?.baseUrl ??
+    moduleBaseUrl({
+      domain: config.domain ?? '',
+      workersDevSubdomain: workersDevAccountSubdomain,
+      moduleId: id,
+      moduleWorkerName: moduleWorkerName(id),
+    });
 
   // ④ 模块构建/上传/路由绑定
   rep.step(4, '构建上传模块 Worker，绑 <domain>/m/<id>/* 路由（zone 路径）与存储绑定');
@@ -756,7 +801,12 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     );
     await writeConfig(
       join(provisioned.outDir, `modules/${mod.id}/worker.js`),
-      prefixStripWrapperSource(mod.id),
+      prefixStripWrapperSource(mod.id, {
+        // domain：剥 /m/<id> 前缀；workers.dev：模块自有子域根挂载，无需剥
+        mount: config.domain ? `/m/${mod.id}` : '',
+        // 决策 #63/#73：模块页自带 frame-ancestors，值 = 壳 origin（跨子域 iframe 才不被裁）
+        shellOrigin: originOf(baseUrl),
+      }),
     );
     // 模块上传：wrapper(main) + app.js(bundle) + SDK 资产目录
     const moduleDir = join(provisioned.outDir, 'modules', mod.id);
@@ -850,9 +900,13 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     }
     rep.log(`模块 ${mod.id} 已上传`);
     if (config.domain && resolvedZone) {
-      await ensureRoute(client, resolvedZone.id, `${config.domain}/m/${mod.id}/*`, moduleWorkerName(mod.id), rep.log);
+      await ensureRoute(client, resolvedZone.id, moduleRoutePattern(config.domain, mod.id), moduleWorkerName(mod.id), rep.log);
+      rep.log(`模块 ${mod.id} 路由就绪（${moduleRoutePattern(config.domain, mod.id)}${isChat ? '，含前端产物 assets' : ''}）`);
+    } else {
+      // workers.dev 形态（#273）：模块自有子域是它的真实 URL；启用子域访问（CF 免费提供，无需 DNS/zone）
+      await enableWorkersDev(client, accountId, moduleWorkerName(mod.id));
+      rep.log(`模块 ${mod.id} 子域就绪（${moduleBaseUrlOf(mod.id)}，workers.dev）`);
     }
-    rep.log(`模块 ${mod.id} 路由就绪（/m/${mod.id}/*${isChat ? '，含前端产物 assets' : ''}）`);
     if (isChat) {
       const hasKeyring = await hasWorkerSecret(client, accountId, moduleWorkerName(mod.id), CHAT_KEYRING_SECRET);
       if (!hasKeyring) {
@@ -914,12 +968,19 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       manifestText: manifestTexts[mod.id] ?? '',
       moduleId: mod.id,
       baseUrl,
+      // #273：entry 按形态写模块**真实**可达 URL（workers.dev = 模块自有子域；domain = zone 路径）
+      entry: moduleEntryUrl({
+        domain: config.domain ?? '',
+        workersDevSubdomain: workersDevAccountSubdomain,
+        moduleId: mod.id,
+        moduleWorkerName: moduleWorkerName(mod.id),
+      }),
       ...(mod.resolved ? { manifest: mod.resolved.manifest } : {}),
     });
     // 存储选择（#55）写进快照：declaration 由 config 条目覆写（向导③½ / CLI），注册表快照即
     // 「这台实例上该模块数据在哪」的权威记录（core-api 门禁与运行时可读）。
-    const entry = entries.find((e) => e.id === mod.id);
-    const declaration = entry?.storage?.declaration;
+    const configEntry = entries.find((e) => e.id === mod.id);
+    const declaration = configEntry?.storage?.declaration;
     const snapshot = declaration
       ? { ...manifest, storage: { ...(manifest.storage ?? { accepts: [declaration] }), declaration } }
       : manifest;
@@ -988,10 +1049,10 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   // ⑨ 冒烟 + 主题体检（§6.5.8 验产物）
   rep.step(9, '冒烟检查 /api/health 与各模块 health + 主题体检');
   const smoke = input.http
-    ? await input.http.smoke(baseUrl, selected.map((m) => m.id))
+    ? await input.http.smoke(baseUrl, moduleTargets)
     : await smokeCheck({
-        baseUrl,
-        moduleIds: selected.map((m) => m.id),
+        coreUrl: baseUrl,
+        modules: moduleTargets,
       });
   for (const r of smoke) {
     rep.log(`${r.ok ? '✓' : '✗'} ${r.name} → ${r.url}${r.detail ? `（${r.detail}）` : ''}`);
@@ -1003,11 +1064,10 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
 
   const themeChecks = input.http
     ? input.http.themeCheck
-      ? await input.http.themeCheck(baseUrl, selected.map((m) => m.id))
+      ? await input.http.themeCheck(baseUrl, moduleTargets)
       : []
     : await checkModuleThemes({
-        baseUrl,
-        moduleIds: selected.map((m) => m.id),
+        modules: moduleTargets,
       });
   for (const r of themeChecks) {
     const mark = r.ok ? (r.skinned ? 'ⓘ（独立皮肤）' : '✓') : '✗';
@@ -1143,6 +1203,10 @@ async function defaultFetchJwks(baseUrl: string): Promise<string> {
  * core-api 自身不再模块级固化无参实例（那会把 members.ts 的契约回退假实现带进生产开户路径）。
  * 适配器用相对路径导入：生成目录没有 workspace 的 node_modules 链接，裸包名解析不到；
  * 相对路径与 core-api 的导入同构，esbuild 打包确定可解析。
+ *
+ * #273：workers.dev 形态下 core 资产 run_worker_first=true（见 coreRunWorkerFirst），
+ * 所有请求（含壳 HTML 与静态资产）都经本入口——入口必须先按原路径取资产（保持直出语义），
+ * 再对 HTML 下发按注册表生成的 frame-src 白名单（跨子域模块 iframe 需壳响应头含模块 origin）。
  */
 export function coreWorkerEntrySource(outDir: string, rootDir: string): string {
   const rel = (p: string): string => relative(outDir, join(rootDir, p)).replaceAll('\\', '/');
@@ -1151,23 +1215,46 @@ export function coreWorkerEntrySource(outDir: string, rootDir: string): string {
 import { createApp } from '${rel('services/core-api/src/index.ts')}';
 import { createStalwartMailProvisioner } from '${rel('adapters/provisioning/stalwart/src/index.ts')}';
 import { withHtmlSecurityHeaders } from '${rel('services/core-api/src/security-headers.ts')}';
+import { registryFrameOrigins } from '${rel('services/core-api/src/registry.ts')}';
 
 const app = createApp({ createMailProvisioner: (cfg) => createStalwartMailProvisioner(cfg) });
+
+const isHtml = (res) => (res.headers.get('content-type') ?? '').toLowerCase().includes('text/html');
+const isApiPath = (p) => p.startsWith('/api/') || p.startsWith('/life/') || p.startsWith('/.well-known/');
+const wantsHtml = (request) => (request.headers.get('accept') ?? '').includes('text/html');
+
+// 壳静态资产历史上以 application/octet-stream 存储（见 _headers 注释/真机实测）：
+// 导航请求（Accept: text/html）命中时按 HTML 处理——补回 text/html + 安全头 + frame-src 白名单。
+const asHtmlDocument = async (asset) => {
+  const headers = new Headers(asset.headers);
+  headers.set('content-type', 'text/html; charset=utf-8');
+  return new Response(await asset.text(), { status: asset.status, statusText: asset.statusText, headers });
+};
 
 export default {
   async fetch(request, env, ctx) {
     const res = await app.fetch(request, env, ctx);
     if (res.status !== 404 || !env.ASSETS) return res;
-    // API/生命周期路径保持 JSON 404；页面导航回退 SPA
     const url = new URL(request.url);
-    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/life/') ||
-        url.pathname.startsWith('/.well-known/') || !request.method ||
-        request.method !== 'GET') {
+    // API/生命周期路径保持 JSON 404；页面导航回退 SPA
+    if (isApiPath(url.pathname) || request.method !== 'GET') {
       return res;
     }
-    // 决策 #47：/<domain>/setup* 走 Worker（run_worker_first），其 HTML 不经静态资产
-    // 的 _headers，故在这里补同一套安全头（值同源：security-headers.ts）。
-    return withHtmlSecurityHeaders(await env.ASSETS.fetch(new URL('/', url.origin).toString(), request));
+    // 决策 #63/#73 + #273：壳 HTML 的 frame-src 白名单按注册表现为生成（跨子域模块 iframe 的唯一放行口）。
+    // CORE_DB 未绑定（单测/异常环境）→ 零白名单，安全默认（绝不 frame-src *）。
+    const frameOrigins = env.CORE_DB ? await registryFrameOrigins(env.CORE_DB, { selfOrigin: url.origin }) : [];
+    // run_worker_first=true（workers.dev 形态）后静态资产也经本入口：先按原路径取资产（保持直出语义）。
+    const asset = await env.ASSETS.fetch(request);
+    if (asset.status !== 404) {
+      if (isHtml(asset)) return withHtmlSecurityHeaders(asset, frameOrigins);
+      if (wantsHtml(request)) return withHtmlSecurityHeaders(await asHtmlDocument(asset), frameOrigins);
+      return asset;
+    }
+    if (!wantsHtml(request)) return res;
+    // 决策 #47：SPA 深链（含 /setup*）的 HTML 不经静态资产的 _headers，在此补同一套头
+    // （值同源：security-headers.ts）+ 现场生成的 frame-src 白名单。
+    const fallback = await env.ASSETS.fetch(new URL('/', url.origin).toString(), request);
+    return withHtmlSecurityHeaders(fallback.status === 404 ? fallback : await asHtmlDocument(fallback), frameOrigins);
   },
 };
 `;

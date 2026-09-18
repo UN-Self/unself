@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { coreWranglerConfig, moduleWranglerConfig } from '../src/assemble';
 import { buildManifestSnapshot } from '../src/registry';
 import { smokeCheck } from '../src/smoke';
+import { moduleBaseUrl, moduleEntryUrl, moduleRoutePattern } from '../src/module-url';
 import type { UnselfConfig } from '../src/config';
 
 const DOMAIN = 'demo.handywote.top';
@@ -41,7 +42,7 @@ function normalizeRoutePattern(pattern: string): { host: string; prefix: string 
 describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == smoke 探测点）', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('同一 config：模块 entry / zone 路由 pattern / 冒烟 URL 三者 host+前缀一致', async () => {
+  it('domain 形态：模块 entry / zone 路由 pattern / 冒烟 URL 三者 host+前缀一致', async () => {
     const routeCfg = JSON.parse(moduleWranglerConfig({
       config: CONFIG,
       dbIds: { modules: 'modules-uuid' },
@@ -50,10 +51,20 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
       zoneName: 'handywote.top',
     })) as { routes: Array<{ pattern: string; custom_domain?: boolean; zone_name?: string }> };
 
-    // 装载点：步骤⑤写入注册表的 manifest.entry（壳按此装载 iframe）
-    const entry = buildManifestSnapshot({ manifestText: MANIFEST, moduleId: 'hello', baseUrl: `https://${DOMAIN}` });
+    // 装载点 + 探测点用同一真值源（#273）：module-url 按形态算出模块挂载根
+    const urlInput = {
+      domain: DOMAIN,
+      workersDevSubdomain: null,
+      moduleId: 'hello',
+      moduleWorkerName: 'unself-module-hello',
+    };
+    const entry = buildManifestSnapshot({
+      manifestText: MANIFEST,
+      moduleId: 'hello',
+      baseUrl: `https://${DOMAIN}`,
+      entry: moduleEntryUrl(urlInput),
+    });
 
-    // 探测点：步骤⑨真实 smokeCheck，仅 stub 网络层
     const probed: string[] = [];
     vi.stubGlobal('fetch', async (input: string | URL) => {
       probed.push(String(input));
@@ -62,10 +73,13 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
         headers: { 'content-type': 'application/json' },
       });
     });
-    const smoke = await smokeCheck({ baseUrl: `https://${DOMAIN}`, moduleIds: ['hello'] });
+    const smoke = await smokeCheck({
+      coreUrl: `https://${DOMAIN}`,
+      modules: [{ id: 'hello', baseUrl: moduleBaseUrl(urlInput) }],
+    });
 
     // 路由点：zone 路径路由（无 custom_domain 标记 = 不自动建 DNS/证书；zone_name 必填）
-    expect(routeCfg.routes).toEqual([{ pattern: `${DOMAIN}/m/hello/*`, zone_name: 'handywote.top' }]);
+    expect(routeCfg.routes).toEqual([{ pattern: moduleRoutePattern(DOMAIN, 'hello'), zone_name: 'handywote.top' }]);
 
     const route = normalizeRoutePattern(routeCfg.routes[0]!.pattern);
     const entryUrl = new URL(entry.entry);
@@ -74,6 +88,45 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
     expect({ host: entryUrl.host, prefix: entryUrl.pathname }).toEqual(route);
     expect({ host: probe.host, prefix: probe.pathname.slice(0, route.prefix.length) }).toEqual(route);
     expect(probed).toContain(`https://${DOMAIN}/m/hello/api/health`);
+  });
+
+  it('workers.dev 形态（#273）：entry == 冒烟探测 == 模块自有子域（无 zone 路由）', async () => {
+    const urlInput = {
+      domain: '',
+      workersDevSubdomain: 'test-subdomain',
+      moduleId: 'hello',
+      moduleWorkerName: 'unself-module-hello',
+    };
+    const entry = buildManifestSnapshot({
+      manifestText: MANIFEST,
+      moduleId: 'hello',
+      baseUrl: 'https://unself-core-api.test-subdomain.workers.dev',
+      entry: moduleEntryUrl(urlInput),
+    });
+    expect(entry.entry).toBe('https://unself-module-hello.test-subdomain.workers.dev/');
+
+    const probed: string[] = [];
+    vi.stubGlobal('fetch', async (input: string | URL) => {
+      probed.push(String(input));
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    await smokeCheck({
+      coreUrl: 'https://unself-core-api.test-subdomain.workers.dev',
+      modules: [{ id: 'hello', baseUrl: moduleBaseUrl(urlInput) }],
+    });
+    // 探测点 == entry 装载点（同 origin，模块恒挂根路径）
+    expect(probed).toContain('https://unself-module-hello.test-subdomain.workers.dev/api/health');
+    // workers.dev 形态不生成 zone 路由（无 domain）：模块配置产物里没有 routes
+    const cfg = JSON.parse(moduleWranglerConfig({
+      config: { ...CONFIG, domain: '' },
+      dbIds: { modules: 'modules-uuid' },
+      mod: { id: 'hello' },
+      jwksJson: JWKS_JSON,
+    })) as { routes?: unknown };
+    expect(cfg.routes).toBeUndefined();
   });
 
   it('core 与模块同走 zone 路径路由（同 host 上 Custom Domain 优先于路径路由，core 不挂）', () => {

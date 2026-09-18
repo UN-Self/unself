@@ -275,6 +275,13 @@ async function copySdkAssets(sdkDir: string, assetsDir: string): Promise<void> {
   }
 }
 
+/** core 资产的 run_worker_first（#273）：domain 形态保持原精确前缀数组（生产路径零变更）；
+ * workers.dev 形态 = true——壳 HTML 必须经 worker 才能下发按注册表生成的 frame-src 白名单
+ * （跨子域模块 iframe 需 shell 响应头含模块 origin；静态资产路径的 `_headers` 是静态值改不了）。 */
+export function coreRunWorkerFirst(config: UnselfConfig): boolean | string[] {
+  return config.domain ? ['/api/*', '/.well-known/*', '/setup*'] : true;
+}
+
 /** 生成 core 部署配置（含 SPA fallback + run_worker_first + 真实 D1 id + route）。 */
 export function coreWranglerConfig(input: {
   config: UnselfConfig;
@@ -304,7 +311,8 @@ export function coreWranglerConfig(input: {
         // SPA：未命中文件回 index.html；API/JWKS 一律先跑 Worker
         not_found_handling: 'single-page-application',
         // v4：'/setup' 精确路径命中 CF 内部处理并 404（未知机理）；'/setup*' 等价覆盖 /setup 与其查询串，且不误伤 /setupX（SPA 兜底）
-        run_worker_first: ['/api/*', '/.well-known/*', '/setup*'],
+        // workers.dev 形态（#273）：true = 全部经 worker，壳 HTML 才能带动态 frame-src 白名单
+        run_worker_first: coreRunWorkerFirst(config),
       },
       d1_databases: [
         {
@@ -445,38 +453,68 @@ export async function writeConfig(path: string, content: string): Promise<void> 
   await writeFile(path, content, 'utf8');
 }
 
-/** 模块路由前缀 wrapper 代码模板（运行时剥 /m/<id> 前缀 + 静态资产回退）。 */
-export function prefixStripWrapperSource(moduleId: string): string {
+/** 模块 wrapper 生成选项（#273）。 */
+export interface ModuleWrapperOptions {
+  /** 挂载前缀：domain 形态 = `/m/<id>`；workers.dev 形态 = `''`（模块自有子域根挂载）。
+   *  缺省 = `/m/<id>`（存量调用方兼容）。 */
+  mount?: string;
+  /** 壳 origin（frame-ancestors 值，决策 #63/#73）；null/缺省 = 不发该头（未配置形态）。 */
+  shellOrigin?: string | null;
+}
+
+/**
+ * 模块入口 wrapper 代码模板（#273 形态化）：
+ * - 前缀剥除（domain 形态）：命中 `/m/<id>` 才剥，根挂载（workers.dev）原样——
+ *   「模块恒挂根路径」不变式（决策 #63）两形态都成立；
+ * - 静态资产回退（ASSETS）；
+ * - frame-ancestors：值 = 壳 origin（模块页自负，决策 #63/#73）——跨子域 iframe 才不会被浏览器裁掉。
+ */
+export function prefixStripWrapperSource(moduleId: string, options: ModuleWrapperOptions = {}): string {
+  const mount = options.mount ?? `/m/${moduleId}`;
+  const shellOrigin = options.shellOrigin ?? null;
   return `// SPDX-License-Identifier: AGPL-3.0-only
-// 由 deploy/cloudflare 生成：剥 /m/${moduleId} 前缀 + ASSETS 回退。
+// 由 deploy/cloudflare 生成：前缀剥除（mount=${mount || '(根挂载)'}）+ ASSETS 回退 + frame-ancestors。
 import worker from './app.js';
 
-const PREFIX = '/m/${moduleId}';
+const PREFIX = '${mount}';
+const SHELL_ORIGIN = ${shellOrigin ? `'${shellOrigin}'` : 'null'};
+
+// frame-ancestors（决策 #63/#73）：值 = 壳 origin；已有 CSP 则合并，不覆盖模块自身策略。
+function withFrameAncestors(res) {
+  if (!SHELL_ORIGIN) return res;
+  const headers = new Headers(res.headers);
+  const existing = headers.get('Content-Security-Policy');
+  if (existing && /frame-ancestors/i.test(existing)) return res;
+  const directive = 'frame-ancestors ' + SHELL_ORIGIN;
+  headers.set('Content-Security-Policy', existing ? existing + '; ' + directive : directive);
+  const nullBody = res.status === 101 || res.status === 204 || res.status === 205 || res.status === 304;
+  return new Response(nullBody ? null : res.body, { status: res.status, statusText: res.statusText, headers });
+}
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const isAsset = !url.pathname.startsWith(PREFIX + '/api/') &&
-                    !url.pathname.startsWith(PREFIX + '/life/') &&
-                    request.method === 'GET';
-    if (isAsset && url.pathname.length > PREFIX.length + 1) {
+    // 前缀剥除（domain 形态）：仅命中挂载前缀才剥；根挂载（workers.dev）原样。
+    const prefixed = PREFIX !== '' && (url.pathname === PREFIX || url.pathname.startsWith(PREFIX + '/'));
+    const path = prefixed ? (url.pathname.slice(PREFIX.length) || '/') : url.pathname;
+    const isAsset = !path.startsWith('/api/') && !path.startsWith('/life/') && request.method === 'GET';
+    if (isAsset && path !== '/') {
       // 页面以相对路径引用资产（import './sdk/module-sdk.esm.js' → 请求
-      // /m/<id>/sdk/...），剥前缀后= sdk/... 命中部署期静态资产。
-      // 仅前缀本身（/m/<id>/ 或 /m/<id>）不是资产：落 worker 根分支，
-      // 由 Hono 渲染模块页（模块无 index.html 静态文件）
-      const assetPath = url.pathname.slice(PREFIX.length + 1);
-      return env.ASSETS.fetch(new URL('/' + assetPath, url.origin));
+      // /sdk/... 或 /m/<id>/sdk/...），剥前缀后 = sdk/... 命中部署期静态资产。
+      // 仅根路径本身（/ 或挂载前缀）不是资产：落 worker 根分支，由 Hono 渲染模块页。
+      return withFrameAncestors(await env.ASSETS.fetch(new URL(path, url.origin)));
+    }
+    // 仅根路径回 index.html：页面内相对引用已在浏览器侧按当前基址解析（不改写 URL/头）
+    if (request.method === 'GET' && path === '/') {
+      const asset = await env.ASSETS.fetch(new URL('/index.html', url.origin).toString(), request);
+      if (asset.status !== 404) return withFrameAncestors(asset);
     }
     // 模块代码按「部署在根路径」编写：剥掉挂载前缀
-    url.pathname = url.pathname.slice(PREFIX.length) || '/';
+    url.pathname = path;
     const headers = new Headers(request.headers);
-    // 仅根路径回 index.html：页面内相对引用已在浏览器侧按 /m/<id>/ 解析（不改写 URL/头）
-    if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '')) {
-      const asset = await env.ASSETS.fetch(new URL('/index.html', url.origin).toString(), request);
-      if (asset.status !== 404) return asset;
-    }
     // Hono 实例是对象非函数：走 .fetch（与 core 入口同款调用约定）
-    return worker.fetch(new Request(url, { method: request.method, headers, body: request.body, duplex: 'half' }), env, ctx);
+    const res = await worker.fetch(new Request(url, { method: request.method, headers, body: request.body, duplex: 'half' }), env, ctx);
+    return withFrameAncestors(res);
   },
 };
 `;
