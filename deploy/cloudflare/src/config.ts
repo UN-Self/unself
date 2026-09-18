@@ -36,6 +36,8 @@ export const ModuleEntrySchema = z.union([
     id: z.string().regex(/^[a-z][a-z0-9-]+$/),
     /** 来源：official:/npm:/github:/https:/file:（docs/modules.md §1）。 */
     source: z.string().min(1),
+    /** 存储选择覆写（#55，来自向导③½/CLI --storage）：declaration ∈ manifest.storage.accepts。 */
+    storage: z.object({ declaration: z.string().min(1) }).optional(),
   }),
 ]);
 
@@ -55,13 +57,17 @@ export interface NormalizedModuleEntry {
   id: string;
   /** 来源字符串（official:/npm:/github:/https:/file:）；undefined = builtin。 */
   source?: string;
+  /** 存储选择覆写（#55）：用户选定四级之一（向导③½ / CLI 覆写）；undefined = preferred ?? core。 */
+  storage?: { declaration: string };
 }
 
 /** config.modules 归一化：字符串与对象两种形态 → 统一 {id, source?}；同 id 重复条目拒绝。 */
 export function normalizeModuleEntries(modules: UnselfConfig['modules']): NormalizedModuleEntry[] {
   const seen = new Set<string>();
   return modules.map((m) => {
-    const entry: NormalizedModuleEntry = typeof m === 'string' ? { id: m } : { id: m.id, source: m.source };
+    const entry: NormalizedModuleEntry = typeof m === 'string'
+      ? { id: m }
+      : { id: m.id, source: m.source, ...(m.storage ? { storage: m.storage } : {}) };
     if (seen.has(entry.id)) {
       throw new Error(`unself.config.jsonc modules 出现重复模块 id："${entry.id}"（同 id 只允许一个条目）`);
     }

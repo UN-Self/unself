@@ -13,15 +13,18 @@ import {
   apexZone,
   beginDeploy,
   chooseDomain,
+  chooseStorage,
   completeDeploy,
   confirmModules,
   failDeploy,
   needsTotalTls,
   pushEvent,
   resetWizard,
+  SHARED_CONSENT_NOTE,
   submitToken,
   type WizardEnvHint,
   type WizardState,
+  type WizardStorageOption,
 } from './state';
 
 /** envHint 缺省（向后兼容 #258）：只给 hasEnvToken 时其余字段的安全默认值。 */
@@ -45,9 +48,16 @@ export interface WizardDeps {
   deploy: (input: {
     domain: string;
     modules: string[];
+    /** ③½ 用户存储选择（#55）：模块 id → 四级之一；缺省模块 = preferred ?? core。 */
+    storageChoices?: Record<string, string>;
     storage: { provider: 'r2'; bucket: string };
     onEvent: (text: string) => void;
   }) => Promise<{ baseUrl: string; setupToken: string | null }>;
+  /**
+   * 模块存储声明投影（#55）：③½ 渲染单选 + accepts 校验的依据。
+   * 由启动方注入（CLI 从模块包 manifest 读；测试直给）；缺省 = 无可选模块（全按 preferred ?? core）。
+   */
+  storageOptions?: WizardStorageOption[];
   /** 环境已带凭证（CLOUDFLARE_API_TOKEN）：① 步页面展示「已检测」态。 */
   hasEnvToken: boolean;
   /**
@@ -123,6 +133,37 @@ function authDetails(hint: WizardEnvHint): string {
 </details>`;
 }
 
+/** ③½ 存储选择段（#55）：逐模块单选 + shared 知情同意。无可选模块（全 core）时整段省略。 */
+function storageSection(state: WizardState): string {
+  const options: WizardStorageOption[] = state.storageOptions;
+  if (options.length === 0) return '';
+  const levelNote: Record<string, string> = {
+    core: '经 Core API 代理（默认，推荐）',
+    shared: '共享库自建表（需知情同意）',
+    dedicated: '独立库（占账户配额）',
+    external: '自备外部库（配置页填连接串）',
+  };
+  const rows = options
+    .map((opt) => {
+      const current = state.storageChoices[opt.id] ?? opt.preferred ?? 'core';
+      const radios = opt.accepts
+        .map(
+          (level) =>
+            `<label class="sto-row"><input type="radio" name="sto-${opt.id}" value="${level}" ${current === level ? 'checked' : ''}> ${level}（${levelNote[level] ?? level}）</label>`,
+        )
+        .join('');
+      return `<fieldset class="sto-mod" data-mod="${opt.id}"><legend>${opt.id}</legend>${radios}</fieldset>`;
+    })
+    .join('\n');
+  const consent = `<label class="consent"><input type="checkbox" id="shared-consent"> ${SHARED_CONSENT_NOTE}</label>`;
+  return `<section>
+  <h2>③½ 数据存放（每模块四选一，声明之外的选项已被模块排除）</h2>
+  ${rows}
+  ${consent}
+  <button id="btn-storage" type="button">确认存储选择</button> <span class="err" id="err-storage"></span>
+</section>`;
+}
+
 /** 页面：页头常驻实例目录（可复制）+ 六段流表单。 */
 export function renderPage(state: WizardState, envHint: WizardEnvHint): string {
   const hint = envHint;
@@ -187,6 +228,7 @@ ${banner}
   <form id="form-modules"><label>逗号分隔 <input type="text" name="modules" value="${state.modules.join(',')}"></label>
   <button type="submit">下一步</button> <span class="err" id="err-modules"></span></form>
 </section>
+${storageSection(state)}
 <section>
   <h2>④ 装配</h2>
   <p id="confirm-line">域名：${state.domainChoice === 'custom' ? state.domain : 'workers.dev 免费域'}；模块：${state.modules.join('、')}</p>
@@ -219,6 +261,17 @@ $('form-modules').addEventListener('submit', async (e) => {
   e.preventDefault();
   const r = await post('/api/step3', { modules: e.target.modules.value.split(',') });
   r.ok ? location.reload() : showErr('err-modules', r.data.problem);
+});
+$('btn-storage')?.addEventListener('click', async () => {
+  const choices = {};
+  for (const opt of document.querySelectorAll('fieldset.sto-mod')) {
+    const id = opt.dataset.mod;
+    const checked = opt.querySelector('input[type=radio]:checked');
+    if (checked) choices[id] = checked.value;
+  }
+  const consent = document.getElementById('shared-consent')?.checked ?? false;
+  const r = await post('/api/step3b', { choices, sharedConsent: consent });
+  r.ok ? location.reload() : showErr('err-storage', r.data.problem);
 });
 $('btn-deploy').addEventListener('click', async () => {
   $('btn-deploy').disabled = true;
@@ -339,6 +392,25 @@ export function createWizardServer(opts: ServeOptions): Server {
           json(res, 200, { step: r.state.step });
           return;
         }
+        // ③½ 存储选择（#55）：逐模块从 accepts 里选，选外即拒绝；shared 需知情同意。
+        if (req.method === 'POST' && url.pathname === '/api/step3b') {
+          if (!state.hasToken) {
+            json(res, 400, { problem: '请先完成①凭证' });
+            return;
+          }
+          const body = await readJsonBody(req);
+          const raw = (body.choices ?? {}) as Record<string, unknown>;
+          const choices: Record<string, string> = {};
+          for (const [k, v] of Object.entries(raw)) choices[k] = String(v);
+          const r = chooseStorage(state, choices, body.sharedConsent === true);
+          if (r.problem) {
+            json(res, 400, { problem: r.problem });
+            return;
+          }
+          deps.setState(r.state);
+          json(res, 200, { step: r.state.step });
+          return;
+        }
         if (req.method === 'POST' && url.pathname === '/api/step4') {
           if (state.step !== 'ready' && state.step !== 'failed' && state.step !== 'done') {
             json(res, 400, { problem: `当前步骤 ${state.step} 不能开始装配（请先完成①②③）` });
@@ -352,6 +424,7 @@ export function createWizardServer(opts: ServeOptions): Server {
             .deploy({
               domain: st.domain,
               modules: st.modules,
+              storageChoices: Object.keys(st.storageChoices).length > 0 ? { ...st.storageChoices } : undefined,
               storage: { provider: 'r2', bucket: 'unself-storage' },
               onEvent: (text) => {
                 // pushEvent 原地追加到当前状态（返回值是事件对象，不是状态——不能拿去 setState）。

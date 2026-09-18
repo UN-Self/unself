@@ -9,6 +9,7 @@ import {
   buildConfigInput,
   chooseDomain,
   completeDeploy,
+  chooseStorage,
   confirmModules,
   failDeploy,
   initialWizardState,
@@ -18,6 +19,7 @@ import {
   submitToken,
   tokenProblem,
   domainProblem,
+  type WizardStorageOption,
 } from '../src/web/state';
 
 let instancePath: string;
@@ -93,7 +95,8 @@ describe('confirmModules（③ 模块确认）', () => {
     const r = confirmModules(s, [' hello ', 'chat', 'hello', '']);
     expect(r.problem).toBeNull();
     expect(r.state.modules).toEqual(['hello', 'chat']);
-    expect(r.state.step).toBe('ready');
+    // #248：③ 模块确认后先进存储选择（③½ storage），④ ready 在 chooseStorage 之后
+    expect(r.state.step).toBe('storage');
 
     expect(confirmModules(s, []).problem).toMatch(/至少确认一个/);
     expect(confirmModules(s, ['Bad_ID']).problem).toMatch(/不合法/);
@@ -172,5 +175,41 @@ describe('needsTotalTls / apexZone（#246 决策 #66 内联判定，语义同 st
   it('组合语义：向导①折叠入口露出条件（多级子域 → 需 API Token/Total TLS）', () => {
     const domain = 'a.team.example.com';
     expect(needsTotalTls(domain, apexZone(domain))).toBe(true);
+  });
+});
+
+describe('chooseStorage（③½ 存储选择，#55）', () => {
+  const OPTS: WizardStorageOption[] = [
+    { id: 'hello', accepts: ['core'] },
+    { id: 'demo', accepts: ['core', 'shared'], preferred: 'core' },
+  ];
+
+  function stateWith(): ReturnType<typeof initialWizardState> {
+    const s = { ...initialWizardState(instancePath, { storageOptions: OPTS.map((o) => ({ ...o })) }), hasToken: true, step: 'storage' as const };
+    return s;
+  }
+
+  it('默认选择 = preferred ?? core；合法选择进 ready', () => {
+    const r = chooseStorage(stateWith(), {}, false);
+    expect(r.problem).toBeNull();
+    expect(r.state.step).toBe('ready');
+    expect(r.state.storageChoices).toEqual({ hello: 'core', demo: 'core' });
+  });
+
+  it('选了 accepts 之外的模式 → 拒绝（不进 ④）', () => {
+    const r = chooseStorage(stateWith(), { hello: 'shared' }, true);
+    expect(r.problem).toMatch(/不支持.*shared.*accepts 之外/);
+    expect(r.state.step).toBe('storage');
+    const r2 = chooseStorage(stateWith(), { demo: 'dedicated' }, false);
+    expect(r2.problem).toMatch(/不支持.*dedicated/);
+  });
+
+  it('shared 需知情同意：未勾选拒绝；勾选后通过且 consent 落状态', () => {
+    const no = chooseStorage(stateWith(), { demo: 'shared' }, false);
+    expect(no.problem).toMatch(/知情同意/);
+    const yes = chooseStorage(stateWith(), { demo: 'shared' }, true);
+    expect(yes.problem).toBeNull();
+    expect(yes.state.storageChoices.demo).toBe('shared');
+    expect(yes.state.sharedConsent).toBe(true);
   });
 });
