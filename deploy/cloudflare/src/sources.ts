@@ -5,6 +5,11 @@
  * 五协议：official: / npm:（含私有 registry，走 npm 配置）/ github:（release 产物）/
  * https:（任意 tarball URL）/ file:（唯一允许本地源码）。
  *
+ * **显式 loopback http 规则（issue #269 / 决策 #58 信任边界）**：`http://` 仅当 hostname ∈
+ * {localhost, 127.0.0.1, ::1} 时接受（仍须指向 .tgz/.tar.gz；返回 kind 复用 'https'，下游按 URL
+ * 处理无协议分支）；其余明文 http 一律拒绝——远端来源走明文等于向中间人开放包替换。
+ * 仅 loopback 允许明文 http，用于本地/离线取包（如本地 registry 镜像）。
+ *
  * **信任边界（硬）**：远端来源一律要求已打包——直接取 tarball 解包，**不走 `npm install`、
  * 不执行包内任何脚本**（postinstall 没有执行机会：解包只认 tar 字节，不读 package.json scripts）。
  * 仅 `file:` 允许本地源码 + 本地构建；`official:` 当前从仓库 modules/ 目录取（与 builtin 同源）。
@@ -70,13 +75,34 @@ export function parseSource(source: string): ParsedSource {
     }
     return { kind: 'https', url: source };
   }
+  // 显式 loopback http 规则（issue #269 / 决策 #58 信任边界）：http:// 仅当 hostname 是
+  // loopback（localhost / 127.0.0.1 / ::1）时接受——本地/离线取包用；其余明文 http 一律拒绝
+  // （远端来源必须 HTTPS，防中间人换包）。kind 复用 'https'（下游只认 URL，无协议分支）。
+  if (source.startsWith('http://')) {
+    let hostname = '';
+    try {
+      // WHATWG URL：IPv6 的 hostname 自带方括号（如 [::1]）→ 剥掉再比对
+      hostname = new URL(source).hostname.replace(/^\[|\]$/g, '');
+    } catch {
+      throw new Error(`http 来源不是合法 URL：${source}`);
+    }
+    if (!['localhost', '127.0.0.1', '::1'].includes(hostname)) {
+      throw new Error(
+        `拒绝明文 http 来源：${source}——HTTPS 强制（决策 #58 信任边界）；仅 loopback（localhost / 127.0.0.1 / ::1）允许明文 http，用于本地/离线取包。请改用 https:// 指向 tarball`,
+      );
+    }
+    if (!source.endsWith('.tgz') && !source.endsWith('.tar.gz')) {
+      throw new Error(`http 来源必须指向 tarball（.tgz/.tar.gz）：${source}`);
+    }
+    return { kind: 'https', url: source };
+  }
   if (source.startsWith('file:')) {
     const p = source.slice('file:'.length);
     if (!p) throw new Error(`file 来源缺路径：${source}（形如 file:./modules/my-todo）`);
     return { kind: 'file', path: p };
   }
   throw new Error(
-    `无法识别的模块来源：${source}（支持 official:/npm:/github:/https:（.tgz）/file:，见 docs/modules.md §1）`,
+    `无法识别的模块来源：${source}（支持 official:/npm:/github:/https:（.tgz）/file:；http: 仅限 loopback 本地取包，见 docs/modules.md §1）`,
   );
 }
 
