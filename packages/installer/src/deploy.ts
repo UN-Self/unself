@@ -411,3 +411,60 @@ export async function packModule(input: { dir: string; outDir?: string; log?: (m
     files: result.files.map((f) => f.name),
   };
 }
+
+// ---------------------------------------------------------------------------
+// `unself module remove`（#270）：引擎卸载 + 同步 config
+// ---------------------------------------------------------------------------
+
+/** `unself module remove <id>` 结果。 */
+export interface RemoveModuleResult {
+  moduleId: string;
+  /** 生效数据落点（core/shared/dedicated/external）。 */
+  level: string;
+  /** 实际删除的清单表。 */
+  tablesDropped: string[];
+  /** 被清的迁移记账表名（无则 null）。 */
+  ledgerTable: string | null;
+  routeRemoved: boolean;
+  workerDeleted: boolean;
+  removedFromRegistry: boolean;
+  lockUpdated: boolean;
+  /** 是否从 unself.config.jsonc 的 modules 段移除。 */
+  configRemoved: boolean;
+}
+
+/**
+ * `unself module remove <id>`：先确认 id 在实例 config 的 modules 里（不在 → 抛错且零副作用），
+ * 再调引擎卸载（撤路由 → 删 Worker → 按 tables 清单删表 → 清记账 → 注册表移除 → 更新 lock），
+ * 最后把该条目从 `unself.config.jsonc` 移除。
+ *
+ * 顺序要点：引擎成功后才改 config——CF/DB 清理失败时配置保持原样，重跑仍可卸载（幂等）。
+ */
+export async function removeModuleFromInstance(input: {
+  instancePath: string;
+  moduleId: string;
+  log?: (msg: string) => void;
+  /** @internal 测试注入口：透传给引擎 removeModule（client / configOverride 等）。 */
+  engineOverrides?: Partial<Parameters<Engine['removeModule']>[0]>;
+}): Promise<RemoveModuleResult> {
+  const { configPath } = instanceLayout(dirname(input.instancePath));
+  const cfgText = readFileSync(configPath, 'utf8');
+  const { removeModuleFromConfigText } = await import('./lib/config-edit');
+  const { text, removed } = removeModuleFromConfigText(cfgText, input.moduleId);
+  if (!removed) {
+    throw new Error(
+      `实例 config 的 modules 里没有「${input.moduleId}」：未卸载任何东西（先确认实例内 id；` +
+        '查看 unself.config.jsonc 的 "modules" 段）',
+    );
+  }
+  const engine = await loadEngine();
+  const result = await engine.removeModule({
+    ...(input.engineOverrides ?? {}),
+    // 引擎 rootDir = 实例目录本身（与 runDeploy 同一约定：lock/config/.deploy 都在实例目录内）
+    rootDir: input.instancePath,
+    moduleId: input.moduleId,
+    ...(input.log ? { log: input.log } : {}),
+  });
+  await writeFile(configPath, text);
+  return { ...result, configRemoved: true };
+}
