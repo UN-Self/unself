@@ -114,7 +114,7 @@ export async function resolveAuth(opts: ResolveAuthOptions = {}): Promise<TokenS
     throw new Error(msg);
   }
   // ③ OAuth：经 `wrangler auth token` 借用；wranglerBin 空串/null 为显式跳过（注入「无 wrangler」行为用）
-  if (opts.wranglerBin === '' || opts.wranglerBin === null) {
+  if (opts.wranglerBin === '' || opts.wranglerBin === null || env.UNSELF_WRANGLER_BIN === '') {
     log('OAuth 借用已被显式禁用（wranglerBin 为空）：走 API Token 路径（零工具链）。');
     return null;
   }
@@ -128,7 +128,7 @@ async function borrowWranglerOauth(bin: string, env: AuthEnv, opts: ResolveAuthO
   const execFile = opts.execFile ?? execFileAsync;
   const [cmd, ...rest] = splitBin(bin);
   try {
-    const { stdout } = await execFile(cmd!, ['auth', 'token', ...rest], { env });
+    const { stdout } = await execFile(cmd!, [...rest, 'auth', 'token'], { env });
     const token = parseWranglerTokenOutput(String(stdout ?? ''));
     if (!token) {
       log('wrangler 已安装但未取到 OAuth 令牌（未登录或会话过期）：跑一次 `wrangler login` 完成浏览器授权；或改用 API Token 路径。');
@@ -159,7 +159,7 @@ async function probeVersionWarning(bin: string, env: AuthEnv, injected?: ExecFil
   try {
     const execFile = injected ?? execFileAsync;
     const [cmd, ...rest] = splitBin(bin);
-    const { stdout } = await execFile(cmd!, ['--version', ...rest], { env });
+    const { stdout } = await execFile(cmd!, [...rest, '--version'], { env });
     return wranglerVersionWarning(parseWranglerVersionOutput(stdout)) ?? undefined;
   } catch {
     return wranglerVersionWarning(null) ?? undefined;

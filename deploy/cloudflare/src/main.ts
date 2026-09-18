@@ -152,6 +152,16 @@ export async function main(argv: string[] = []): Promise<Summary> {
     }
   }
   asker.close(); // 交互终点：后续九步不再读终端
+
+  // --check-auth：探测与自检已在上面完成，到此即退出（0=自检通过，1=被拦；不装配、不进九步）。
+  if (cli.checkAuth) {
+    out('--check-auth：权限自检通过，可以开跑（未装配任何资源）。');
+    out('──────────── 将装配（预览）────────────');
+    out(`  域名   ${config.domain || 'workers.dev 免费域名（自动分配）'}`);
+    out(`  模块   ${config.modules.join('、') || '（全停用）'}`);
+    return {} as unknown as Summary;
+  }
+
   out('──────────── 将装配 ────────────');
   out(`  域名   ${effective.domain || 'workers.dev 免费域名（自动分配）'}`);
   out(`  模块   ${effective.modules.length > 0 ? effective.modules.join('、') : '（全停用）'}    存储   ${effective.storage.provider === 'r2' ? `R2 自动创建（${effective.storage.bucket}）` : `外部 S3（${effective.storage.endpoint}）`}`);
@@ -175,12 +185,6 @@ export async function main(argv: string[] = []): Promise<Summary> {
       throw err;
     }
   })();
-
-  // --check-auth：探测与自检已在上面完成，到此即退出（0=自检通过，1=被拦；不装配）。
-  //（自检通过时九步不跑，summary 为静态占位——返回值只用于 --check-auth 之外的实际装配路径。）
-  if (cli.checkAuth) {
-    out('--check-auth：权限自检通过，可以开跑（未装配任何资源）。');
-    return summary;  }
 
   // ---- 收尾屏「下一步」指引（§5.5 ⑤）----
   console.log('\n━━━━━━━━━━ 装配完成 ✓ ━━━━━━━━');
