@@ -37,15 +37,18 @@ node deploy/cloudflare/bin.ts
 
 ## 装第三方模块
 
-模块可以来自 npm、git、任意 tarball，也可以是你本地的一个目录：
+模块可以来自官方源、npm（含私有 registry）、git release 产物、任意 HTTPS tarball，也可以是你本地的一个目录：
 
 ```sh
 unself module add npm:@acme/unself-todo@1.2.0
+unself deploy
 ```
 
-（`unself` CLI 随安装器提供，开发中；在 Web 向导里也可以点「添加模块」把安装串粘进去。）
+安装串的五种写法（决策 #58）：`official:hello`、`npm:@acme/unself-todo@1.2.0`、`github:acme/unself-todo#v1.2.0`、`https://…/todo-1.2.0.tgz`、`file:./modules/my-todo`。
 
-想自己写模块——包格式、字段表、数据落点、`validate` 清单、发布流程：**[docs/modules.md](docs/modules.md)**。
+`module add` 会先解析来源，把「将要装什么」打出来（版本、SRI、声明的权限、数据落点），**未知能力直接拒绝并点名**；解析结果写进 `unself.config.jsonc` 与 `unself.lock`，所以紧接着的 `unself deploy` 不会重复下载。Web 向导第③步也可以点「添加模块」把安装串粘进去，装配前同样展示来源 / 版本 / SRI / 权限 / 落点。
+
+想自己写模块：`unself module pack <目录>` 把模块打成 `.tgz` 并打印 SRI，再发布到 npm / git release / 任意 HTTPS 地址。包格式、字段表、数据落点、发布前自检清单与发布流程：**[docs/modules.md](docs/modules.md)**。
 
 ## 卡住了去哪
 

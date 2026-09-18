@@ -41,7 +41,8 @@ describe('createInstanceDir', () => {
     expect(res.namespace).toBe(deriveNamespace(root.split('/').pop() as string));
 
     const lock = JSON.parse(readFileSync(res.layout.lockPath, 'utf8')) as Record<string, unknown>;
-    expect(lock).toEqual({ lockVersion: 1, instance: {}, modules: [] });
+    // #269：骨架必须过引擎 LockFileSchema（旧 {instance:{},modules:[]} 会被引擎判非法）
+    expect(lock).toEqual({ lockVersion: 1, generatedAt: expect.any(String), modules: {} });
   });
 
   it('opts.modules 覆盖默认模块列表', () => {

@@ -45,19 +45,24 @@ describe('submitToken（① 密码框语义）', () => {
   it('非法 token → 400 人话错误且原地不动', () => {
     const s = initialWizardState(instancePath);
     expect(submitToken(s, '').problem).toMatch(/为空/);
-    expect(submitToken(s, 'A'.repeat(20)).problem).toMatch(/长度/);
     expect(submitToken(s, `bad ${'A'.repeat(40)}`).problem).toMatch(/空格/);
-    expect(submitToken(s, '1'.repeat(40)).problem).toMatch(/应以字母开头/);
+    expect(submitToken(s, 'not-a-token!').problem).toMatch(/以外的字符/);
     const after = submitToken(s, '').state;
     expect(after.step).toBe('auth');
     expect(after.hasToken).toBe(false);
   });
 
-  it('tokenProblem 形态规则与 CLI 侧同源（#66）', () => {
-    expect(tokenProblem('1'.repeat(39))).toMatch(/应以字母开头/);
-    expect(tokenProblem(`-${'a'.repeat(39)}`)).toMatch(/应以字母开头/);
-    expect(tokenProblem('x'.repeat(39))).toBeNull();
-    expect(tokenProblem('ValidTokenWithLetters1234567890123')).toBeNull();
+  it('tokenProblem 只拦形状：#269 放宽——不再要求字母开头/固定长度（CF《Token formats》无此约束）', () => {
+    // 老格式：40 位字母数字，首字符可能是数字（约 1/6 概率）
+    expect(tokenProblem('1'.repeat(40))).toBeNull();
+    // 新格式：cfut_ 前缀 + 40 字符 + 校验和（超 50 位也必须放行）
+    expect(tokenProblem(`cfut_${'a'.repeat(40)}${'b'.repeat(8)}`)).toBeNull();
+    expect(tokenProblem(`-${'a'.repeat(39)}`)).toBeNull();
+    // 短 token 也不再被形状正则拦（真伪交给 CF /user/tokens/verify）
+    expect(tokenProblem('x'.repeat(20))).toBeNull();
+    expect(tokenProblem('')).toMatch(/为空/);
+    expect(tokenProblem('has space')).toMatch(/空格/);
+    expect(tokenProblem('bad!char')).toMatch(/以外的字符/);
   });
 });
 
