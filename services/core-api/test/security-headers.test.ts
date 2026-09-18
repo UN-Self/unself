@@ -14,44 +14,46 @@ function html(body = '<!doctype html><html></html>'): Response {
 }
 
 describe('withHtmlSecurityHeaders（HTML 响应补头）', () => {
-  it('text/html 响应拿到 CSP / X-Frame-Options / nosniff / Referrer-Policy', () => {
-    const res = withHtmlSecurityHeaders(html());
+  it('text/html 响应拿到 CSP / X-Frame-Options / nosniff / Referrer-Policy', async () => {
+    const res = await withHtmlSecurityHeaders(html());
     expect(res.headers.get('content-security-policy')).toBe(HTML_CSP);
     expect(res.headers.get('x-frame-options')).toBe(HTML_FRAME_OPTIONS);
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
   });
 
-  it('反点击劫持两个方向都在：frame-ancestors 收敛 + X-Frame-Options 兜底', () => {
-    const csp = withHtmlSecurityHeaders(html()).headers.get('content-security-policy')!;
+  it('反点击劫持两个方向都在：frame-ancestors 收敛 + X-Frame-Options 兜底', async () => {
+    const csp = (await withHtmlSecurityHeaders(html())).headers.get('content-security-policy')!;
     expect(csp).toContain("frame-ancestors 'self'");
     expect(csp).toContain("default-src 'self'");
     expect(csp).not.toContain('*');
   });
 
   it('响应体与状态码原样透传（补头不改内容）', async () => {
-    const res = withHtmlSecurityHeaders(new Response('<h1>hi</h1>', { status: 418, headers: { 'content-type': 'text/html' } }));
+    const res = await withHtmlSecurityHeaders(new Response('<h1>hi</h1>', { status: 418, headers: { 'content-type': 'text/html' } }));
     expect(res.status).toBe(418);
     expect(await res.text()).toBe('<h1>hi</h1>');
   });
 
-  it('JSON 响应不被加头（API 不上这套头）', () => {
-    const res = withHtmlSecurityHeaders(new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }));
+  it('JSON 响应不被加头（API 不上这套头）', async () => {
+    const res = await withHtmlSecurityHeaders(new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }));
     expect(res.headers.has('content-security-policy')).toBe(false);
     expect(res.headers.has('x-frame-options')).toBe(false);
   });
 
-  it('空 content-type / 二进制不被加头', () => {
-    expect(withHtmlSecurityHeaders(new Response('x')).headers.has('content-security-policy')).toBe(false);
+  it('空 content-type / 二进制不被加头', async () => {
+    expect((await withHtmlSecurityHeaders(new Response('x'))).headers.has('content-security-policy')).toBe(false);
     expect(
-      withHtmlSecurityHeaders(new Response(new Uint8Array([1, 2]), { headers: { 'content-type': 'image/png' } })).headers.has(
-        'content-security-policy',
-      ),
+      (
+        await withHtmlSecurityHeaders(
+          new Response(new Uint8Array([1, 2]), { headers: { 'content-type': 'image/png' } }),
+        )
+      ).headers.has('content-security-policy'),
     ).toBe(false);
   });
 
-  it('已有同名头时不覆盖（静态资产 _headers 先加过 → 幂等）', () => {
-    const res = withHtmlSecurityHeaders(
+  it('已有同名头时不覆盖（静态资产 _headers 先加过 → 幂等）', async () => {
+    const res = await withHtmlSecurityHeaders(
       new Response('<html>', { headers: { 'content-type': 'text/html', 'x-frame-options': 'DENY' } }),
     );
     expect(res.headers.get('x-frame-options')).toBe('DENY');
