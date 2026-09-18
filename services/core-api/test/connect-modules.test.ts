@@ -43,15 +43,15 @@ describe('htmlCsp（frame-src 按白名单生成）', () => {
 });
 
 describe('withHtmlSecurityHeaders（响应头注入 + 幂等合并）', () => {
-  it('带白名单：HTML 响应的 CSP frame-src 含白名单 origin', () => {
-    const res = withHtmlSecurityHeaders(html(), ['https://mod.example.com']);
+  it('带白名单：HTML 响应的 CSP frame-src 含白名单 origin', async () => {
+    const res = await withHtmlSecurityHeaders(html(), ['https://mod.example.com']);
     const csp = res.headers.get('content-security-policy')!;
     expect(csp).toContain("frame-src 'self' https://mod.example.com");
   });
 
-  it('响应已带 CSP（_headers 先加）时：在原 frame-src 上合并，不推翻原策略', () => {
+  it('响应已带 CSP（_headers 先加）时：在原 frame-src 上合并，不推翻原策略', async () => {
     const existing = "default-src 'self'; frame-src 'self'; object-src 'none'";
-    const res = withHtmlSecurityHeaders(
+    const res = await withHtmlSecurityHeaders(
       new Response('<html></html>', {
         status: 200,
         headers: { 'content-type': 'text/html', 'content-security-policy': existing },
@@ -63,8 +63,43 @@ describe('withHtmlSecurityHeaders（响应头注入 + 幂等合并）', () => {
     expect(csp).toContain("object-src 'none'");
   });
 
-  it('JSON 响应不加头（即使带白名单）', () => {
-    const res = withHtmlSecurityHeaders(
+  it('#247b：下发 HTML 的 CSP meta frame-src 被重写为含白名单的最终版（meta∩头部交集，运行期改 meta 无效）', async () => {
+    const body = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'self'; frame-src 'self'; object-src 'none'"></head><body></body></html>`;
+    const res = await withHtmlSecurityHeaders(
+      new Response(body, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }),
+      ['https://todo.example.org'],
+    );
+    const text = await res.text();
+    // meta 内的 frame-src 已含白名单 origin（解析前就位，浏览器才认）
+    expect(text).toContain("frame-src 'self' https://todo.example.org");
+    // 响应头同样含白名单（两层一致）
+    expect(res.headers.get('content-security-policy')).toContain('https://todo.example.org');
+  });
+
+  it('#247b：meta 无 frame-src 时追加到 content 末尾；无 meta 的 HTML 原样透传', async () => {
+    const withBase = await withHtmlSecurityHeaders(
+      new Response(
+        `<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'self'; object-src 'none'"></head></html>`,
+        { status: 200, headers: { 'content-type': 'text/html' } },
+      ),
+      ['https://todo.example.org'],
+    );
+    expect(await withBase).toBeTruthy();
+    const baseText = await withBase.text();
+    expect(baseText).toContain("; frame-src 'self' https://todo.example.org");
+
+    const noMeta = await withHtmlSecurityHeaders(
+      new Response('<html><head><title>x</title></head></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      }),
+      ['https://todo.example.org'],
+    );
+    expect(await noMeta.text()).toBe('<html><head><title>x</title></head></html>');
+  });
+
+  it('JSON 响应不加头（即使带白名单）', async () => {
+    const res = await withHtmlSecurityHeaders(
       new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }),
       ['https://mod.example.com'],
     );
