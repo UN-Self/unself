@@ -55,7 +55,7 @@ unself module add npm:@acme/unself-todo@1.2.0
 
 ## 开发
 
-Node ≥ 22、pnpm ≥ 11。PR 前三件套必须全绿：`pnpm -r typecheck && pnpm -r test && pnpm -r build`。
+Node ≥ 22、pnpm ≥ 11。PR 前门禁必须全绿（= CI 同一套 5 步，见 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)）。
 测试标准（测行为不测实现）见 [docs/testing.md](docs/testing.md)；贡献流程与 DCO 见 [CONTRIBUTING.md](CONTRIBUTING.md)（设计变更必须先改设计文档）。
 
 ## 文档
