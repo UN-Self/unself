@@ -4,8 +4,8 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { validateModulePackage } from '../src/validate';
-import { CONTRACT_VERSION } from '../src/manifest';
+import { CONTRACT_VERSION, ModuleManifestSchema } from '../src/manifest';
+import { manifestFromYamlText, validateModulePackage } from '../src/validate';
 
 /** 仓库根（packages/contracts → 上两级）。 */
 const REPO_ROOT = join(import.meta.dirname, '..', '..', '..');
@@ -164,7 +164,7 @@ describe('六类硬错（docs/modules.md §7，每类红灯）', () => {
   it('③ tables 与迁移不一致（建了未申报 / 申报未建）→ error(tables)', () => {
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
-    manifest.storage = { accepts: ['shared'] };
+    manifest.storage = { accepts: ['shared'], declaration: 'shared' };
     manifest.tables = ['todo_items'];
     const undeclared = validateModulePackage({
       ...base,
@@ -239,7 +239,7 @@ describe('增量友好（#57）与附加检查', () => {
   it('迁移文件名不符合 000N_描述.sql → error(tables)', () => {
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
-    manifest.storage = { accepts: ['shared'] };
+    manifest.storage = { accepts: ['shared'], declaration: 'shared' };
     manifest.tables = ['todo_items'];
     const result = validateModulePackage({
       ...base,
@@ -257,8 +257,142 @@ describe('增量友好（#57）与附加检查', () => {
   });
 });
 
+describe('迁移静态检查（决策 #61，#248）：逐条幂等 + 只写增量安全语句', () => {
+  /** shared 级合法最小包（带迁移入口）。 */
+  function sharedInput(migrations: Record<string, string>): Parameters<typeof validateModulePackage>[0] {
+    const base = minimalInput();
+    const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
+    manifest.storage = { accepts: ['shared'], declaration: 'shared' };
+    manifest.tables = ['todo_items'];
+    return { ...base, manifestText: JSON.stringify(manifest), migrations };
+  }
+
+  it('全幂等增量迁移 → 绿（官方 hello 真实文件同规）', () => {
+    const result = validateModulePackage(sharedInput({
+      '0001_init.sql': 'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY);\nCREATE INDEX IF NOT EXISTS idx_todo ON todo_items (id);',
+      '0002_seed.sql': "INSERT OR IGNORE INTO todo_items (id) VALUES (1);",
+    }));
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it('非幂等 CREATE（缺 IF NOT EXISTS）→ error 指出文件与第几条语句', () => {
+    const result = validateModulePackage(sharedInput({
+      '0001_init.sql': 'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY);\nCREATE TABLE todo_tags (id INTEGER);',
+    }));
+    expect(result.ok).toBe(false);
+    const mig = result.errors.filter((e) => e.check === 'migrations');
+    expect(mig).toHaveLength(1);
+    expect(mig[0]!.message).toContain('0001_init.sql');
+    expect(mig[0]!.message).toContain('第 2 条');
+    expect(mig[0]!.message).toContain('IF NOT EXISTS');
+  });
+
+  it('非幂等 INSERT（缺 OR IGNORE/REPLACE）→ error 指出文件与第几条语句', () => {
+    const result = validateModulePackage(sharedInput({
+      '0001_init.sql': 'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY);',
+      '0002_seed.sql': "INSERT INTO todo_items (id) VALUES (1);",
+    }));
+    expect(result.ok).toBe(false);
+    const mig = result.errors.filter((e) => e.check === 'migrations');
+    expect(mig).toHaveLength(1);
+    expect(mig[0]!.message).toContain('0002_seed.sql');
+    expect(mig[0]!.message).toContain('第 1 条');
+    expect(mig[0]!.message).toContain('OR IGNORE');
+  });
+
+  it('破坏性语句（DROP/DELETE/UPDATE/ALTER）→ error 拦下（增量安全规则②）', () => {
+    const result = validateModulePackage(sharedInput({
+      '0001_init.sql': 'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY);',
+      '0002_drop.sql': 'DROP TABLE todo_items;',
+      '0003_wipe.sql': 'DELETE FROM todo_items;',
+      '0004_rewrite.sql': 'UPDATE todo_items SET id = 1;',
+      '0005_expand.sql': 'ALTER TABLE todo_items ADD COLUMN title TEXT;',
+    }));
+    expect(result.ok).toBe(false);
+    const mig = result.errors.filter((e) => e.check === 'migrations');
+    // DROP/DELETE/UPDATE/ALTER 各一条；CREATE 幂等不报
+    expect(mig).toHaveLength(4);
+    expect(mig.map((e) => e.message).map((m) => m.split('：')[0])).toEqual([
+      '0002_drop.sql',
+      '0003_wipe.sql',
+      '0004_rewrite.sql',
+      '0005_expand.sql',
+    ]);
+    expect(mig[0]!.message).toContain('第 1 条');
+  });
+
+  it('触发器体内分号不切语句；官方 chat 真实 schema-baseline.sql 幂等检查全绿', () => {
+    const result = validateModulePackage({ ...chatPackageInput() });
+    // chat 的 baseline 全部 CREATE IF NOT EXISTS / INSERT OR IGNORE → 幂等检查零新增错误
+    expect(result.errors.filter((e) => e.check === 'migrations')).toEqual([]);
+  });
+
+  it('official hello（core 级，无迁移）不触发迁移检查', () => {
+    const result = validateModulePackage(helloPackageInput());
+    expect(result.errors).toEqual([]);
+  });
+});
+
 describe('契约真值锚定', () => {
   it('CONTRACT_VERSION 锚定 1.0（防止悄悄漂移）', () => {
     expect(CONTRACT_VERSION).toBe('1.0');
+  });
+});
+
+describe('storage.declaration（#55 增量字段：安装时用户选定）', () => {
+  function baseWithStorage(storage: Record<string, unknown>): Parameters<typeof validateModulePackage>[0] {
+    const base = minimalInput();
+    const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
+    manifest.storage = storage;
+    return { ...base, manifestText: JSON.stringify(manifest) };
+  }
+
+  it('declaration 在 accepts 内 → 绿（shared 带 tables+迁移）', () => {
+    // shared 选择：需带 tables + 迁移（自建表的既有硬护栏不回退；accepts 含 shared 时
+    // 作者侧缺迁移仍拦——但 core 选择不触发任何建表路径，走 declaration-not-shared 分支）
+    const base = minimalInput();
+    const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
+    manifest.storage = { accepts: ['core', 'shared'], preferred: 'core', declaration: 'shared' };
+    manifest.tables = ['todo_items'];
+    const result = validateModulePackage({
+      ...base,
+      manifestText: JSON.stringify(manifest),
+      migrations: { '0001_init.sql': 'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY);' },
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it('declaration=core 且包内无迁移 → 绿（装 core 不建表；accepts 含 shared 的表清单归作者侧）', () => {
+    // 旧路径拦「accepts 含 shared 但无迁移」；用户选 core 时不建表，不应拦安装
+    const ok = validateModulePackage(baseWithStorage({ accepts: ['core', 'shared'], declaration: 'core' }));
+    expect(ok.errors.filter((e) => e.check === 'tables')).toEqual([]);
+    expect(ok.ok).toBe(true);
+  });
+
+  it('declaration 不在 accepts 内 → schema 层 error（选了声明之外的模式即拒绝安装，#55）', () => {
+    const result = validateModulePackage(baseWithStorage({ accepts: ['core'], declaration: 'dedicated' }));
+    expect(result.ok).toBe(false);
+    expect(result.errors.map((e) => e.check)).toContain('storage');
+    expect(result.errors.some((e) => e.message.includes('declaration') && e.message.includes('dedicated'))).toBe(true);
+  });
+
+  it('manifest.yaml 形态：storage.declaration 解析进候选（yaml 三字段齐备）', () => {
+    const yaml = [
+      'id: demo',
+      'route: /m/demo',
+      'entry: https://team.example.com/m/demo/',
+      'runtimes:',
+      '  - worker',
+      'version: 1.0.0',
+      'storage:',
+      '  accepts:',
+      '    - dedicated',
+      '  preferred: dedicated',
+      '  declaration: dedicated',
+    ].join('\n');
+    const parsed = ModuleManifestSchema.parse(manifestFromYamlText(yaml));
+    expect(parsed.storage).toEqual({ accepts: ['dedicated'], preferred: 'dedicated', declaration: 'dedicated' });
   });
 });
