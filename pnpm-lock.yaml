@@ -267,6 +267,12 @@ importers:
       '@types/node':
         specifier: ^24
         version: 24.13.3
+      '@unself/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@unself/deploy-cloudflare':
+        specifier: workspace:*
+        version: link:../../deploy/cloudflare
       esbuild:
         specifier: ^0.28.0
         version: 0.28.2
@@ -279,16 +285,6 @@ importers:
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
-    optionalDependencies:
-      '@unself/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      '@unself/control-plane':
-        specifier: workspace:*
-        version: link:../control-plane
-      '@unself/deploy-cloudflare':
-        specifier: workspace:*
-        version: link:../../deploy/cloudflare
 
   packages/module-sdk:
     dependencies:

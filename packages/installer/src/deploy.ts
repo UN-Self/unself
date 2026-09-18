@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * 部署执行桥（薄）：向导④与 `unself deploy` 都经由 runDeploy。
- * 引擎（@unself/deploy-cloudflare）一律动态加载：CLI 核心（init/list/use/…）与 Web 向导
- * 页面/状态机零引擎依赖——独立安装制品里也能跑；真正装配时才需要引擎在依赖里
- * （workspace 开发装 / 发布后 registry 装均满足）。
+ * 引擎（@unself/deploy-cloudflare）经动态 import 调用：#257 起它**随安装器 bundle 进 dist/unself.mjs**
+ * （安装器 tarball 零运行期依赖），仓库开发形态下则由 workspace 链接提供——两种形态同一份代码。
+ * 引擎运行期消费的装配产物（core/shell/SDK/builtin 模块包）随包分发在 `<安装器>/dist/artifacts`，
+ * `rootDir`（实例目录的父目录）只当**输出目录**（.deploy/、unself.lock）。
  * 职责边界：读实例目录 → configOverride 进九步引擎（不改配置文件语义）→ 进度转发。
  */
 import { readFileSync } from 'node:fs';
@@ -23,27 +24,40 @@ export interface RunDeployOptions {
 const STORAGE_LEVELS = ['core', 'shared', 'dedicated', 'external'] as const;
 
 /**
- * 读实例所属仓库内各模块 manifest 的 storage 声明（#55）：
+ * 读实例所属模块的 storage 声明（#55）：
  * 返回向导③½ 的单选数据（id + accepts + preferred）。
- * 只对「当前实例目录的 rootDir 下 modules/ 里发现到的模块」生效——与九步引擎的
- * discoverModules 同款扫描（manifest.yaml 存在即模块目录）。
+ * 两个来源（#257）：产物形态读安装器包内 `<artifacts>/modules/<id>/manifest.json`；
+ * 仓库形态读 `rootDir/modules/<id>/manifest.yaml`——干净机器没有仓库，必须优先产物。
+ * 与九步引擎的 discoverModules 同源（模块目录的两种形态同规）。
  */
 export async function wizardStorageOptions(rootDir: string): Promise<Array<{ id: string; accepts: string[]; preferred?: string }>> {
   const { readdir, readFile } = await import('node:fs/promises');
   const { existsSync } = await import('node:fs');
   const { join } = await import('node:path');
-  const modulesDir = join(rootDir, 'modules');
+  let modulesDir = join(rootDir, 'modules');
+  let packageForm = false;
+  try {
+    const engine = await loadEngine();
+    const artifacts = engine.resolveArtifactRoots({ rootDir });
+    if (artifacts) {
+      modulesDir = artifacts.modulesDir;
+      packageForm = true;
+    }
+  } catch {
+    // 引擎不可用（发布包已内置引擎；此处僅兼容开发态缺依赖）→ 退回仓库形态扫描
+  }
   if (!existsSync(modulesDir)) return [];
   const out: Array<{ id: string; accepts: string[]; preferred?: string }> = [];
   for (const entry of await readdir(modulesDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const manifestPath = join(modulesDir, entry.name, 'manifest.yaml');
+    const manifestPath = join(modulesDir, entry.name, packageForm ? 'manifest.json' : 'manifest.yaml');
     if (!existsSync(manifestPath)) continue;
     // 轻量提取 storage.accepts/preferred：不引引擎（installer 零引擎依赖），
     // 用 @unself/contracts 的 manifestFromYamlText 单轨解析（防解析分叉）。
     try {
       const { manifestFromYamlText } = await import('@unself/contracts');
-      const candidate = manifestFromYamlText(await readFile(manifestPath, 'utf8')) as {
+      const text = await readFile(manifestPath, 'utf8');
+      const candidate = (packageForm ? JSON.parse(text) : manifestFromYamlText(text)) as {
         id?: string;
         storage?: { accepts?: string[]; preferred?: string };
       };

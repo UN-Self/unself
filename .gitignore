@@ -11,6 +11,9 @@ coverage/
 # 部署脚本生成的装配产物（临时部署配置与 shell 构建副本）
 .deploy/
 
+# 安装器 tarball（#257：npm pack 产物，可重建——交付走 PR 附件/发布流水线，不入库）
+packages/installer/*.tgz
+
 # 环境变量与密钥（pnpm-lock.yaml 必须入库，勿忽略）
 .dev.vars
 .env
