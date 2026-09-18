@@ -26,13 +26,13 @@ import { CONTRACT_VERSION, ModuleManifestSchema } from '@unself/contracts';
 import { LOCK_FILENAME, emptyLock, parseLockText, serializeLock, manifestHashOf, type LockFile } from './lock';
 import { lockRecordFrom, resolveSources } from './module-sources';
 import { createCoreControlPlane } from './control-plane';
+import { CredentialsMissingError, credentialsMissingMessage, resolveAuth } from './auth';
 import { domainProblem } from './interactive';
 import { createKeypair, JWT_SECRET_NAME, publicJwksJson } from './keypair';
 import { ensureRoute, ensureTotalTls, ensureZoneARecord, findZone, removeLegacyCustomDomains, removeRoutesForPatterns } from './rest/zones';
 import { ensureDatabases, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
 import {
   RestClient,
-  resolveToken,
   findAccountId,
   putWorker,
   hasWorkerSecret,
@@ -694,11 +694,14 @@ export async function runNineSteps(input: {
   };
 }
 
-/** 默认 REST 客户端：env token → 借 wrangler OAuth（决策 #65/#66）。 */
+/** 默认 REST 客户端：env token → 借 wrangler OAuth（决策 #65/#66，#246 起 resolveAuth 统一收口）。 */
 async function defaultClient(log: (m: string) => void): Promise<RestClient> {
-  const { token, source } = await resolveToken({ log });
-  log(source === 'env' ? '凭证：CLOUDFLARE_API_TOKEN' : '凭证：借用 wrangler OAuth 令牌');
-  return new RestClient({ token });
+  const cred = await resolveAuth({ log });
+  if (!cred) {
+    throw new CredentialsMissingError(credentialsMissingMessage());
+  }
+  if (cred.warning) log(`⚠ ${cred.warning}`);
+  return new RestClient({ token: cred.token });
 }
 
 /** 读目录下 .sql 文件（文件名升序；#55 记账契约：000N_描述.sql 只增不改）。 */
