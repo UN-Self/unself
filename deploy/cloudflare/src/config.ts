@@ -9,11 +9,15 @@
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
 import type { SourcedModule } from './module-sources';
+import { NAMESPACE_RE } from './naming';
 
 /** 选中 R2：脚本负责建桶。 */
 export const R2StorageSchema = z.object({
   provider: z.literal('r2'),
-  /** 桶名；缺省 unself-storage。 */
+  /**
+   * 桶名；缺省 = 与命名空间同源（`<namespace>-storage`；无 namespace 的历史实例 = `unself-storage`，#272）。
+   * 显式写了非缺省值就照用（外部桶/自定义桶名）。
+   */
   bucket: z.string().min(1).default('unself-storage'),
 });
 /** 外部 S3：部署者自备桶（MinIO/R2 外部/其他 S3 兼容）。 */
@@ -44,6 +48,16 @@ export const ModuleEntrySchema = z.union([
 export const UnselfConfigSchema = z.object({
   /** 实例对外域名（如 team.example.com）；空/省略 → workers.dev 临时域。 */
   domain: z.string().trim().default(''),
+  /**
+   * 实例命名空间（#272）：CF 资源名前缀（`mysite` → `mysite-core` / `mysite-core-api` / `mysite-storage`）。
+   * **省略 = 历史形态 `unself-*`**——#272 之前部署的既有实例再次部署逐字不变（不会因为改名变孤儿）；
+   * 新实例由 `init`/向导写入，从实例名派生。`UNSELF_RESOURCE_PREFIX` 仍可显式覆盖（探针/CI）。
+   */
+  namespace: z
+    .string()
+    .trim()
+    .regex(NAMESPACE_RE, '命名空间只能小写字母/数字/连字符，首尾必须是字母或数字，长度 ≤40')
+    .optional(),
   /** 选中启用的模块（字符串=builtin 目录；{id,source}=第三方来源）；空数组 = 全停用（未列出的已存在模块 → 注册表 not_deployed、其 zone 路由删除）。 */
   modules: z.array(ModuleEntrySchema),
   storage: StorageSchema.default({ provider: 'r2', bucket: 'unself-storage' }),
@@ -137,10 +151,25 @@ export function stripJsonc(source: string): string {
   return out.replace(/,(\s*[}\]])/g, '$1');
 }
 
+/**
+ * R2 桶名与命名空间同源（#272）：配了命名空间但没显式写桶名（仍是历史缺省 `unself-storage`）时，
+ * 桶名跟随命名空间 → `<namespace>-storage`。显式桶名（≠ 历史缺省）原样保留。
+ */
+export function withNamespacedBucket(cfg: UnselfConfig): UnselfConfig {
+  if (
+    cfg.namespace !== undefined &&
+    cfg.storage.provider === 'r2' &&
+    cfg.storage.bucket === 'unself-storage'
+  ) {
+    return { ...cfg, storage: { provider: 'r2', bucket: `${cfg.namespace}-storage` } };
+  }
+  return cfg;
+}
+
 /** 解析并校验配置文本。抛 ZodError/JSON 语法错误（调用方转人话）。 */
 export function parseUnselfConfigText(text: string): UnselfConfig {
   const json = stripJsonc(text);
-  return UnselfConfigSchema.parse(JSON.parse(json));
+  return withNamespacedBucket(UnselfConfigSchema.parse(JSON.parse(json)));
 }
 
 /** 读仓库根 unself.config.jsonc。 */

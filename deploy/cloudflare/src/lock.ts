@@ -38,6 +38,17 @@ export const LockEntrySchema = z.object({
 });
 export type LockEntry = z.infer<typeof LockEntrySchema>;
 
+/** 单个已记账资源（D1/KV 带服务端 id；R2/Worker 只有名）。 */
+export const ResourceLedgerSchema = z.object({
+  /** 本实例命名空间（dev 探针/无命名空间历史实例省略）。 */
+  namespace: z.string().optional(),
+  d1: z.array(z.object({ name: z.string().min(1), id: z.string().min(1) })).default([]),
+  kv: z.array(z.object({ name: z.string().min(1), id: z.string().min(1) })).default([]),
+  r2: z.array(z.object({ name: z.string().min(1) })).default([]),
+  workers: z.array(z.object({ name: z.string().min(1) })).default([]),
+});
+export type ResourceLedger = z.infer<typeof ResourceLedgerSchema>;
+
 /** unself.lock 顶层模型。lockVersion 只在破坏性变更时 bump。 */
 export const LockFileSchema = z.object({
   lockVersion: z.literal(1),
@@ -45,6 +56,12 @@ export const LockFileSchema = z.object({
   generatedAt: z.string().min(1),
   /** 模块 id → 锁条目。 */
   modules: z.record(z.string(), LockEntrySchema),
+  /**
+   * CF 资源台账（#272）：装配成功时写入本实例占用的 D1/KV/R2/Worker「名 + id」。
+   * 撞车守卫据此判定「账户里同名资源是否属于本实例」——台账对不上/不存在即停住求助，不静默接管。
+   * 旧实例（#272 之前部署）没有本段 → 守卫按「无法证明归属」处理（要求显式 `--allow-adopt`）。
+   */
+  resources: ResourceLedgerSchema.optional(),
 });
 export type LockFile = z.infer<typeof LockFileSchema>;
 
