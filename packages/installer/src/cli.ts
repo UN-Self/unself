@@ -7,13 +7,11 @@
  */
 import { rmSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+// 只依赖实例管理三库（零引擎依赖）：装配引擎仅在 deploy 分支动态加载——
+// 独立安装制品（npx tarball）里核心命令不 import 引擎即可工作。
+import { createInstanceDir, instanceLayout, loadInstance } from './lib/dir';
 import {
-  createInstanceDir,
-  echoPathline,
-  instanceLayout,
-  loadInstance,
   loadRegistry,
-  pathline,
   refreshRegistry,
   registerInstance,
   registryPath,
@@ -21,7 +19,8 @@ import {
   resolveCurrent,
   saveRegistry,
   type InstancesRegistry,
-} from './index';
+} from './lib/registry';
+import { echoPathline, pathline } from './lib/pathline';
 
 export interface RunOptions {
   argv: string[];
