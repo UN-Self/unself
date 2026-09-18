@@ -38,7 +38,6 @@ import {
   putWorker,
   hasWorkerSecret,
   putWorkerSecret,
-  isWorkerNew,
   enableWorkersDev,
   ensureR2Bucket,
   workersDevSubdomain,
@@ -60,8 +59,10 @@ import {
 import {
   checkSharedGuards,
   dedicatedDbNameFor,
+  doMigrationLedgerName,
   migrationDirFor,
   migrationFailure,
+  planDoMigrations,
   readSqlFiles,
   storageLevelFor,
   type StorageLevel,
@@ -306,6 +307,11 @@ export async function runNineSteps(input: {
   rep.log('core 迁移已应用（unself-core，记账 unself_migrations_core）');
   /** dedicated 模块的独立 D1 id（步骤①补建；摘要与绑定共用）。 */
   const dedicatedDbIds = new Map<string, string>();
+  /**
+   * 模块记账表所在 D1（#255）：与步骤②里模块迁移落点**同一个库**——DO 迁移 tag 的
+   * 「已应用」判定与写入都挂在这张 `unself_migrations_<模块>` 上，不另造第二套记账。
+   */
+  const moduleLedgerDbIds = new Map<string, string>();
   // 平台基建（#248）：core 级模块经 Core API 代理存取，代理的承载表 module_kv 归 core
   // （docs/modules.md §4「core 的 schema 归 core」）——与模块无关，必须在任何 core 级模块跑之前就位。
   // 记账独立（unself_migrations_platform，落在 modules 库）：与各模块记账互不覆盖（#55 护栏①同规）。
@@ -388,6 +394,8 @@ export async function runNineSteps(input: {
     } else {
       rep.log(`模块 ${mod.id} 落点 shared：共享 modules 库建表（独立记账 ${`unself_migrations_${mod.id.replaceAll('-', '_')}`}）`);
     }
+    // 记账库登记（步骤④的 DO 迁移判定/写入必须用同一个库同一张表）
+    moduleLedgerDbIds.set(mod.id, targetDbId);
     const targetCp = createCoreControlPlane(client, accountId, targetDbId);
     // 逐文件带定位地跑：applyMigrations 内部按记账跳过；失败转「模块/文件/第几条语句」人话。
     try {
@@ -670,16 +678,31 @@ export async function runNineSteps(input: {
     const moduleAssetsDir = isChat
       ? join(provisioned.outDir, 'modules', chatAssetsDir!)
       : join(provisioned.outDir, mod.assetsDir ?? join('modules', mod.id, 'assets'));
-    // 首部署检测：脚本不存在 → 带 DO migrations 元数据建 SQLite 类；已部署 → 不带（幂等重传）
-    const isFirstDeploy = await isWorkerNew(client, accountId, `unself-module-${mod.id}`);
-    const chatMigrations = chatPkgMeta?.migrations?.[0];
-    const doMigrations =
-      isFirstDeploy && chatMigrations
-        ? {
-            newTag: chatMigrations.tag,
-            steps: chatMigrations.new_sqlite_classes.map((cls) => ({ new_sqlite_classes: [cls] })),
-          }
-        : undefined;
+    // DO 迁移判定（#255）：不再用 isWorkerNew（脚本存在与否 ≠ DO SQLite 类已建）。
+    // 依据 = 模块记账表里的已应用 tag（#248 同一套记账）；上传成功后记账，失败不记。
+    const declaredDoMigrations = chatPkgMeta?.migrations ?? [];
+    let doMigrations: { oldTag?: string; newTag: string; steps: Array<Record<string, unknown>> } | undefined;
+    let doMigrationCp: ReturnType<typeof createCoreControlPlane> | null = null;
+    let pendingDoTags: string[] = [];
+    if (declaredDoMigrations.length > 0) {
+      const ledgerDbId = moduleLedgerDbIds.get(mod.id);
+      if (!ledgerDbId) {
+        throw new Error(
+          `模块 ${mod.id} 声明了 DO 迁移（migrations）但落点 core/external（无模块记账库）：` +
+            'DO 迁移的「已应用」判定必须有落脚账表，先声明 shared/dedicated 落点',
+        );
+      }
+      doMigrationCp = createCoreControlPlane(client, accountId, ledgerDbId);
+      const appliedNames = await doMigrationCp.appliedMigrations(mod.id);
+      const plan = planDoMigrations({ declared: declaredDoMigrations, appliedNames });
+      if (plan) {
+        doMigrations = { ...(plan.oldTag !== undefined ? { oldTag: plan.oldTag } : {}), newTag: plan.newTag, steps: plan.steps };
+        pendingDoTags = plan.tags;
+        rep.log(`模块 ${mod.id} DO 迁移待应用（记账未记）：${pendingDoTags.join('、')}`);
+      } else {
+        rep.log(`模块 ${mod.id} DO 迁移已记账，本次不发（幂等重传）`);
+      }
+    }
     const moduleUpload = async (): Promise<void> =>
       uploadWorkerSpec(input, client, accountId, rep, {
         name: `unself-module-${mod.id}`,
@@ -701,6 +724,16 @@ export async function runNineSteps(input: {
         ...(doMigrations ? { migrations: doMigrations } : {}),
       });
     await moduleUpload();
+    // 迁移已真正应用（上传 2xx）才记账：上传失败不记账 → 下次重发，而不是永久跳过（#255）
+    if (doMigrations && doMigrationCp) {
+      for (const tag of pendingDoTags) {
+        await doMigrationCp.markMigrationApplied(mod.id, doMigrationLedgerName(tag));
+      }
+      // 同一次运行内的重传（secret 生效补 deploy）不再带已应用的迁移
+      // ——重复 tag 会被 CF 拒（10079 Migration tag precondition failed）。
+      doMigrations = undefined;
+      pendingDoTags = [];
+    }
     rep.log(`模块 ${mod.id} 已上传`);
     if (config.domain && resolvedZone) {
       await ensureRoute(client, resolvedZone.id, `${config.domain}/m/${mod.id}/*`, `unself-module-${mod.id}`, rep.log);
