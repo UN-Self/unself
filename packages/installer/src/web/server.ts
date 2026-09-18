@@ -8,6 +8,7 @@
  * 部署执行器由 deps.deploy 注入（测试替身 / CLI 接九步引擎），向导壳不 import 引擎。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { DEFAULT_THEME, tokenCssName } from '@unself/contracts';
 import {
   beginDeploy,
   chooseDomain,
@@ -70,6 +71,17 @@ function advise(err: unknown): { cause: string; owner: 'token' | 'dns' | 'networ
   return { cause: msg.slice(0, 300), owner: 'code', fix: '直接重跑即可：装配器幂等收敛，不会重复创建资源' };
 }
 
+/**
+ * 向导页的令牌变量块：取值来自契约默认主题（`packages/contracts/src/theme-tokens.json`
+ * 是令牌取值的唯一定义处），页面样式一律引用 `var(--unself-*)`——照 AGENTS「样式只走 tokens」。
+ * 源码里不出现任何颜色字面量（取值在运行时由数据渲染出来），故 verify-tokens 规则一通过。
+ */
+function themeVarBlock(): string {
+  return Object.entries(DEFAULT_THEME)
+    .map(([dotted, value]) => `${tokenCssName(dotted)}: ${value};`)
+    .join(' ');
+}
+
 /** 页面：页头常驻实例目录（可复制）+ 六段流表单。 */
 export function renderPage(state: WizardState, hasEnvToken: boolean): string {
   const authNote = hasEnvToken
@@ -82,14 +94,14 @@ export function renderPage(state: WizardState, hasEnvToken: boolean): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Unself 安装向导</title>
 <style>
-  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-  body { max-width: 42rem; margin: 0 auto; padding: 1.5rem 1rem; }
-  header { border: 1px solid #8884; border-radius: 8px; padding: .75rem 1rem; margin-bottom: 1.5rem; }
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; ${themeVarBlock()} }
+  body { max-width: 42rem; margin: 0 auto; padding: 1.5rem 1rem; color: var(--unself-color-text); background: var(--unself-color-bg); }
+  header { border: 1px solid var(--unself-color-border); border-radius: 8px; padding: .75rem 1rem; margin-bottom: 1.5rem; }
   code { user-select: all; word-break: break-all; }
-  section { margin: 1rem 0; padding: 1rem; border: 1px solid #8884; border-radius: 8px; }
+  section { margin: 1rem 0; padding: 1rem; border: 1px solid var(--unself-color-border); border-radius: 8px; }
   label { display: block; margin: .5rem 0; }
   input[type=password], input[type=text] { width: 100%; box-sizing: border-box; padding: .5rem; margin-top: .25rem; }
-  .err { color: #c0392b; white-space: pre-wrap; }
+  .err { color: var(--unself-color-danger); white-space: pre-wrap; }
   ol li { margin: .25rem 0; }
 </style>
 </head>
