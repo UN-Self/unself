@@ -46,7 +46,6 @@ import {
 import { buildAssetManifest, startAssetSession, uploadMissingAssets } from './rest/assets';
 import type { WorkerBinding } from './rest/workers';
 import {
-  applyChatSchema,
   CHAT_DB_NAME,
   CHAT_KEYRING_SECRET,
   CHAT_MODULE_ID,
@@ -258,13 +257,42 @@ export async function runNineSteps(input: {
   rep.log('core 迁移已应用（unself-core，记账 unself_migrations_core）');
   /** dedicated 模块的独立 D1 id（步骤①补建；摘要与绑定共用）。 */
   const dedicatedDbIds = new Map<string, string>();
+  // 平台基建（#248）：core 级模块经 Core API 代理存取，代理的承载表 module_kv 归 core
+  // （docs/modules.md §4「core 的 schema 归 core」）——与模块无关，必须在任何 core 级模块跑之前就位。
+  // 记账独立（unself_migrations_platform，落在 modules 库）：与各模块记账互不覆盖（#55 护栏①同规）。
+  const modulesCp = createCoreControlPlane(client, accountId, dbIds.modules);
+  const platformMigrationDir = join(rootDir, 'services/core-api/migrations/modules');
+  const platformFiles = await readSqlFiles(platformMigrationDir);
+  if (platformFiles.length > 0) {
+    try {
+      const report = await modulesCp.applyMigrations('platform', platformFiles);
+      rep.log(`平台迁移（modules 库）：应用 ${report.applied.length} 个${report.skipped.length > 0 ? `，记账跳过 ${report.skipped.length} 个` : ''}`);
+    } catch (err) {
+      const applied = await modulesCp.appliedMigrations('platform');
+      const pending = platformFiles.filter((f) => !applied.includes(f.name));
+      for (const file of pending) {
+        try {
+          await modulesCp.applyMigrations('platform', [file]);
+        } catch (fileErr) {
+          throw migrationFailure({ moduleId: 'platform', file: file.name, sql: file.sql, cause: fileErr });
+        }
+      }
+      throw migrationFailure({
+        moduleId: 'platform',
+        file: pending[pending.length - 1]?.name ?? '(未知)',
+        sql: pending[pending.length - 1]?.sql ?? '',
+        cause: err,
+      });
+    }
+  }
   for (const mod of selected) {
     const level = storageLevelFor({ manifest: mod.resolved?.manifest, id: mod.id });
-    if (mod.id === CHAT_MODULE_ID && chatResources && chatPkg) {
-      // chat（#74 普通化 = dedicated 普通实例）：基线 schema 一次性灌入保留（#219 决策，上游无记账迁移链）
-      await applyChatSchema({ client, accountId, chatDbId: chatResources.dbId, moduleDir: mod.dir, log: rep.log });
+    if (mod.id === CHAT_MODULE_ID && chatResources) {
+      // chat（#74/#248 普通化）：专属库在步骤①建（`unself-chat`），这里把 id 记进落点表——
+      // 之后与任何 dedicated 模块走**同一条**通用迁移链（migrations/chat/0001_baseline.sql +
+      // 独立记账 unself_migrations_chat），不再有「一次性灌 schema」的存储豁免。
+      // （chat 的 KV/R2/DO 绑定是模块资源，由包配置提供，见步骤④——与存储落点无关。）
       dedicatedDbIds.set(mod.id, chatResources.dbId);
-      continue;
     }
     if (level === 'core') {
       rep.log(`模块 ${mod.id} 落点 core：数据经 Core API 代理，无模块建表`);
@@ -306,20 +334,20 @@ export async function runNineSteps(input: {
     } else {
       rep.log(`模块 ${mod.id} 落点 shared：共享 modules 库建表（独立记账 ${`unself_migrations_${mod.id.replaceAll('-', '_')}`}）`);
     }
-    const modulesCp = createCoreControlPlane(client, accountId, targetDbId);
+    const targetCp = createCoreControlPlane(client, accountId, targetDbId);
     // 逐文件带定位地跑：applyMigrations 内部按记账跳过；失败转「模块/文件/第几条语句」人话。
     try {
-      const report = await modulesCp.applyMigrations(mod.id, files);
+      const report = await targetCp.applyMigrations(mod.id, files);
       rep.log(
         `模块 ${mod.id} 迁移：本次应用 ${report.applied.length} 个${report.skipped.length > 0 ? `，记账跳过 ${report.skipped.length} 个` : ''}`,
       );
     } catch (err) {
       // 逐文件重放定位：找到第一份「记账上未应用」的文件再跑一次，捕原始错误转三要素
-      const applied = await modulesCp.appliedMigrations(mod.id);
+      const applied = await targetCp.appliedMigrations(mod.id);
       const pending = files.filter((f) => !applied.includes(f.name));
       for (const file of pending) {
         try {
-          await modulesCp.applyMigrations(mod.id, [file]);
+          await targetCp.applyMigrations(mod.id, [file]);
         } catch (fileErr) {
           throw migrationFailure({ moduleId: mod.id, file: file.name, sql: file.sql, cause: fileErr });
         }
@@ -554,6 +582,11 @@ export async function runNineSteps(input: {
       { type: 'plain_text', name: 'MODULE_ID', text: mod.id },
       { type: 'plain_text', name: 'CORE_JWKS_JSON', text: jwksJson },
     ];
+    if (modLevel === 'core') {
+      // core 级（#248 收敛（a)）：模块唯一数据通道 = Core API 代理；跨 worker 用 Service Binding
+      // （同 zone 明文 fetch 被 CF 平台禁 → 只有绑定这条路能在生产成立）。
+      moduleBindings.push({ type: 'service', name: 'CORE_API', service: 'unself-core-api' });
+    }
     if (modLevel === 'dedicated' && dedicatedDbIds.has(mod.id)) {
       // dedicated 专属库绑定（#248）：unself-<id>，绑定名 <ID>_DB（chat 的 DB 绑定走包配置同名兼容）
       moduleBindings.push({

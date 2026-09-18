@@ -39,12 +39,14 @@ function seedModule(db: CoreTestDb, permissions?: string[], enabled: 0 | 1 = 1):
   );
 }
 
-/** modules 库（module_kv 真建表）——storage API 的数据落点。 */
+/** modules 库（module_kv 真建表）——storage API 的数据落点。
+ * #248：承载表是**平台基建**（services/core-api/migrations/modules/），不再由 hello 模块自带迁移创建；
+ * 测试与装配器同源加载同一份平台迁移文件（同一份 SQL，不做替身）。 */
 function createModulesDb(): D1Database {
   const sqlite = new DatabaseSync(':memory:');
   applyMigrations(
     sqlite,
-    fileURLToPath(new URL('../../../modules/hello/migrations/hello/', import.meta.url)),
+    fileURLToPath(new URL('../migrations/modules/', import.meta.url)),
   );
   return createD1Adapter(sqlite);
 }

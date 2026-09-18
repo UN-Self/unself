@@ -2,7 +2,7 @@
 
 /**
  * chat 模块测试工厂：真 SQLite（node:sqlite，Node≥22 内置，零新依赖）
- * 加载 modules/chat/worker/schema-baseline.sql 真建表 + 最小 D1 适配器 + 内存 KV。
+ * 加载 modules/chat/migrations/chat/0001_baseline.sql 真建表 + 最小 D1 适配器 + 内存 KV。
  *
  * 为什么自己 fork 而不 import module-sdk 的 test-factory：后者默认加载
  * modules/hello/migrations/hello/ 的 module_kv 迁移——chat 不用 module_kv，
@@ -140,7 +140,7 @@ export interface ChatTestDb {
 
 /** schema-baseline.sql 的仓库内路径（schema 真值唯一来源，上游 worker 交付）。 */
 export const SCHEMA_BASELINE_PATH = fileURLToPath(
-  new URL('../worker/schema-baseline.sql', import.meta.url),
+  new URL('../migrations/chat/0001_baseline.sql', import.meta.url),
 );
 
 /**

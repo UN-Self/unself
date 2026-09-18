@@ -8,6 +8,7 @@
  * - moduleWorkerEntry：包 main 入口解析（hello=src/index.ts、chat=worker/src/index.js）。
  */
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -111,7 +112,7 @@ describe('readChatPackageConfig（包配置子集解析）', () => {
     expect(pkg.migrations).toEqual([{ tag: 'v1', new_sqlite_classes: ['ChannelRoom', 'Scheduler', 'UserInbox'] }]);
   });
 
-  it('缺 schema-baseline.sql / D1 绑定形状不对 → 人话报错', async () => {
+  it('缺迁移链（migrations/chat/*.sql）/ D1 绑定形状不对 → 人话报错', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'chat-pkg-'));
     await mkdir(join(dir, 'worker'), { recursive: true });
     await writeFile(join(dir, 'wrangler.jsonc'), '{"d1_databases":[]}');
@@ -119,8 +120,18 @@ describe('readChatPackageConfig（包配置子集解析）', () => {
     await writeFile(join(dir, 'wrangler.jsonc'), '{"d1_databases":[{"binding":"DB","database_id":"x"}],"kv_namespaces":[{"binding":"OTHER","id":"y"}]}');
     await expect(readChatPackageConfig(dir)).rejects.toThrow(/kv_namespaces/);
     await writeFile(join(dir, 'wrangler.jsonc'), '{"d1_databases":[{"binding":"DB"}],"kv_namespaces":[{"binding":"SESSIONS"}]}');
-    await expect(readChatPackageConfig(dir)).rejects.toThrow(/schema-baseline/);
+    // #248：chat 的 schema 走标准迁移链，包内 migrations/chat/ 缺失 → 装载即拒（不再有一次性灌 schema 豁免）
+    await expect(readChatPackageConfig(dir)).rejects.toThrow(/migrations\/chat/);
+    await mkdir(join(dir, 'migrations', 'chat'), { recursive: true });
+    await expect(readChatPackageConfig(dir)).rejects.toThrow(/migrations\/chat/); // 空目录同样拒（无 .sql = 无法应用）
+    await writeFile(join(dir, 'migrations', 'chat', '0001_baseline.sql'), 'PRAGMA foreign_keys = ON;');
+    await expect(readChatPackageConfig(dir)).resolves.toMatchObject({ d1Binding: 'DB' });
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('真实 chat 包：迁移链在标准位置 migrations/chat/（#248 存储面去豁免的锚点）', () => {
+    expect(existsSync(join(REPO, 'modules/chat/migrations/chat/0001_baseline.sql'))).toBe(true);
+    expect(existsSync(join(REPO, 'modules/chat/worker/schema-baseline.sql'))).toBe(false);
   });
 });
 
