@@ -453,12 +453,12 @@ export async function writeConfig(path: string, content: string): Promise<void> 
   await writeFile(path, content, 'utf8');
 }
 
-/** 模块 wrapper 生成选项（#273）。 */
+/** 模块 wrapper 生成选项（#273 + #277）。 */
 export interface ModuleWrapperOptions {
   /** 挂载前缀：domain 形态 = `/m/<id>`；workers.dev 形态 = `''`（模块自有子域根挂载）。
    *  缺省 = `/m/<id>`（存量调用方兼容）。 */
   mount?: string;
-  /** 壳 origin（frame-ancestors 值，决策 #63/#73）；null/缺省 = 不发该头（未配置形态）。 */
+  /** 壳 origin（壳上下文注入值：frame-ancestors + `unself-shell-origin` meta）；null/缺省 = 不注入任何壳上下文。 */
   shellOrigin?: string | null;
 }
 
@@ -467,27 +467,63 @@ export interface ModuleWrapperOptions {
  * - 前缀剥除（domain 形态）：命中 `/m/<id>` 才剥，根挂载（workers.dev）原样——
  *   「模块恒挂根路径」不变式（决策 #63）两形态都成立；
  * - 静态资产回退（ASSETS）；
- * - frame-ancestors：值 = 壳 origin（模块页自负，决策 #63/#73）——跨子域 iframe 才不会被浏览器裁掉。
+ * - 壳上下文注入（决策 #63/#73 + #277）：
+ *   - frame-ancestors：值 = 壳 origin（模块页自负）——跨子域 iframe 才不会被浏览器裁掉；
+ *   - `<meta name="unself-shell-origin">`：Firefox 无 ancestorOrigins，模块页 JS 读它校验入站 token；
+ *     触发条件 = shellOrigin 非 null 且响应为 text/html 且非无 body 状态（101/204/205/304）。
  */
 export function prefixStripWrapperSource(moduleId: string, options: ModuleWrapperOptions = {}): string {
   const mount = options.mount ?? `/m/${moduleId}`;
   const shellOrigin = options.shellOrigin ?? null;
   return `// SPDX-License-Identifier: AGPL-3.0-only
-// 由 deploy/cloudflare 生成：前缀剥除（mount=${mount || '(根挂载)'}）+ ASSETS 回退 + frame-ancestors。
+// 由 deploy/cloudflare 生成：前缀剥除（mount=${mount || '(根挂载)'}）+ ASSETS 回退 + 壳上下文（frame-ancestors + shell-origin meta）。
 import worker from './app.js';
 
 const PREFIX = '${mount}';
 const SHELL_ORIGIN = ${shellOrigin ? `'${shellOrigin}'` : 'null'};
+const META_NAME = 'unself-shell-origin';
+const BODYLESS = [101, 204, 205, 304];
 
-// frame-ancestors（决策 #63/#73）：值 = 壳 origin；已有 CSP 则合并，不覆盖模块自身策略。
-function withFrameAncestors(res) {
+// 壳上下文注入（决策 #63/#73，#277）：
+// - frame-ancestors：值 = 壳 origin；已有 CSP 则合并，不覆盖模块自身策略；
+// - shell-origin <meta>：Firefox 无 ancestorOrigins，模块页 JS 读它校验入站 token
+//   （用 <meta> 不动 script：CSP 安全）。触发条件：HTML 且非无 body 状态；
+//   幂等只豁免 meta 插入（已含则不重复插）；frame-ancestors 照补、失真标头照删。
+async function withShellContext(res) {
   if (!SHELL_ORIGIN) return res;
   const headers = new Headers(res.headers);
+  const contentType = headers.get('Content-Type') || '';
+  const nullBody = BODYLESS.includes(res.status);
+  const isHtml = contentType.includes('text/html');
+  if (isHtml && !nullBody) {
+    // frame-ancestors 照补（幂等不豁免）：已有则保留模块自身策略，否则并入
+    const existing = headers.get('Content-Security-Policy');
+    if (!(existing && /frame-ancestors/i.test(existing))) {
+      headers.set('Content-Security-Policy', existing ? existing + '; ' + 'frame-ancestors ' + SHELL_ORIGIN : 'frame-ancestors ' + SHELL_ORIGIN);
+    }
+    // meta 注入：已含（幂等标记）只跳过插入，不重复；否则插 <head> 开标签后 / 前置最前
+    const bodyText = await res.text();
+    let body = bodyText;
+    if (!bodyText.includes('name="' + META_NAME + '"')) {
+      const meta = '<meta name="' + META_NAME + '" content="' + SHELL_ORIGIN.replace(/"/g, '&quot;') + '">';
+      const headOpen = /<head[^>]*>/i.exec(bodyText);
+      if (headOpen) {
+        const at = headOpen.index + headOpen[0].length;
+        body = bodyText.slice(0, at) + meta + bodyText.slice(at);
+      } else {
+        body = meta + bodyText;
+      }
+    }
+    // body 已被 text() 解码重建：失真的长度/编码标头必须删（幂等短路也不例外）
+    headers.delete('Content-Encoding');
+    headers.delete('Content-Length');
+    return new Response(body, { status: res.status, statusText: res.statusText, headers });
+  }
+  // 非 HTML / 无 body 状态：只补 frame-ancestors（#273 语义原样），body 不动
   const existing = headers.get('Content-Security-Policy');
   if (existing && /frame-ancestors/i.test(existing)) return res;
   const directive = 'frame-ancestors ' + SHELL_ORIGIN;
   headers.set('Content-Security-Policy', existing ? existing + '; ' + directive : directive);
-  const nullBody = res.status === 101 || res.status === 204 || res.status === 205 || res.status === 304;
   return new Response(nullBody ? null : res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
@@ -502,19 +538,19 @@ export default {
       // 页面以相对路径引用资产（import './sdk/module-sdk.esm.js' → 请求
       // /sdk/... 或 /m/<id>/sdk/...），剥前缀后 = sdk/... 命中部署期静态资产。
       // 仅根路径本身（/ 或挂载前缀）不是资产：落 worker 根分支，由 Hono 渲染模块页。
-      return withFrameAncestors(await env.ASSETS.fetch(new URL(path, url.origin)));
+      return withShellContext(await env.ASSETS.fetch(new URL(path, url.origin)));
     }
     // 仅根路径回 index.html：页面内相对引用已在浏览器侧按当前基址解析（不改写 URL/头）
     if (request.method === 'GET' && path === '/') {
       const asset = await env.ASSETS.fetch(new URL('/index.html', url.origin).toString(), request);
-      if (asset.status !== 404) return withFrameAncestors(asset);
+      if (asset.status !== 404) return withShellContext(asset);
     }
     // 模块代码按「部署在根路径」编写：剥掉挂载前缀
     url.pathname = path;
     const headers = new Headers(request.headers);
     // Hono 实例是对象非函数：走 .fetch（与 core 入口同款调用约定）
     const res = await worker.fetch(new Request(url, { method: request.method, headers, body: request.body, duplex: 'half' }), env, ctx);
-    return withFrameAncestors(res);
+    return withShellContext(res);
   },
 };
 `;

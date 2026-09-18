@@ -127,6 +127,11 @@ describe('prefixStripWrapperSource（④挂载前缀剥除）', () => {
     expect(src).toContain("const SHELL_ORIGIN = 'https://unself-core-api.test-subdomain.workers.dev'");
     expect(src).toContain('frame-ancestors');
   });
+
+  it('workers.dev 形态模板（#277）：注入 `unself-shell-origin` meta（Firefox 无 ancestorOrigins 的 token 通道）', () => {
+    const src = prefixStripWrapperSource('hello', { mount: '', shellOrigin: 'https://unself-core-api.test-subdomain.workers.dev' });
+    expect(src).toContain("const META_NAME = 'unself-shell-origin'");
+  });
 });
 
 describe('migrationWranglerConfig（②迁移专用最小配置）', () => {
@@ -180,6 +185,8 @@ describe('buildModuleSdkAssets（T3 页面 SDK 装载契约）', () => {
       const mod = (await import(pathToFileURL(esmPath).href)) as Record<string, unknown>;
       expect(typeof mod.createModuleSDK).toBe('function');
       expect(Object.keys(mod).sort()).toEqual([
+        // #277 子任务 A：SDK 新增壳 origin 解析导出（wrapper 同步注入 meta，两端口对齐）
+        'SHELL_ORIGIN_META_NAME',
         'assertCoreOrigin',
         // #248 收敛（a)：core 级数据的唯一通道 = Core API 代理；createD1Storage 是兼容别名（形状不变）
         'createCoreApiStorage',
@@ -189,6 +196,7 @@ describe('buildModuleSdkAssets（T3 页面 SDK 装载契约）', () => {
         'createModuleStorage',
         'decodeJwtPayload',
         // #91 通道 B：主题语义名 → CSS 变量名单点转换（模块作者写样式用）
+        'resolveShellOrigin',
         'tokenCssName',
         'verifyModuleToken',
       ]);
