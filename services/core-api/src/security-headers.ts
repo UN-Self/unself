@@ -69,11 +69,29 @@ function frameSrcOf(csp: string): string | null {
 }
 
 /**
+ * 把下发 HTML 的 CSP meta 同步为含白名单的最终 frame-src（#247b）：
+ * 实测（Chrome 140）meta CSP 与响应头 CSP 取交集——meta 的 default-src 'self' 会兜住 frame-src，
+ * 且文档解析后 meta 不可放宽（运行期改写是 no-op），只改响应头不够，必须改解析前的 HTML。
+ * meta 已含 frame-src → 原位替换；不含 → 追加到 content 末尾；无 meta → 原文返回（非我们外壳的 HTML 不强塞）。
+ */
+function rewriteMetaFrameSrc(html: string, frameSrc: string): string {
+  const metaPattern = /<meta[^>]*http-equiv=["']?Content-Security-Policy["']?[^>]*>/i;
+  const metaTag = html.match(metaPattern)?.[0];
+  if (!metaTag) return html;
+  if (/frame-src[^;"']*/i.test(metaTag)) {
+    return html.replace(metaTag, metaTag.replace(/frame-src[^;"']*/i, frameSrc));
+  }
+  return html.replace(metaTag, metaTag.replace(/content=("[^"]*)"/i, `$1; ${frameSrc}"`));
+}
+
+/**
  * 给 HTML 响应补安全头；给 frameOrigins 时在 CSP `frame-src` 追加白名单
  * （响应自带 CSP：在原值上追加；没有：套生成值）。
+ * 同时重写下发 HTML 的 CSP meta frame-src 为同一白名单（#247b：meta∩头部交集，见 rewriteMetaFrameSrc）；
+ * meta 已含相同 frame-src 时 body 不变（幂等，流零拷贝）。
  * 其余头与幂等语义不变（同名保留不覆盖；非 HTML 原样返回）。
  */
-export function withHtmlSecurityHeaders(response: Response, frameOrigins?: readonly string[]): Response {
+export async function withHtmlSecurityHeaders(response: Response, frameOrigins?: readonly string[]): Promise<Response> {
   if (!isHtml(response)) return response;
   const headers = new Headers(response.headers);
   const cspWithFrame = frameOrigins ? htmlCsp(frameOrigins) : HTML_CSP;
@@ -98,6 +116,17 @@ export function withHtmlSecurityHeaders(response: Response, frameOrigins?: reado
   for (const [name, value] of HTML_HEADERS.filter(([n]) => n !== 'Content-Security-Policy')) {
     if (!headers.has(name)) headers.set(name, value);
   }
+  // #247b：同步下发 HTML 的 CSP meta（解析前改写才有效；meta∩头部交集详见 rewriteMetaFrameSrc）。
+  // 幂等：meta 已含相同 frame-src 时零拷贝；仅带白名单时才重写（无白名单时 meta 基线自洽）。
+  if (frameOrigins && frameOrigins.length > 0) {
+    const frameSrc = `frame-src 'self' ${frameOrigins.join(' ')}`;
+    const html = await response.text();
+    const next = rewriteMetaFrameSrc(html, frameSrc);
+    if (next !== html) {
+      headers.set('Content-Length', String(new TextEncoder().encode(next).byteLength));
+    }
+    return new Response(next, { status: response.status, statusText: response.statusText, headers });
+  }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -112,7 +141,7 @@ export function htmlSecurityHeaders(options?: {
   return async (c: Context, next: Next): Promise<void> => {
     await next();
     const frameOrigins = options?.frameOrigins ? await options.frameOrigins() : undefined;
-    const patched = withHtmlSecurityHeaders(c.res, frameOrigins);
+    const patched = await withHtmlSecurityHeaders(c.res, frameOrigins);
     if (patched !== c.res) c.res = patched;
   };
 }
