@@ -87,6 +87,38 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     const shellManifest = first.state.assetManifests.find((m) => Object.keys(m).some((k) => k.startsWith('/index.html')))!;
     expect(Object.keys(shellManifest).every((k) => k.startsWith('/'))).toBe(true);
     expect(Object.values(shellManifest).every((e) => /^[0-9a-f]{32}$/.test(e.hash))).toBe(true);
+    // #279：上传 part 的 Content-Type 按扩展名（CF 直传契约：serving 类型 = part 类型）——
+    // 此处跑的是**真产物树 + 真上传代码路径**，覆盖壳资产与模块资产两个入口（同为 uploadWorkerSpec）。
+    const partType = new Map(first.state.assetUploadParts.map((p) => [p.name, p.type]));
+    const wantType: Array<[string, RegExp]> = [
+      ['.html', /^text\/html/],
+      ['.mjs', /^text\/javascript/],
+      ['.js', /^text\/javascript/],
+      ['.css', /^text\/css/],
+      ['.svg', /^image\/svg\+xml/],
+      ['.woff2', /^font\/woff2/],
+      ['.woff', /^font\/woff/],
+      ['.png', /^image\/png/],
+      ['.webp', /^image\/webp/],
+      ['.avif', /^image\/avif/],
+      ['.ico', /^image\/vnd\.microsoft\.icon/],
+      ['.json', /^application\/json/],
+      ['.wasm', /^application\/wasm/],
+      ['.webmanifest', /^application\/manifest\+json/],
+    ];
+    let typedAssets = 0;
+    for (const manifest of first.state.assetManifests) {
+      for (const [path, entry] of Object.entries(manifest)) {
+        const expected = wantType.find(([suffix]) => path.toLowerCase().endsWith(suffix));
+        if (!expected) continue;
+        const type = partType.get((entry as { hash: string }).hash);
+        expect(type, `${path} 的 part 类型（#279）`).toBeDefined();
+        expect(type, `${path} 的 part 类型（#279）`).toMatch(expected[1]);
+        typedAssets++;
+      }
+    }
+    // 真壳产物必有 html + js + css（否则断言退化成空跑）
+    expect(typedAssets).toBeGreaterThan(2);
     // 迁移：import 进 core 库 + 模块记账独立（unself_migrations_core / unself_migrations_hello）
     expect(first.state.importEtags.size).toBeGreaterThan(0);
     expect(first.state.ledgerTables.has('unself_migrations_core')).toBe(true);

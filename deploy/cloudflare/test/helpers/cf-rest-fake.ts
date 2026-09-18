@@ -69,6 +69,8 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
     // 已有 worker（existingSecrets 出现过 → worker 必已存在）
     assetManifests: [] as Array<Record<string, { hash: string }>>,
     assetUploads: [] as string[][],
+    /** #279：已上传 part 的 [字段名(=hash), Content-Type]（serving 类型 = part 类型，回归断言点）。 */
+    assetUploadParts: [] as Array<{ name: string; type: string }>,
     secretPuts: [] as Array<{ worker: string; name: string }>,
     setupDone: options.setupDone ?? false,
     setupToken: options.existingSetupToken ?? null,
@@ -272,7 +274,14 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
       return Response.json({ jwt: 'asset-session-jwt', buckets: hashes.map((h) => [h]) });
     }
     if (path.startsWith('/accounts/') && path.includes('/workers/assets/upload') && method === 'POST') {
-      state.assetUploads.push([...((init?.body as FormData)?.keys?.() ?? [])]);
+      const form = init?.body as FormData;
+      state.assetUploads.push([...(form?.keys?.() ?? [])]);
+      state.assetUploadParts.push(
+        ...[...(form?.entries?.() ?? [])].map(([name, value]) => ({
+          name: String(name),
+          type: typeof value === 'object' && value !== null && 'type' in value ? String((value as Blob).type) : '',
+        })),
+      );
       return Response.json({ jwt: 'asset-completion-jwt' });
     }
 
