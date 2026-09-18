@@ -157,8 +157,11 @@ export async function main(argv: string[] = []): Promise<Summary> {
   if (cli.checkAuth) {
     out('--check-auth：权限自检通过，可以开跑（未装配任何资源）。');
     out('──────────── 将装配（预览）────────────');
-    out(`  域名   ${config.domain || 'workers.dev 免费域名（自动分配）'}`);
-    out(`  模块   ${config.modules.join('、') || '（全停用）'}`);
+    // 预览必须与真正装配用同一份 effective（CLI/交互 > 配置文件）；
+    // 且 #245 起 config.modules 可为对象条目（{id, source}），直接 join 会印 [object Object]——
+    // effective.modules 已经过 moduleIds(normalizeModuleEntries(...)) 归一化。
+    out(`  域名   ${effective.domain || 'workers.dev 免费域名（自动分配）'}`);
+    out(`  模块   ${effective.modules.join('、') || '（全停用）'}`);
     return {} as unknown as Summary;
   }
 
