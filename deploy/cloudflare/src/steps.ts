@@ -21,7 +21,10 @@ import {
   writeConfig,
   type Provisioned,
 } from './assemble';
-import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type ModuleRef, type UnselfConfig } from './config';
+import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type ModuleRef, type NormalizedModuleEntry, type UnselfConfig } from './config';
+import { CONTRACT_VERSION, ModuleManifestSchema } from '@unself/contracts';
+import { LOCK_FILENAME, emptyLock, parseLockText, serializeLock, manifestHashOf, type LockFile } from './lock';
+import { lockRecordFrom, resolveSources } from './module-sources';
 import { createCoreControlPlane } from './control-plane';
 import { domainProblem } from './interactive';
 import { createKeypair, JWT_SECRET_NAME, publicJwksJson } from './keypair';
@@ -75,26 +78,45 @@ export function consoleReporter(): StepReporter {
   };
 }
 
-/** 扫描 modules 目录下各 manifest.yaml → ModuleRef[]（选中态按 config.modules 标注）。 */
-export async function discoverModules(rootDir: string, selectedIds: string[]): Promise<ModuleRef[]> {
+/**
+ * 模块发现：
+ * - builtin 条目（无 source）→ 扫描 modules 目录（manifest.yaml，存量路径）；
+ * - sourced 条目（{id, source}）→ 来源解析器取包落位（远端 tarball 直解/file: 本地目录），
+ *   包根即当 module 目录（步骤②迁移/④装配/⑤注册表共用）。
+ * sourced 解析需要 outDir（步骤③前里立）——这里先只注册 source 侧表；实际取包延后到步骤③内
+ * （provisionAll 之前的 ensureSourcedModules）。
+ */
+export async function discoverModules(
+  rootDir: string,
+  selectedIds: string[],
+  entries?: NormalizedModuleEntry[],
+): Promise<ModuleRef[]> {
+  const sourcedEntries = (entries ?? []).filter((e): e is NormalizedModuleEntry & { source: string } => !!e.source);
   const { readdir } = await import('node:fs/promises');
   const modulesDir = join(rootDir, 'modules');
-  if (!existsSync(modulesDir)) return [];
   const refs: ModuleRef[] = [];
-  for (const entry of (await readdir(modulesDir, { withFileTypes: true }))) {
-    if (!entry.isDirectory()) continue;
-    const manifestPath = join(modulesDir, entry.name, 'manifest.yaml');
-    if (!existsSync(manifestPath)) continue;
-    const text = await readFile(manifestPath, 'utf8');
-    const { manifestId } = await import('./config');
-    const id = manifestId(text) ?? entry.name;
-    refs.push({ id, dir: join(modulesDir, entry.name), selected: selectedIds.includes(id) });
+  if (existsSync(modulesDir)) {
+    for (const entry of (await readdir(modulesDir, { withFileTypes: true }))) {
+      if (!entry.isDirectory()) continue;
+      const manifestPath = join(modulesDir, entry.name, 'manifest.yaml');
+      if (!existsSync(manifestPath)) continue;
+      const text = await readFile(manifestPath, 'utf8');
+      const { manifestId } = await import('./config');
+      const id = manifestId(text) ?? entry.name;
+      // config 里同 id 带了 source → sourced 条目优先（目录扫描不产出该 id）
+      if (sourcedEntries.some((s) => s.id === id)) continue;
+      refs.push({ id, dir: join(modulesDir, entry.name), selected: selectedIds.includes(id) });
+    }
   }
-  // 配置里选了但仓库里不存在的模块 → 明确失败（部署半套没人受益）
+  // sourced 条目：占位（dir 在 ensureSourcedModules 取包后回填）
+  for (const s of sourcedEntries) {
+    refs.push({ id: s.id, dir: '', selected: selectedIds.includes(s.id), source: s.source });
+  }
+  // 配置里选了但仓库里不存在的 builtin 模块 → 明确失败（部署半套没人受益）
   const found = new Set(refs.map((r) => r.id));
   for (const id of selectedIds) {
     if (!found.has(id)) {
-      throw new Error(`unself.config.jsonc 选中模块 "${id}" 不存在（modules/ 下无该 manifest.yaml）`);
+      throw new Error(`unself.config.jsonc 选中模块 "${id}" 不存在（modules/ 下无该 manifest.yaml，且 config 未提供 source）`);
     }
   }
   return refs;
@@ -172,6 +194,12 @@ export async function runNineSteps(input: {
   fetchJwks?: (baseUrl: string) => Promise<string>;
   /** 测试注入口：拦截 worker 上传（默认真实 putWorker + assets 直传）。 */
   uploadWorker?: (upload: WorkerUploadSpec) => Promise<void>;
+  /** 漂移已确认（-y / 交互确认后）；有漂移未确认 → 来源解析直接报错列 diff（#245）。 */
+  yes?: boolean;
+  /** @internal 测试注入口（module-sources-install.test.ts）：替换远端抓取（形状同 module-sources 内 fetchers）。 */
+  fetchers?: Parameters<typeof resolveSources>[0]['fetchers'];
+  /** @internal 测试注入口：预置 unself.lock 内容（#245 来源测试）。 */
+  preLock?: string;
   /** 测试注入口：拦截 DNS 自建（默认真实 ensureZoneARecord，#244 前的步骤顺序保留）。 */
   ensureDns?: (domain: string) => Promise<void>;
 }): Promise<Summary> {
@@ -187,7 +215,8 @@ export async function runNineSteps(input: {
       );
     }
   }
-  const modules = await discoverModules(rootDir, moduleIds(normalizeModuleEntries(config.modules)));
+  const entries = normalizeModuleEntries(config.modules);
+  const modules = await discoverModules(rootDir, moduleIds(entries), entries);
   const selected = modules.filter((m) => m.selected);
   validateS3Storage(config);
   /** chat 密钥环动作（选中 chat 时在步骤④赋值；未选中 undefined）。 */
@@ -233,6 +262,55 @@ export async function runNineSteps(input: {
   // node:sqlite 探测（Docker 落点可用性预检；不可用给人话不崩——仅提示，不阻断 CF 部署）
   const sqlite = probeSqlite();
   rep.log(sqlite.usable ? `node:sqlite 可用（${sqlite.version}）：Docker 模块落点就绪` : `node:sqlite 不可用：${sqlite.reason.split('\n')[0]}（Docker 落点暂不可用，CF 部署不受影响）`);
+
+  // ②½ 来源解析（#245）：sourced 模块取包/复用 lock + 完整性校验；builtin 直接登记 lock（决策 #60）。
+  // outDir 此时尚未创建（provisionAll 建）——手动先建：module-sources 暂存区要落盘。
+  const outDirPre = join(rootDir, DEPLOY_DIR);
+  const { mkdir: mkdirPre } = await import('node:fs/promises');
+  await mkdirPre(outDirPre, { recursive: true });
+  const lockPath = join(rootDir, LOCK_FILENAME);
+  let lock: LockFile = emptyLock();
+  if (input.preLock !== undefined) {
+    lock = parseLockText(input.preLock);
+  } else if (existsSync(lockPath)) {
+    lock = parseLockText(await readFile(lockPath, 'utf8'));
+  }
+  const sourcedEntries = entries.filter((e): e is NormalizedModuleEntry & { source: string } => !!e.source);
+  let resolution: Awaited<ReturnType<typeof resolveSources>> | null = null;
+  if (sourcedEntries.length > 0) {
+    resolution = await resolveSources({
+      rootDir,
+      outDir: outDirPre,
+      entries: sourcedEntries,
+      lock,
+      confirmed: input.yes,
+      log: rep.log,
+      ...(input.fetchers ? { fetchers: input.fetchers as Parameters<typeof resolveSources>[0]['fetchers'] } : {}),
+    });
+    for (const mod of resolution.sourced) {
+      const ref = modules.find((m) => m.id === mod.id);
+      if (ref) {
+        ref.dir = mod.packageDir;
+        ref.resolved = mod;
+      }
+    }
+  }
+  // lock 记录（决策 #60「builtin 也进 lock」）：sourced 由解析产物生成；builtin 从 manifest.yaml 提取。
+  // 只有本次 config 声明的模块进 lock（removed 的旧记录随 resolution.removed 删掉）。
+  const lockModules: LockFile['modules'] = {};
+  for (const mod of modules.filter((m) => m.selected && !m.source)) {
+    const yaml = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
+    const manifest = ModuleManifestSchema.parse(buildManifestSnapshot({ manifestText: yaml, moduleId: mod.id, baseUrl: '' }));
+    lockModules[mod.id] = {
+      source: `builtin:${mod.id}`,
+      version: manifest.version,
+      manifestHash: manifestHashOf(manifest),
+      contractVersion: CONTRACT_VERSION,
+    };
+  }
+  for (const mod of resolution?.sourced ?? []) {
+    lockModules[mod.id] = lockRecordFrom(mod);
+  }
 
   // ③ Shell Worker（构建 + 上传）
   rep.step(3, '构建上传 Shell Worker（壳 + Core API）');
@@ -499,7 +577,12 @@ export async function runNineSteps(input: {
   rep.step(5, '注册表写入（选中 enabled，未选 not_deployed）');
   const manifestTexts: Record<string, string> = {};
   for (const mod of modules) {
-    manifestTexts[mod.id] = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
+    if (mod.resolved) {
+      // sourced：解析产物里已有 manifest 原文（yaml/json 双形态均可，#243 单轨解析）
+      manifestTexts[mod.id] = mod.resolved.manifestText;
+    } else {
+      manifestTexts[mod.id] = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
+    }
   }
   for (const mod of modules) {
     if (!mod.selected) continue;
@@ -507,6 +590,7 @@ export async function runNineSteps(input: {
       manifestText: manifestTexts[mod.id] ?? '',
       moduleId: mod.id,
       baseUrl,
+      ...(mod.resolved ? { manifest: mod.resolved.manifest } : {}),
     });
     await coreCp.upsertModule({ id: mod.id, enabled: true, manifest });
     rep.log(`upsert ${mod.id}（enabled=1，快照刷新）`);
@@ -537,6 +621,18 @@ export async function runNineSteps(input: {
     if (setup.status === 'reused') rep.log('复用未消费的一次性 setup token（重跑幂等）');
     else rep.log('一次性 setup token 已写入 core 库');
     rep.log(`一次性激活链接：${baseUrl}/setup?token=${setup.token}`);
+  }
+
+  // ⑧½ lock 落盘（#245）：装配全程无哈希失败、无中途异常才会走到这里——写锁即「本次安装已兑现」。
+  // 测试注入 preLock 时跳过真实写盘（测试断言面单独读 lock 文件时用真实写）。
+  if (input.preLock === undefined) {
+    const newLock: LockFile = {
+      lockVersion: 1,
+      generatedAt: new Date().toISOString(),
+      modules: lockModules,
+    };
+    await writeConfig(join(rootDir, LOCK_FILENAME), serializeLock(newLock));
+    rep.log(`unself.lock 已更新（${Object.keys(lockModules).length} 个模块）`);
   }
 
   // ⑨ 冒烟 + 主题体检（§6.5.8 验产物）
