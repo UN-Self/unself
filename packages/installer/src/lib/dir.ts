@@ -52,15 +52,23 @@ const CONFIG_TEMPLATE = `// SPDX-License-Identifier: AGPL-3.0-only
 }
 `;
 
-const LOCK_SKELETON = JSON.stringify(
-  {
-    lockVersion: 1,
-    instance: {},
-    modules: [],
-  },
-  null,
-  2,
-) + '\n';
+const LOCK_SKELETON_MODULES: Record<string, never> = {};
+
+/**
+ * 空 lock 骨架（形状必须过引擎 `LockFileSchema`：#269 实测旧骨架 `{instance:{},modules:[]}`
+ * 缺 generatedAt 且 modules 不是 record，干净实例首跑 `unself deploy` 会直接「结构非法」）。
+ */
+function lockSkeleton(): string {
+  return JSON.stringify(
+    {
+      lockVersion: 1,
+      generatedAt: new Date().toISOString(),
+      modules: LOCK_SKELETON_MODULES,
+    },
+    null,
+    2,
+  ) + '\n';
+}
 
 export interface CreateInstanceDirOptions {
   /** 写入默认配置的启用模块列表，默认 ["hello"] */
@@ -128,7 +136,7 @@ export function createInstanceDir(
 
   const lockCreated = !existsSync(layout.lockPath);
   if (lockCreated) {
-    writeFileSync(layout.lockPath, LOCK_SKELETON);
+    writeFileSync(layout.lockPath, lockSkeleton());
   }
 
   return {

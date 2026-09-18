@@ -10,12 +10,14 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { DEFAULT_THEME, tokenCssName } from '@unself/contracts';
 import {
+  addModule,
   apexZone,
   beginDeploy,
   chooseDomain,
   chooseStorage,
   completeDeploy,
   confirmModules,
+  deployModules,
   failDeploy,
   needsTotalTls,
   pushEvent,
@@ -23,6 +25,8 @@ import {
   SHARED_CONSENT_NOTE,
   submitToken,
   type WizardEnvHint,
+  type WizardModuleAdd,
+  type WizardResourceName,
   type WizardState,
   type WizardStorageOption,
 } from './state';
@@ -47,7 +51,8 @@ export interface WizardDeps {
    */
   deploy: (input: {
     domain: string;
-    modules: string[];
+    /** 模块条目（#269）：字符串 = builtin；对象 = 带来源（official:/npm:/github:/https:/file:）。 */
+    modules: Array<string | { id: string; source?: string }>;
     /** ③½ 用户存储选择（#55）：模块 id → 四级之一；缺省模块 = preferred ?? core。 */
     storageChoices?: Record<string, string>;
     storage: { provider: 'r2'; bucket: string };
@@ -56,7 +61,22 @@ export interface WizardDeps {
     token?: string;
     /** 撞车守卫放行开关（#272）：④ 显式勾选「允许接管」。 */
     allowAdopt?: boolean;
+    /** 来源漂移已确认（#269）：③ 已展示将要装什么且用户确认。 */
+    yes?: boolean;
   }) => Promise<{ baseUrl: string; setupToken: string | null }>;
+  /**
+   * ③ 来源解析（#269）：把安装串解析成「将要装什么」（调引擎 previewModuleSource）。
+   * 未知能力等门禁失败 → 抛人话 Error（点名能力）；壳转 400 展示。
+   * 缺省 = 未接线（旧调用方/测试）→ ③ 添加来源入口提示不可用。
+   */
+  resolveModule?: (source: string) => Promise<WizardModuleAdd>;
+  /**
+   * ① token 真验（#269）：`GET /user/tokens/verify`（CLI 注入；缺省 = 跳过真验）。
+   * 返回 ok=false 时壳把 message 展示在①（区分「token 无效」与网络/权限问题）。
+   */
+  verifyToken?: (token: string) => Promise<{ ok: boolean; message: string }>;
+  /** ③ 改模块后重算资源名预览（#269；缺省 = 沿用启动时快照）。 */
+  previewResources?: (moduleIds: string[]) => Promise<WizardResourceName[]>;
   /**
    * 模块存储声明投影（#55）：③½ 渲染单选 + accepts 校验的依据。
    * 由启动方注入（CLI 从模块包 manifest 读；测试直给）；缺省 = 无可选模块（全按 preferred ?? core）。
@@ -135,6 +155,40 @@ function authDetails(hint: WizardEnvHint): string {
   <p><a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer noopener">打开 Cloudflare 创建 API Token</a></p>
   <p>权限清单与向导失败提示一致（Account：Workers Scripts/D1/R2 Edit；Zone：Workers Routes/DNS/SSL Edit），创建后整段复制粘贴到下面密码框（掩码输入，不落盘）。</p>
 </details>`;
+}
+
+/** HTML 转义（来源串/版本/SRI 都来自包元数据，进页面前一律转义）。 */
+function esc(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+}
+
+/**
+ * ③ 已添加的第三方模块预览（#269）：装配前把「将要装什么」摊开——来源 / 版本 / SRI / permissions / 落点。
+ * 数据来自 ① 之后 ③ 步的实时解析（resolveModule）；未添加时返回空串。
+ */
+function moduleAddsSection(state: WizardState): string {
+  if (state.moduleAdds.length === 0) return '';
+  const rows = state.moduleAdds
+    .map((m) => {
+      const sri = m.integrity ? `${esc(m.integrity).slice(0, 24)}…` : '（本地目录形态，无下载字节）';
+      const perms = m.permissions.length > 0 ? esc(m.permissions.join('、')) : '（不声明任何需授权能力）';
+      const storage = `accepts=${esc(m.storageAccepts.join('/'))}${m.storagePreferred ? `，preferred=${esc(m.storagePreferred)}` : ''}`;
+      return `<li data-mod="${esc(m.id)}"><strong>${esc(m.id)}</strong> v${esc(m.version)}
+      <ul>
+        <li>来源：<code>${esc(m.source)}</code>（${esc(m.kind)}）</li>
+        <li>SRI：<code>${sri}</code></li>
+        <li>声明权限：${perms}</li>
+        <li>数据落点：${storage}</li>
+      </ul></li>`;
+    })
+    .join('\n    ');
+  return `<section>
+  <h2>将要安装的模块</h2>
+  <p>以下内容已在装配前解析（来源、版本、SRI、声明权限、落点）；确认后才会进④。</p>
+  <ul class="mod-adds">
+    ${rows}
+  </ul>
+</section>`;
 }
 
 /** 资源名预览段（#272）：本实例会占用的 CF 资源名（只读；只展示，不影响装配决策）。 */
@@ -218,6 +272,9 @@ export function renderPage(state: WizardState, envHint: WizardEnvHint): string {
   details.auth-fold summary { cursor: pointer; color: var(--unself-color-info); }
   ul.res-names { padding-left: 1.2rem; }
   ul.res-names .kind { color: var(--unself-color-info); margin-left: .6rem; }
+  ul.mod-adds { padding-left: 1.2rem; }
+  ul.mod-adds ul { padding-left: 1.2rem; }
+  ul.mod-adds li { margin: .4rem 0; }
 </style>
 </head>
 <body>
@@ -248,7 +305,11 @@ ${banner}
   <h2>③ 启用模块</h2>
   <form id="form-modules"><label>逗号分隔 <input type="text" name="modules" value="${state.modules.join(',')}"></label>
   <button type="submit">下一步</button> <span class="err" id="err-modules"></span></form>
+  <form id="form-module-add"><label>添加模块（安装串：official:hello / npm:@acme/pkg@1.2.0 / github:acme/pkg#v1.0.0 / https://…/x.tgz / file:./modules/x）
+  <input type="text" name="source" placeholder="npm:@acme/unself-todo@1.2.0"></label>
+  <button type="submit">添加模块</button> <span class="err" id="err-module-add"></span></form>
 </section>
+${moduleAddsSection(state)}
 ${storageSection(state)}
 ${resourceNamesSection(state)}
 <section>
@@ -284,6 +345,11 @@ $('form-modules').addEventListener('submit', async (e) => {
   e.preventDefault();
   const r = await post('/api/step3', { modules: e.target.modules.value.split(',') });
   r.ok ? location.reload() : showErr('err-modules', r.data.problem);
+});
+$('form-module-add')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const r = await post('/api/step3/add', { source: e.target.source.value });
+  r.ok ? location.reload() : showErr('err-module-add', r.data.problem);
 });
 $('btn-storage')?.addEventListener('click', async () => {
   const choices = {};
@@ -369,13 +435,24 @@ export function createWizardServer(opts: ServeOptions): Server {
             return;
           }
           const body = await readJsonBody(req);
-          const r = submitToken(state, String(body.token ?? ''));
+          const raw = String(body.token ?? '');
+          const r = submitToken(state, raw);
           if (r.problem) {
             json(res, 400, { problem: r.problem });
             return;
           }
-          // #272 接线：token 只留在本次服务内存（sessionToken），由 ④ 部署调用传给引擎（此前只置 hasToken，从未传给引擎）。
-          sessionToken = String(body.token ?? '').trim();
+          const token = raw.trim();
+          // #269 真验（CF `GET /user/tokens/verify`）：形状只拦明显不对；无效 token 显示 CF 原话，
+          // 网络/权限问题与「token 无效」分开报。失败不进 ②。
+          if (deps.verifyToken) {
+            const v = await deps.verifyToken(token);
+            if (!v.ok) {
+              json(res, 400, { problem: v.message });
+              return;
+            }
+          }
+          // #272 接线：token 只留在本次服务内存（sessionToken），由 ④ 部署调用传给引擎。
+          sessionToken = token;
           deps.setState(r.state);
           json(res, 200, { step: r.state.step });
           return;
@@ -417,8 +494,49 @@ export function createWizardServer(opts: ServeOptions): Server {
             json(res, 400, { problem: r.problem });
             return;
           }
-          deps.setState(r.state);
-          json(res, 200, { step: r.state.step });
+          // #269：③ 改了模块清单 → 资源名预览重算（不再沿用启动时快照）。
+          const next = deps.previewResources
+            ? { ...r.state, resourceNames: await deps.previewResources(r.state.modules) }
+            : r.state;
+          deps.setState(next);
+          json(res, 200, { step: next.step });
+          return;
+        }
+        // ③ 添加来源模块（#269）：解析安装串 → 权限门禁（未知能力报名字）→ 并入清单 + 落点单选。
+        if (req.method === 'POST' && url.pathname === '/api/step3/add') {
+          if (!state.hasToken) {
+            json(res, 400, { problem: '请先完成①凭证' });
+            return;
+          }
+          if (!deps.resolveModule) {
+            json(res, 400, {
+              problem: '本次向导启动未接线来源解析：请用 CLI `unself module add <来源>`（或升级安装器）',
+            });
+            return;
+          }
+          const body = await readJsonBody(req);
+          const source = String(body.source ?? '').trim();
+          if (!source) {
+            json(res, 400, { problem: '安装串为空：形如 npm:@acme/unself-todo@1.2.0 / official:hello / file:./modules/x' });
+            return;
+          }
+          let preview: WizardModuleAdd;
+          try {
+            preview = await deps.resolveModule(source);
+          } catch (err) {
+            json(res, 400, { problem: err instanceof Error ? err.message : String(err) });
+            return;
+          }
+          const r = addModule(state, preview);
+          if (r.problem) {
+            json(res, 400, { problem: r.problem });
+            return;
+          }
+          const next = deps.previewResources
+            ? { ...r.state, resourceNames: await deps.previewResources(r.state.modules) }
+            : r.state;
+          deps.setState(next);
+          json(res, 200, { step: next.step, id: preview.id });
           return;
         }
         // ③½ 存储选择（#55）：逐模块从 accepts 里选，选外即拒绝；shared 需知情同意。
@@ -455,9 +573,12 @@ export function createWizardServer(opts: ServeOptions): Server {
           void deps
             .deploy({
               domain: st.domain,
-              modules: st.modules,
+              // #269：③ 添加的来源模块以 {id, source} 进装配；builtin 仍为字符串。
+              modules: deployModules(st),
               storageChoices: Object.keys(st.storageChoices).length > 0 ? { ...st.storageChoices } : undefined,
               storage: { provider: 'r2', bucket: 'unself-storage' },
+              // #269：③ 已在装配前展示「将要装什么」且用户点确认 → 来源漂移视为已确认（#245 闸门不⭕）。
+              yes: true,
               ...(sessionToken ? { token: sessionToken } : {}),
               ...(allowAdopt ? { allowAdopt: true } : {}),
               onEvent: (text) => {
