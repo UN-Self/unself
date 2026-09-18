@@ -29,21 +29,38 @@ type GeneratedModule = {
 type LoadedEntry = { fetch: (request: Request) => Promise<Response> };
 
 /** 生成入口产物并 import 成一个可调用的 `fetch`（假 ASSETS 只认 `/`，回 HTML）。 */
-async function loadGeneratedEntry(options?: { assetsHtml?: string | null }): Promise<LoadedEntry> {
+async function loadGeneratedEntry(options?: {
+  assetsHtml?: string | null;
+  /** 资产响应的 content-type（真机实测：壳资产存为 application/octet-stream）。 */
+  assetsContentType?: string;
+  /** 注册表行（#273：frame-src 白名单真值源）；缺省 = 无 CORE_DB 绑定。 */
+  registryManifests?: Array<{ entry: string }>;
+}): Promise<LoadedEntry> {
   const dir = await mkdtemp(join(REPO_ROOT, '.tmp-209-'));
   temps.push(dir);
   const file = join(dir, 'core-worker.js');
   await writeFile(file, coreWorkerEntrySource(dir, REPO_ROOT));
 
-  const html = options?.assetsHtml === null ? undefined : (options?.assetsHtml ?? '<!doctype html><html><body>shell</body></html>');
-  const env = {
+  const html = options?.assetsHtml === null ? undefined : (options?.assetsHtml ?? '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'self\'"></head><body>shell</body></html>');
+  const contentType = options?.assetsContentType ?? 'text/html; charset=utf-8';
+  const env: Record<string, unknown> = {
     ASSETS: {
       fetch: async (): Promise<Response> => {
         if (html === undefined) return new Response('not here', { status: 404, headers: { 'content-type': 'text/plain' } });
-        return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+        return new Response(html, { status: 200, headers: { 'content-type': contentType } });
       },
     },
   };
+  if (options?.registryManifests) {
+    // 最小 D1 形状：registryFrameOrigins 只调 prepare(...).all() 读 manifest_json
+    env.CORE_DB = {
+      prepare: () => ({
+        all: async () => ({
+          results: options.registryManifests!.map((m) => ({ manifest_json: JSON.stringify(m) })),
+        }),
+      }),
+    };
+  }
 
   const mod = (await import(`${pathToFileURL(file).href}?t=${Date.now()}`)) as GeneratedModule;
   return {
@@ -81,5 +98,41 @@ describe('生成的 core 入口（#209）：SPA 回退的 HTML 必须带安全�
     const entry = await loadGeneratedEntry({ assetsHtml: null });
     const res = await entry.fetch(new Request('https://team.example.com/some-page'));
     expect(res.headers.has('content-security-policy')).toBe(false);
+  });
+
+  it('workers.dev（#273）：壳 HTML 的 frame-src 含注册表里模块自有子域 origin（跨子域 iframe 放行口）', async () => {
+    const entry = await loadGeneratedEntry({
+      registryManifests: [
+        { entry: 'https://unself-module-hello.test-subdomain.workers.dev/' },
+        { entry: 'https://unself-core-api.test-subdomain.workers.dev/' },
+      ],
+    });
+    const res = await entry.fetch(
+      new Request('https://unself-core-api.test-subdomain.workers.dev/', { headers: { accept: 'text/html' } }),
+    );
+    const csp = res.headers.get('content-security-policy') ?? '';
+    // 模块 origin 入选；壳自身 origin 不当白名单（同源已由 'self' 覆盖）
+    expect(csp).toContain('https://unself-module-hello.test-subdomain.workers.dev');
+    expect(csp).not.toContain('https://unself-core-api.test-subdomain.workers.dev');
+    expect(csp).toContain("frame-src 'self'");
+    // 同时改写下发 HTML 的 CSP meta（#247b：meta∩头部交集）
+    const body = await res.text();
+    expect(body).toContain('https://unself-module-hello.test-subdomain.workers.dev');
+  });
+
+  it('workers.dev（#273）：壳资产以 octet-stream 存时，导航请求仍补 text/html + frame-src 白名单（真机实测形状）', async () => {
+    const entry = await loadGeneratedEntry({
+      assetsContentType: 'application/octet-stream',
+      registryManifests: [{ entry: 'https://unself-module-hello.test-subdomain.workers.dev/' }],
+    });
+    const res = await entry.fetch(
+      new Request('https://unself-core-api.test-subdomain.workers.dev/', {
+        headers: { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
+      }),
+    );
+    expect(res.headers.get('content-type')).toContain('text/html');
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain('https://unself-module-hello.test-subdomain.workers.dev');
+    expect(await res.text()).toContain('https://unself-module-hello.test-subdomain.workers.dev');
   });
 });

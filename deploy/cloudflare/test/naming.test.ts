@@ -65,9 +65,9 @@ describe('带前缀的九步（隔离探针口径）', () => {
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
         configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-probe-257-storage' } },
         http: {
-          smoke: async (b: string, ids: string[]) =>
+          smoke: async (b: string, mods: Array<{ id: string; baseUrl: string }>) =>
             [{ name: 'core-api', url: `${b}/api/health`, ok: true, status: 200 }].concat(
-              ids.map((id) => ({ name: `module:${id}`, url: `${b}/m/${id}/api/health`, ok: true, status: 200 })),
+              mods.map((m) => ({ name: `module:${m.id}`, url: `${m.baseUrl}/api/health`, ok: true, status: 200 })),
             ),
         },
       });

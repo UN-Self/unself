@@ -218,9 +218,9 @@ describe('#269 布局不变式：module add 写的 lock 就是 runDeploy 读的 
         artifactRoot: artifactsRoot,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
         http: {
-          smoke: async (_b: string, ids: string[]) => [
+          smoke: async (_b: string, mods: Array<{ id: string; baseUrl: string }>) => [
             { name: 'core-api', url: 'https://x/api/health', ok: true, status: 200 },
-            ...ids.map((id) => ({ name: `module:${id}`, url: `https://x/m/${id}/api/health`, ok: true, status: 200 })),
+            ...mods.map((m) => ({ name: `module:${m.id}`, url: `${m.baseUrl}/api/health`, ok: true, status: 200 })),
           ],
           themeCheck: async () => [],
         },

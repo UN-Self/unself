@@ -28,13 +28,13 @@ async function fakeBuildShell(rootDir: string): Promise<void> {
 }
 
 const SMOKE_OK = {
-  smoke: async (b: string, ids: string[]) =>
+  smoke: async (b: string, mods: Array<{ id: string; baseUrl: string }>) =>
     ([{ name: 'core-api', url: `${b}/api/health`, ok: true, status: 200 }] as Array<{
       name: string;
       url: string;
       ok: boolean;
       status: number;
-    }>).concat(ids.map((id) => ({ name: `module:${id}`, url: `${b}/m/${id}/api/health`, ok: true, status: 200 }))),
+    }>).concat(mods.map((m) => ({ name: `module:${m.id}`, url: `${m.baseUrl}/api/health`, ok: true, status: 200 }))),
 };
 
 // ---------------------------------------------------------------------------
