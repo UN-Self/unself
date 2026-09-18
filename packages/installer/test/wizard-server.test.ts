@@ -96,10 +96,12 @@ describe('六段流全链（替身部署）', () => {
     const s2 = await post('/api/step2', { choice: 'workers' });
     expect(s2.json.step).toBe('modules');
 
-    // ③ 模块确认
+    // ③ 模块确认 → ③½ 存储选择（默认 storageOptions 为空 → 直接 ready）
     const s3 = await post('/api/step3', { modules: 'hello, chat' });
-    expect(s3.json.step).toBe('ready');
+    expect(s3.json.step).toBe('storage');
     expect(holder.state.modules).toEqual(['hello', 'chat']);
+    const s3b = await post('/api/step3b', { choices: {}, sharedConsent: false });
+    expect(s3b.json.step).toBe('ready');
 
     // ④ 开始装配 → 202 deploying
     const s4 = await post('/api/step4', {});

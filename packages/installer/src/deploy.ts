@@ -14,7 +14,54 @@ export interface RunDeployOptions {
   /** 向导②③的决策（缺省 = 读实例目录 unself.config.jsonc）。 */
   domain?: string;
   modules?: string[];
+  /** ③½ 用户存储选择（#55）：模块 id → 四级之一；进引擎后写进各模块 manifest 快照。 */
+  storageChoices?: Record<string, string>;
   onEvent?: (text: string) => void;
+}
+
+/** 四级词表（与 @unself/contracts StorageLevelSchema 同源语义；向导壳零引擎依赖故内联）。 */
+const STORAGE_LEVELS = ['core', 'shared', 'dedicated', 'external'] as const;
+
+/**
+ * 读实例所属仓库内各模块 manifest 的 storage 声明（#55）：
+ * 返回向导③½ 的单选数据（id + accepts + preferred）。
+ * 只对「当前实例目录的 rootDir 下 modules/ 里发现到的模块」生效——与九步引擎的
+ * discoverModules 同款扫描（manifest.yaml 存在即模块目录）。
+ */
+export async function wizardStorageOptions(rootDir: string): Promise<Array<{ id: string; accepts: string[]; preferred?: string }>> {
+  const { readdir, readFile } = await import('node:fs/promises');
+  const { existsSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const modulesDir = join(rootDir, 'modules');
+  if (!existsSync(modulesDir)) return [];
+  const out: Array<{ id: string; accepts: string[]; preferred?: string }> = [];
+  for (const entry of await readdir(modulesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const manifestPath = join(modulesDir, entry.name, 'manifest.yaml');
+    if (!existsSync(manifestPath)) continue;
+    // 轻量提取 storage.accepts/preferred：不引引擎（installer 零引擎依赖），
+    // 用 @unself/contracts 的 manifestFromYamlText 单轨解析（防解析分叉）。
+    try {
+      const { manifestFromYamlText } = await import('@unself/contracts');
+      const candidate = manifestFromYamlText(await readFile(manifestPath, 'utf8')) as {
+        id?: string;
+        storage?: { accepts?: string[]; preferred?: string };
+      };
+      const id = typeof candidate.id === 'string' ? candidate.id : entry.name;
+      const accepts = (candidate.storage?.accepts ?? ['core']).filter((l): l is (typeof STORAGE_LEVELS)[number] =>
+        (STORAGE_LEVELS as readonly string[]).includes(l),
+      );
+      out.push({
+        id,
+        accepts: accepts.length > 0 ? accepts : ['core'],
+        ...(candidate.storage?.preferred ? { preferred: candidate.storage.preferred } : {}),
+      });
+    } catch {
+      // 解析失败（非契约形态）：降级为 core 单选，不阻断向导启动
+      out.push({ id: entry.name, accepts: ['core'] });
+    }
+  }
+  return out;
 }
 
 export interface DeployResult {
@@ -24,6 +71,7 @@ export interface DeployResult {
 
 /** 九步引擎模块形状（动态加载目标；workspace 内可直接 import 供类型检查）。 */
 type Engine = typeof import('@unself/deploy-cloudflare');
+type EngineUnselfConfig = import('@unself/deploy-cloudflare').UnselfConfig;
 
 async function loadEngine(): Promise<Engine> {
   try {
@@ -61,10 +109,30 @@ export async function runDeploy(input: RunDeployOptions): Promise<DeployResult> 
   const log = (msg: string): void => input.onEvent?.(msg);
   const rep = engine.progressTracker({ total: 9, out: log });
   const configOverride = await effectiveConfig(input.instancePath, { domain: input.domain, modules: input.modules });
+  // ③½ 用户存储选择（#55）写进各模块 manifest 快照：declaration 进注册表快照，
+  // 引擎据此决定四级落点（core 代理 / shared 建表 / dedicated 独立库 / external 接线）。
+  const modulesOverride = input.storageChoices
+    ? (configOverride.modules ?? []).map((entry) => {
+        const id = typeof entry === 'string' ? entry : entry.id;
+        const source = typeof entry === 'string' ? undefined : entry.source;
+        const choice = input.storageChoices?.[id];
+        if (!choice) {
+          return entry;
+        }
+        if (!(STORAGE_LEVELS as readonly string[]).includes(choice)) {
+          throw new Error(
+            `模块 ${id} 的存储选择「${choice}」不是四级词表之一（core/shared/dedicated/external）`,
+          );
+        }
+        return source !== undefined
+          ? { id, source, storage: { declaration: choice } }
+          : ({ id, storage: { declaration: choice } } as unknown as EngineUnselfConfig['modules'][number]);
+      })
+    : configOverride.modules;
   const summary = await engine.runNineSteps({
     // rootDir = 实例目录的父目录（引擎在 rootDir 下找 unself.config.jsonc / modules/ / services/）。
     rootDir: input.instancePath.replace(/[/\\]unself$/, ''),
-    configOverride,
+    ...(modulesOverride !== configOverride.modules ? { configOverride: { ...configOverride, modules: modulesOverride } } : { configOverride }),
     reporter: rep.reporter,
   });
   rep.complete();
