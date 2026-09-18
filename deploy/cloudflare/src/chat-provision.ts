@@ -105,7 +105,7 @@ export async function readChatPackageConfig(moduleDir: string): Promise<ChatPack
   // 不再有一次性灌 schema 的豁免——包内必须带标准 migrations/<id>/ 目录（落点 dedicated）。
   const migrationsDir = join(moduleDir, 'migrations', CHAT_MODULE_ID);
   if (!existsSync(migrationsDir) || readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).length === 0) {
-    throw new Error('modules/chat/migrations/chat/ 缺失或无 .sql：chat 迁移链无法应用（#248）');
+    throw new Error('modules/chat/migrations/chat/ 缺失或无 .sql：chat 迁移链无法应用（本 issue）');
   }
   const doRaw = (parsed.durable_objects ?? {}) as { bindings?: unknown };
   return {

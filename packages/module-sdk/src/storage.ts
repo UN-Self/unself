@@ -136,7 +136,7 @@ export function createD1Storage(options: CoreApiProxyBinding & { moduleId?: stri
   const maybeDb = (options as { db?: unknown }).db;
   if (maybeDb !== undefined) {
     throw new Error(
-      'storage: createD1Storage 已收敛到 Core API 代理（#248，决策 #75）——模块不再直连 MODULES_DB。' +
+      'storage: createD1Storage 已收敛到 Core API 代理（本 issue，决策 #75）——模块不再直连 MODULES_DB。' +
         '请改传 { coreApiOrigin, getToken, fetchImpl }（core 级），或声明 shared/dedicated 落点并直连自己的库。',
     );
   }
