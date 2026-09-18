@@ -6,6 +6,7 @@
  */
 import {
   migrationsCreateSql,
+  migrationsInsertIgnoreSql,
   migrationsInsertSql,
   migrationsListSql,
   REGISTRY_LIST_SQL,
@@ -116,6 +117,15 @@ export class RestD1ControlPlane implements ControlPlane {
     if (!(await tableExists(this.exec, table))) return [];
     const { results } = await this.exec.query<{ name: unknown }>(migrationsListSql(module));
     return results.map((r) => String(r.name));
+  }
+
+  async markMigrationApplied(module: string, name: string): Promise<void> {
+    // 与 applyMigrations 同一张表（#255）：非 SQL 事件（DO 迁移 tag）走同一记账，幂等
+    const table = migrationsTableFor(module);
+    if (!(await tableExists(this.exec, table))) {
+      await this.exec.query(migrationsCreateSql(module));
+    }
+    await this.exec.query(migrationsInsertIgnoreSql(module), [name]);
   }
 }
 

@@ -90,6 +90,26 @@ describe('SqliteControlPlane（真 sqlite）', () => {
     expect(retry.applied).toEqual(['0002_bad.sql', '0003_after.sql']);
     expect(retry.skipped).toEqual(['0001_ok.sql']);
   });
+
+  it('非 SQL 迁移事件（DO 迁移 tag）记进同一张模块记账表：跨模块不可见、重复记幂等（#255）', async () => {
+    const cp = SqliteControlPlane.open(':memory:');
+    await cp.applyMigrations('chat', [{ name: '0001_baseline.sql', sql: 'CREATE TABLE IF NOT EXISTS t (id TEXT);' }]);
+    await cp.markMigrationApplied('chat', 'do-migration:v1');
+    // 与 SQL 文件同表可见（同一套记账，不是第二张表）
+    await expect(cp.appliedMigrations('chat')).resolves.toEqual(['0001_baseline.sql', 'do-migration:v1']);
+    // 重复记幂等
+    await cp.markMigrationApplied('chat', 'do-migration:v1');
+    await expect(cp.appliedMigrations('chat')).resolves.toEqual(['0001_baseline.sql', 'do-migration:v1']);
+    // 跨模块隔离（#55 护栏①）：别的模块看不到这条 tag
+    await expect(cp.appliedMigrations('hello')).resolves.toEqual([]);
+    // 新迁移文件仍照常应用（tag 不把文件记账顶掉）
+    const r = await cp.applyMigrations('chat', [
+      { name: '0001_baseline.sql', sql: 'SELECT 1;' },
+      { name: '0002_next.sql', sql: 'CREATE TABLE IF NOT EXISTS t2 (id TEXT);' },
+    ]);
+    expect(r.applied).toEqual(['0002_next.sql']);
+    expect(r.skipped).toEqual(['0001_baseline.sql']);
+  });
 });
 
 describe('D1ControlPlane（同一份 SQL 跑在 D1 形状适配器上）', () => {
@@ -201,5 +221,17 @@ describe('RestD1ControlPlane（同一份 SQL 跑在 REST 执行器上 · 防漂�
     const other = await cp.applyMigrations('chat', files);
     expect(other.skipped).toEqual(['0001_init.sql']);
     expect(other.applied).toEqual(['0002_new.sql']);
+  });
+
+  it('非 SQL 迁移事件（DO 迁移 tag）与文件记账同表：REST 实现与 sqlite 实现同语义（#255）', async () => {
+    const base = SqliteControlPlane.open(':memory:');
+    const cp = restOverSqlite(base);
+    await cp.applyMigrations('chat', [{ name: '0001_baseline.sql', sql: 'CREATE TABLE IF NOT EXISTS t (id TEXT);' }]);
+    await cp.markMigrationApplied('chat', 'do-migration:v1');
+    await cp.markMigrationApplied('chat', 'do-migration:v1');
+    await expect(cp.appliedMigrations('chat')).resolves.toEqual(['0001_baseline.sql', 'do-migration:v1']);
+    // REST 写入的是同一张表：直查底库可见（不是另建的表）
+    const rows = base.db.prepare('SELECT name FROM unself_migrations_chat ORDER BY name').all() as Array<{ name: string }>;
+    expect(rows.map((r) => r.name)).toEqual(['0001_baseline.sql', 'do-migration:v1']);
   });
 });
