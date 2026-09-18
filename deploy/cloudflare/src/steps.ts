@@ -1205,8 +1205,14 @@ async function defaultFetchJwks(baseUrl: string): Promise<string> {
  * 相对路径与 core-api 的导入同构，esbuild 打包确定可解析。
  *
  * #273：workers.dev 形态下 core 资产 run_worker_first=true（见 coreRunWorkerFirst），
- * 所有请求（含壳 HTML 与静态资产）都经本入口——入口必须先按原路径取资产（保持直出语义），
+ * 所有请求（含壳 HTML 与静态资产）都经本入口——入口先按原路径取资产（保持直出语义），
  * 再对 HTML 下发按注册表生成的 frame-src 白名单（跨子域模块 iframe 需壳响应头含模块 origin）。
+ *
+ * #279：壳 HTML 过去以 application/octet-stream 存储（上传 part 类型写死），#273 曾在此对「导航请求
+ * 命中非 HTML 资产」现场改写成 text/html 兜底（asHtmlDocument）。MIME 已在上传侧修对（rest/mime.ts），
+ * 该兜底**删除**：它会把 JS/CSS/图片在带 `Accept: text/html` 的导航下谎报成 text/html，
+ * 更会把「资产类型又退化成 octet-stream」的回归藏起来（HTML 照常、只有 module 脚本白屏）。
+ * 现在「类型写错」直接原样透出——宁可显式故障，不要伪装。
  */
 export function coreWorkerEntrySource(outDir: string, rootDir: string): string {
   const rel = (p: string): string => relative(outDir, join(rootDir, p)).replaceAll('\\', '/');
@@ -1223,14 +1229,6 @@ const isHtml = (res) => (res.headers.get('content-type') ?? '').toLowerCase().in
 const isApiPath = (p) => p.startsWith('/api/') || p.startsWith('/life/') || p.startsWith('/.well-known/');
 const wantsHtml = (request) => (request.headers.get('accept') ?? '').includes('text/html');
 
-// 壳静态资产历史上以 application/octet-stream 存储（见 _headers 注释/真机实测）：
-// 导航请求（Accept: text/html）命中时按 HTML 处理——补回 text/html + 安全头 + frame-src 白名单。
-const asHtmlDocument = async (asset) => {
-  const headers = new Headers(asset.headers);
-  headers.set('content-type', 'text/html; charset=utf-8');
-  return new Response(await asset.text(), { status: asset.status, statusText: asset.statusText, headers });
-};
-
 export default {
   async fetch(request, env, ctx) {
     const res = await app.fetch(request, env, ctx);
@@ -1246,15 +1244,14 @@ export default {
     // run_worker_first=true（workers.dev 形态）后静态资产也经本入口：先按原路径取资产（保持直出语义）。
     const asset = await env.ASSETS.fetch(request);
     if (asset.status !== 404) {
-      if (isHtml(asset)) return withHtmlSecurityHeaders(asset, frameOrigins);
-      if (wantsHtml(request)) return withHtmlSecurityHeaders(await asHtmlDocument(asset), frameOrigins);
-      return asset;
+      // 只给真 HTML 补头；其余原样透出（#279：不再按 Accept 伪造 text/html）
+      return isHtml(asset) ? withHtmlSecurityHeaders(asset, frameOrigins) : asset;
     }
     if (!wantsHtml(request)) return res;
     // 决策 #47：SPA 深链（含 /setup*）的 HTML 不经静态资产的 _headers，在此补同一套头
     // （值同源：security-headers.ts）+ 现场生成的 frame-src 白名单。
     const fallback = await env.ASSETS.fetch(new URL('/', url.origin).toString(), request);
-    return withHtmlSecurityHeaders(fallback.status === 404 ? fallback : await asHtmlDocument(fallback), frameOrigins);
+    return withHtmlSecurityHeaders(fallback, frameOrigins);
   },
 };
 `;

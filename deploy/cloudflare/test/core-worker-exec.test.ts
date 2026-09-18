@@ -31,7 +31,9 @@ type LoadedEntry = { fetch: (request: Request) => Promise<Response> };
 /** 生成入口产物并 import 成一个可调用的 `fetch`（假 ASSETS 只认 `/`，回 HTML）。 */
 async function loadGeneratedEntry(options?: {
   assetsHtml?: string | null;
-  /** 资产响应的 content-type（真机实测：壳资产存为 application/octet-stream）。 */
+  /** 资产响应的 body（缺省 = assetsHtml；给非 HTML 资产用）。 */
+  assetsBody?: string;
+  /** 资产响应的 content-type（#279 后应为上传时定对的真类型）。 */
   assetsContentType?: string;
   /** 注册表行（#273：frame-src 白名单真值源）；缺省 = 无 CORE_DB 绑定。 */
   registryManifests?: Array<{ entry: string }>;
@@ -42,12 +44,13 @@ async function loadGeneratedEntry(options?: {
   await writeFile(file, coreWorkerEntrySource(dir, REPO_ROOT));
 
   const html = options?.assetsHtml === null ? undefined : (options?.assetsHtml ?? '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'self\'"></head><body>shell</body></html>');
+  const body = options?.assetsBody ?? html;
   const contentType = options?.assetsContentType ?? 'text/html; charset=utf-8';
   const env: Record<string, unknown> = {
     ASSETS: {
       fetch: async (): Promise<Response> => {
-        if (html === undefined) return new Response('not here', { status: 404, headers: { 'content-type': 'text/plain' } });
-        return new Response(html, { status: 200, headers: { 'content-type': contentType } });
+        if (body === undefined) return new Response('not here', { status: 404, headers: { 'content-type': 'text/plain' } });
+        return new Response(body, { status: 200, headers: { 'content-type': contentType } });
       },
     },
   };
@@ -120,7 +123,10 @@ describe('生成的 core 入口（#209）：SPA 回退的 HTML 必须带安全�
     expect(body).toContain('https://unself-module-hello.test-subdomain.workers.dev');
   });
 
-  it('workers.dev（#273）：壳资产以 octet-stream 存时，导航请求仍补 text/html + frame-src 白名单（真机实测形状）', async () => {
+  it('workers.dev（#279）：资产类型退化成 octet-stream 时**不再**被伪造为 text/html——故障显式透出，不许伪装', async () => {
+    // #273 时代的 asHtmlDocument 会把导航请求命中的非 HTML 资产强改成 text/html，
+    // 从而把「上传 part 类型错」的回归藏起来（HTML 照常、只有 module 脚本白屏）。
+    // #279 修在上传侧（rest/mime.ts）后该兜底被删除：worker 只给真 HTML 补安全头，其余原样透出。
     const entry = await loadGeneratedEntry({
       assetsContentType: 'application/octet-stream',
       registryManifests: [{ entry: 'https://unself-module-hello.test-subdomain.workers.dev/' }],
@@ -130,9 +136,22 @@ describe('生成的 core 入口（#209）：SPA 回退的 HTML 必须带安全�
         headers: { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
       }),
     );
-    expect(res.headers.get('content-type')).toContain('text/html');
-    const csp = res.headers.get('content-security-policy') ?? '';
-    expect(csp).toContain('https://unself-module-hello.test-subdomain.workers.dev');
-    expect(await res.text()).toContain('https://unself-module-hello.test-subdomain.workers.dev');
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    expect(res.headers.has('content-security-policy')).toBe(false);
+  });
+
+  it('workers.dev（#279）：导航请求命中真 JS 资产时类型与 body 原样透出（不伪造 text/html、不加 CSP）', async () => {
+    const entry = await loadGeneratedEntry({
+      assetsContentType: 'text/javascript; charset=utf-8',
+      assetsBody: 'export const x = 1;',
+    });
+    const res = await entry.fetch(
+      new Request('https://unself-core-api.test-subdomain.workers.dev/assets/index-abc.js', {
+        headers: { accept: 'text/html,application/xhtml+xml,*/*;q=0.8' },
+      }),
+    );
+    expect(res.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+    expect(res.headers.has('content-security-policy')).toBe(false);
+    expect(await res.text()).toBe('export const x = 1;');
   });
 });
