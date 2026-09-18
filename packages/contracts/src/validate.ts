@@ -292,6 +292,7 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
       'compat',
       'description',
       'icon',
+      'coreOrigin',
     ]);
     const unknown = Object.keys(rawRecord).filter((k) => !known.has(k));
     if (unknown.length > 0) {

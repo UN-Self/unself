@@ -88,7 +88,8 @@ const TableNameSchema = z.string().regex(/^[a-z][a-z0-9_]*$/);
 /**
  * 模块清单契约 v1（docs/modules.md §3 字段冻结表）。
  * 硬护栏（schema 层直接拒绝）：storage.accepts 含 shared 时必须申报 tables；
- * preferred 必须是 accepts 成员。其余语义检查（六类）在 validate 模块。
+ * preferred 必须是 accepts 成员；coreOrigin 禁止 '*'/空串且跨域时必须 https（决策 #63）。
+ * 其余语义检查（六类）在 validate 模块。
  */
 export const ModuleManifestSchema = z
   .object({
@@ -119,6 +120,12 @@ export const ModuleManifestSchema = z
       .string()
       .regex(/^[a-z0-9-]+$/)
       .optional(),
+    /**
+     * 壳页面 origin（决策 #63）：跨域模块的 SDK 用它做入站消息校验、浏览器侧
+     * 直调 Core API 的基准；同域路径制模块可省略（运行时取当前 origin）。
+     * 硬禁止 '*'（superRefine）——通配等于向任意页面泄露模块 token。
+     */
+    coreOrigin: z.string().optional(),
   })
   .superRefine((manifest, ctx) => {
     const accepts = manifest.storage?.accepts;
@@ -137,6 +144,60 @@ export const ModuleManifestSchema = z
         message: `storage.preferred=${manifest.storage.preferred} 不在 accepts 内`,
       });
     }
+    // 决策 #63 硬禁止：coreOrigin 回落 '*' = 允许任意页面向模块投递 token——直接拒绝
+    if (manifest.coreOrigin === '*') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['coreOrigin'],
+        message: 'coreOrigin 禁止 "*"（决策 #63）：通配等于向任意页面泄露模块 token，必须填壳的确切 https origin',
+      });
+    }
+    if (manifest.coreOrigin !== undefined && manifest.coreOrigin !== '') {
+      const origin = normalizeOrigin(manifest.coreOrigin);
+      if (origin === null || origin !== manifest.coreOrigin || !origin.startsWith('https://')) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['coreOrigin'],
+          message: `coreOrigin=${manifest.coreOrigin} 不是合法的 https origin（应为 https://host[:port] 形态，决策 #63）`,
+        });
+      }
+    }
+    // 跨域模块的入口必须 https（决策 #63 publicUrl 强制 https 的 schema 层锚点）：
+    // entry 非 http(s)/不可解析 → 拒；entry 是 http:// 非 localhost（自托管公网明文）→ 拒
+    const entry = normalizeOrigin(manifest.entry);
+    if (entry === null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['entry'],
+        message: `entry=${manifest.entry} 不是可解析的 http(s) URL`,
+      });
+    } else if (!entry.startsWith('https://')) {
+      let host: string;
+      try {
+        host = new URL(manifest.entry).hostname;
+      } catch {
+        host = '';
+      }
+      const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+      if (!isLocal) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['entry'],
+          message: `entry=${manifest.entry} 非 https（决策 #63 publicUrl 强制 https；仅 localhost/127.0.0.1 明文豁免）`,
+        });
+      }
+    }
   });
+
+/** URL → origin 归一化：非 http(s)/解析失败 → null（供 coreOrigin/entry 校验共用）。 */
+function normalizeOrigin(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
 
 export type ModuleManifest = z.infer<typeof ModuleManifestSchema>;

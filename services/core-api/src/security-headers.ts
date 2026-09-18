@@ -15,7 +15,11 @@
 
 import type { Context, Next } from 'hono';
 
-/** CSP 指令集（顺序固定：便于 `_headers` 与本文件逐字对齐、测试断言稳定）。 */
+/**
+ * 基础 CSP 指令集（顺序固定，便于 `_headers` 与本文件逐字对齐、测试断言稳定）。
+ * 含 `frame-src 'self'`（同域路径制基线）；跨域模块 origin 由
+ * `htmlCsp(frameOrigins)` 在其后追加成白名单（决策 #63/#73）。
+ */
 export const HTML_CSP = [
   "default-src 'self'",
   "script-src 'self'",
@@ -29,6 +33,17 @@ export const HTML_CSP = [
   "form-action 'self'",
   "object-src 'none'",
 ].join('; ');
+
+/**
+ * 外壳 CSP 生成（决策 #63/#73 按注册表白名单动态生成）：
+ * `frame-src` 在基础值后追加注册表里跨域模块的 origin——加模块只改注册表、
+ * 不必重建外壳；不传或传空 = 零白名单，安全默认，绝不出现 `frame-src *`。
+ * 输入必须已归一化为「scheme://host[:port]」形态（归一化归 registryFrameOrigins/normalizeFrameOrigin）。
+ */
+export function htmlCsp(frameOrigins?: readonly string[]): string {
+  if (!frameOrigins || frameOrigins.length === 0) return HTML_CSP;
+  return HTML_CSP.replace('frame-src \'self\'', `frame-src 'self' ${frameOrigins.join(' ')}`);
+}
 
 /** 兼容不支持 `frame-ancestors` 的老浏览器；`DENY` 会连自家 iframe 一起挡，故用 `SAMEORIGIN`。 */
 export const HTML_FRAME_OPTIONS = 'SAMEORIGIN';
@@ -44,15 +59,43 @@ function isHtml(response: Response): boolean {
   return (response.headers.get('content-type') ?? '').toLowerCase().includes('text/html');
 }
 
+/** 响应已带 CSP 时的 frame-src 原文抽取（无该指令回 null）。 */
+function frameSrcOf(csp: string): string | null {
+  for (const part of csp.split(';')) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith('frame-src')) return trimmed;
+  }
+  return null;
+}
+
 /**
- * 给 HTML 响应补安全头（纯函数形态：便于单测直接断言行为，不必起 Worker）。
- * 幂等：已有同名头（如静态资产 `_headers` 已加）时原样保留，不覆盖。
- * 非 HTML（JSON/二进制/空体）原样返回，不改动 Response 对象本身。
+ * 给 HTML 响应补安全头；给 frameOrigins 时在 CSP `frame-src` 追加白名单
+ * （响应自带 CSP：在原值上追加；没有：套生成值）。
+ * 其余头与幂等语义不变（同名保留不覆盖；非 HTML 原样返回）。
  */
-export function withHtmlSecurityHeaders(response: Response): Response {
+export function withHtmlSecurityHeaders(response: Response, frameOrigins?: readonly string[]): Response {
   if (!isHtml(response)) return response;
   const headers = new Headers(response.headers);
-  for (const [name, value] of HTML_HEADERS) {
+  const cspWithFrame = frameOrigins ? htmlCsp(frameOrigins) : HTML_CSP;
+  const existing = headers.get('Content-Security-Policy');
+  if (existing && frameOrigins) {
+    // 已有 CSP（如静态资产 _headers 先加）：在原 frame-src 上追加白名单（不重复已含项）
+    const frameSrc = frameSrcOf(existing);
+    if (frameSrc) {
+      const merged = frameSrc
+        .split(/\s+/)
+        .filter((v) => v && !(frameOrigins as readonly string[]).includes(v))
+        .concat([...frameOrigins])
+        .join(' ');
+      headers.set('Content-Security-Policy', existing.replace(frameSrc, merged));
+    } else {
+      // 原头没有 frame-src：在最末追加该指令（保守合并不推翻既有策略）
+      headers.set('Content-Security-Policy', `${existing}; frame-src 'self' ${frameOrigins.join(' ')}`);
+    }
+  } else if (!existing) {
+    headers.set('Content-Security-Policy', cspWithFrame);
+  }
+  for (const [name, value] of HTML_HEADERS.filter(([n]) => n !== 'Content-Security-Policy')) {
     if (!headers.has(name)) headers.set(name, value);
   }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
@@ -61,11 +104,15 @@ export function withHtmlSecurityHeaders(response: Response): Response {
 /**
  * Hono 中间件形态：给经 app 返回的 HTML 响应补头（当前 app 只出 JSON，
  * 留着是因为「谁回 HTML 谁上头」比「记得在某处手动调」更不容易漏）。
+ * 可选给 `frameOrigins` 提供者：每个响应现场查注册表（决策 #63 动态——加模块不改外壳）。
  */
-export function htmlSecurityHeaders() {
+export function htmlSecurityHeaders(options?: {
+  frameOrigins?: () => Promise<string[]> | string[];
+}) {
   return async (c: Context, next: Next): Promise<void> => {
     await next();
-    const patched = withHtmlSecurityHeaders(c.res);
+    const frameOrigins = options?.frameOrigins ? await options.frameOrigins() : undefined;
+    const patched = withHtmlSecurityHeaders(c.res, frameOrigins);
     if (patched !== c.res) c.res = patched;
   };
 }

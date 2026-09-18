@@ -9,3 +9,6 @@ export type { VerifyModuleTokenOptions } from './verify';
 export type { ModuleStorage, ModuleContext } from './storage';
 export { createD1Storage } from './storage';
 export type { CreateD1StorageOptions, D1MinimalDatabase, D1MinimalStatement } from './storage';
+// 跨域模块的「模块 → core」通道（决策 #63）：coreOrigin 必填禁 '*'，fetch 以壳 origin 为基准。
+export { createModuleApi, assertCoreOrigin } from './module-api';
+export type { CreateModuleApiOptions, ModuleApi, ModuleApiFetcher, ModuleApiPath } from './module-api';
