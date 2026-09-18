@@ -69,6 +69,7 @@ export function manifestYamlToCandidate(parsed: ParsedManifestYaml): ManifestCan
   const { scalars, lists } = parsed;
   const storageAccepts = lists['storage.accepts'];
   const storagePreferred = scalars['storage.preferred'];
+  const storageDeclaration = scalars['storage.declaration'];
   return {
     id: scalars.id,
     route: scalars.route,
@@ -78,11 +79,12 @@ export function manifestYamlToCandidate(parsed: ParsedManifestYaml): ManifestCan
     ...(scalars.description ? { description: scalars.description } : {}),
     ...(scalars.icon ? { icon: scalars.icon } : {}),
     ...(lists.permissions ? { permissions: lists.permissions } : {}),
-    ...(storageAccepts || storagePreferred
+    ...(storageAccepts || storagePreferred || storageDeclaration
       ? {
           storage: {
             accepts: storageAccepts ?? [],
             ...(storagePreferred ? { preferred: storagePreferred } : {}),
+            ...(storageDeclaration ? { declaration: storageDeclaration } : {}),
           },
         }
       : {}),

@@ -42,6 +42,11 @@ export const ModuleStorageSchema = z.object({
   accepts: z.array(StorageLevelSchema).min(1),
   /** 安装器默认勾选的偏好；必须是 accepts 的成员。 */
   preferred: StorageLevelSchema.optional(),
+  /**
+   * 安装时的存储选择（部署者选定，#55；增量字段，缺省 = preferred ?? core）。
+   * 只允许 accepts 的成员——选了声明之外的模式在 schema 层直接拒绝（不靠安装器二次校验）。
+   */
+  declaration: StorageLevelSchema.optional(),
 });
 
 /** 配置页字段声明（决策 #53/#66）：安装器渲染表单，不执行模块提供的页面。 */
@@ -129,12 +134,22 @@ export const ModuleManifestSchema = z
   })
   .superRefine((manifest, ctx) => {
     const accepts = manifest.storage?.accepts;
-    if (accepts?.includes('shared') && (!manifest.tables || manifest.tables.length === 0)) {
-      // docs/modules.md §4 三护栏之一：shared 必须申报表名清单（卸载/备份按清单执行）
+    const declared = manifest.storage?.declaration;
+    if (accepts?.includes('shared') && (!manifest.tables || manifest.tables.length === 0) && declared !== 'core') {
+      // docs/modules.md §4 三护栏之一：shared 必须申报表名清单（卸载/备份按清单执行）。
+      // declaration=core（用户实际装 core，shared 不会落库）时豁免——装的是哪一级，才执行哪一级护栏。
       ctx.addIssue({
         code: 'custom',
         path: ['tables'],
         message: 'storage.accepts 含 shared 时必须申报 tables（表名清单，docs/modules.md §4 护栏②）',
+      });
+    }
+    // 用户实际选了 shared → tables 申报同样必需（装的是哪一级，就执行哪一级的护栏）
+    if (declared === 'shared' && (!manifest.tables || manifest.tables.length === 0)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tables'],
+        message: 'storage.declaration=shared（用户选定）时必须申报 tables（表名清单，docs/modules.md §4 护栏②）',
       });
     }
     if (manifest.storage?.preferred && accepts && !accepts.includes(manifest.storage.preferred)) {
@@ -142,6 +157,16 @@ export const ModuleManifestSchema = z
         code: 'custom',
         path: ['storage', 'preferred'],
         message: `storage.preferred=${manifest.storage.preferred} 不在 accepts 内`,
+      });
+    }
+    // 决策 #55：安装时的存储选择（declaration）只允许 accepts 的成员——
+    // 装了声明之外的模式在 schema 层直接拒绝（不让它跑一半炸；用户选定后的
+    // 快照进注册表，snapshot 即「这台实例上该模块数据在哪」的权威记录）。
+    if (declared && accepts && !accepts.includes(declared)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['storage', 'declaration'],
+        message: `storage.declaration=${declared} 不在 accepts=[${accepts.join(', ')}] 内（#55：选了声明之外的模式即拒绝安装）`,
       });
     }
     // 决策 #63 硬禁止：coreOrigin 回落 '*' = 允许任意页面向模块投递 token——直接拒绝
