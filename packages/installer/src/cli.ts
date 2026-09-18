@@ -45,6 +45,8 @@ export interface RunOptions {
     instancePath: string;
     /** 撞车守卫放行开关（#272）。 */
     allowAdopt?: boolean;
+    /** 来源漂移已确认（#269，`--yes`）。 */
+    yes?: boolean;
     /** 九步进度事件转发（#272：`unself deploy` 不再吞进度）。 */
     onEvent?: (text: string) => void;
   }) => Promise<{ baseUrl: string; setupToken: string | null }>;
@@ -62,8 +64,12 @@ const USAGE: string[] = [
   '  use <名字>           切换当前实例（写注册表 current）',
   '  current              显示当前实例（名字 + 实例目录）',
   '  destroy <名字>       注销实例（--purge 连目录一起删；数据不可恢复，谨慎）',
-  '  deploy [--allow-adopt]  CI/逃生门：对当前实例直达九步装配（等价向导④）',
+  '  module pack [目录]   把模块目录打成 .tgz（--out <目录>；与 builtin 产物同一条路）',
+  '  module add <来源>    解析来源（official:/npm:/github:/https:/file:）→ 写 config+lock 并预暂存',
+  '                    --as <名字> 覆盖实例内 id；解析会做未知能力门禁（点名声拒）',
+  '  deploy [--allow-adopt] [--yes]  CI/逃生门：对当前实例直达九步装配（等价向导④）',
   '                    --allow-adopt = 撞车守卫放行（台账证明不了归属时显式接管同名资源）',
+  '                    --yes = 来源漂移已确认（新装/换源时不列 diff 直接解析）',
   '  help                 显示本帮助',
   '',
   '实例注册表：~/.unself/instances.json（只记「名字 → 路径」，不含秘密；可重建）',
@@ -77,13 +83,21 @@ export function parseArgs(argv: string[]): {
   json: boolean;
   purge: boolean;
   allowAdopt: boolean;
+  yes: boolean;
 } {
   const allowAdopt = argv.includes('--allow-adopt') || argv.includes('--allow-shared-account');
+  const yes = argv.includes('--yes') || argv.includes('-y');
   const rest = argv.filter(
-    (a) => a !== '--json' && a !== '--purge' && a !== '--allow-adopt' && a !== '--allow-shared-account',
+    (a) =>
+      a !== '--json' &&
+      a !== '--purge' &&
+      a !== '--allow-adopt' &&
+      a !== '--allow-shared-account' &&
+      a !== '--yes' &&
+      a !== '-y',
   );
   const cmd = rest[0] ?? 'wizard';
-  return { cmd, args: rest.slice(1), json: argv.includes('--json'), purge: argv.includes('--purge'), allowAdopt };
+  return { cmd, args: rest.slice(1), json: argv.includes('--json'), purge: argv.includes('--purge'), allowAdopt, yes };
 }
 
 /** 取「当前实例」并做磁盘有效性校验（resolveCurrent 纯函数 + loadInstance 校验）。 */
@@ -105,12 +119,33 @@ export function resolveCurrentInstance(
 }
 
 /** 已知命令表（未知命令先拦，不落到需要当前实例的分支给误导性错误）。 */
-const KNOWN_COMMANDS = ['wizard', 'init', 'list', 'use', 'current', 'destroy', 'deploy', 'help', '--help', '-h'];
+const KNOWN_COMMANDS = ['wizard', 'init', 'list', 'use', 'current', 'destroy', 'module', 'deploy', 'help', '--help', '-h'];
+
+/** 位置参数/取值开关解析（`--out <dir>` / `--as <id>` 消费后一个 token）。 */
+function splitPositional(args: string[], valueFlags: string[]): { positionals: string[]; values: Record<string, string> } {
+  const positionals: string[] = [];
+  const values: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (valueFlags.includes(a)) {
+      values[a] = args[i + 1] ?? '';
+      i++;
+      continue;
+    }
+    const eq = valueFlags.find((f) => a.startsWith(`${f}=`));
+    if (eq) {
+      values[eq] = a.slice(eq.length + 1);
+      continue;
+    }
+    positionals.push(a);
+  }
+  return { positionals, values };
+}
 
 /** 执行单条命令（不吞异常：由 run 统一转人话 + exit 1）。 */
 async function exec(opts: RunOptions): Promise<number> {
   const { argv, env, home, cwd, log } = opts;
-  const { cmd, args, json, purge, allowAdopt } = parseArgs(argv);
+  const { cmd, args, json, purge, allowAdopt, yes } = parseArgs(argv);
 
   // 未知命令先拦：不消耗注册表读取，也不给「没有当前实例」的误导性错误。
   if (!KNOWN_COMMANDS.includes(cmd)) {
@@ -213,6 +248,41 @@ async function exec(opts: RunOptions): Promise<number> {
     return 0;
   }
 
+  // ---- module pack / module add（#269）----
+  if (cmd === 'module') {
+    const sub = args[0] ?? '';
+    const { positionals, values } = splitPositional(args.slice(1), ['--out', '--as']);
+    if (sub === 'pack') {
+      const dir = positionals[0] ?? cwd;
+      const outDir = values['--out'];
+      const { packModule } = await import('./deploy');
+      const r = await packModule({ dir, ...(outDir !== undefined ? { outDir } : {}), log });
+      log(`已打包模块：${r.id} v${r.version}`);
+      log(`包文件：${r.files.length} 个（${r.files.join('、')}）`);
+      log(`tarball：${r.tarballPath}`);
+      log(`integrity：${r.integrity}`);
+      return 0;
+    }
+    if (sub === 'add') {
+      const source = positionals[0] ?? '';
+      if (!source) throw new Error('用法：unself module add <来源> [--as <实例内名字>]（来源形如 npm:@acme/pkg@1.2.0）');
+      const as = values['--as'];
+      const reg = loadRegistry(home);
+      const inst = resolveCurrentInstance(reg, env, cwd);
+      const { addModuleSource } = await import('./deploy');
+      const r = await addModuleSource({ instancePath: inst.path, source, ...(as !== undefined ? { as } : {}), log });
+      log(`已添加模块：${r.id} v${r.version}（来源 ${r.source}）`);
+      if (r.integrity) log(`SRI：${r.integrity}`);
+      log(`声明权限：${r.permissions.length > 0 ? r.permissions.join('、') : '（无）'}`);
+      log(`数据落点：accepts=${r.storage.accepts.join('/')}${r.storage.preferred ? `，preferred=${r.storage.preferred}` : ''}`);
+      log(`已写入：${pathline(r.configPath)}（modules 段）与 ${pathline(r.lockPath)}`);
+      log('下一步：`unself deploy`（lock 已命中，不会重复下载，也不会因来源漂移报错）。');
+      echoPathline(inst.path, log);
+      return 0;
+    }
+    throw new Error(`未知 module 子命令「${sub}」。可用：unself module pack|add`);
+  }
+
   // ---- wizard（默认）/ deploy：都需要当前实例 ----
   const reg = loadRegistry(home);
   const inst = resolveCurrentInstance(reg, env, cwd);
@@ -244,9 +314,35 @@ async function exec(opts: RunOptions): Promise<number> {
               ...(input.storageChoices ? { storageChoices: input.storageChoices } : {}),
               ...(input.token ? { token: input.token } : {}),
               ...(input.allowAdopt ? { allowAdopt: true } : {}),
+              ...(input.yes ? { yes: true } : {}),
               onEvent: input.onEvent,
             });
           },
+          // #269 ③ 来源解析：探到就展示「将要装什么」；未知能力在此报名字拒绝。
+          resolveModule: async (source) => {
+            const { describeModuleSource } = await import('./deploy');
+            const p = await describeModuleSource(source, { instancePath: o.instancePath, log });
+            return {
+              id: p.id,
+              source: p.source,
+              kind: p.kind,
+              version: p.version,
+              ...(p.integrity !== undefined ? { integrity: p.integrity } : {}),
+              permissions: p.permissions,
+              storageAccepts: p.storage.accepts as never[],
+              ...(p.storage.preferred !== undefined ? { storagePreferred: p.storage.preferred as never } : {}),
+              manifestHash: p.manifestHash,
+            };
+          },
+          // #269 ① token 真验（CF GET /user/tokens/verify）：无效与网络/权限问题分开报。
+          verifyToken: async (token) => {
+            const { verifyApiToken } = await import('./deploy');
+            const r = await verifyApiToken(token);
+            return { ok: r.ok, message: r.message };
+          },
+          // #269 ③ 改模块后重算资源名预览（不再沿用启动时快照）。
+          previewResources: async (moduleIds) =>
+            (await (await import('./deploy')).previewInstanceResources(o.instancePath, moduleIds)).names,
         },
       });
       log(`向导已启动：http://localhost:${actual}`);
@@ -273,8 +369,8 @@ async function exec(opts: RunOptions): Promise<number> {
 
   if (cmd === 'deploy') {
     const fn = opts.deployNineSteps ?? (async (input) => (await import('./deploy')).runDeploy(input));
-    // #272：转发九步事件（原先不传 onEvent，用户只看得到结果行、看不到哪一步在干什么）+ 撞车守卫开关。
-    const result = await fn({ instancePath: inst.path, allowAdopt, onEvent: (line) => log(line) });
+    // #272：转发九步事件；#269：`--yes` 把「来源漂移已确认」传给引擎。
+    const result = await fn({ instancePath: inst.path, allowAdopt, yes, onEvent: (line) => log(line) });
     log(`装配完成：${result.baseUrl}`);
     log(result.setupToken ? `setup 深链：/setup?token=${result.setupToken}` : '已有管理员：setup 已封箱。');
     echoPathline(inst.path, log);

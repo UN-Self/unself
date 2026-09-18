@@ -42,6 +42,25 @@ export interface WizardResourceName {
   name: string;
 }
 
+/**
+ * ③ 添加的第三方模块（#269）：来源入口的解析结果（来源/版本/SRI/permissions/落点）。
+ * 只存展示与装配所需字段；manifest 原文不进状态（体积 + 无回读价值）。
+ */
+export interface WizardModuleAdd {
+  id: string;
+  source: string;
+  /** 来源协议（official/npm/github/https/file）。 */
+  kind: string;
+  version: string;
+  /** 包字节 SRI（sha512-…）；目录形态无下载字节时省略。 */
+  integrity?: string;
+  permissions: string[];
+  storageAccepts: StorageLevel[];
+  storagePreferred?: StorageLevel;
+  /** manifest 规范化哈希（进 lock 前展示用；不落盘）。 */
+  manifestHash: string;
+}
+
 /** 数据四级中需要知情同意的级别（#55：shared = 共享库完整访问权 + 零隔离）。 */
 export const SHARED_CONSENT_NOTE =
   '该模块将在共享数据库中自建表：它将获得共享数据库的完整访问权（与其他模块零隔离）；' +
@@ -82,6 +101,8 @@ export interface WizardState {
   modules: string[];
   /** 模块存储声明投影（③ 步渲染单选；空 = 全部按 preferred ?? core）。 */
   storageOptions: WizardStorageOption[];
+  /** ③ 添加的第三方模块（#269）：来源 + 解析后的版本/SRI/permissions/落点。 */
+  moduleAdds: WizardModuleAdd[];
   /** 本实例会占用的 CF 资源名（#272 预览；来自实例配置的命名空间派生）。 */
   resourceNames: WizardResourceName[];
   /** 用户对每模块的存储选择（#55）；缺省模块 = preferred ?? core。 */
@@ -96,9 +117,15 @@ export interface WizardState {
 /** 初始状态（① auth）。instancePath 必填——页头常驻可见（决策 #53）。 */
 export function initialWizardState(
   instancePath: string,
-  options?: { modules?: string[]; storageOptions?: WizardStorageOption[]; resourceNames?: WizardResourceName[] },
+  options?: {
+    modules?: string[];
+    storageOptions?: WizardStorageOption[];
+    resourceNames?: WizardResourceName[];
+    moduleAdds?: WizardModuleAdd[];
+  },
 ): WizardState {
   const storageOptions = options?.storageOptions ?? [];
+  const moduleAdds = options?.moduleAdds ?? [];
   return {
     step: 'auth',
     instancePath,
@@ -107,6 +134,7 @@ export function initialWizardState(
     domain: '',
     modules: options?.modules ?? ['hello'],
     storageOptions,
+    moduleAdds,
     resourceNames: options?.resourceNames ?? [],
     storageChoices: {},
     sharedConsent: false,
@@ -124,16 +152,16 @@ export function pushEvent(s: WizardState, e: Omit<WizardEvent, 'i'>): WizardEven
 }
 
 /**
- * token 形态校验（语义与 deploy/cloudflare interactive.tokenProblem 同源：#66/#249）。
- * 只拦「明显不对」，真伪以 CF 校验为准。返回 null = 合法。
+ * token 形态校验（决策 #251/#269）：只拦「明显不对」，真伪交给 CF `GET /user/tokens/verify`。
+ * 依据 CF《Token formats》（2026-04-20）：老格式 = 40 位字母数字（首字符可能是数字），
+ * 新格式 = `cfut_` + 40 字符 + 校验和——规格里**没有「必须字母开头」**，长度也不固定，
+ * 所以这里只做「非空 + 无空白 + 字符集 [A-Za-z0-9_-]」，不再猜形状。返回 null = 交给真验。
  */
 export function tokenProblem(token: string): string | null {
   const t = token.trim();
   if (!t) return 'token 为空';
   if (/\s/.test(t)) return 'token 里含空格/换行：可能是复制带了空白或粘了两段，请重新整段复制粘贴';
-  if (!/^[A-Za-z0-9_-]+$/.test(t)) return 'token 含字母数字以外的字符：请确认复制的是 API Token 本身（不是邮箱/Notation/密钥 JSON）';
-  if (!/^[A-Za-z]/.test(t)) return 'token 形态不像 CF API Token（应以字母开头的 40 位字母数字）：请确认复制完整';
-  if (t.length < 30 || t.length > 50) return `token 长度 ${t.length} 不像 CF API Token（应为 40 位左右）：请确认复制完整`;
+  if (!/^[A-Za-z0-9_-]+$/.test(t)) return 'token 含字母、数字、连字符、下划线以外的字符：请确认复制的是 API Token 本身（不是邮箱/Notation/密钥 JSON）';
   return null;
 }
 
@@ -254,16 +282,63 @@ export function failDeploy(s: WizardState, err: WizardError): WizardState {
   return { ...s, step: 'failed', error: err };
 }
 
-/** ⑥ 幂等重跑：清错误/结果/事件回 ①（token 需重填——明文本就不留存）。 */
+/**
+ * ⑥ 幂等重跑：清错误/结果/事件回 ①（token 需重填——明文本就不留存）。
+ * ③ 添加的第三方模块（#269）随 storageOptions/resourceNames 一起保留。
+ */
 export function resetWizard(s: WizardState): WizardState {
   return {
     ...initialWizardState(s.instancePath, {
       modules: s.modules,
       storageOptions: s.storageOptions,
       resourceNames: s.resourceNames,
+      moduleAdds: s.moduleAdds,
     }),
     step: 'auth',
   };
+}
+
+/**
+ * ③ 添加一个来源模块（#269）：并入 modules / storageOptions / moduleAdds。
+ * 重复 id → problem（不静默覆盖）。返回新状态，原状态不动。
+ */
+export function addModule(
+  s: WizardState,
+  add: WizardModuleAdd,
+): { state: WizardState; problem: string | null } {
+  if (s.moduleAdds.some((a) => a.id === add.id)) {
+    return { state: s, problem: `模块 ${add.id} 已在本次装配清单里（要换来源请先刷新页面重来）` };
+  }
+  const storageOptions = s.storageOptions.some((o) => o.id === add.id)
+    ? s.storageOptions
+    : [
+        ...s.storageOptions,
+        {
+          id: add.id,
+          accepts: add.storageAccepts,
+          ...(add.storagePreferred !== undefined ? { preferred: add.storagePreferred } : {}),
+        },
+      ];
+  return {
+    state: {
+      ...s,
+      modules: s.modules.includes(add.id) ? s.modules : [...s.modules, add.id],
+      moduleAdds: [...s.moduleAdds, add],
+      storageOptions,
+    },
+    problem: null,
+  };
+}
+
+/**
+ * ③ 确认后交给 ④ 的模块条目（#269）：字符串 = builtin；对象 = 带来源。
+ * 只保留仍在 modules 里的条目。
+ */
+export function deployModules(s: WizardState): Array<string | { id: string; source: string }> {
+  return s.modules.map((id) => {
+    const add = s.moduleAdds.find((a) => a.id === id);
+    return add ? { id, source: add.source } : id;
+  });
 }
 
 /** 对外（GET /api/state）暴露的状态投影：永不携带 token 明文。 */

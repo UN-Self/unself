@@ -130,11 +130,11 @@ describe('六段流全链（替身部署）', () => {
     expect(holder.state.step).toBe('done');
   });
 
-  it('① token 非法 → 400 人话 problem（密码框掩码语义：状态不含明文）', async () => {
-    const r = await post('/api/step1', { token: 'short' });
+  it('① token 形状非法 → 400 人话 problem（密码框掩码语义：状态不含明文）', async () => {
+    const r = await post('/api/step1', { token: 'bad!token' });
     expect(r.status).toBe(400);
-    expect(String(r.json.problem)).toMatch(/长度/);
-    expect(JSON.stringify(holder.state)).not.toContain('short');
+    expect(String(r.json.problem)).toMatch(/以外的字符/);
+    expect(JSON.stringify(holder.state)).not.toContain('bad!token');
   });
 
   it('② 自有域非法 → 400 原地不动；⑥ failed 后重跑 reset 收敛', async () => {
