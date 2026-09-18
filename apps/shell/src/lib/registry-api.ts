@@ -10,7 +10,9 @@ import { request, type ApiError } from './api-client'
 
 export type { ApiError }
 
-/** 注册表条目（core-api RegistryEntry 的成员侧子集）。 */
+/**
+ * 注册表条目（core-api RegistryEntry 的成员侧子集）。
+ */
 export interface RegistryModule {
   id: string
   enabled: boolean
@@ -29,6 +31,17 @@ export interface RegistryModule {
 
 export async function fetchEnabledModules(): Promise<RegistryModule[]> {
   return request<RegistryModule[]>('/api/modules', undefined, { messagePolicy: () => '模块列表加载失败' })
+}
+
+/**
+ * 外壳 frame-src 白名单（决策 #63/#73 动态 CSP）：
+ * GET /api/modules/frame-origins → 启用模块 entry 的 origin 集合（不含实例自身 origin）。
+ * 壳启动时拉一次注入到 index.html 的 CSP；加模块只改注册表，不重建外壳。
+ */
+export async function fetchFrameOrigins(): Promise<string[]> {
+  return request<string[]>('/api/modules/frame-origins', undefined, {
+    messagePolicy: () => 'frame 白名单加载失败',
+  })
 }
 
 /**

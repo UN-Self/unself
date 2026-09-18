@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { getSigningRuntime } from '../keys';
 import { checkTokenGate, issueModuleToken, MODULE_TOKEN_ISSUER } from '../token';
-import { listModules, ModuleRegistrationSchema, toggleModule, upsertModule } from '../registry';
+import { listModules, ModuleRegistrationSchema, registryFrameOrigins, toggleModule, upsertModule } from '../registry';
 import { audit } from '../services/audit';
 import { configuredMailSender, deliverNotification } from '../services/notifications';
 import { readSession } from '../session';
@@ -102,6 +102,16 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
   app.get('/api/modules', async (c) => {
     const all = await listModules(c.env.CORE_DB);
     return c.json(all.filter((m) => m.enabled));
+  });
+
+  /**
+   * 外壳 frame-src 白名单（决策 #63/#73 动态 CSP）：启用模块 entry 的 origin 集合。
+   * 壳启动时拉一次并重写 index.html 的 CSP；加模块只改注册表、不重建外壳。
+   * 匿名可读与 /api/modules 同口径（origin 列表无敏感面；不暴露模块清单细节）。
+   */
+  app.get('/api/modules/frame-origins', async (c) => {
+    const selfOrigin = new URL(c.req.url).origin;
+    return c.json(await registryFrameOrigins(c.env.CORE_DB, { selfOrigin }));
   });
 
   /** 实例公钥集：模块后端与 SDK 验签的唯一真值来源（§5.2）。 */

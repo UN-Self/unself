@@ -13,6 +13,7 @@
 import { Hono } from 'hono';
 
 import type { Bindings } from '../index';
+import { moduleApiCors } from '../middleware/module-api-cors';
 import { requireModuleAuth, requireModulePermission } from '../middleware/module-auth';
 import type { ModuleAuthVariables } from '../token';
 import { deliverNotification } from '../services/notifications';
@@ -25,6 +26,10 @@ interface KvRow {
 
 export function registerModuleApiRoutes(app: Hono<{ Bindings: Bindings; Variables: ModuleAuthVariables }>): void {
   const moduleApi = new Hono<{ Bindings: Bindings; Variables: ModuleAuthVariables }>();
+
+  // CORS（#63/#73）：在 token 门禁之前——预检 OPTIONS 无 Authorization，也必须在门禁前短路回答；
+  // 白名单 = 注册表启用模块的 entry origin，现场查库（启停秒级生效）。
+  moduleApi.use('*', moduleApiCors());
 
   // 门禁两段：① 模块 token（验签 + 注册表快照）；② 能力词按端点叠加
   moduleApi.use('*', requireModuleAuth());
