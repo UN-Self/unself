@@ -13,9 +13,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  CHAT_DB_NAME,
-  CHAT_KV_NAME,
-  CHAT_R2_NAME,
+  chatDbName,
+  chatKvName,
+  chatR2Name,
   chatWranglerConfig,
   ensureChatResources,
   generateChatKeyring,
@@ -72,11 +72,11 @@ describe('ensureChatResources（REST 查漏补建）', () => {
     expect(kvId).toBe(fake.kvId);
     expect(fake.calls.some((c) => c.method === 'POST' && c.url.endsWith('/d1/database'))).toBe(true);
     expect(fake.calls.some((c) => c.method === 'POST' && c.url.endsWith('/storage/kv/namespaces'))).toBe(true);
-    expect(logs.some((l) => l.includes(CHAT_DB_NAME))).toBe(true);
+    expect(logs.some((l) => l.includes(chatDbName()))).toBe(true);
   });
 
   it('已存在：零 create（幂等），list 命中直接返回 id', async () => {
-    const fake = restFake({ existingD1: [CHAT_DB_NAME], existingKv: [CHAT_KV_NAME] });
+    const fake = restFake({ existingD1: [chatDbName()], existingKv: [chatKvName()] });
     await ensureChatResources(fake.client, 'ACC', () => {});
     expect(fake.calls.some((c) => c.method === 'POST')).toBe(false);
   });
@@ -155,11 +155,11 @@ describe('chatWranglerConfig（部署配置生成）', () => {
     expect(cfg.name).toBe('unself-module-chat');
     expect(cfg.main).toBe('chat/worker.js');
     expect(cfg.routes).toEqual([{ pattern: 'team.example.com/m/chat/*', zone_name: undefined }]);
-    expect(cfg.d1_databases).toEqual([{ binding: 'DB', database_name: CHAT_DB_NAME, database_id: 'chat-uuid' }]);
+    expect(cfg.d1_databases).toEqual([{ binding: 'DB', database_name: chatDbName(), database_id: 'chat-uuid' }]);
     // #231：SESSIONS KV 已无 worker 写入/读取方（本地会话下架 + PATCH profile 停写），
-    // 绑定暂由生成配置代持到 M3 清退（取舍见 chat-provision.ts CHAT_KV_NAME 注释）。
+    // 绑定暂由生成配置代持到 M3 清退（取舍见 chat-provision.ts chatKvName 注释）。
     expect(cfg.kv_namespaces).toEqual([{ binding: 'SESSIONS', id: 'kv-uuid' }]);
-    expect(cfg.r2_buckets).toEqual([{ binding: 'FILES', bucket_name: CHAT_R2_NAME }]);
+    expect(cfg.r2_buckets).toEqual([{ binding: 'FILES', bucket_name: chatR2Name() }]);
     expect(cfg.durable_objects.bindings).toEqual([{ name: 'CHANNEL_ROOM', class_name: 'ChannelRoom' }]);
     expect(cfg.migrations).toEqual([{ tag: 'v1', new_sqlite_classes: ['ChannelRoom'] }]);
     expect(cfg.assets).toMatchObject({ directory: 'chat/assets/frontend', binding: 'ASSETS', run_worker_first: true });

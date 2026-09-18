@@ -7,7 +7,7 @@
  * → ⑨ 冒烟 + 主题体检。
  * 所有资源查漏后补建：连跑两次收敛（#14 验收）。全程不安装、不调用 wrangler（决策 #65）。
  */
-import { readFile } from 'node:fs/promises';
+import { cp, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { probeSqlite } from '@unself/control-plane';
@@ -24,13 +24,15 @@ import {
 import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type ModuleRef, type NormalizedModuleEntry, type UnselfConfig } from './config';
 import { CONTRACT_VERSION, ModuleManifestSchema, type ModuleManifest } from '@unself/contracts';
 import { LOCK_FILENAME, emptyLock, parseLockText, serializeLock, manifestHashOf, type LockFile } from './lock';
-import { lockRecordFrom, resolveSources } from './module-sources';
+import { lockRecordFrom, readManifest, resolveSources } from './module-sources';
+import { resolveArtifactRoots, setActiveArtifactRoots, type ArtifactRoots } from './artifacts';
+import { moduleWorkerName, coreWorkerName } from './naming';
 import { createCoreControlPlane } from './control-plane';
 import { CredentialsMissingError, credentialsMissingMessage, resolveAuth } from './auth';
 import { domainProblem } from './interactive';
 import { createKeypair, JWT_SECRET_NAME, publicJwksJson } from './keypair';
 import { ensureRoute, ensureTotalTls, ensureZoneARecord, findZone, removeLegacyCustomDomains, removeRoutesForPatterns } from './rest/zones';
-import { ensureDatabases, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
+import { ensureDatabases, validateS3Storage } from './provision';
 import { ensureD1 } from './rest';
 import {
   RestClient,
@@ -45,11 +47,11 @@ import {
 import { buildAssetManifest, startAssetSession, uploadMissingAssets } from './rest/assets';
 import type { WorkerBinding } from './rest/workers';
 import {
-  CHAT_DB_NAME,
   CHAT_KEYRING_SECRET,
   CHAT_MODULE_ID,
-  CHAT_KV_NAME,
-  CHAT_R2_NAME,
+  chatDbName,
+  chatKvName,
+  chatR2Name,
   chatWranglerConfig,
   ensureChatResources,
   ensureChatR2Bucket,
@@ -90,7 +92,9 @@ export function consoleReporter(): StepReporter {
 
 /**
  * 模块发现：
- * - builtin 条目（无 source）→ 扫描 modules 目录（manifest.yaml，存量路径）；
+ * - builtin 条目（无 source）→ 扫模块目录：
+ *   · 仓库形态 `rootDir/modules/<id>/manifest.yaml`（源码）；
+ *   · 产物形态 `<artifacts>/modules/<id>/manifest.json`（**包形态** —— #257 验收③「builtin 与第三方同一条路」）。
  * - sourced 条目（{id, source}）→ 来源解析器取包落位（远端 tarball 直解/file: 本地目录），
  *   包根即当 module 目录（步骤②迁移/④装配/⑤注册表共用）。
  * sourced 解析需要 outDir（步骤③前里立）——这里先只注册 source 侧表；实际取包延后到步骤③内
@@ -100,22 +104,49 @@ export async function discoverModules(
   rootDir: string,
   selectedIds: string[],
   entries?: NormalizedModuleEntry[],
+  opts?: {
+    /** 产物根（#257）：给了就扫 `<artifacts>/modules` 的包形态；缺省 = 仓库 modules/ 源码形态。 */
+    artifacts?: ArtifactRoots | null;
+  },
 ): Promise<ModuleRef[]> {
   const sourcedEntries = (entries ?? []).filter((e): e is NormalizedModuleEntry & { source: string } => !!e.source);
   const { readdir } = await import('node:fs/promises');
-  const modulesDir = join(rootDir, 'modules');
+  const artifacts = opts?.artifacts ?? null;
   const refs: ModuleRef[] = [];
-  if (existsSync(modulesDir)) {
-    for (const entry of (await readdir(modulesDir, { withFileTypes: true }))) {
-      if (!entry.isDirectory()) continue;
-      const manifestPath = join(modulesDir, entry.name, 'manifest.yaml');
-      if (!existsSync(manifestPath)) continue;
-      const text = await readFile(manifestPath, 'utf8');
-      const { manifestId } = await import('./config');
-      const id = manifestId(text) ?? entry.name;
-      // config 里同 id 带了 source → sourced 条目优先（目录扫描不产出该 id）
-      if (sourcedEntries.some((s) => s.id === id)) continue;
-      refs.push({ id, dir: join(modulesDir, entry.name), selected: selectedIds.includes(id) });
+  if (artifacts) {
+    // 产物形态：builtin 模块以包被消费（manifest.json + worker.js + migrations/）——与第三方同一条路。
+    if (existsSync(artifacts.modulesDir)) {
+      for (const entry of await readdir(artifacts.modulesDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const dir = join(artifacts.modulesDir, entry.name);
+        if (!existsSync(join(dir, 'manifest.json'))) continue;
+        const { manifest, text } = await readManifest(dir);
+        const id = manifest.id ?? entry.name;
+        if (sourcedEntries.some((s) => s.id === id)) continue;
+        const source = `builtin:${id}`;
+        refs.push({
+          id,
+          dir,
+          selected: selectedIds.includes(id),
+          source,
+          resolved: { id, source, packageDir: dir, manifest, manifestText: text, version: manifest.version },
+        });
+      }
+    }
+  } else {
+    const modulesDir = join(rootDir, 'modules');
+    if (existsSync(modulesDir)) {
+      for (const entry of (await readdir(modulesDir, { withFileTypes: true }))) {
+        if (!entry.isDirectory()) continue;
+        const manifestPath = join(modulesDir, entry.name, 'manifest.yaml');
+        if (!existsSync(manifestPath)) continue;
+        const text = await readFile(manifestPath, 'utf8');
+        const { manifestId } = await import('./config');
+        const id = manifestId(text) ?? entry.name;
+        // config 里同 id 带了 source → sourced 条目优先（目录扫描不产出该 id）
+        if (sourcedEntries.some((s) => s.id === id)) continue;
+        refs.push({ id, dir: join(modulesDir, entry.name), selected: selectedIds.includes(id) });
+      }
     }
   }
   // sourced 条目：占位（dir 在 ensureSourcedModules 取包后回填）
@@ -257,9 +288,21 @@ export async function runNineSteps(input: {
   preLock?: string;
   /** 测试注入口：拦截 DNS 自建（默认真实 ensureZoneARecord，#244 前的步骤顺序保留）。 */
   ensureDns?: (domain: string) => Promise<void>;
+  /**
+   * 产物根（#257）：显式指定「core / shell / SDK / builtin 模块包」所在目录（随安装器分发的产物）。
+   * 缺省 = 自探测（`UNSELF_ARTIFACTS` → <引擎模块目录>/artifacts）；都缺 → 仓库开发形态（读 rootDir 源码树）。
+   * 显式给的值必须合法（缺 manifest.json 直接抛，不回落到仓库路径）。
+   */
+  artifactRoot?: string;
 }): Promise<Summary> {
   const { rootDir } = input;
   const rep = input.reporter ?? consoleReporter();
+  // 产物根解析（#257）：安装器产物形态 = 不读 rootDir 下 modules/ services/ apps/ packages/（只写 .deploy/）。
+  const artifacts = resolveArtifactRoots({ artifactRoot: input.artifactRoot, rootDir });
+  setActiveArtifactRoots(artifacts);
+  if (artifacts) {
+    rep.log(`产物模式：装配产物来自 ${artifacts.root}（安装器包内，未读仓库源码树）`);
+  }
   const config = input.configOverride ?? (await loadUnselfConfig(rootDir));
   // 域名体检（#194 D3）：CLI --domain= 与配置文件 domain 都汇入 config.domain，此处统一拦截。
   if (config.domain) {
@@ -271,7 +314,7 @@ export async function runNineSteps(input: {
     }
   }
   const entries = normalizeModuleEntries(config.modules);
-  const modules = await discoverModules(rootDir, moduleIds(entries), entries);
+  const modules = await discoverModules(rootDir, moduleIds(entries), entries, { artifacts });
   const selected = modules.filter((m) => m.selected);
   // 数据落点（#248 四级）：声明来自模块 manifest（builtin 读盘 / sourced 用解析产物），
   // 用户选择覆写在 config 条目的 storage.declaration（契约层已保证 ∈ accepts）。
@@ -302,7 +345,7 @@ export async function runNineSteps(input: {
   //    失败处理（#61）：停住并指出「模块 / 文件 / 第几条语句」，不自动重试、不自动回滚。
   rep.step(2, '跑核心迁移与选中模块迁移（按模块独立记账，REST import）');
   const coreCp = createCoreControlPlane(client, accountId, dbIds.core);
-  const coreMigrationDir = join(rootDir, 'services/core-api/migrations/core');
+  const coreMigrationDir = artifacts ? artifacts.coreMigrationsDir : join(rootDir, 'services/core-api/migrations/core');
   await coreCp.applyMigrations('core', await readSqlFiles(coreMigrationDir));
   rep.log('core 迁移已应用（unself-core，记账 unself_migrations_core）');
   /** dedicated 模块的独立 D1 id（步骤①补建；摘要与绑定共用）。 */
@@ -316,7 +359,7 @@ export async function runNineSteps(input: {
   // （docs/modules.md §4「core 的 schema 归 core」）——与模块无关，必须在任何 core 级模块跑之前就位。
   // 记账独立（unself_migrations_platform，落在 modules 库）：与各模块记账互不覆盖（#55 护栏①同规）。
   const modulesCp = createCoreControlPlane(client, accountId, dbIds.modules);
-  const platformMigrationDir = join(rootDir, 'services/core-api/migrations/modules');
+  const platformMigrationDir = artifacts ? artifacts.platformMigrationsDir : join(rootDir, 'services/core-api/migrations/modules');
   const platformFiles = await readSqlFiles(platformMigrationDir);
   if (platformFiles.length > 0) {
     try {
@@ -447,6 +490,7 @@ export async function runNineSteps(input: {
       lock,
       confirmed: input.yes,
       log: rep.log,
+      ...(artifacts ? { artifacts } : {}),
       ...(input.fetchers ? { fetchers: input.fetchers as Parameters<typeof resolveSources>[0]['fetchers'] } : {}),
     });
     for (const mod of resolution.sourced) {
@@ -462,10 +506,10 @@ export async function runNineSteps(input: {
       if (mod.dir && mod.source) await applyModuleStorage(mod);
     }
   }
-  // lock 记录（决策 #60「builtin 也进 lock」）：sourced 由解析产物生成；builtin 从 manifest.yaml 提取。
-  // 只有本次 config 声明的模块进 lock（removed 的旧记录随 resolution.removed 删掉）。
+  // lock 记录（决策 #60「builtin 也进 lock」）：解析产物（sourced 包 / 产物形态 builtin 包）直接用 resolved；
+  // 仓库形态 builtin 从 manifest.yaml 提取。只有本次 config 声明的模块进 lock（removed 的旧记录随 resolution.removed 删掉）。
   const lockModules: LockFile['modules'] = {};
-  for (const mod of modules.filter((m) => m.selected && !m.source)) {
+  for (const mod of modules.filter((m) => m.selected && !m.resolved && !m.source)) {
     const yaml = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
     const manifest = ModuleManifestSchema.parse(buildManifestSnapshot({ manifestText: yaml, moduleId: mod.id, baseUrl: '' }));
     lockModules[mod.id] = {
@@ -475,8 +519,8 @@ export async function runNineSteps(input: {
       contractVersion: CONTRACT_VERSION,
     };
   }
-  for (const mod of resolution?.sourced ?? []) {
-    lockModules[mod.id] = lockRecordFrom(mod);
+  for (const mod of modules.filter((m) => m.selected && m.resolved)) {
+    lockModules[mod.id] = lockRecordFrom(mod.resolved!);
   }
 
   // ③ Shell Worker（构建 + 上传）
@@ -487,6 +531,7 @@ export async function runNineSteps(input: {
     modules,
     dbIds,
     buildShell: input.buildShell,
+    artifacts,
   };
   const provisioned: Provisioned = await provisionAll(provisionInput);
 
@@ -529,22 +574,28 @@ export async function runNineSteps(input: {
     join(provisioned.outDir, 'core.wrangler.jsonc'),
     coreWranglerConfig({ config, dbIds, coreName: provisioned.coreName, zoneName: resolvedZone?.name }),
   );
-  await writeConfig(
-    join(provisioned.outDir, 'core-worker.js'),
-    coreWorkerEntrySource(provisioned.outDir, rootDir),
-  );
-  // 入口模板落盘后立即自打包（wrangler 隐式 bundle 的替代；探针实证顺序反了会打到陈旧入口）
-  await bundleCoreWorker(
-    join(provisioned.outDir, 'core-worker.js'),
-    join(provisioned.outDir, 'core-worker.bundle.js'),
-  );
+  if (artifacts) {
+    // 产物形态：core Worker 也在安装器构建期打好包（含 core-api + Stalwart 适配器）——照抄，不读仓库源码。
+    await cp(artifacts.coreWorker, join(provisioned.outDir, 'core-worker.js'));
+  } else {
+    await writeConfig(
+      join(provisioned.outDir, 'core-worker.js'),
+      coreWorkerEntrySource(provisioned.outDir, rootDir),
+    );
+    // 入口模板落盘后立即自打包（wrangler 隐式 bundle 的替代；探针实证顺序反了会打到陈旧入口）
+    await bundleCoreWorker(
+      join(provisioned.outDir, 'core-worker.js'),
+      join(provisioned.outDir, 'core-worker.bundle.js'),
+    );
+  }
   // core 上传描述（secret 首部署后补写 → 同描述重传一次；幂等收敛）
   const coreVars: Record<string, string> = {};
   if (config.domain) coreVars.UNSELF_BASE_URL = `https://${config.domain}`;
+  const coreMainModule = artifacts ? 'core-worker.js' : 'core-worker.bundle.js';
   const coreSpec: WorkerUploadSpec = {
     name: provisioned.coreName,
-    mainModule: 'core-worker.bundle.js',
-    modules: [{ name: 'core-worker.bundle.js', content: await readFile(join(provisioned.outDir, 'core-worker.bundle.js'), 'utf8') }],
+    mainModule: coreMainModule,
+    modules: [{ name: coreMainModule, content: await readFile(join(provisioned.outDir, coreMainModule), 'utf8') }],
     bindings: [
       { type: 'd1', name: 'CORE_DB', id: dbIds.core },
       { type: 'd1', name: 'MODULES_DB', id: dbIds.modules },
@@ -608,7 +659,12 @@ export async function runNineSteps(input: {
   for (const mod of provisioned.modules) {
     const isChat = mod.id === CHAT_MODULE_ID;
     const chatAssetsDir = isChat
-      ? await (input.buildChatFrontend ?? buildChatFrontendAssets)({
+      ? await (input.buildChatFrontend ??
+          ((i: { rootDir: string; outDir: string; log: (msg: string) => void }) =>
+            buildChatFrontendAssets({
+              ...i,
+              ...(artifacts ? { prebuiltDir: join(artifacts.modulesDir, CHAT_MODULE_ID, 'frontend') } : {}),
+            })))({
           rootDir,
           outDir: provisioned.outDir,
           log: rep.log,
@@ -655,7 +711,7 @@ export async function runNineSteps(input: {
     if (modLevel === 'core') {
       // core 级（#248 收敛（a)）：模块唯一数据通道 = Core API 代理；跨 worker 用 Service Binding
       // （同 zone 明文 fetch 被 CF 平台禁 → 只有绑定这条路能在生产成立）。
-      moduleBindings.push({ type: 'service', name: 'CORE_API', service: 'unself-core-api' });
+      moduleBindings.push({ type: 'service', name: 'CORE_API', service: coreWorkerName() });
     }
     if (modLevel === 'dedicated' && dedicatedDbIds.has(mod.id)) {
       // dedicated 专属库绑定（#248）：unself-<id>，绑定名 <ID>_DB（chat 的 DB 绑定走包配置同名兼容）
@@ -671,7 +727,7 @@ export async function runNineSteps(input: {
       moduleBindings.push(
         { type: 'd1', name: chatPkgMeta.d1Binding, id: chatResources.dbId },
         { type: 'kv_namespace', name: 'SESSIONS', namespace_id: chatResources.kvId },
-        { type: 'r2_bucket', name: 'FILES', bucket_name: CHAT_R2_NAME },
+        { type: 'r2_bucket', name: 'FILES', bucket_name: chatR2Name() },
         ...chatPkgMeta.doBindings.map((b) => ({ type: 'durable_object_namespace', ...b })),
       );
     }
@@ -705,7 +761,7 @@ export async function runNineSteps(input: {
     }
     const moduleUpload = async (): Promise<void> =>
       uploadWorkerSpec(input, client, accountId, rep, {
-        name: `unself-module-${mod.id}`,
+        name: moduleWorkerName(mod.id),
         mainModule: 'worker.js',
         modules: [
           { name: 'worker.js', content: await readFile(join(moduleDir, 'worker.js'), 'utf8') },
@@ -736,18 +792,18 @@ export async function runNineSteps(input: {
     }
     rep.log(`模块 ${mod.id} 已上传`);
     if (config.domain && resolvedZone) {
-      await ensureRoute(client, resolvedZone.id, `${config.domain}/m/${mod.id}/*`, `unself-module-${mod.id}`, rep.log);
+      await ensureRoute(client, resolvedZone.id, `${config.domain}/m/${mod.id}/*`, moduleWorkerName(mod.id), rep.log);
     }
     rep.log(`模块 ${mod.id} 路由就绪（/m/${mod.id}/*${isChat ? '，含前端产物 assets' : ''}）`);
     if (isChat) {
-      const hasKeyring = await hasWorkerSecret(client, accountId, `unself-module-${mod.id}`, CHAT_KEYRING_SECRET);
+      const hasKeyring = await hasWorkerSecret(client, accountId, moduleWorkerName(mod.id), CHAT_KEYRING_SECRET);
       if (!hasKeyring) {
         const keyring = generateChatKeyring();
         if (input.putSecret) {
-          await input.putSecret(`unself-module-${mod.id}`, keyring, CHAT_KEYRING_SECRET);
+          await input.putSecret(moduleWorkerName(mod.id), keyring, CHAT_KEYRING_SECRET);
           rep.log(`写入 secret ${CHAT_KEYRING_SECRET}（测试注入口）`);
         } else {
-          await putWorkerSecret(client, accountId, `unself-module-${mod.id}`, CHAT_KEYRING_SECRET, keyring);
+          await putWorkerSecret(client, accountId, moduleWorkerName(mod.id), CHAT_KEYRING_SECRET, keyring);
         }
         // secret 生效需重部署（重传同产物；不带 DO migrations——已建类）
         await moduleUpload();
@@ -899,9 +955,9 @@ export async function runNineSteps(input: {
     r2Bucket: provisioned.r2Bucket,
     chat: chatMod
       ? {
-          db: CHAT_DB_NAME,
-          kv: CHAT_KV_NAME,
-          r2: CHAT_R2_NAME,
+          db: chatDbName(),
+          kv: chatKvName(),
+          r2: chatR2Name(),
           keyringAction: chatKeyringAction!,
         }
       : undefined,
@@ -1060,4 +1116,4 @@ export interface Summary {
   themeChecks: ThemeCheckResult[];
 }
 
-export { CORE_DB_NAME, MODULES_DB_NAME, DEPLOY_DIR, CHAT_DB_NAME, CHAT_KV_NAME, CHAT_R2_NAME };
+export { DEPLOY_DIR };

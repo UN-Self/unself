@@ -11,10 +11,11 @@ import { spawn } from 'node:child_process';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { build } from 'esbuild';
 import type { ModuleManifest } from '@unself/contracts';
 import type { UnselfConfig } from './config';
 import type { ModuleRef } from './config';
+import type { ArtifactRoots } from './artifacts';
+import { coreDbName, coreWorkerName, modulesDbName, moduleWorkerName, resourceName } from './naming';
 
 export type RelPath = string;
 
@@ -89,21 +90,35 @@ export async function provisionAll(options: {
    * 签名只吃 rootDir：构建产物约定落 apps/shell/dist，由随后 cp 搬运。
    */
   buildShell?: (rootDir: string) => Promise<void>;
+  /**
+   * 产物根（#257）：给了就**不再读仓库源码树**——shell / SDK / builtin 模块 worker 全部从
+   * `<installer>/dist/artifacts/**` 搬运（预打包产物）；缺省 = 仓库开发形态（现行为不变）。
+   */
+  artifacts?: ArtifactRoots | null;
 }): Promise<Provisioned> {
   const { rootDir, config, modules } = options;
+  const artifacts = options.artifacts ?? null;
   const log = options.log ?? console.log;
   const buildShell =
     options.buildShell ?? ((dir) => runTool('pnpm', ['--filter', '@unself/shell', 'build'], dir));
   const outDir = join(rootDir, DEPLOY_DIR);
   await mkdir(outDir, { recursive: true });
 
-  // ---- 步骤③ 构建侧：shell（每次部署无条件重建，#73）----
-  const shellDist = join(rootDir, 'apps/shell/dist');
-  log('构建 shell（vite build）…');
-  await buildShell(rootDir);
+  // ---- 步骤③ 构建侧：shell ----
   const shellAssets = join(outDir, 'assets/shell');
-  await ensureEmptyDir(shellAssets);
-  await cp(shellDist, shellAssets, { recursive: true });
+  if (artifacts) {
+    // 产物形态：shell 已在安装器构建期用 vite 构建好，随 tarball 分发（干净机器没有 pnpm/vite）
+    log('搬运 shell 产物（安装器包内 artifacts/shell）…');
+    await ensureEmptyDir(shellAssets);
+    await cp(artifacts.shellDir, shellAssets, { recursive: true });
+  } else {
+    // 仓库形态：每次部署无条件重建（vite build，杜绝 dist 陈旧复用，#73）
+    const shellDist = join(rootDir, 'apps/shell/dist');
+    log('构建 shell（vite build）…');
+    await buildShell(rootDir);
+    await ensureEmptyDir(shellAssets);
+    await cp(shellDist, shellAssets, { recursive: true });
+  }
 
   // ---- 步骤④ 构建侧：模块 ----
   const sdkEntry = join(rootDir, 'packages/module-sdk/src/index.ts');
@@ -115,21 +130,17 @@ export async function provisionAll(options: {
     // 入口约定：包 package.json main（hello=src/index.ts、chat=worker/src/index.js）；
     // 无包描述的裸目录回退 src/index.ts（最小仓库场景）。
     const workerEntry = join(modOut, 'app.js');
-    await build({
-      entryPoints: [await moduleWorkerEntry(mod.dir)],
-      outfile: workerEntry,
-      bundle: true,
-      format: 'esm',
-      platform: 'neutral',
-      target: 'es2022',
-      conditions: ['workerd', 'import'],
-      external: ['@cloudflare/workers-types'],
-      legalComments: 'inline',
-      banner: { js: '// SPDX-License-Identifier: AGPL-3.0-only' },
-      logLevel: 'silent',
-    });
+    const prebuilt = artifacts ? join(mod.dir, 'worker.js') : null;
+    if (prebuilt && existsSync(prebuilt)) {
+      // 产物形态 / 已打包模块包：worker.js 本就是自包含单文件（决策 #58/#60）——照抄，不再过一次 esbuild
+      await cp(prebuilt, workerEntry);
+    } else {
+      await bundleModuleWorker(await moduleWorkerEntry(mod.dir), workerEntry);
+    }
     // SDK 浏览器资产（页面 import ./sdk/module-sdk.esm.js → 部署期静态资产）
-    await buildModuleSdkAssets(sdkEntry, join(modOut, 'assets/sdk'));
+    const sdkAssetsDir = join(modOut, 'assets/sdk');
+    if (artifacts) await copySdkAssets(artifacts.sdkDir, sdkAssetsDir);
+    else await buildModuleSdkAssets(sdkEntry, sdkAssetsDir);
     moduleProvisions.push({
       id: mod.id,
       dir: mod.dir,
@@ -141,7 +152,7 @@ export async function provisionAll(options: {
   }
 
   // ---- core Worker 名（baseUrl 由 steps.ts 的 resolveBaseUrl 决策，不在此估算）----
-  const coreName = 'unself-core-api';
+  const coreName = coreWorkerName();
 
   return {
     outDir,
@@ -150,6 +161,28 @@ export async function provisionAll(options: {
     modules: moduleProvisions,
     r2Bucket: config.storage.provider === 'r2' ? config.storage.bucket : undefined,
   };
+}
+
+/**
+ * 模块 Worker 打包（依赖打进单文件）。
+ * esbuild **惰性导入**（#257）：安装器产物形态不需要 esbuild（worker.js 已预打包），
+ * 打包时把它标为 external 即可——干净机器不装 esbuild 也能跑完九步。
+ */
+export async function bundleModuleWorker(entry: string, outfile: string): Promise<void> {
+  const { build } = await import('esbuild');
+  await build({
+    entryPoints: [entry],
+    outfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'neutral',
+    target: 'es2022',
+    conditions: ['workerd', 'import'],
+    external: ['@cloudflare/workers-types'],
+    legalComments: 'inline',
+    banner: { js: '// SPDX-License-Identifier: AGPL-3.0-only' },
+    logLevel: 'silent',
+  });
 }
 
 async function rm(path: string): Promise<void> {
@@ -199,6 +232,7 @@ export async function moduleWorkerEntry(moduleDir: string): Promise<string> {
  *   的命中目标——IIFE 无顶层 export，浏览器 ESM 具名导入会报 SyntaxError（T3 线上实锤）。
  */
 export async function buildModuleSdkAssets(sdkEntry: string, assetsDir: string): Promise<void> {
+  const { build } = await import('esbuild');
   await mkdir(assetsDir, { recursive: true });
   await build({
     entryPoints: [sdkEntry],
@@ -221,6 +255,18 @@ export async function buildModuleSdkAssets(sdkEntry: string, assetsDir: string):
     legalComments: 'inline',
     logLevel: 'silent',
   });
+}
+
+/** 产物形态搬运 SDK 资产（module-sdk.js + module-sdk.esm.js）：干净机器无 esbuild，直接抄预构建产物。 */
+async function copySdkAssets(sdkDir: string, assetsDir: string): Promise<void> {
+  await mkdir(assetsDir, { recursive: true });
+  for (const name of ['module-sdk.js', 'module-sdk.esm.js']) {
+    const from = join(sdkDir, name);
+    if (!existsSync(from)) {
+      throw new Error(`安装器产物不完整：缺 ${from}（SDK 浏览器资产）——重跑 \`pnpm --filter @unself/installer build\` 重新生成产物`);
+    }
+    await cp(from, join(assetsDir, name));
+  }
 }
 
 /** 生成 core 部署配置（含 SPA fallback + run_worker_first + 真实 D1 id + route）。 */
@@ -257,12 +303,12 @@ export function coreWranglerConfig(input: {
       d1_databases: [
         {
           binding: 'CORE_DB',
-          database_name: 'unself-core',
+          database_name: coreDbName(),
           database_id: dbIds.core,
         },
         {
           binding: 'MODULES_DB',
-          database_name: 'unself-modules',
+          database_name: modulesDbName(),
           database_id: dbIds.modules,
         },
       ],
@@ -295,7 +341,7 @@ export function moduleWranglerConfig(input: {
   return JSON.stringify(
     {
       $schema: 'node_modules/wrangler/config-schema.json',
-      name: `unself-module-${mod.id}`,
+      name: moduleWorkerName(mod.id),
       // wrangler v4 的 main/assets 相对「配置文件所在目录」解析（本配置在 modules/ 下）
       main: `${mod.id}/worker.js`, // wrapper 独占入口；bundle 在 app.js（同目录）
       compatibility_date: '2026-09-01',
@@ -316,14 +362,14 @@ export function moduleWranglerConfig(input: {
       d1_databases: [
         {
           binding: 'MODULES_DB',
-          database_name: 'unself-modules',
+          database_name: modulesDbName(),
           database_id: dbIds.modules,
         },
         ...(storageLevel === 'dedicated'
           ? [
               {
                 binding: `${mod.id.toUpperCase().replaceAll('-', '_')}_DB`,
-                database_name: `unself-${mod.id}`,
+                database_name: resourceName(mod.id),
                 database_id: dedicatedDbId ?? '',
               },
             ]
@@ -332,7 +378,7 @@ export function moduleWranglerConfig(input: {
       // core 级（#248 收敛（a)）：模块唯一数据通道 = Core API 代理；与 core-api 的跨 worker 调用
       // 只能走 Service Binding（同 zone 明文 fetch 被 CF 平台禁，见 #71 根因①）。steps.ts 上传时
       // 也注入同名绑定——配置产物与真实部署面保持一致（生成物可核对，不是唯一输入源）。
-      ...(storageLevel === 'core' ? { services: [{ binding: 'CORE_API', service: 'unself-core-api' }] } : {}),
+      ...(storageLevel === 'core' ? { services: [{ binding: 'CORE_API', service: coreWorkerName() }] } : {}),
       vars: {
         MODULE_ID: mod.id,
         // 数据落点（#248）：模块 SDK 据此决定存储通道（core=Core API 代理；shared/dedicated=直连建表；external=外部连接串）
@@ -371,6 +417,7 @@ export function migrationWranglerConfig(input: {
  * 必须在 core-worker.js 模板写盘【之后】调用（entry 是它的产物——探针曾因错序用到上一轮陈旧入口，测试已锁）。
  */
 export async function bundleCoreWorker(entry: string, outfile: string): Promise<void> {
+  const { build } = await import('esbuild');
   await build({
     entryPoints: [entry],
     outfile,

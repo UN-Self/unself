@@ -19,6 +19,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tableNamesFromSql, splitSqlStatements } from '@unself/contracts';
 import type { ModuleManifest } from '@unself/contracts';
+import { resourceName } from './naming';
 
 /** 数据四级（决策 #55）。 */
 export type StorageLevel = 'core' | 'shared' | 'dedicated' | 'external';
@@ -31,9 +32,9 @@ export function storageLevelFor(mod: { manifest?: ModuleManifest; id: string }):
   return preferred ?? 'core';
 }
 
-/** dedicated 独立库名（chat 普通化后同规：unself-<模块id>）。 */
+/** dedicated 独立库名（chat 普通化后同规：unself-<模块id>；带 UNSELF_RESOURCE_PREFIX 时随前缀，#257）。 */
 export function dedicatedDbNameFor(moduleId: string): string {
-  return `unself-${moduleId}`;
+  return resourceName(moduleId);
 }
 
 /**
