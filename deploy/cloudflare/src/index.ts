@@ -5,6 +5,10 @@
 export { runNineSteps } from './steps';
 export type { Summary, StepReporter } from './steps';
 
+// 模块卸载（#270）：平台按 tables 清单清理（撤路由 → 删 Worker → 删表 → 清记账 → 删注册表行）。
+export { removeModule, assertDroppable } from './uninstall';
+export type { RemoveModuleOptions, RemoveModuleResult } from './uninstall';
+
 // 产物形态（#257）：安装器打包脚本与向导数据层消费；`artifactRootsFrom` 供嵌入式测试构造产物根。
 export {
   ARTIFACTS_FORMAT_VERSION,
