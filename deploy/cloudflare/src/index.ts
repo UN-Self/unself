@@ -18,6 +18,7 @@ export type { ArtifactRoots, ArtifactsManifest } from './artifacts';
 
 // 装配产物构建原语（#257）：安装器构建期用它产出 dist/artifacts/**（core worker / SDK / 模块 worker bundle）。
 export { coreWorkerEntrySource } from './steps';
+export { DEPLOY_DIR } from './assemble';
 export { buildModuleSdkAssets, bundleCoreWorker, bundleModuleWorker, moduleWorkerEntry, provisionAll } from './assemble';
 
 // 资源命名（#257/#272）：UNSELF_RESOURCE_PREFIX 显式覆盖 + 实例命名空间 + 资源名预览。
@@ -50,6 +51,18 @@ export type { ExistingResource, GuardOutcome, ResourceKind, TargetResource } fro
 
 export { loadUnselfConfig, parseUnselfConfigText, withNamespacedBucket } from './config';
 export type { UnselfConfig } from './config';
+
+// 模块来源入口与打包（#269）：来源预览 / 打包器 / unself.lock 记账原语（安装器 module add 复用）。
+export { previewModuleSource } from './module-preview';
+export type { ModulePreview, PreviewInput, PreviewStorageLevel } from './module-preview';
+export { modulePackageFiles, packModuleDir } from './module-pack';
+export type { ModulePackageFile, ModulePackageInput } from './module-pack';
+export { emptyLock, LOCK_FILENAME, manifestHashOf, parseLockText, serializeLock, buildLockPlan } from './lock';
+export type { LockFile, LockPlan } from './lock';
+export { parseSource, sriFromBuffer } from './sources';
+export type { ParsedSource } from './sources';
+export { normalizeModuleEntries } from './config';
+export type { NormalizedModuleEntry } from './config';
 
 export { createCoreControlPlane } from './control-plane';
 export { progressTracker } from './progress';

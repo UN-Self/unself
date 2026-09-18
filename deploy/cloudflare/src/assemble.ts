@@ -10,7 +10,7 @@
 import { spawn } from 'node:child_process';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 import type { ModuleManifest } from '@unself/contracts';
 import type { UnselfConfig } from './config';
 import type { ModuleRef } from './config';
@@ -130,9 +130,11 @@ export async function provisionAll(options: {
     // 入口约定：包 package.json main（hello=src/index.ts、chat=worker/src/index.js）；
     // 无包描述的裸目录回退 src/index.ts（最小仓库场景）。
     const workerEntry = join(modOut, 'app.js');
-    const prebuilt = artifacts ? join(mod.dir, 'worker.js') : null;
-    if (prebuilt && existsSync(prebuilt)) {
-      // 产物形态 / 已打包模块包：worker.js 本就是自包含单文件（决策 #58/#60）——照抄，不再过一次 esbuild
+    // 已打包形态（包根带预构建 worker.js）——**不问 artifacts**：远端来源（npm/github/https tarball）
+    // 与 builtin 包都必须是自包含单文件（决策 #58/#60），重打包会改变字节并可能引入额外包裹。
+    // 只有源码形态（仓库 builtin、file: 本地源码）才走 esbuild。
+    const prebuilt = join(mod.dir, 'worker.js');
+    if (existsSync(prebuilt)) {
       await cp(prebuilt, workerEntry);
     } else {
       await bundleModuleWorker(await moduleWorkerEntry(mod.dir), workerEntry);
@@ -174,6 +176,10 @@ export async function bundleModuleWorker(entry: string, outfile: string): Promis
     entryPoints: [entry],
     outfile,
     bundle: true,
+    // 打包可复现（#269）：esbuild 的路径注释相对 `absWorkingDir`（缺省 = esbuild 服务启动时的 cwd，
+    // 随调用方 cwd 漂移：同一个模块由 pack 与由装配器打包会产出不同字节）。固定为入口文件所在目录，
+    // 使「同内容」在任何 cwd / 任何打包路径下产出逐字节一致（验收③「换成同内容的本地 tarball 结果一致」）。
+    absWorkingDir: dirname(resolvePath(entry)),
     format: 'esm',
     platform: 'neutral',
     target: 'es2022',
