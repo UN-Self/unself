@@ -18,7 +18,7 @@
 1. 认领：当前里程碑编号最小、依赖满足的 issue
 2. `git fetch origin && git switch -c m<M>/issue-<N> origin/m<M>/dev`
 3. 依据：docs/ 内按上表找；测试标准 docs/testing.md
-4. 验证缺一不可：`pnpm -r typecheck && pnpm -r test && pnpm -r build`
+4. 验证缺一不可（= CI 同一套门禁，分层跑）：测试 `pnpm -r test && node scripts/check-migrations-upgrade.mjs` ／ 类型·构建 `pnpm -r typecheck && pnpm -r build` ／ 纪律 lint `pnpm verify:tokens`
 5. `git commit -s` 小步提交 → `gh pr create --base m<M>/dev`（中文 + 验收对照）
 6. 回报编排会话后即停——不合并、不续领；阻塞同通道报
 
@@ -30,7 +30,7 @@
 1. diff/边界复核（越界改动要么退回要么明示批准）
 2. 新测试测行为（不是实现细节；标准见 docs/testing.md）
 3. **红灯验证**：变异或基线复现——把改动改坏，测试必红（贴证据）
-4. 本地三件套全绿（typecheck/test/build）
+4. 本地门禁全绿（= CI 同一套，缺一不可）：`pnpm -r test` + `node scripts/check-migrations-upgrade.mjs`（跨版本迁移闸门）+ `pnpm -r typecheck` + `pnpm -r build` + `pnpm verify:tokens`（纪律 lint）
 5. SPDX 头 / `commit -s` / PR 含 `closes #N` + 验收对照表
 
 **合并与收尾**：`gh pr merge --rebase` → 本地 ff `main` 后推送 → 清理 worktree/本地分支/tab。worker 报「完成」不等于交付：先查 worktree/PR 真实状态（防中途静默停机）。里程碑收官条件见 docs/roadmap.md「收官定义」。
@@ -53,6 +53,7 @@
 - wrangler 版本漂移会改变结论：OAuth 能否绑 zone 路由在 4.129.0 已可（旧版报 10405）；契约/形状类定案必须注明 wrangler 版本 → docs/audit/241-oauth覆盖实测-2026-09-17.md
 - wrangler 完整安装 213MB，其中 workerd 二进制 147MB 无法剥离（miniflare 启动即 require）→ 装配器不依赖 wrangler（决策 #65）
 - 从 OAuth scope 清单推断权限不可靠（「无 R2 scope」实测仍能建桶）→ 权限类结论只能实测 → docs/audit/241-oauth覆盖实测-2026-09-17.md
+- **CI 门禁不是「三件套」**：还含 `pnpm verify:tokens`（纪律 lint）与 `node scripts/check-migrations-upgrade.mjs`（升级路径测试）→ 只跑三件套会「本地全绿、CI 红」（#258 实锤）
 
 ## 与用户协作
 
