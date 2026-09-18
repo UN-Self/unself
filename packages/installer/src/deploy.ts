@@ -18,6 +18,37 @@ export interface RunDeployOptions {
   /** ③½ 用户存储选择（#55）：模块 id → 四级之一；进引擎后写进各模块 manifest 快照。 */
   storageChoices?: Record<string, string>;
   onEvent?: (text: string) => void;
+  /**
+   * 向导①粘贴的 API Token（#272）：只进本次进程内存/本次 REST 调用，不落盘、不回显、不进状态。
+   * 显式给了就用它建 RestClient（优先于环境变量）；缺省 = 引擎默认凭证优先级（env → OAuth）。
+   */
+  token?: string;
+  /** 撞车守卫放行开关（#272）：显式接管既有同名资源。 */
+  allowAdopt?: boolean;
+}
+
+/** 实例资源名预览（#272）：向导/init 展示「本实例会占用哪些 CF 资源名」。 */
+export interface InstanceResourcePreview {
+  /** 实例命名空间；undefined = 历史形态 unself-*。 */
+  namespace?: string;
+  names: Array<{ kind: string; name: string }>;
+}
+
+/**
+ * 读实例配置并推出本实例会占用的资源名（纯预览；不建任何资源）。
+ * 由引擎的 previewResourceNames 同源派生，安装器不重复实现命名规则。
+ */
+export async function previewInstanceResources(instancePath: string): Promise<InstanceResourcePreview> {
+  const engine = await loadEngine();
+  const cfg = await effectiveConfig(instancePath);
+  const moduleIds = (cfg.modules as Array<string | { id: string }>).map((m) => (typeof m === 'string' ? m : m.id));
+  const bucket = cfg.storage.provider === 'r2' ? cfg.storage.bucket : undefined;
+  const names = engine.previewResourceNames({
+    ...(cfg.namespace !== undefined ? { namespace: cfg.namespace } : {}),
+    moduleIds,
+    ...(bucket !== undefined ? { bucket } : {}),
+  });
+  return { ...(cfg.namespace !== undefined ? { namespace: cfg.namespace } : {}), names };
 }
 
 /** 四级词表（与 @unself/contracts StorageLevelSchema 同源语义；向导壳零引擎依赖故内联）。 */
@@ -122,6 +153,8 @@ export async function runDeploy(input: RunDeployOptions): Promise<DeployResult> 
   const engine = await loadEngine();
   const log = (msg: string): void => input.onEvent?.(msg);
   const rep = engine.progressTracker({ total: 9, out: log });
+  // 向导①粘贴的 token（#272）：建显式 RestClient（不落 process.env；本次调用结束即随作用域消失）。
+  const client = input.token ? new engine.RestClient({ token: input.token }) : undefined;
   const configOverride = await effectiveConfig(input.instancePath, { domain: input.domain, modules: input.modules });
   // ③½ 用户存储选择（#55）写进各模块 manifest 快照：declaration 进注册表快照，
   // 引擎据此决定四级落点（core 代理 / shared 建表 / dedicated 独立库 / external 接线）。
@@ -146,6 +179,8 @@ export async function runDeploy(input: RunDeployOptions): Promise<DeployResult> 
   const summary = await engine.runNineSteps({
     // rootDir = 实例目录的父目录（引擎在 rootDir 下找 unself.config.jsonc / modules/ / services/）。
     rootDir: input.instancePath.replace(/[/\\]unself$/, ''),
+    ...(client ? { client } : {}),
+    ...(input.allowAdopt ? { allowAdopt: true } : {}),
     ...(modulesOverride !== configOverride.modules ? { configOverride: { ...configOverride, modules: modulesOverride } } : { configOverride }),
     reporter: rep.reporter,
   });

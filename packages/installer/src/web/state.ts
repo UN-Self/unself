@@ -36,6 +36,12 @@ export interface WizardStorageOption {
   preferred?: StorageLevel;
 }
 
+/** 资源名预览项（#272：向导页展示本实例会占用哪些 CF 资源名）。 */
+export interface WizardResourceName {
+  kind: string;
+  name: string;
+}
+
 /** 数据四级中需要知情同意的级别（#55：shared = 共享库完整访问权 + 零隔离）。 */
 export const SHARED_CONSENT_NOTE =
   '该模块将在共享数据库中自建表：它将获得共享数据库的完整访问权（与其他模块零隔离）；' +
@@ -76,6 +82,8 @@ export interface WizardState {
   modules: string[];
   /** 模块存储声明投影（③ 步渲染单选；空 = 全部按 preferred ?? core）。 */
   storageOptions: WizardStorageOption[];
+  /** 本实例会占用的 CF 资源名（#272 预览；来自实例配置的命名空间派生）。 */
+  resourceNames: WizardResourceName[];
   /** 用户对每模块的存储选择（#55）；缺省模块 = preferred ?? core。 */
   storageChoices: Record<string, StorageLevel>;
   /** shared 知情同意已勾选（有模块选 shared 时必须 true 才能进 ④）。 */
@@ -88,7 +96,7 @@ export interface WizardState {
 /** 初始状态（① auth）。instancePath 必填——页头常驻可见（决策 #53）。 */
 export function initialWizardState(
   instancePath: string,
-  options?: { modules?: string[]; storageOptions?: WizardStorageOption[] },
+  options?: { modules?: string[]; storageOptions?: WizardStorageOption[]; resourceNames?: WizardResourceName[] },
 ): WizardState {
   const storageOptions = options?.storageOptions ?? [];
   return {
@@ -99,6 +107,7 @@ export function initialWizardState(
     domain: '',
     modules: options?.modules ?? ['hello'],
     storageOptions,
+    resourceNames: options?.resourceNames ?? [],
     storageChoices: {},
     sharedConsent: false,
     events: [],
@@ -248,7 +257,11 @@ export function failDeploy(s: WizardState, err: WizardError): WizardState {
 /** ⑥ 幂等重跑：清错误/结果/事件回 ①（token 需重填——明文本就不留存）。 */
 export function resetWizard(s: WizardState): WizardState {
   return {
-    ...initialWizardState(s.instancePath, { modules: s.modules, storageOptions: s.storageOptions }),
+    ...initialWizardState(s.instancePath, {
+      modules: s.modules,
+      storageOptions: s.storageOptions,
+      resourceNames: s.resourceNames,
+    }),
     step: 'auth',
   };
 }
