@@ -50,6 +50,21 @@ export interface RunOptions {
     /** 九步进度事件转发（#272：`unself deploy` 不再吞进度）。 */
     onEvent?: (text: string) => void;
   }) => Promise<{ baseUrl: string; setupToken: string | null }>;
+  /**
+   * `module remove` 卸载执行桥（缺省 = 动态加载 `./deploy.removeModuleFromInstance`，
+   * 测试注入替身以免真连 CF）。形状同引擎 RemoveModuleResult + configRemoved。
+   */
+  moduleRemove?: (input: { instancePath: string; moduleId: string; log?: (line: string) => void }) => Promise<{
+    moduleId: string;
+    level: string;
+    tablesDropped: string[];
+    ledgerTable: string | null;
+    routeRemoved: boolean;
+    workerDeleted: boolean;
+    removedFromRegistry: boolean;
+    lockUpdated: boolean;
+    configRemoved: boolean;
+  }>;
 }
 
 const USAGE: string[] = [
@@ -67,6 +82,9 @@ const USAGE: string[] = [
   '  module pack [目录]   把模块目录打成 .tgz（--out <目录>；与 builtin 产物同一条路）',
   '  module add <来源>    解析来源（official:/npm:/github:/https:/file:）→ 写 config+lock 并预暂存',
   '                    --as <名字> 覆盖实例内 id；解析会做未知能力门禁（点名声拒）',
+  '  module validate [目录]  对模块目录跑 §7 六类发布前硬检查（缺 manifest 即人话错）',
+  '  module remove <id>    卸载模块：撤路由 → 删 Worker → 按 tables 清单删表 → 清记账 → 注册表移除',
+  '                    （成功后同步从 unself.config.jsonc 的 modules 段移除；不在 config 里则拒不动作）',
   '  deploy [--allow-adopt] [--yes]  CI/逃生门：对当前实例直达九步装配（等价向导④）',
   '                    --allow-adopt = 撞车守卫放行（台账证明不了归属时显式接管同名资源）',
   '                    --yes = 来源漂移已确认（新装/换源时不列 diff 直接解析）',
@@ -144,7 +162,7 @@ function splitPositional(args: string[], valueFlags: string[]): { positionals: s
 
 /** 执行单条命令（不吞异常：由 run 统一转人话 + exit 1）。 */
 async function exec(opts: RunOptions): Promise<number> {
-  const { argv, env, home, cwd, log } = opts;
+  const { argv, env, home, cwd, log, err } = opts;
   const { cmd, args, json, purge, allowAdopt, yes } = parseArgs(argv);
 
   // 未知命令先拦：不消耗注册表读取，也不给「没有当前实例」的误导性错误。
@@ -280,7 +298,43 @@ async function exec(opts: RunOptions): Promise<number> {
       echoPathline(inst.path, log);
       return 0;
     }
-    throw new Error(`未知 module 子命令「${sub}」。可用：unself module pack|add`);
+    // ---- module validate（#270）：库层检查在 @unself/contracts，这里只做命令与输出 ----
+    if (sub === 'validate') {
+      const dir = positionals[0] ?? cwd;
+      const { validateModuleDir, formatValidateDiagnostic } = await import('./lib/module-validate');
+      const r = await validateModuleDir(dir);
+      const label = r.id !== undefined ? `${r.id}${r.version !== undefined ? ` v${r.version}` : ''}` : dir;
+      for (const d of r.errors) log(formatValidateDiagnostic(d));
+      for (const d of r.warnings) log(formatValidateDiagnostic(d));
+      if (r.ok) {
+        log(`✓ 模块校验通过：${label}（错误 0，警告 ${r.warnings.length}）`);
+        return 0;
+      }
+      err(`✗ 模块校验未通过：${label}（错误 ${r.errors.length}，警告 ${r.warnings.length}）`);
+      return 1;
+    }
+    // ---- module remove（#270）：引擎卸载 + 同步 config ----
+    if (sub === 'remove') {
+      const id = positionals[0] ?? '';
+      if (!id) throw new Error('用法：unself module remove <实例内 id>（与 `unself module add` 对称；成功后同步改 config）');
+      const reg = loadRegistry(home);
+      const inst = resolveCurrentInstance(reg, env, cwd);
+      const { removeModuleFromInstance } = await import('./deploy');
+      const fn = opts.moduleRemove ?? ((i) => removeModuleFromInstance(i));
+      const r = await fn({ instancePath: inst.path, moduleId: id, log });
+      log(`已卸载模块：${r.moduleId}（落点 ${r.level}）`);
+      log(
+        r.tablesDropped.length > 0
+          ? `已删表（按 tables 清单）：${r.tablesDropped.join('、')}`
+          : '清单内无表可删（core/external 落点或未申报）',
+      );
+      if (r.ledgerTable) log(`已清记账表：${r.ledgerTable}`);
+      log(`路由：${r.routeRemoved ? '已撤' : '未涉及'}；Worker：${r.workerDeleted ? '已删' : '本不存在'}；注册表：${r.removedFromRegistry ? '已移除' : '本无'}`);
+      log(`已从 unself.config.jsonc 的 modules 段移除${r.lockUpdated ? '，unself.lock 已更新' : ''}。`);
+      echoPathline(inst.path, log);
+      return 0;
+    }
+    throw new Error(`未知 module 子命令「${sub}」。可用：unself module pack|add|validate|remove`);
   }
 
   // ---- wizard（默认）/ deploy：都需要当前实例 ----
@@ -380,7 +434,10 @@ async function exec(opts: RunOptions): Promise<number> {
   throw new Error(`未知命令「${cmd}」。可用命令见 unself help`);
 }
 
-/** CLI 主入口：异常转人话 + exit 1（不裸栈）。 */
+/** CLI 主入口：异常转人话 + exit 1（不裸栈）。
+ * 部署语义提示（「可直接重跑」）只对装配路径（deploy）显示——module add/remove/validate 等窄命令
+ * 贴这句话会误导（装/卸模块不幂等收敛，错了要按报错修）。
+ */
 export async function run(opts: RunOptions): Promise<void> {
   try {
     const code = await exec(opts);
@@ -388,7 +445,9 @@ export async function run(opts: RunOptions): Promise<void> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     opts.err(`错误：${msg}`);
-    opts.err('（多数失败可直接重跑：装配幂等收敛，不会重复创建资源）');
+    if (parseArgs(opts.argv).cmd === 'deploy') {
+      opts.err('（多数失败可直接重跑：装配幂等收敛，不会重复创建资源）');
+    }
     opts.exit?.(1);
   }
 }
