@@ -17,6 +17,8 @@ export interface ModuleConfigEntry {
   id: string;
   /** 缺省 = builtin 目录形态（字符串条目）。 */
   source?: string;
+  /** 存储选择覆写（#55；向导③½/CLI 写入）。 */
+  storage?: { declaration: string };
 }
 
 /** 段内注释剥离（JSONC → JSON；字符串感知，行注释与块注释）。 */
@@ -106,7 +108,7 @@ function locateModulesArray(text: string): { open: number; close: number } {
 }
 
 /** 读 `"modules"` 段的原始数组（JSONC 宽容解析；不可解析 → 人话错，不猜）。 */
-export function readModulesArray(text: string): Array<string | { id: string; source?: string }> {
+export function readModulesArray(text: string): Array<string | ModuleConfigEntry> {
   const { open, close } = locateModulesArray(text);
   const inner = stripComments(text.slice(open, close + 1));
   let parsed: unknown;
@@ -122,7 +124,7 @@ export function readModulesArray(text: string): Array<string | { id: string; sou
 }
 
 /** 数组 → 单行 JSONC（字符串条目用 `"id"`；对象条目单行展开，与模板风格一致）。 */
-function serializeModulesArray(items: Array<string | { id: string; source?: string }>): string {
+function serializeModulesArray(items: Array<string | ModuleConfigEntry>): string {
   const parts = items.map((item) => JSON.stringify(item));
   return `[${parts.join(', ')}]`;
 }
@@ -142,4 +144,17 @@ export function addModuleToConfigText(text: string, entry: ModuleConfigEntry): s
   const next = [...existing, entry.source !== undefined ? entry : entry.id];
   const { open, close } = locateModulesArray(text);
   return text.slice(0, open) + serializeModulesArray(next) + text.slice(close + 1);
+}
+
+/**
+ * 从 `"modules"` 段移除一个实例内 id（`unself module remove`，issue #270）：
+ * 返回新文本与是否命中；未命中原样返回（调用方据 removed=false 报人话错，不静默）。
+ * 其余原文（含注释）逐字节保留；数组内注释会重排为单行（与 add 同一条路）。
+ */
+export function removeModuleFromConfigText(text: string, id: string): { text: string; removed: boolean } {
+  const existing = readModulesArray(text);
+  const next = existing.filter((e) => (typeof e === 'string' ? e : e.id) !== id);
+  if (next.length === existing.length) return { text, removed: false };
+  const { open, close } = locateModulesArray(text);
+  return { text: text.slice(0, open) + serializeModulesArray(next) + text.slice(close + 1), removed: true };
 }
