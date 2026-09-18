@@ -1,175 +1,137 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createD1Storage } from '../src/storage';
-import { createModuleDb, type ModuleTestDb } from './test-factory';
+import { createCoreApiStorage, createD1Storage } from '../src/storage';
 
 /**
- * #9 / 审核 T8（#60）：手搓假 D1 换成真 SQLite（node:sqlite + 真 module_kv 迁移）。
- * 假替身（MemoryStatement/MemoryDatabase）只按字符串 includes 解释 createD1Storage
- * 发出的固定 SQL 形态——SQL 漏 WHERE module_id 过滤、LIKE/ESCAPE 写偏都能全绿。
- * 真库裁决后：LIKE/ESCAPE 语义由 SQLite 给出真值，并新增 T8 守护用例
- * （漏 module_id 过滤即红，见「T8 守护」组）。
+ * #248 收敛（a)：存储客户端统一走 Core API 代理（/api/module-api/storage/* 四形状）。
+ * 替身只出现在外部边界（HTTP fetch），按真 core-api 路由的响应形状回放；
+ * 语义断言全部落在「客户端发了什么请求 / 如何解释响应」——与 core-api 的
+ * module-api.test.ts（真路由侧）互为两张皮免疫：形状漂移任何一边都会红。
  */
-describe('createD1Storage（真 SQLite）', () => {
-  const OPEN: ModuleTestDb[] = [];
-  const makeDb = (): ModuleTestDb => {
-    const db = createModuleDb();
-    OPEN.push(db);
-    return db;
-  };
-  afterEach(() => {
-    for (const db of OPEN) db.close();
-    OPEN.length = 0;
+
+/** fetch 替身：路由内存 KV + 请求记录。 */
+function makeFetchStub(initial: Record<string, string> = {}) {
+  const kv = new Map<string, string>(Object.entries(initial));
+  const calls: Array<{ method: string; path: string; body?: unknown; auth?: string }> = [];
+  const fetchImpl = vi.fn(async (input: string | URL, init?: RequestInit): Promise<Response> => {
+    const url = new URL(String(input));
+    const path = url.pathname;
+    const auth = (init?.headers as Record<string, string> | undefined)?.authorization;
+    const method = init?.method ?? 'GET';
+    let body: unknown;
+    if (typeof init?.body === 'string') body = JSON.parse(init.body);
+    calls.push({ method, path, body, auth });
+    const m = path.match(/^\/api\/module-api\/storage\/(.*)$/);
+    if (!m) return Response.json({ error: 'not found' }, { status: 404 });
+    const key = decodeURIComponent(m[1] ?? '');
+    if (key === '') {
+      // GET /storage/ = 列键
+      return Response.json({ keys: [...kv.keys()].sort() });
+    }
+    if (method === 'GET') {
+      if (!kv.has(key)) return Response.json({ error: 'key not found' }, { status: 404 });
+      return Response.json({ key, value: kv.get(key) });
+    }
+    if (method === 'PUT') {
+      const v = (body as { value?: unknown })?.value;
+      if (typeof v !== 'string') return Response.json({ error: 'body must be { value: string }' }, { status: 400 });
+      kv.set(key, v);
+      return Response.json({ ok: true });
+    }
+    if (method === 'DELETE') {
+      kv.delete(key);
+      return Response.json({ ok: true });
+    }
+    return Response.json({ error: 'method not allowed' }, { status: 405 });
+  });
+  return { fetchImpl, calls, kv };
+}
+
+/** 代理客户端构造（token 现场取）。 */
+function clientFor(stub: ReturnType<typeof makeFetchStub>, token = 'tok-1') {
+  return createCoreApiStorage({
+    coreApiOrigin: 'https://team.example.com',
+    getToken: () => token,
+    fetchImpl: stub.fetchImpl as unknown as (input: string, init?: RequestInit) => Promise<Response>,
+  });
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('createCoreApiStorage（#248 收敛（a)：Core API 代理四形状）', () => {
+  it('get：200 取值 / 404 回 null；请求带 Bearer 模块 token', async () => {
+    const stub = makeFetchStub({ counter: '3' });
+    const store = clientFor(stub);
+    await expect(store.get('counter')).resolves.toBe('3');
+    await expect(store.get('missing')).resolves.toBeNull();
+    expect(stub.calls[0]).toMatchObject({ method: 'GET', path: '/api/module-api/storage/counter', auth: 'Bearer tok-1' });
+    expect(stub.calls[1]!.path).toBe('/api/module-api/storage/missing');
   });
 
-  const hello = (db: ModuleTestDb) => createD1Storage({ db: db.d1, moduleId: 'hello' });
-
-  it('get 在键不存在时返回 null', async () => {
-    await expect(hello(makeDb()).get('counter')).resolves.toBeNull();
+  it('put 覆盖写、delete 幂等；body 形状 { value } 与 core-api 契约一致', async () => {
+    const stub = makeFetchStub();
+    const store = clientFor(stub);
+    await store.put('counter', '1');
+    expect(stub.calls[0]).toMatchObject({ method: 'PUT', body: { value: '1' } });
+    await store.put('counter', '2');
+    await expect(stub.kv.get('counter')).toBe('2');
+    await expect(stub.kv.get('counter')).toBe('2');
+    await store.delete('counter');
+    await store.delete('counter'); // 不存在也成功（代理 200）
+    expect(stub.kv.has('counter')).toBe(false);
   });
 
-  it('put/get/delete/list 正常路径', async () => {
-    const db = makeDb();
-    const storage = hello(db);
-    await storage.put('counter', '1');
-    await expect(storage.get('counter')).resolves.toBe('1');
-    await expect(storage.list()).resolves.toEqual(['counter']);
-    await storage.delete('counter');
-    await expect(storage.get('counter')).resolves.toBeNull();
-    await expect(storage.list()).resolves.toEqual([]);
+  it('list：全量按键排序；prefix 在客户端过滤且通配符按字面处理', async () => {
+    const stub = makeFetchStub({ 'a/1': 'x', 'a_2': 'y', 'b': 'z' });
+    const store = clientFor(stub);
+    await expect(store.list()).resolves.toEqual(['a/1', 'a_2', 'b']);
+    await expect(store.list('a/')).resolves.toEqual(['a/1']);
+    await expect(store.list('a_')).resolves.toEqual(['a_2']); // _ 不当通配
   });
 
-  it('put 覆盖写（真 PK 上的 upsert：ON CONFLICT 命中才覆盖）', async () => {
-    const storage = hello(makeDb());
-    await storage.put('counter', '1');
-    await storage.put('counter', '2');
-    await expect(storage.get('counter')).resolves.toBe('2');
-    await expect(storage.list()).resolves.toEqual(['counter']);
+  it('键守卫：空 key / 含保留分隔符 ":" 一律拒绝且零网络（跨前缀注入防线路径不回退）', async () => {
+    const stub = makeFetchStub();
+    const store = clientFor(stub);
+    await expect(store.get('')).rejects.toThrow(/非空/);
+    await expect(store.get('other:xxx')).rejects.toThrow(/跨前缀/);
+    await expect(store.put('evil::', '1')).rejects.toThrow(/跨前缀/);
+    expect(stub.fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('delete 幂等（不存在也成功）', async () => {
-    const storage = hello(makeDb());
-    await storage.put('counter', '1');
-    await storage.delete('counter');
-    await expect(storage.delete('counter')).resolves.toBeUndefined();
-  });
-
-  it('list(prefix) 前缀过滤、按键排序，空 prefix 等价全量', async () => {
-    const storage = hello(makeDb());
-    await storage.put('a/1', 'x');
-    await storage.put('b/2', 'y');
-    await storage.put('a/3', 'z');
-    await expect(storage.list()).resolves.toEqual(['a/1', 'a/3', 'b/2']);
-    await expect(storage.list('')).resolves.toEqual(['a/1', 'a/3', 'b/2']);
-    await expect(storage.list('a')).resolves.toEqual(['a/1', 'a/3']);
-    await expect(storage.list('b')).resolves.toEqual(['b/2']);
-    await expect(storage.list('none')).resolves.toEqual([]);
-  });
-
-  it('list 的前缀 LIKE 按字面处理通配符（% 与 _ 不生效）——真 SQLite 裁决', async () => {
-    const storage = hello(makeDb());
-    await storage.put('v%', 'pct');
-    await storage.put('v_', 'under');
-    await storage.put('vx', 'plain');
-    // ORDER BY key 下 'v%'(0x25) < 'v_'(0x5F) < 'vx'，与 ASCII 排序一致
-    await expect(storage.list('v')).resolves.toEqual(['v%', 'v_', 'vx']);
-    // ESCAPE '\'：% 与 _ 在任意位置都只匹配字面量（含前缀 '%'、'_' 字面查询）
-    await expect(storage.list('v%')).resolves.toEqual(['v%']);
-    await expect(storage.list('v_')).resolves.toEqual(['v_']);
-  });
-
-  it('跨前缀 key 一律抛错：other:xxx / evil:: / 自带本模块前缀 / 空 key', async () => {
-    const storage = hello(makeDb());
-    await expect(storage.put('other:xxx', '1')).rejects.toThrow('跨前缀访问');
-    await expect(storage.put('evil::', '1')).rejects.toThrow('跨前缀访问');
-    await expect(storage.put('hello:counter', '1')).rejects.toThrow('跨前缀访问');
-    await expect(storage.get('chat:msg')).rejects.toThrow('跨前缀访问');
-    await expect(storage.delete('chat:msg')).rejects.toThrow('跨前缀访问');
-    await expect(storage.list('chat:')).rejects.toThrow('跨前缀访问');
-    await expect(storage.put('', '1')).rejects.toThrow('非空');
-  });
-
-  it('拒绝后不留脏数据', async () => {
-    const storage = hello(makeDb());
-    await storage.put('counter', '1');
-    await expect(storage.put('other:xxx', '2')).rejects.toThrow('跨前缀访问');
-    await expect(storage.list()).resolves.toEqual(['counter']);
-  });
-
-  it('不同 moduleId 互不可见（同库并存）', async () => {
-    const db = makeDb();
-    const a = createD1Storage({ db: db.d1, moduleId: 'mod-a' });
-    const b = createD1Storage({ db: db.d1, moduleId: 'mod-b' });
-    await a.put('shared', 'a-value');
-    await b.put('shared', 'b-value');
-    await expect(a.get('shared')).resolves.toBe('a-value');
-    await expect(b.get('shared')).resolves.toBe('b-value');
-    await expect(a.list()).resolves.toEqual(['shared']);
-    await expect(b.list()).resolves.toEqual(['shared']);
-    await b.delete('shared');
-    await expect(a.get('shared')).resolves.toBe('a-value');
-    await expect(b.get('shared')).resolves.toBeNull();
-  });
-
-  it('非法 moduleId / 表名在创建时抛错', () => {
-    expect(() => createD1Storage({ db: makeDb().d1, moduleId: '' })).toThrow('非法 moduleId');
-    expect(() => createD1Storage({ db: makeDb().d1, moduleId: 'has space' })).toThrow('非法 moduleId');
+  it('token 缺失 → 人话报错且零网络；coreOrigin="*" 创建即拒（#63）', async () => {
+    const stub = makeFetchStub();
+    const store = createCoreApiStorage({ coreApiOrigin: 'https://team.example.com', getToken: () => undefined, fetchImpl: stub.fetchImpl });
+    await expect(store.get('k')).rejects.toThrow(/token/);
+    expect(stub.fetchImpl).not.toHaveBeenCalled();
     expect(() =>
-      createD1Storage({ db: makeDb().d1, moduleId: 'hello', table: 'x; DROP TABLE module_kv' }),
-    ).toThrow('非法表名');
-    expect(() =>
-      createD1Storage({ db: makeDb().d1, moduleId: 'hello', table: 'module-kv' }),
-    ).toThrow('非法表名');
+      createCoreApiStorage({ coreApiOrigin: '*', getToken: () => 't', fetchImpl: stub.fetchImpl }),
+    ).toThrow(/"\*"/);
   });
 
-  it('自定义表名可用（先在建真库建表再经 SDK 使用）', async () => {
-    const db = makeDb();
-    db.run(
-      'CREATE TABLE mod_kv_2 (module_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(module_id, key))',
-    );
-    const storage = createD1Storage({ db: db.d1, moduleId: 'hello', table: 'mod_kv_2' });
-    await storage.put('k', 'v');
-    await expect(storage.get('k')).resolves.toBe('v');
-    await expect(storage.list()).resolves.toEqual(['k']);
+  it('代理 5xx → 报错带状态码（不静默假成功）', async () => {
+    const fetchImpl = vi.fn(async () => new Response('boom', { status: 503 }));
+    const store = createCoreApiStorage({ coreApiOrigin: 'https://t.example', getToken: () => 't', fetchImpl: fetchImpl as never });
+    await expect(store.put('k', 'v')).rejects.toThrow(/503/);
+  });
+});
+
+describe('createD1Storage 兼容别名（#248：直连路径已死）', () => {
+  it('旧直连形态 { db } → 人话报错拒用（红灯验证：死代码不再是可用通道）', () => {
+    const fakeD1 = { prepare: () => { throw new Error('direct D1 must not be reached'); } };
+    expect(() => createD1Storage({ db: fakeD1, moduleId: 'hello' } as never)).toThrow(/已收敛到 Core API 代理|#248|MODULES_DB/);
   });
 
-  describe('T8 守护：真库裁决 SDK SQL（漏 WHERE module_id 即红）', () => {
-    it('同 key 两模块直插后：list 只回本模块 key、get 只回本模块值', async () => {
-      const db = makeDb();
-      // 直插两模块同 key 行（不经 SDK，绕开子域收口，模拟真库共存数据）
-      db.run(
-        "INSERT INTO module_kv (module_id, key, value) VALUES ('mod-a','k','a'),('mod-b','k','b')",
-      );
-      const a = createD1Storage({ db: db.d1, moduleId: 'mod-a' });
-      // listSql 若漏 WHERE module_id → 两行都回（['k','k']），此断言必红
-      await expect(a.list()).resolves.toEqual(['k']);
-      // selectSql（get）若漏 WHERE module_id → 命中 mod-b 行（'b'），此断言必红
-      await expect(a.get('k')).resolves.toBe('a');
+  it('代理形态经别名可用（旧调用点零改动迁移）', async () => {
+    const stub = makeFetchStub({ k: 'v' });
+    const store = createD1Storage({
+      coreApiOrigin: 'https://team.example.com',
+      moduleId: 'hello',
+      getToken: () => 't',
+      fetchImpl: stub.fetchImpl as never,
     });
-
-    it("真建表列：columns()==['module_id','key','value']，SELECT * 行结构与之一致", async () => {
-      const db = makeDb();
-      expect(db.columns('module_kv')).toEqual(['module_id', 'key', 'value']);
-      db.run("INSERT INTO module_kv (module_id, key, value) VALUES ('mod-a','k','a')");
-      const row = db.first('SELECT * FROM module_kv');
-      expect(Object.keys(row ?? {})).toEqual(db.columns('module_kv'));
-    });
-
-    it('真 PK 约束：同 (module_id,key) 二次裸 INSERT 抛错（upsert 才允许覆盖）', async () => {
-      const db = makeDb();
-      db.run("INSERT INTO module_kv (module_id, key, value) VALUES ('mod-a','k','a')");
-      expect(() =>
-        db.run("INSERT INTO module_kv (module_id, key, value) VALUES ('mod-a','k','dup')"),
-      ).toThrow();
-      // 首次写入的行未被破坏
-      expect(
-        db.first<{ value: string }>(
-          'SELECT value FROM module_kv WHERE module_id = ? AND key = ?',
-          'mod-a',
-          'k',
-        )?.value,
-      ).toBe('a');
-    });
+    await expect(store.get('k')).resolves.toBe('v');
   });
 });

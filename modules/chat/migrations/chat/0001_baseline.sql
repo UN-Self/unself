@@ -1,6 +1,8 @@
 -- SPDX-License-Identifier: GPL-3.0-only
 -- Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/schema.sql（GPL-3.0-only，裁剪版）
--- schema-baseline.sql = 上游 schema.sql + 22 个非 Telegram migration 归并，基准 29978c2
+-- 0001_baseline.sql（原 worker/schema-baseline.sql，#248 迁入标准迁移链）= 上游 schema.sql
+-- + 22 个非 Telegram migration 归并，基准 29978c2；全文件逐条幂等（CREATE ... IF NOT EXISTS /
+-- INSERT OR IGNORE），可由 packages/control-plane 按独立记账表（unself_migrations_chat）逐条重放
 -- 相对上游 schema.sql 的差异：删除 telegram_bridge_config、telegram_mappings 两表及 idx_telegram_mappings_channel 索引，其余结构原样保留
 PRAGMA foreign_keys = ON;
 

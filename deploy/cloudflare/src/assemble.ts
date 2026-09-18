@@ -329,6 +329,10 @@ export function moduleWranglerConfig(input: {
             ]
           : []),
       ],
+      // core 级（#248 收敛（a)）：模块唯一数据通道 = Core API 代理；与 core-api 的跨 worker 调用
+      // 只能走 Service Binding（同 zone 明文 fetch 被 CF 平台禁，见 #71 根因①）。steps.ts 上传时
+      // 也注入同名绑定——配置产物与真实部署面保持一致（生成物可核对，不是唯一输入源）。
+      ...(storageLevel === 'core' ? { services: [{ binding: 'CORE_API', service: 'unself-core-api' }] } : {}),
       vars: {
         MODULE_ID: mod.id,
         // 数据落点（#248）：模块 SDK 据此决定存储通道（core=Core API 代理；shared/dedicated=直连建表；external=外部连接串）

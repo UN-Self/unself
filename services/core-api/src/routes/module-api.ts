@@ -6,7 +6,8 @@
  * 权限按注册表 manifest 快照的 permissions 声明放行（未声明 → 403）。
  *
  * 词表六项的落地状态（首版只实现有真实消费者的两个词，其余留 501 占位防静默假成功）：
- * - storage：模块键值存储（module_kv，MODULES_DB）——真实现（#248 数据四级接线前的 core 级收口）；
+ * - storage：模块键值存储（module_kv，MODULES_DB）——真实现；**这是 `core` 级数据落点的唯一通道**
+ *   （#248 决策 #55/#75 收敛（a)：模块 SDK 不再直连数据库，见 packages/module-sdk/src/storage.ts）；
  * - notify：向成员发站内通知（module_notify 类型行，迁移 0008 种入）——真实现；
  * - acl / ai / realtime / mail：契约预留（词表冻结、门禁生效），端点 501 待后续 issue 接线。
  */
@@ -18,7 +19,7 @@ import { requireModuleAuth, requireModulePermission } from '../middleware/module
 import type { ModuleAuthVariables } from '../token';
 import { deliverNotification } from '../services/notifications';
 
-/** 模块键值行（module_kv，与 modules/hello/migrations/hello/0001_module_kv.sql 一致）。 */
+/** 模块键值行（module_kv，平台基建表：services/core-api/migrations/modules/0001_module_kv.sql，#248）。 */
 interface KvRow {
   key: string;
   value: string;

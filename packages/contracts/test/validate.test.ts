@@ -40,7 +40,7 @@ function helloPackageInput(): {
   };
 }
 
-/** chat 官方模块包输入：tables 申报 = schema-baseline.sql 的 18 张表（与迁移一致）。 */
+/** chat 官方模块包输入：tables 申报 = migrations/chat/0001_baseline.sql 的 18 张表（与迁移一致）。 */
 function chatPackageInput(): {
   manifestText: string;
   packageName: string;
@@ -84,7 +84,7 @@ function chatPackageInput(): {
     workerText: 'export default {}',
     licenseText: 'SPDX-License-Identifier: GPL-3.0-only',
     migrations: {
-      '0001_baseline.sql': readRepoFile('modules/chat/worker/schema-baseline.sql'),
+      '0001_baseline.sql': readRepoFile('modules/chat/migrations/chat/0001_baseline.sql'),
     },
   };
 }
@@ -119,7 +119,7 @@ describe('validateModulePackage：绿路径', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('官方 chat 通过 validate（真实 schema-baseline.sql，18 张表申报一致）', () => {
+  it('官方 chat 通过 validate（真实 0001_baseline.sql，18 张表申报一致）', () => {
     const result = validateModulePackage(chatPackageInput());
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
@@ -322,7 +322,7 @@ describe('迁移静态检查（决策 #61，#248）：逐条幂等 + 只写增�
     expect(mig[0]!.message).toContain('第 1 条');
   });
 
-  it('触发器体内分号不切语句；官方 chat 真实 schema-baseline.sql 幂等检查全绿', () => {
+  it('触发器体内分号不切语句；官方 chat 真实 0001_baseline.sql 幂等检查全绿', () => {
     const result = validateModulePackage({ ...chatPackageInput() });
     // chat 的 baseline 全部 CREATE IF NOT EXISTS / INSERT OR IGNORE → 幂等检查零新增错误
     expect(result.errors.filter((e) => e.check === 'migrations')).toEqual([]);
