@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 凭证解析（决策 #65/#66）：优先级同官方——CLOUDFLARE_API_TOKEN > OAuth 借用。
- * OAuth 经 `wrangler auth token` 借用（官方文档明确支持 "for use with other tools and scripts"）；
- * 机器上没有 wrangler 时给人话（去哪登录 / 怎么给 token），不崩。
- * 生产代码只 spawn `wrangler auth token` 这一条只读命令，绝不安装/调用其他 wrangler 功能。
+ * wrangler 探测与输出解析 + 旧版 resolveToken 兼容层（#246 迁移到 auth.ts 后保留）。
+ * - parseWranglerTokenOutput / findWranglerBin：唯一实现在本文件（auth.ts 复用）；
+ * - resolveToken：旧签名适配器，内部委托 resolveAuth（优先级/透传/注入语义一致）；
+ *   差异：凭证缺失时不再给人话后 throw 两种文案，统一抛 CredentialsMissingError（人话在 message 里）。
+ * 生产代码只 spawn `wrangler auth token` 这一条只读命令，绝不安装/调用其他 wrangler 功能（决策 #65）。
  */
+import { credentialsMissingMessage, resolveAuth, type ExecFileLike } from '../auth';
 
-export interface TokenSource {
+/** 旧版来源形状（#246 前的公共面；新代码请用 auth.TokenSource）。 */
+export interface LegacyTokenSource {
   token: string;
   /** 来源（日志/诊断用，不含值）。 */
   source: 'env' | 'wrangler-oauth';
@@ -50,39 +53,16 @@ export function findWranglerBin(env: NodeJS.ProcessEnv = process.env): string | 
 
 import { existsSync as existsSync0, readdirSync as readdirSync0 } from 'node:fs';
 
-export async function resolveToken(opts: ResolveTokenOptions = {}): Promise<TokenSource> {
-  const env = opts.env ?? process.env;
-  const log = opts.log ?? (() => {});
-  const envToken = env.CLOUDFLARE_API_TOKEN;
-  if (envToken) {
-    return { token: envToken, source: 'env' };
-  }
-  const bin = opts.wranglerBin ?? findWranglerBin(env);
-  if (!bin) {
-    throw new Error(
-      '未找到 Cloudflare 凭证：\n' +
-        '  ① export CLOUDFLARE_API_TOKEN=...（API Token， dash.cloudflare.com → My Profile → API Tokens）；\n' +
-        '  ② 或先 `wrangler login` 完成浏览器授权（本工具会借用自己的 OAuth 令牌，官方支持「for use with other tools and scripts」）。',
-    );
-  }
-  const execFile = opts.execFile ?? execFileAsync;
-  const [cmd, ...args] = bin.startsWith('node ') ? ['node', bin.slice(5)] : [bin];
-  const { stdout } = await execFile(cmd!, args);
-  const token = parseWranglerTokenOutput(String(stdout ?? ''));
-  if (!token) {
-    throw new Error(
-      'wrangler 已安装但未取到 OAuth 令牌（未登录或会话过期）：跑一次 `wrangler login` 完成浏览器授权后重试；' +
-        '或直接 export CLOUDFLARE_API_TOKEN=... 走 API Token 路径。',
-    );
-  }
-  log('凭证：借用 wrangler OAuth 令牌（官方支持「for use with other tools and scripts」）');
-  return { token, source: 'wrangler-oauth' };
+/** 旧签名兼容层：委托 resolveAuth（#246）；缺凭证 → 抛 CredentialsMissingError（人话在 message）。 */
+export async function resolveToken(opts: ResolveTokenOptions = {}): Promise<LegacyTokenSource> {
+  const cred = await resolveAuth({
+    env: opts.env,
+    wranglerBin: opts.wranglerBin,
+    execFile: opts.execFile ? (opts.execFile as unknown as ExecFileLike) : undefined,
+    log: opts.log,
+    probe: false, // 旧入口无「版本 ≠ 已验证 → 警告」语义，不追加探测
+  });
+  if (!cred) throw new Error(credentialsMissingMessage());
+  const source: LegacyTokenSource['source'] = cred.source === 'env-api-token' ? 'env' : 'wrangler-oauth';
+  return { token: cred.token, source };
 }
-
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFileCb) as unknown as (
-  cmd: string,
-  args: string[],
-) => Promise<{ stdout: string; stderr: string }>;
