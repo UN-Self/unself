@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PassThrough } from 'node:stream';
 import type { ExecFileSyncOptions } from 'node:child_process';
 import {
+  authPreflight,
   buildTokenDeepLink,
   buildTokenFirstScreen,
   chooseDomain,
@@ -10,6 +11,7 @@ import {
   createAsker,
   domainProblem,
   echoControl,
+  oauthCallbackReachable,
   sttyRef,
   askSecret,
   parseCliArgs,
@@ -21,6 +23,9 @@ import {
   usageText,
   TOKEN_PERMISSION_TABLE,
 } from '../src/interactive';
+import type { TokenSource } from '../src/auth';
+import type { PermissionProbeResult } from '../src/permissions';
+import type { RestClient } from '../src/rest/client';
 
 describe('parseCliArgs（CLI 参数解析）', () => {
   it('全缺省：无参数 → 仅 yes:false', () => {
@@ -67,13 +72,20 @@ describe('parseCliArgs（CLI 参数解析）', () => {
     expect(parseCliArgs(['--version']).info).toBe('version');
     expect(parseCliArgs(['--domain=a.example', '--help'])).toEqual({ domain: 'a.example', yes: false, info: 'help' });
   });
+  it('--check-auth：进 checkAuth 位', () => {
+    expect(parseCliArgs(['--check-auth'])).toEqual({ yes: false, checkAuth: true });
+    expect(parseCliArgs(['--domain=a.example', '--check-auth']).checkAuth).toBe(true);
+  });
+  it('--check-aut（拼错）→ did-you-mean 建议 --check-auth（#246）', () => {
+    expect(() => parseCliArgs(['--check-aut'])).toThrow(/--check-auth/);
+  });
 });
 
 describe('usageText（--help 用法文本）', () => {
   it('版本号、全部参数与「退出不部署」语义都在', () => {
     const text = usageText('9.9.9-test').join('\n');
     expect(text).toContain('9.9.9-test');
-    for (const f of ['--domain=', '--modules=', '-y, --yes', '-h, --help', '--version']) {
+    for (const f of ['--domain=', '--modules=', '--check-auth', '-y, --yes', '-h, --help', '--version']) {
       expect(text).toContain(f);
     }
     expect(text).toContain('CLOUDFLARE_API_TOKEN');
@@ -447,5 +459,134 @@ describe('echoControl（stty 开关；注入 ref 不碰真终端）', () => {
       throw new Error('spawn stty ENOENT');
     }) as unknown as typeof sttyRef.run;
     expect(echoControl('-echo')).toBeNull();
+  });
+});
+
+describe('oauthCallbackReachable（OAuth 回调可达性，只探 2 项之二，决策 #67）', () => {
+  const savedEnv = { ...process.env };
+  beforeEach(() => {
+    // 注入用例必须与真实环境绝缘：清掉本机可能存在的 DISPLAY/WAYLAND/SSH/BROWSER
+    delete process.env.DISPLAY;
+    delete process.env.WAYLAND_DISPLAY;
+    delete process.env.SSH_CONNECTION;
+    delete process.env.BROWSER;
+  });
+  afterEach(() => {
+    for (const k of ['DISPLAY', 'WAYLAND_DISPLAY', 'SSH_CONNECTION', 'BROWSER'] as const) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+  });
+
+  it('display 非空 → true（X11 桌面；有 ssh 但有图形也算可达）', () => {
+    expect(oauthCallbackReachable({ display: ':1' })).toBe(true);
+    expect(oauthCallbackReachable({ display: ':1', ssh: '1 2 3 4' })).toBe(true);
+  });
+  it('wayland 非空 → true', () => {
+    expect(oauthCallbackReachable({ wayland: 'wayland-0' })).toBe(true);
+  });
+  it('display/wayland 全空但 browserEnv 非空 → true（BROWSER 重定向，如 Windows 侧 wslview）', () => {
+    expect(oauthCallbackReachable({ browserEnv: 'wslview' })).toBe(true);
+  });
+  it('全空且 ssh 非空 → false（远程 shell 开不出浏览器）', () => {
+    expect(oauthCallbackReachable({ ssh: '1 2 3 4' })).toBe(false);
+  });
+  it('全空且无 ssh → true（视为桌面直连）', () => {
+    expect(oauthCallbackReachable({})).toBe(true);
+    expect(oauthCallbackReachable()).toBe(true);
+  });
+  it('win32/darwin 注入分支：平台不参与判定，注入即测（决策 #67，Linux 上注入覆盖）', () => {
+    // Windows（%APPDATA% 桌面 / RDP 远程无 BROWSER）与 macOS（图形 / SSH 会话）两套注入形状：
+    // 判定只看 display/wayland/ssh/browserEnv，不看 platform——oauthCallbackReachable 没有平台参数。
+    expect(oauthCallbackReachable({ display: '', wayland: '', ssh: '', browserEnv: '' })).toBe(true); // win32 桌面（无 ssh）
+    expect(oauthCallbackReachable({ display: '', wayland: '', ssh: '1 2 3 4', browserEnv: '' })).toBe(false); // win32 RDP-SSH 无浏览器
+    expect(oauthCallbackReachable({ browserEnv: 'C:\\Program Files\\Mozilla Firefox\\firefox.exe' })).toBe(true); // win32 BROWSER
+    expect(oauthCallbackReachable({ display: '/private/tmp/com.apple.launchd.X/org.xquartz:0' })).toBe(true); // darwin X11
+    expect(oauthCallbackReachable({ display: '', wayland: '', ssh: '2 3 4 5', browserEnv: '' })).toBe(false); // darwin SSH
+  });
+});
+
+
+describe('authPreflight（开跑前凭证+权限编排，§5.5 ①前置，#246）', () => {
+  const deepLink = buildTokenDeepLink();
+  const credOf = (over: Partial<TokenSource> = {}): TokenSource => ({
+    token: 't',
+    source: 'wrangler-oauth',
+    note: 'wrangler OAuth（wrangler auth token 借用）',
+    ...over,
+  });
+  const okProbe = (): PermissionProbeResult => ({
+    ok: true,
+    missing: [],
+    lines: ['✓ 账户：可见（GET /accounts）', '✓ D1（列表）：可读', '✓ R2（列表）：可读', '✓ KV（列表）：可读', '✓ zones（列表）：可读'],
+    accountId: 'acc-1',
+  });
+  const missProbe = (): PermissionProbeResult => ({
+    ok: false,
+    missing: ['D1（列表）权限不足——缺 Account 级 D1 权限（Workers → D1 Edit）：按向导深链接重建 token 或 `wrangler login` 重授权'],
+    lines: ['✓ 账户：可见（GET /accounts）', '✗ D1（列表）：权限不足'],
+    accountId: 'acc-1',
+  });
+
+  function depsOf(over: {
+    cred?: TokenSource | null;
+    probe?: PermissionProbeResult;
+    failProbe?: boolean;
+  }) {
+    const log: string[] = [];
+    const out: string[] = [];
+    let probeCalls = 0;
+    const deps = {
+      resolveAuth: () => {
+        if ('cred' in over && (over.cred === null || over.cred !== undefined)) {
+          return Promise.resolve(over.cred);
+        }
+        return Promise.reject(new Error('resolveAuth 应该只被调用一次（编排器接受已解析凭证）'));
+      },
+      probePermissions: (_client: RestClient) => {
+        probeCalls++;
+        if (over.failProbe) return Promise.reject(new Error('probe-fail'));
+        return Promise.resolve(over.probe ?? okProbe());
+      },
+      log: (m: string) => log.push(m),
+      out: (l: string) => out.push(l),
+    };
+    return { deps, log, out, probeCount: () => probeCalls };
+  }
+
+  it('凭证就绪 + 全绿 → outcome=ok，报告逐行打印（含「权限自检通过」）', async () => {
+    const { deps, log, probeCount } = depsOf({ probe: okProbe() });
+    const r = await authPreflight({ ...deps, resolveAuth: () => Promise.resolve(credOf()) });
+    expect(r.outcome).toBe('ok');
+    if (r.outcome === 'ok') expect(r.result.accountId).toBe('acc-1');
+    expect(log.join('\n')).toContain('凭证：wrangler OAuth');
+    expect(log.join('\n')).toContain('权限自检通过');
+    expect(probeCount()).toBe(1);
+  });
+
+  it('缺凭证 → no-credentials：输出 API Token 深链接 + 设备码指路，不装配不探测', async () => {
+    const { deps, out, log, probeCount } = depsOf({ cred: null });
+    const r = await authPreflight({ ...deps, resolveAuth: () => Promise.resolve(null) });
+    expect(r.outcome).toBe('no-credentials');
+    expect(out.join('\n')).toContain(deepLink);
+    expect(out.join('\n')).toContain('API Token');
+    expect(out.join('\n')).toContain('设备码');
+    expect(log).toEqual([]);
+    expect(probeCount()).toBe(0);
+  });
+
+  it('OAuth 借用的版本警告 → 原样转达（人话；不含 token 明文）', async () => {
+    const { deps, log } = depsOf({});
+    await authPreflight({ ...deps, resolveAuth: () => Promise.resolve(credOf({ warning: 'wrangler 版本 9.9.9 ≠ 已验证的 4.129.0' })) });
+    expect(log.join('\n')).toContain('wrangler 版本 9.9.9 ≠ 已验证的 4.129.0');
+  });
+
+  it('权限缺项 → outcome=missing：指名缺哪项 + 深链接；调用方 exit 1', async () => {
+    const { deps, log } = depsOf({ probe: missProbe() });
+    const r = await authPreflight({ ...deps, resolveAuth: () => Promise.resolve(credOf()) });
+    expect(r.outcome).toBe('missing');
+    if (r.outcome === 'missing') expect(r.deepLink).toBe(deepLink);
+    expect(log.join('\n')).toContain('D1（列表）权限不足');
+    expect(log.join('\n')).toContain('权限自检未通过');
   });
 });
