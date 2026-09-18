@@ -16,6 +16,10 @@ export interface FakeAccountOptions {
   existingKv?: string[];
   /** worker 名 → 已配置 secret 名集合。 */
   existingSecrets?: Record<string, string[]>;
+  /** 预置已存在的 worker 脚本（stub 场景：脚本在、DO 类未建）。 */
+  existingWorkers?: string[];
+  /** 预置模块记账表内容（表名 → 已记账名）：模拟「上次真部署已记账」的收敛态。 */
+  existingLedger?: Record<string, string[]>;
   /** core 库 instance_config.setup_done（步骤⑧ → sealed）。 */
   setupDone?: boolean;
   /** core 库已有未消费 setup token（重跑复用）。 */
@@ -51,7 +55,7 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
       Object.entries(options.existingSecrets ?? {}).map(([w, list]) => [w, new Set(list)]),
     ),
     uploads: [] as Array<{ worker: string; metadata: Record<string, unknown> }>,
-    existingWorkers: new Set<string>(),
+    existingWorkers: new Set<string>(options.existingWorkers ?? []),
     // 已有 worker（existingSecrets 出现过 → worker 必已存在）
     assetManifests: [] as Array<Record<string, { hash: string }>>,
     assetUploads: [] as string[][],
@@ -66,8 +70,10 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
     registry: new Map<string, { enabled: number; version: string; manifest_json: string }>(),
     importEtags: new Set<string>(),
     importCalls: [] as Array<{ action: string; etag?: string; bookmark?: string }>,
-    ledgerTables: new Set<string>(),
-    ledgerRows: new Map<string, Set<string>>(),
+    ledgerTables: new Set<string>(Object.keys(options.existingLedger ?? {})),
+    ledgerRows: new Map<string, Set<string>>(
+      Object.entries(options.existingLedger ?? {}).map(([table, rows]) => [table, new Set(rows)]),
+    ),
     legacyLedger: options.legacyLedger ?? [],
     subdomain: 'test-subdomain',
   };
@@ -290,8 +296,9 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
       state.ledgerRows.set(table, state.ledgerRows.get(table) ?? new Set());
       return envRow([], 0);
     }
-    if (sql.startsWith('INSERT INTO unself_migrations_')) {
+    if (sql.startsWith('INSERT INTO unself_migrations_') || sql.startsWith('INSERT OR IGNORE INTO unself_migrations_')) {
       const table = /unself_migrations_[a-z0-9_]+/.exec(sql)![0];
+      state.ledgerRows.set(table, state.ledgerRows.get(table) ?? new Set());
       state.ledgerRows.get(table)!.add(String(params[0]));
       return envRow([], 1);
     }

@@ -10,6 +10,9 @@
  * - external  ：自备外部库，装配器只声明不接线（连接串走配置页）。
  *
  * 失败处理（#61 硬）：停住并指出「模块 / 文件 / 第几条语句」，不自动重试、不自动回滚。
+ *
+ * #255：DO 迁移 tag 的「是否已应用」= **模块记账表里的事实**（`doMigrationLedgerName`），
+ * 与「脚本是否存在」彻底解耦（planDoMigrations）。
  */
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -31,6 +34,70 @@ export function storageLevelFor(mod: { manifest?: ModuleManifest; id: string }):
 /** dedicated 独立库名（chat 普通化后同规：unself-<模块id>）。 */
 export function dedicatedDbNameFor(moduleId: string): string {
   return `unself-${moduleId}`;
+}
+
+/**
+ * DO 迁移 tag 在模块记账表里的条目名（#255）：与 SQL 文件名**同表**、不同命名空间
+ * ——复用 #248 的 `unself_migrations_<模块>`，不另造第二套记账（决策 #55/#64）。
+ */
+export function doMigrationLedgerName(tag: string): string {
+  return `do-migration:${tag}`;
+}
+
+/** 包配置里声明的 DO 迁移（wrangler migrations 数组的一项）。 */
+export interface DoMigrationDeclaration {
+  tag: string;
+  new_sqlite_classes: string[];
+}
+
+/** 一次脚本上传要带的 DO 迁移元数据（形状同 WorkerUpload.migrations）。 */
+export interface DoMigrationPlan {
+  oldTag?: string;
+  newTag: string;
+  steps: Array<Record<string, unknown>>;
+  /** 本次要应用的 tag（按声明序，与 steps 一一对应）——上传成功后逐条记账。 */
+  tags: string[];
+}
+
+/**
+ * DO 迁移计划（#255）：判定依据是**模块记账表里已记的 tag**（事实），
+ * 不再用「脚本是否存在」当「DO 类是否已建」的代理（两者不等价：占位 stub / 手工
+ * wrangler 部署都会让脚本已存在而类未建）。
+ *
+ * - `declared` 按包配置顺序（wrangler migrations 数组顺序即应用顺序）；
+ * - 全部 tag 已记账 → `undefined`（幂等重传不带 migrations；重复 tag 会被 CF 拒：
+ *   `Migration tag precondition failed; current tag is <t>`，实测版本见 #255 探针记录）；
+ * - `oldTag` = 首个未记账 tag 之前最后一个已记账 tag（无则省略 = 无前序迁移的首应用）；
+ * - 未记账 tag 逐个生成 `new_sqlite_classes` 步，`newTag` = 最后一个声明 tag。
+ *
+ * 记账不连续（后面的 tag 已记、前面的未记）说明库里有夹缝——宁停不住，报出具体 tag。
+ */
+export function planDoMigrations(input: {
+  declared: DoMigrationDeclaration[];
+  appliedNames: string[];
+}): DoMigrationPlan | undefined {
+  const applied = new Set(input.appliedNames);
+  let oldTag: string | undefined;
+  let newTag: string | undefined;
+  const steps: Array<Record<string, unknown>> = [];
+  const tags: string[] = [];
+  for (const decl of input.declared) {
+    if (applied.has(doMigrationLedgerName(decl.tag))) {
+      if (steps.length > 0) {
+        throw new Error(
+          `DO 迁移记账不连续：tag "${decl.tag}" 已记账，但更早的 tag 尚未记账（前一个待应用 tag "${newTag}"）——` +
+            '先核对该模块记账表，不要带着夹缝部署',
+        );
+      }
+      oldTag = decl.tag;
+      continue;
+    }
+    steps.push({ new_sqlite_classes: [...decl.new_sqlite_classes] });
+    tags.push(decl.tag);
+    newTag = decl.tag;
+  }
+  if (!newTag || steps.length === 0) return undefined;
+  return { ...(oldTag !== undefined ? { oldTag } : {}), newTag, steps, tags };
 }
 
 /** shared 护栏③：表名必须以 `<模块id>_` 开头（下划线连写；模块 id 内的 - 转 _）。 */

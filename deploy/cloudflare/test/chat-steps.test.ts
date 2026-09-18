@@ -75,7 +75,11 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     // ② #248 存储面去豁免：chat 与任何 dedicated 模块同一条链——独立记账表 unself_migrations_chat
     //    + 基线 schema（migrations/chat/0001_baseline.sql）按文件 import，记账名即模块 id。
     expect(fake.state.ledgerTables.has('unself_migrations_chat')).toBe(true);
-    expect([...fake.state.ledgerRows.get('unself_migrations_chat') ?? []]).toEqual(['0001_baseline.sql']);
+    // 同一张账表：SQL 文件 + DO 迁移 tag（#255 归一）
+    expect([...(fake.state.ledgerRows.get('unself_migrations_chat') ?? [])].sort()).toEqual([
+      '0001_baseline.sql',
+      'do-migration:v1',
+    ]);
     expect(fake.state.importEtags.size).toBeGreaterThanOrEqual(1);
     expect(fake.state.registry.get('chat')).toBeDefined();
   });
@@ -107,9 +111,9 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     expect(byName.get('ASSETS')).toMatchObject({ type: 'assets' });
     expect(byName.get('MODULE_ID')).toMatchObject({ type: 'plain_text', text: 'chat' });
     expect(JSON.parse(String(byName.get('CORE_JWKS_JSON')!.text)).keys).toHaveLength(1);
-    // 首部署：DO migrations 元数据在场（new_tag=v1，三类各一步）
+    // 首部署：DO migrations 元数据在场（new_tag=v1，一条迁移含三类）
     expect(meta.migrations?.new_tag).toBe('v1');
-    expect(meta.migrations?.steps.map((s) => s.new_sqlite_classes[0])).toEqual(['ChannelRoom', 'Scheduler', 'UserInbox']);
+    expect(meta.migrations?.steps.flatMap((s) => s.new_sqlite_classes)).toEqual(['ChannelRoom', 'Scheduler', 'UserInbox']);
     // 路由绑定（zone 模式）
     expect(fake.state.routes.has('demo.handywote.top/m/chat/*')).toBe(true);
     // wrapper 落位
@@ -162,6 +166,8 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
       existingBuckets: [...first.state.buckets],
       existingKv: [...first.state.kv.keys()],
       existingSecrets: Object.fromEntries([...first.state.secrets].map(([w, s]) => [w, [...s]])),
+      existingWorkers: [...first.state.existingWorkers],
+      existingLedger: Object.fromEntries([...first.state.ledgerRows].map(([t, rows]) => [t, [...rows]])),
     });
     const summary2 = await runNineSteps({
       rootDir: ROOT,
@@ -235,6 +241,86 @@ describe('#219 模块面断言参数化（验收第 5 条）', () => {
         fake.calls.some((c) => (c.body as { sql?: string; params?: unknown[] } | undefined)?.sql?.startsWith('UPDATE module_registry') &&
           (c.body as { params?: unknown[] }).params?.[0] === id),
       ).toBe(true);
+    }
+  });
+});
+
+describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本存在与否）', () => {
+  /** 首次真部署：干净账户态（无 stub、无记账）。 */
+  async function deployChat(): Promise<ReturnType<typeof makeCfRestFake>> {
+    const fake = makeCfRestFake();
+    await runNineSteps({
+      rootDir: ROOT,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      http: SMOKE_OK,
+      buildShell: fakeBuildShell,
+      buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
+      fetchJwks: async () => FIXED_JWKS,
+    });
+    return fake;
+  }
+
+  it('脚本已存在但 DO 类未建（占位 stub）→ 部署必须发 DO migrations 并记进模块账', { timeout: 120_000 }, async () => {
+    // 线上实况复现：09-16 wrangler 直连部署的 298B 占位 stub——脚本在，
+    // CHANNEL_ROOM/SCHEDULER/USER_INBOX 三个 SQLite 类都没建。旧判定 isWorkerNew=false → 迁移不发。
+    const fake = makeCfRestFake({
+      existingD1: ['unself-core', 'unself-modules'],
+      existingWorkers: ['unself-module-chat'],
+      existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] },
+    });
+    await runNineSteps({
+      rootDir: ROOT,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      http: SMOKE_OK,
+      buildShell: fakeBuildShell,
+      buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
+      fetchJwks: async () => FIXED_JWKS,
+    });
+    const chatUploads = fake.state.uploads.filter((u) => u.worker === 'unself-module-chat');
+    const withMigrations = chatUploads.find((u) => (u.metadata as { migrations?: unknown }).migrations);
+    expect(withMigrations, '脚本已存在但类未建时，DO 迁移必须随上传发出').toBeDefined();
+    const migrations = (withMigrations!.metadata as {
+      migrations: { old_tag?: string; new_tag: string; steps: Array<{ new_sqlite_classes: string[] }> };
+    }).migrations;
+    expect(migrations.old_tag).toBeUndefined(); // 无前序 DO 迁移 → 首应用
+    expect(migrations.new_tag).toBe('v1');
+    expect(migrations.steps.flatMap((s) => s.new_sqlite_classes)).toEqual(['ChannelRoom', 'Scheduler', 'UserInbox']);
+    // 同一套记账（#248）：tag 记在模块账表里，不是第二张表
+    expect([...(fake.state.ledgerRows.get('unself_migrations_chat') ?? [])]).toContain('do-migration:v1');
+    // 同一次运行内的重传（密钥环 secret 生效补 deploy）不再带迁移（重复 tag 会被 CF 拒，10079）
+    const last = chatUploads[chatUploads.length - 1]!;
+    expect((last.metadata as { migrations?: unknown }).migrations).toBeUndefined();
+  });
+
+  it('DO 类已存在（上次真部署已记账）→ 幂等重跑不带 migrations、不报错', { timeout: 240_000 }, async () => {
+    const first = await deployChat();
+    expect(
+      first.state.uploads.filter((u) => u.worker === 'unself-module-chat').some((u) => (u.metadata as { migrations?: unknown }).migrations),
+    ).toBe(true);
+    const second = makeCfRestFake({
+      existingD1: [...first.state.d1.keys()],
+      existingBuckets: [...first.state.buckets],
+      existingKv: [...first.state.kv.keys()],
+      existingSecrets: Object.fromEntries([...first.state.secrets].map(([w, s]) => [w, [...s]])),
+      existingWorkers: [...first.state.existingWorkers],
+      existingLedger: Object.fromEntries([...first.state.ledgerRows].map(([t, rows]) => [t, [...rows]])),
+    });
+    const summary = await runNineSteps({
+      rootDir: ROOT,
+      client: new RestClient({ token: 't', fetchImpl: second.fetchImpl }),
+      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      http: SMOKE_OK,
+      buildShell: fakeBuildShell,
+      buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
+      fetchJwks: async () => FIXED_JWKS,
+    });
+    expect(summary.chat).toEqual({ db: CHAT_DB_NAME, kv: CHAT_KV_NAME, r2: CHAT_R2_NAME, keyringAction: 'existing' });
+    const chatUploads = second.state.uploads.filter((u) => u.worker === 'unself-module-chat');
+    expect(chatUploads.length).toBeGreaterThanOrEqual(1);
+    for (const u of chatUploads) {
+      expect((u.metadata as { migrations?: unknown }).migrations).toBeUndefined();
     }
   });
 });
