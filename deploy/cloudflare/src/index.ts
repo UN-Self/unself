@@ -20,10 +20,35 @@ export type { ArtifactRoots, ArtifactsManifest } from './artifacts';
 export { coreWorkerEntrySource } from './steps';
 export { buildModuleSdkAssets, bundleCoreWorker, bundleModuleWorker, moduleWorkerEntry, provisionAll } from './assemble';
 
-// 资源命名（#257）：UNSELF_RESOURCE_PREFIX 同账户多实例/隔离探针。
-export { coreDbName, coreWorkerName, modulesDbName, moduleWorkerName, resourceName } from './naming';
+// 资源命名（#257/#272）：UNSELF_RESOURCE_PREFIX 显式覆盖 + 实例命名空间 + 资源名预览。
+export {
+  activeResourceNamespace,
+  coreDbName,
+  coreWorkerName,
+  isPrefixed,
+  moduleWorkerName,
+  modulesDbName,
+  NAMESPACE_RE,
+  previewResourceNames,
+  resourceName,
+  resourceNameFor,
+  resourcePrefix,
+  setResourceNamespace,
+} from './naming';
+export type { ResourceNamePreview } from './naming';
 
-export { loadUnselfConfig, parseUnselfConfigText } from './config';
+// 撞车守卫（#272）：账户同名资源归属判定（unself.lock 资源台账）。
+export {
+  decideGuard,
+  formatCollisionMessage,
+  ledgerCovers,
+  probeExisting,
+  ResourceCollisionError,
+  targetResources,
+} from './guard';
+export type { ExistingResource, GuardOutcome, ResourceKind, TargetResource } from './guard';
+
+export { loadUnselfConfig, parseUnselfConfigText, withNamespacedBucket } from './config';
 export type { UnselfConfig } from './config';
 
 export { createCoreControlPlane } from './control-plane';

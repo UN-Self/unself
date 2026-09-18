@@ -23,10 +23,11 @@ import {
 } from './assemble';
 import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type ModuleRef, type NormalizedModuleEntry, type UnselfConfig } from './config';
 import { CONTRACT_VERSION, ModuleManifestSchema, type ModuleManifest } from '@unself/contracts';
-import { LOCK_FILENAME, emptyLock, parseLockText, serializeLock, manifestHashOf, type LockFile } from './lock';
+import { LOCK_FILENAME, emptyLock, parseLockText, serializeLock, manifestHashOf, type LockFile, type ResourceLedger } from './lock';
 import { lockRecordFrom, readManifest, resolveSources } from './module-sources';
 import { resolveArtifactRoots, setActiveArtifactRoots, type ArtifactRoots } from './artifacts';
-import { moduleWorkerName, coreWorkerName } from './naming';
+import { moduleWorkerName, coreWorkerName, coreDbName, modulesDbName, resourceName, resourcePrefix, setResourceNamespace, activeResourceNamespace } from './naming';
+import { decideGuard, probeExisting, targetResources } from './guard';
 import { createCoreControlPlane } from './control-plane';
 import { CredentialsMissingError, credentialsMissingMessage, resolveAuth } from './auth';
 import { domainProblem } from './interactive';
@@ -235,8 +236,8 @@ export interface StepDeps {
   accountId?: string;
 }
 
-/** 九步主流程。返回部署摘要（供测试断言与部署输出）。 */
-export async function runNineSteps(input: {
+/** 九步主流程选项。 */
+export interface RunNineStepsOptions {
   rootDir: string;
   /** REST 客户端（测试注入替身；缺省由凭证解析新建）。 */
   client?: RestClient;
@@ -294,7 +295,31 @@ export async function runNineSteps(input: {
    * 显式给的值必须合法（缺 manifest.json 直接抛，不回落到仓库路径）。
    */
   artifactRoot?: string;
-}): Promise<Summary> {
+  /**
+   * 撞车守卫放行开关（#272）：账户里已有同名资源且台账证明不了归属时，默认停住；
+   * 显式 `--allow-adopt` / `UNSELF_ALLOW_ADOPT=1` / 向导④「允许接管」才继续。
+   * 缺省 = 读 `UNSELF_ALLOW_ADOPT`（`=1` 视为 true）。
+   */
+  allowAdopt?: boolean;
+}
+
+/**
+ * 九步主流程（#272）：进入时把 `config.namespace` 登记为资源命名空间，退出还原——
+ * 命名空间状态只活在本次运行内（不会污染同进程的下一实例/探针）。
+ */
+export async function runNineSteps(input: RunNineStepsOptions): Promise<Summary> {
+  const config = input.configOverride ?? (await loadUnselfConfig(input.rootDir));
+  const prevNamespace = activeResourceNamespace();
+  setResourceNamespace(config.namespace);
+  try {
+    return await runNineStepsInner({ ...input, configOverride: config });
+  } finally {
+    setResourceNamespace(prevNamespace);
+  }
+}
+
+/** 九步主流程实现（命名空间已由 wrapper 登记）。返回部署摘要（供测试断言与部署输出）。 */
+async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   const { rootDir } = input;
   const rep = input.reporter ?? consoleReporter();
   // 产物根解析（#257）：安装器产物形态 = 不读 rootDir 下 modules/ services/ apps/ packages/（只写 .deploy/）。
@@ -323,12 +348,52 @@ export async function runNineSteps(input: {
   /** chat 密钥环动作（选中 chat 时在步骤④赋值；未选中 undefined）。 */
   let chatKeyringAction: 'created' | 'existing' | undefined;
 
+  // unself.lock 提前读取（#272）：撞车守卫要用它的资源台账判定「同名资源是否属于本实例」。
+  const lockPath = join(rootDir, LOCK_FILENAME);
+  let lock: LockFile = emptyLock();
+  if (input.preLock !== undefined) {
+    lock = parseLockText(input.preLock);
+  } else if (existsSync(lockPath)) {
+    lock = parseLockText(await readFile(lockPath, 'utf8'));
+  }
+
   const client = input.client ?? await defaultClient(rep.log);
 
   // ① D1（chat 选中时：包配置先过一道形状检查，再补建专属 D1/KV/R2）
   rep.step(1, '确保 core/modules 两个 D1 存在（chat 选中时含专属 D1/KV/R2）');
   const accountId = await findAccountId(client);
   if (!accountId) throw new Error('无法解析 CF 账户（GET /accounts 失败或为空）——检查凭证');
+
+  // ①′ 撞车守卫（#272，硬）：账户里已有同名资源且不属于本实例 → 停住（不创建/不修改），
+  // 要显式开关才继续。仅在「隔离模式」（有命名空间或显式前缀）下比较目标名；
+  // 历史无前缀实例的命名就是 unself-*（#272 之前的生产实例零影响，幂等重跑语义不变）。
+  if (resourcePrefix() !== '') {
+    const targets = targetResources({
+      prefix: resourcePrefix(),
+      moduleIds: selected.map((m) => m.id),
+      ...(config.storage.provider === 'r2' ? { bucket: config.storage.bucket } : {}),
+      dedicatedModuleIds: selected
+        .filter((m) => storagePlans.get(m.id)?.level === 'dedicated')
+        .map((m) => m.id),
+      chatSelected: selected.some((m) => m.id === CHAT_MODULE_ID),
+    });
+    const existing = await probeExisting(client, accountId, targets);
+    const outcome = decideGuard({
+      existing,
+      ledger: lock.resources,
+      allowAdopt: input.allowAdopt ?? process.env.UNSELF_ALLOW_ADOPT === '1',
+    });
+    if (outcome.status === 'owned') {
+      rep.log(`撞车守卫：${existing.length} 个同名资源与本实例台账一致（幂等重跑），放行`);
+    } else if (outcome.status === 'adopted') {
+      rep.log(
+        `撞车守卫：显式接管 ${outcome.foreign.length} 个既有资源（--allow-adopt）：${outcome.foreign
+          .map((f) => f.name)
+          .join('、')}`,
+      );
+    }
+  }
+
   const dbIds = await ensureDatabases(client, accountId, rep.log);
   const chatMod = selected.find((m) => m.id === CHAT_MODULE_ID);
   let chatResources: { dbId: string; kvId: string } | null = null;
@@ -347,7 +412,7 @@ export async function runNineSteps(input: {
   const coreCp = createCoreControlPlane(client, accountId, dbIds.core);
   const coreMigrationDir = artifacts ? artifacts.coreMigrationsDir : join(rootDir, 'services/core-api/migrations/core');
   await coreCp.applyMigrations('core', await readSqlFiles(coreMigrationDir));
-  rep.log('core 迁移已应用（unself-core，记账 unself_migrations_core）');
+  rep.log(`core 迁移已应用（${coreDbName()}，记账 unself_migrations_core）`);
   /** dedicated 模块的独立 D1 id（步骤①补建；摘要与绑定共用）。 */
   const dedicatedDbIds = new Map<string, string>();
   /**
@@ -473,13 +538,6 @@ export async function runNineSteps(input: {
   const outDirPre = join(rootDir, DEPLOY_DIR);
   const { mkdir: mkdirPre } = await import('node:fs/promises');
   await mkdirPre(outDirPre, { recursive: true });
-  const lockPath = join(rootDir, LOCK_FILENAME);
-  let lock: LockFile = emptyLock();
-  if (input.preLock !== undefined) {
-    lock = parseLockText(input.preLock);
-  } else if (existsSync(lockPath)) {
-    lock = parseLockText(await readFile(lockPath, 'utf8'));
-  }
   const sourcedEntries = entries.filter((e): e is NormalizedModuleEntry & { source: string } => !!e.source);
   let resolution: Awaited<ReturnType<typeof resolveSources>> | null = null;
   if (sourcedEntries.length > 0) {
@@ -899,13 +957,32 @@ export async function runNineSteps(input: {
   // ⑧½ lock 落盘（#245）：装配全程无哈希失败、无中途异常才会走到这里——写锁即「本次安装已兑现」。
   // 测试注入 preLock 时跳过真实写盘（测试断言面单独读 lock 文件时用真实写）。
   if (input.preLock === undefined) {
+    // 资源台账（#272）：装配成功才写——撞车守卫下次据此判定归属（幂等重跑放行）。
+    const ledger: ResourceLedger = {
+      ...(config.namespace !== undefined ? { namespace: config.namespace } : {}),
+      d1: [
+        { name: coreDbName(), id: dbIds.core },
+        { name: modulesDbName(), id: dbIds.modules },
+        ...[...dedicatedDbIds].map(([id, dbId]) => ({ name: resourceName(id), id: dbId })),
+      ],
+      kv: chatResources ? [{ name: chatKvName(), id: chatResources.kvId }] : [],
+      r2: [
+        ...(config.storage.provider === 'r2' ? [{ name: config.storage.bucket }] : []),
+        ...(chatMod ? [{ name: chatR2Name() }] : []),
+      ],
+      workers: [
+        { name: coreWorkerName() },
+        ...selected.map((m) => ({ name: moduleWorkerName(m.id) })),
+      ],
+    };
     const newLock: LockFile = {
       lockVersion: 1,
       generatedAt: new Date().toISOString(),
       modules: lockModules,
+      resources: ledger,
     };
     await writeConfig(join(rootDir, LOCK_FILENAME), serializeLock(newLock));
-    rep.log(`unself.lock 已更新（${Object.keys(lockModules).length} 个模块）`);
+    rep.log(`unself.lock 已更新（${Object.keys(lockModules).length} 个模块 + ${ledger.d1.length + ledger.kv.length + ledger.r2.length + ledger.workers.length} 个资源台账）`);
   }
 
   // ⑨ 冒烟 + 主题体检（§6.5.8 验产物）
