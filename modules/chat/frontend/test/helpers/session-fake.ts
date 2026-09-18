@@ -10,20 +10,22 @@ export const CORE_ORIGIN = 'https://team.example.com'
 
 type Listener = (event: { origin: string; data: unknown }) => void
 
-export function installFakeWindow(origin = CORE_ORIGIN): {
+export function installFakeWindow(origin = CORE_ORIGIN, ancestorOrigins?: string[]): {
   postMessage: ReturnType<typeof vi.fn>
   dispatch: (data: unknown, from?: string) => void
 } {
   const postMessage = vi.fn()
   const listeners = new Set<Listener>()
+  const locationLike = { origin, ...(ancestorOrigins ? { ancestorOrigins } : {}) }
   vi.stubGlobal('window', {
-    location: { origin },
+    location: locationLike,
     parent: { postMessage },
     addEventListener: (_type: string, listener: Listener) => listeners.add(listener),
     removeEventListener: (_type: string, listener: Listener) => listeners.delete(listener),
   })
-  // session.ts 的 coreOrigin 读 globalThis.location.origin（同源装载语义）——必须一起 stub
-  vi.stubGlobal('location', { origin })
+  // session.ts 的 coreOrigin 走 SDK resolveShellOrigin()（#277）：读 globalThis.location
+  // ——必须一起 stub；ancestorOrigins 给的是跨子域 iframe 的壳 origin（模块自有子域装载）。
+  vi.stubGlobal('location', locationLike)
   return {
     postMessage,
     dispatch: (data, from) => {

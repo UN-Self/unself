@@ -6,11 +6,13 @@
  * → ④ token/claims 投影给调用方（myUserId = claims.sub 解出的核心用户 id）。
  *
  * 独立开发态（dev-shim.html 宿主）：SDK 一切照常——shim 顶替壳发 token/tokens 消息，
- * 前端无需感知。coreOrigin 取 location.origin（同源路径制装载，architecture.md §模块契约）。
+ * 前端无需感知。coreOrigin 由 resolveShellOrigin() 取**壳 origin**（#277）：
+ * ancestorOrigins[0] → wrapper 注入 meta → location.origin（非 iframe 直开回落）——
+ * 自有域形态同源 = location.origin；workers.dev 形态跨子域 = 壳子域（architecture.md §模块契约）。
  *
  * token 只存内存（本文件闭包），localStorage 绝不落凭证；续期换新后 latestToken 即新值。
  */
-import { createModuleSDK } from '@unself/module-sdk'
+import { createModuleSDK, resolveShellOrigin } from '@unself/module-sdk'
 import type { ModuleSDK } from '@unself/module-sdk'
 
 export interface ChatSession {
@@ -55,8 +57,9 @@ export function userIdFromToken(decode: (token: string) => { sub: string }, toke
 /** 创建 chat 会话（SDK 握手 + 静默续期装配）。 */
 export function createChatSession(options: CreateChatSessionOptions = {}): ChatSession {
   const moduleId = options.moduleId ?? 'chat'
-  // 同源路径制：iframe 内 location.origin 即壳 origin（SDK 入站 token 的校验锚点）
-  const coreOrigin = globalThis.location?.origin
+  // coreOrigin 必须是**壳 origin**（#277）：跨子域 iframe（workers.dev 形态）下 location.origin 是模块自己，
+  // 拿它当 coreOrigin → SDK 入站校验（event.origin === coreOrigin）永远不中 → 握手死。
+  const coreOrigin = resolveShellOrigin()
   const sdk = createModuleSDK({ moduleId, coreOrigin })
 
   let latestToken: string | null = null
