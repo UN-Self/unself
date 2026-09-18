@@ -31,6 +31,7 @@ import { domainProblem } from './interactive';
 import { createKeypair, JWT_SECRET_NAME, publicJwksJson } from './keypair';
 import { ensureRoute, ensureTotalTls, ensureZoneARecord, findZone, removeLegacyCustomDomains, removeRoutesForPatterns } from './rest/zones';
 import { ensureDatabases, validateS3Storage, CORE_DB_NAME, MODULES_DB_NAME } from './provision';
+import { ensureD1 } from './rest';
 import {
   RestClient,
   findAccountId,
@@ -57,6 +58,14 @@ import {
   generateChatKeyring,
   readChatPackageConfig,
 } from './chat-provision';
+import {
+  checkSharedGuards,
+  dedicatedDbNameFor,
+  migrationDirFor,
+  migrationFailure,
+  readSqlFiles,
+  storageLevelFor,
+} from './migrate';
 import { buildChatFrontendAssets } from './chat-frontend';
 import { buildManifestSnapshot } from './registry';
 import { checkModuleThemes, smokeCheck } from './smoke';
@@ -238,26 +247,86 @@ export async function runNineSteps(input: {
     await ensureChatR2Bucket(client, accountId, rep.log);
   }
 
-  // ② 迁移（core + 各选中模块；未选模块不动数据）——REST import + 按模块独立记账（#55）
+  // ② 迁移与数据落点（#248 四级）：core→无迁移；shared→共享库建表（三护栏硬校验）；
+  //    dedicated→独立 D1 建表；external→接线归模块（连接串走配置页），装配器不碰。
+  //    记账隔离：applyMigrations(module, …) → unself_migrations_<module>（#55 护栏①）。
+  //    失败处理（#61）：停住并指出「模块 / 文件 / 第几条语句」，不自动重试、不自动回滚。
   rep.step(2, '跑核心迁移与选中模块迁移（按模块独立记账，REST import）');
   const coreCp = createCoreControlPlane(client, accountId, dbIds.core);
   const coreMigrationDir = join(rootDir, 'services/core-api/migrations/core');
   await coreCp.applyMigrations('core', await readSqlFiles(coreMigrationDir));
   rep.log('core 迁移已应用（unself-core，记账 unself_migrations_core）');
+  /** dedicated 模块的独立 D1 id（步骤①补建；摘要与绑定共用）。 */
+  const dedicatedDbIds = new Map<string, string>();
   for (const mod of selected) {
+    const level = storageLevelFor({ manifest: mod.resolved?.manifest, id: mod.id });
     if (mod.id === CHAT_MODULE_ID && chatResources && chatPkg) {
-      // #219：chat 不走记账迁移链——基线 schema 一次性灌入（全 IF NOT EXISTS + OR IGNORE，首建即收敛）
+      // chat（#74 普通化 = dedicated 普通实例）：基线 schema 一次性灌入保留（#219 决策，上游无记账迁移链）
       await applyChatSchema({ client, accountId, chatDbId: chatResources.dbId, moduleDir: mod.dir, log: rep.log });
+      dedicatedDbIds.set(mod.id, chatResources.dbId);
       continue;
     }
-    const migDir = join(mod.dir, 'migrations', mod.id);
-    if (!existsSync(migDir)) {
-      rep.log(`模块 ${mod.id} 无 migrations/${mod.id} 目录：跳过迁移`);
+    if (level === 'core') {
+      rep.log(`模块 ${mod.id} 落点 core：数据经 Core API 代理，无模块建表`);
       continue;
     }
-    const modulesCp = createCoreControlPlane(client, accountId, dbIds.modules);
-    await modulesCp.applyMigrations(mod.id, await readSqlFiles(migDir));
-    rep.log(`模块 ${mod.id} 迁移已应用（记账 unself_migrations_${mod.id.replaceAll('-', '_')}）`);
+    if (level === 'external') {
+      rep.log(`模块 ${mod.id} 落点 external：自备外部库，装配器不接线（连接串走配置页）`);
+      continue;
+    }
+    const migDir = migrationDirFor(mod.dir, mod.id);
+    const files = await readSqlFiles(migDir);
+    if (files.length === 0) {
+      throw new Error(
+        `模块 ${mod.id} 落点 ${level}（自建表）但包内没有 migrations/${mod.id}/ 迁移文件——装一半的库没人受益，先补迁移再装`,
+      );
+    }
+    const manifest = mod.resolved?.manifest;
+    const tables = manifest?.tables ?? [];
+    if (level === 'shared') {
+      // shared 三护栏③：命名前缀 + 禁止跨模块外键（装配时硬校验，违者停住）；
+      // 护栏②（tables 申报）在契约 schema 已拦，这里对实际建的表再兜一道。
+      if (tables.length === 0) {
+        throw new Error(
+          `模块 ${mod.id} 落点 shared 但未申报 tables 表名清单（护栏②）——共享库不接收未经申报的表`,
+        );
+      }
+      const problems = checkSharedGuards({ moduleId: mod.id, tables, migrations: files });
+      if (problems.length > 0) {
+        throw new Error(
+          `模块 ${mod.id} 未通过 shared 三护栏硬校验：\n${problems.map((p) => `  - ${p}`).join('\n')}`,
+        );
+      }
+    }
+    let targetDbId = dbIds.modules;
+    if (level === 'dedicated') {
+      targetDbId = dedicatedDbIds.get(mod.id) ?? (await ensureD1(client, accountId, dedicatedDbNameFor(mod.id), rep.log));
+      dedicatedDbIds.set(mod.id, targetDbId);
+      rep.log(`模块 ${mod.id} 落点 dedicated：独立库 ${dedicatedDbNameFor(mod.id)}（${targetDbId}）`);
+    } else {
+      rep.log(`模块 ${mod.id} 落点 shared：共享 modules 库建表（独立记账 ${`unself_migrations_${mod.id.replaceAll('-', '_')}`}）`);
+    }
+    const modulesCp = createCoreControlPlane(client, accountId, targetDbId);
+    // 逐文件带定位地跑：applyMigrations 内部按记账跳过；失败转「模块/文件/第几条语句」人话。
+    try {
+      const report = await modulesCp.applyMigrations(mod.id, files);
+      rep.log(
+        `模块 ${mod.id} 迁移：本次应用 ${report.applied.length} 个${report.skipped.length > 0 ? `，记账跳过 ${report.skipped.length} 个` : ''}`,
+      );
+    } catch (err) {
+      // 逐文件重放定位：找到第一份「记账上未应用」的文件再跑一次，捕原始错误转三要素
+      const applied = await modulesCp.appliedMigrations(mod.id);
+      const pending = files.filter((f) => !applied.includes(f.name));
+      for (const file of pending) {
+        try {
+          await modulesCp.applyMigrations(mod.id, [file]);
+        } catch (fileErr) {
+          throw migrationFailure({ moduleId: mod.id, file: file.name, sql: file.sql, cause: fileErr });
+        }
+      }
+      // 逐文件重放全部成功（竞态/瞬时差异）→ 保留原始错误上下文人话化
+      throw migrationFailure({ moduleId: mod.id, file: pending[pending.length - 1]?.name ?? '(未知)', sql: pending[pending.length - 1]?.sql ?? '', cause: err });
+    }
   }
   // node:sqlite 探测（Docker 落点可用性预检；不可用给人话不崩——仅提示，不阻断 CF 部署）
   const sqlite = probeSqlite();
@@ -449,6 +518,8 @@ export async function runNineSteps(input: {
       : undefined;
     // chat 包配置（DO 绑定 + 首部署 DO migrations 元数据）；readChatPackageConfig 已在步骤①通过形状检查
     const chatPkgMeta = isChat && chatPkg ? chatPkg : null;
+    // 数据落点（#248）：shared 走 modules 库绑定；dedicated 额外绑专属库；core/external 仅 MODULES_DB
+    const modLevel = storageLevelFor({ manifest: mod.manifest, id: mod.id });
     await writeConfig(
       join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`),
       isChat && chatResources && chatPkg
@@ -467,6 +538,8 @@ export async function runNineSteps(input: {
             mod,
             jwksJson,
             zoneName: resolvedZone?.name,
+            storageLevel: modLevel,
+            ...(modLevel === 'dedicated' ? { dedicatedDbId: dedicatedDbIds.get(mod.id) } : {}),
           }),
     );
     await writeConfig(
@@ -481,6 +554,15 @@ export async function runNineSteps(input: {
       { type: 'plain_text', name: 'MODULE_ID', text: mod.id },
       { type: 'plain_text', name: 'CORE_JWKS_JSON', text: jwksJson },
     ];
+    if (modLevel === 'dedicated' && dedicatedDbIds.has(mod.id)) {
+      // dedicated 专属库绑定（#248）：unself-<id>，绑定名 <ID>_DB（chat 的 DB 绑定走包配置同名兼容）
+      moduleBindings.push({
+        type: 'd1',
+        name: `${mod.id.toUpperCase().replaceAll('-', '_')}_DB`,
+        id: dedicatedDbIds.get(mod.id),
+      });
+    }
+    // STORAGE_LEVEL 入 vars（由 moduleWranglerConfig 生成，模块 SDK 据此选通道）
     if (chatPkgMeta && chatResources) {
       // chat 专属绑定（#219 决策 #50 豁免）：专属 D1 + SESSIONS KV + FILES R2 + DO 三绑定
       moduleBindings.push(
@@ -592,8 +674,15 @@ export async function runNineSteps(input: {
       baseUrl,
       ...(mod.resolved ? { manifest: mod.resolved.manifest } : {}),
     });
-    await coreCp.upsertModule({ id: mod.id, enabled: true, manifest });
-    rep.log(`upsert ${mod.id}（enabled=1，快照刷新）`);
+    // 存储选择（#55）写进快照：declaration 由 config 条目覆写（向导③½ / CLI），注册表快照即
+    // 「这台实例上该模块数据在哪」的权威记录（core-api 门禁与运行时可读）。
+    const entry = entries.find((e) => e.id === mod.id);
+    const declaration = entry?.storage?.declaration;
+    const snapshot = declaration
+      ? { ...manifest, storage: { ...(manifest.storage ?? { accepts: [declaration] }), declaration } }
+      : manifest;
+    await coreCp.upsertModule({ id: mod.id, enabled: true, manifest: snapshot });
+    rep.log(`upsert ${mod.id}（enabled=1，快照刷新${declaration ? `，落点 ${declaration}` : ''}）`);
   }
   for (const mod of unselected) {
     await coreCp.toggleModule(mod.id, false);
@@ -702,17 +791,6 @@ async function defaultClient(log: (m: string) => void): Promise<RestClient> {
   }
   if (cred.warning) log(`⚠ ${cred.warning}`);
   return new RestClient({ token: cred.token });
-}
-
-/** 读目录下 .sql 文件（文件名升序；#55 记账契约：000N_描述.sql 只增不改）。 */
-async function readSqlFiles(dir: string): Promise<Array<{ name: string; sql: string }>> {
-  const { readdir } = await import('node:fs/promises');
-  const names = (await readdir(dir)).filter((n) => n.endsWith('.sql')).sort();
-  const files: Array<{ name: string; sql: string }> = [];
-  for (const name of names) {
-    files.push({ name, sql: await readFile(join(dir, name), 'utf8') });
-  }
-  return files;
 }
 
 /** worker 上传（真实路径）：assets 直传 + putWorker。测试可注入 uploadWorker 替身。 */

@@ -12,6 +12,7 @@ import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { build } from 'esbuild';
+import type { ModuleManifest } from '@unself/contracts';
 import type { UnselfConfig } from './config';
 import type { ModuleRef } from './config';
 
@@ -40,6 +41,8 @@ export interface ModuleProvision {
   workerEntry: RelPath;
   /** SDK/页面静态资产目录（相对 outDir；无资产模块 undefined）。 */
   assetsDir?: string;
+  /** 解析后的 manifest（#248：存储落点判定用；builtin 模块 undefined 时按 preferred??core）。 */
+  manifest?: ModuleManifest;
 }
 
 /** 装配产物目录名（.deploy，gitignore）。 */
@@ -133,6 +136,7 @@ export async function provisionAll(options: {
       config: `modules/${mod.id}.wrangler.jsonc`,
       workerEntry: `modules/${mod.id}/app.js`,
       assetsDir: `modules/${mod.id}/assets`,
+      ...(mod.resolved ? { manifest: mod.resolved.manifest } : {}),
     });
   }
 
@@ -281,8 +285,13 @@ export function moduleWranglerConfig(input: {
   jwksJson: string;
   /** zone 路由必填（wrangler schema：routes[] 元素需 zone_id|zone_name）；部署脚本经 API 探测注入。 */
   zoneName?: string;
+  /** 数据落点（#248 四级）：shared/external → 绑 MODULES_DB（external 建表归模块自身库，这里仅共用绑定名）；
+   *  dedicated → 额外绑专属库 `<id>_DB`（unself-<id>）；core → 仅 MODULES_DB（SDK 走 Core API 代理）。 */
+  storageLevel?: 'core' | 'shared' | 'dedicated' | 'external';
+  /** dedicated 专属库 id（storageLevel=dedicated 时必填）。 */
+  dedicatedDbId?: string;
 }): string {
-  const { config, dbIds, mod, jwksJson, zoneName } = input;
+  const { config, dbIds, mod, jwksJson, zoneName, storageLevel = 'core', dedicatedDbId } = input;
   return JSON.stringify(
     {
       $schema: 'node_modules/wrangler/config-schema.json',
@@ -310,9 +319,20 @@ export function moduleWranglerConfig(input: {
           database_name: 'unself-modules',
           database_id: dbIds.modules,
         },
+        ...(storageLevel === 'dedicated'
+          ? [
+              {
+                binding: `${mod.id.toUpperCase().replaceAll('-', '_')}_DB`,
+                database_name: `unself-${mod.id}`,
+                database_id: dedicatedDbId ?? '',
+              },
+            ]
+          : []),
       ],
       vars: {
         MODULE_ID: mod.id,
+        // 数据落点（#248）：模块 SDK 据此决定存储通道（core=Core API 代理；shared/dedicated=直连建表；external=外部连接串）
+        STORAGE_LEVEL: storageLevel,
         // 部署期注入公钥 JWKS：模块本地验签零运行时网络（#71 根因①：跨 Worker 拉 core JWKS)
         // 被 CF 同 zone 禁令拦截 → 恒 401。换钥 = core secret 更新后重跑部署同步。
         CORE_JWKS_JSON: jwksJson,
