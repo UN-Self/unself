@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * REST 客户端行为测试（注入 fetch 替身，不真打网络）：
- * 信封解析 / 错误码映射 / 429 退避 / d1 import 三段式与 etag 幂等 /
+ * 信封解析 / 错误码映射 / 429 退避 / d1 import 四段式（init→PUT→ingest→poll）与 etag 幂等 /
  * worker 上传表单形状（metadata.main_module + 文件名字段）/ token 解析（含 wrangler 装饰剥离）。
- * 红灯点：改坏「错误码透传」「import 的 current_bookmark 轮询」「token 剥离」必红。
+ * 红灯点：改坏「错误码透传」「import 的 ingest 步」「token 剥离」必红。
  */
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CloudflareApiError, RestClient } from '../src/rest/client';
 import { d1Import, d1Query, ensureD1 } from '../src/rest/d1';
@@ -14,7 +15,7 @@ import { ensureKvNamespace, ensureR2Bucket } from '../src/rest/storage';
 import { ensureRoute, findZone, removeRoutesForPatterns } from '../src/rest/zones';
 
 /** 按请求序列回放的 fetch 替身；记录全部请求。 */
-function fakeFetch(responses: Array<{ status: number; body: unknown; expect?: (req: { url: string; method: string; body?: unknown; headers: Headers }) => void }>) {
+function fakeFetch(responses: Array<{ status: number; body: unknown; headers?: Record<string, string>; expect?: (req: { url: string; method: string; body?: unknown; headers: Headers }) => void }>) {
   const calls: Array<{ url: string; method: string; body?: unknown; headers: Headers }> = [];
   const impl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = String(input);
@@ -23,9 +24,9 @@ function fakeFetch(responses: Array<{ status: number; body: unknown; expect?: (r
     const idx = Math.min(calls.length - 1, responses.length - 1);
     const r = responses[idx]!;
     r.expect?.(call);
-    return new Response(typeof r.body === 'string' ? r.body : JSON.stringify(r.body), {
+    return new Response(r.body === null ? '' : typeof r.body === 'string' ? r.body : JSON.stringify(r.body), {
       status: r.status,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(r.headers ?? {}) },
     });
   };
   return { calls, impl };
@@ -85,20 +86,47 @@ describe('D1 REST', () => {
     expect(JSON.parse(String(f.calls[0]!.body))).toEqual({ sql: 'SELECT * FROM t WHERE id = ?1', params: ['a'] });
   });
 
-  it('d1Import：init→PUT（Content-length）→poll(current_bookmark)→complete（红灯点：改坏 bookmark 轮询必红）', async () => {
+  it('d1Import：init→PUT(ETag 校验)→ingest→poll→complete（红灯点：删掉 ingest 必红——SQL 根本不执行）', async () => {
+    const sql = 'CREATE TABLE t (id TEXT);';
+    const md5 = createHash('md5').update(new TextEncoder().encode(sql)).digest('hex');
     const f = fakeFetch([
-      { status: 200, body: { success: true, result: { upload_url: 'https://r2.example/put', at_bookmark: 'bm1' }, errors: [] } },
-      { status: 200, body: { status: 'ongoing', at_bookmark: 'bm2' } }, // presigned PUT 响应
-      { status: 200, body: { success: true, result: { status: 'complete', num_queries: 2, final_bookmark: 'bm3' }, errors: [] } },
+      { status: 200, body: { success: true, result: { filename: 'db.abc.sql', upload_url: 'https://r2.example/put' }, errors: [] } },
+      { status: 200, headers: { etag: `"${md5}"` }, body: null }, // presigned PUT：200 空体 + ETag
+      { status: 200, body: { success: true, result: { status: 'ongoing', at_bookmark: 'bm2' }, errors: [] } }, // ingest
+      { status: 200, body: { success: true, result: { status: 'complete', result: { num_queries: 2, final_bookmark: 'bm3' } }, errors: [] } },
     ]);
     const client = new RestClient({ token: 't', fetchImpl: f.impl });
-    const report = await d1Import(client, 'ACC', 'DBID', 'CREATE TABLE t (id TEXT);');
+    const report = await d1Import(client, 'ACC', 'DBID', sql);
     expect(report).toEqual({ numQueries: 2, finalBookmark: 'bm3' });
     // PUT 用原始字节直传 presigned URL
     expect(f.calls[1]!.url).toBe('https://r2.example/put');
-    expect(f.calls[1]!.headers.get('Content-length')).toBe('25');
+    expect(f.calls[1]!.headers.get('Content-length')).toBe(String(new TextEncoder().encode(sql).length));
+    // ingest 带 init 回的 filename + 同一 etag（缺这一步 SQL 不会执行）
+    expect(JSON.parse(String(f.calls[2]!.body))).toEqual({ action: 'ingest', filename: 'db.abc.sql', etag: md5 });
     // poll 带最新 bookmark
-    expect(JSON.parse(String(f.calls[2]!.body))).toEqual({ action: 'poll', current_bookmark: 'bm2' });
+    expect(JSON.parse(String(f.calls[3]!.body))).toEqual({ action: 'poll', current_bookmark: 'bm2' });
+  });
+
+  it('d1Import：服务端未回 status=complete → 抛错（拒绝把「可能没执行」记成已应用）', async () => {
+    const sql = 'CREATE TABLE t (id TEXT);';
+    const md5 = createHash('md5').update(new TextEncoder().encode(sql)).digest('hex');
+    const f = fakeFetch([
+      { status: 200, body: { success: true, result: { filename: 'db.abc.sql', upload_url: 'https://r2.example/put' }, errors: [] } },
+      { status: 200, headers: { etag: `"${md5}"` }, body: null },
+      { status: 200, body: { success: true, result: { errors: [] }, errors: [] } }, // ingest 既无 status 也无 bookmark
+    ]);
+    const client = new RestClient({ token: 't', fetchImpl: f.impl });
+    await expect(d1Import(client, 'ACC', 'DBID', sql)).rejects.toThrow(/未返回 status="complete"/);
+  });
+
+  it('d1Import：上传内容 ETag 与 md5 不符 → 抛错（内容完整性硬闸）', async () => {
+    const sql = 'CREATE TABLE t (id TEXT);';
+    const f = fakeFetch([
+      { status: 200, body: { success: true, result: { filename: 'db.abc.sql', upload_url: 'https://r2.example/put' }, errors: [] } },
+      { status: 200, headers: { etag: '"deadbeef"' }, body: null },
+    ]);
+    const client = new RestClient({ token: 't', fetchImpl: f.impl });
+    await expect(d1Import(client, 'ACC', 'DBID', sql)).rejects.toThrow(/上传内容校验失败/);
   });
 
   it('ensureD1 查漏补建：命中不创建；未命中创建（幂等）', async () => {

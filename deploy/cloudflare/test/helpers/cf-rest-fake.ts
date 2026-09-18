@@ -8,7 +8,10 @@
  * accounts · d1 database(list/create/query/import) · kv namespaces · r2 buckets ·
  * workers scripts(put/settings/secrets/subdomain) · assets-upload-session ·
  * zones(lookup/routes/dns/total_tls) · workers/domains。
+ *
+ * D1 import 四段式（#257，CF REST v4 实测）：init{filename,upload_url} → PUT(ETag) → ingest → poll。
  */
+import { createHash } from 'node:crypto';
 
 export interface FakeAccountOptions {
   existingD1?: string[];
@@ -70,6 +73,8 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
     registry: new Map<string, { enabled: number; version: string; manifest_json: string }>(),
     importEtags: new Set<string>(),
     importCalls: [] as Array<{ action: string; etag?: string; bookmark?: string }>,
+    /** 已因注入失败而被拒绝的 etag（重放也必须失败，否则「逐文件定位」测试会看到假成功）。 */
+    failedEtags: new Set<string>(),
     ledgerTables: new Set<string>(Object.keys(options.existingLedger ?? {})),
     ledgerRows: new Map<string, Set<string>>(
       Object.entries(options.existingLedger ?? {}).map(([table, rows]) => [table, new Set(rows)]),
@@ -128,33 +133,50 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
       return d1Query(sql, params ?? []);
     }
 
-    // ---- D1：import（init / poll + presigned PUT）----
+    // ---- D1：import（init / ingest / poll + presigned PUT）
+    // 形状 = CF REST v4 实测四段式（#257）：init({filename,upload_url}) → PUT(ETag) → ingest → poll。
     const im = path.match(/\/d1\/database\/([^/]+)\/import$/);
     if (im && method === 'POST') {
       const action = (body as { action: string }).action;
       if (action === 'init') {
         const etag = (body as { etag: string }).etag;
         state.importCalls.push({ action, etag });
+        if (state.failedEtags.has(etag)) {
+          return env({ status: 'error', errors: options.importFailure?.errors ?? ['fake import error'] });
+        }
         if (state.importEtags.has(etag)) {
-          return env({ status: 'complete', num_queries: 3, final_bookmark: 'bm-done' });
+          // 同内容已上传 → 服务端去重，直接回 poll 形状（无 upload_url）
+          return env({ status: 'complete', result: { num_queries: 3, final_bookmark: 'bm-done' } });
         }
         state.importEtags.add(etag);
-        return env({ upload_url: `https://r2-fake.example/upload?etag=${etag}`, at_bookmark: 'bm1' });
+        const filename = `fake-db.${etag}.sql`;
+        return env({ filename, upload_url: `https://r2-fake.example/upload?etag=${etag}&filename=${filename}` });
+      }
+      if (action === 'ingest') {
+        const etag = (body as { etag: string }).etag;
+        state.importCalls.push({ action, etag });
+        // #248：注入的 import 失败（迁移失败定位测试用；真实 D1 在 ingest/poll 里回 errors 明细）
+        if (state.failedEtags.has(etag) || importError) {
+          return env({ status: 'error', errors: importError ?? options.importFailure?.errors ?? [] });
+        }
+        return env({ status: 'complete', result: { num_queries: 3, final_bookmark: 'bm-done' } });
       }
       if (action === 'poll') {
         state.importCalls.push({ action, bookmark: (body as { current_bookmark: string }).current_bookmark });
-        // #248：注入的 import 失败（迁移失败定位测试用；真实 D1 在轮询里回 errors 明细）
         if (importError) return env({ status: 'error', errors: importError });
-        return env({ status: 'complete', num_queries: 3, final_bookmark: 'bm-done' });
+        return env({ status: 'complete', result: { num_queries: 3, final_bookmark: 'bm-done' } });
       }
     }
     if (path.startsWith('/upload?etag=') && method === 'PUT') {
       const sqlText = body instanceof Uint8Array ? new TextDecoder().decode(body) : '';
+      const etag = new URL(url).searchParams.get('etag') ?? '';
+      const md5 = createHash('md5').update(body instanceof Uint8Array ? body : Buffer.alloc(0)).digest('hex');
       if (options.importFailure && sqlText.includes(options.importFailure.marker)) {
         importError = options.importFailure.errors;
-        return new Response(JSON.stringify({ status: 'pending', at_bookmark: 'bm-err' }), { status: 200 });
+        state.failedEtags.add(etag);
       }
-      return new Response(JSON.stringify({ status: 'complete', num_queries: 3, final_bookmark: 'bm-done' }), { status: 200 });
+      // 真实 PUT：200 空体 + ETag（= 上传字节 md5）；引擎据此校验内容完整性
+      return new Response('', { status: 200, headers: { etag: `"${md5}"` } });
     }
 
     // ---- KV ----
