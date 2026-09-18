@@ -7,7 +7,7 @@
  * 装配主流程 = runNineSteps 整包调用，行为与既有部署完全一致；本文件只做交互编排与输出。
  */
 import { runNineSteps, type Summary } from './steps';
-import { loadUnselfConfig, type UnselfConfig } from './config';
+import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type UnselfConfig } from './config';
 import {
   buildTokenDeepLink,
   buildTokenFirstScreen,
@@ -25,12 +25,12 @@ import { progressTracker } from './progress';
 
 const TOTAL_STEPS = 9;
 
-/** 交互结果只改本次运行的内存副本，不回写 unself.config.jsonc（结构不变）。 */
+/** 交互结果只改本次运行的内存副本，不回写 unself.config.jsonc（结构不变）。对象条目归一化取 id——交互面只确认启用与否，来源改写走配置文件。 */
 function applyDecision(config: UnselfConfig, domain: string | null, modulesOverride: string[] | null): UnselfConfig {
   return {
     ...config,
     domain: domain ?? '',
-    modules: modulesOverride ?? config.modules,
+    modules: modulesOverride ?? moduleIds(normalizeModuleEntries(config.modules)),
   };
 }
 
@@ -91,7 +91,7 @@ export async function main(argv: string[] = []): Promise<Summary> {
   });
   let modulesOverride: string[] | null = cli.modules ?? null;
   if (!cli.yes && tty && cli.modules === undefined) {
-    const candidates = config.modules;
+    const candidates = moduleIds(normalizeModuleEntries(config.modules));
     out('② 启用模块（逗号分隔，回车=配置文件值）：');
     out(`  候选：${candidates.length > 0 ? candidates.join('、') : '（配置为空 = 全停用）'}`);
     for (let tries = 0; tries < 2; tries++) {

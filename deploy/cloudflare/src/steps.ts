@@ -21,7 +21,7 @@ import {
   writeConfig,
   type Provisioned,
 } from './assemble';
-import { loadUnselfConfig, type ModuleRef, type UnselfConfig } from './config';
+import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type ModuleRef, type UnselfConfig } from './config';
 import { createCoreControlPlane } from './control-plane';
 import { domainProblem } from './interactive';
 import { createKeypair, JWT_SECRET_NAME, publicJwksJson } from './keypair';
@@ -187,7 +187,7 @@ export async function runNineSteps(input: {
       );
     }
   }
-  const modules = await discoverModules(rootDir, config.modules);
+  const modules = await discoverModules(rootDir, moduleIds(normalizeModuleEntries(config.modules)));
   const selected = modules.filter((m) => m.selected);
   validateS3Storage(config);
   /** chat 密钥环动作（选中 chat 时在步骤④赋值；未选中 undefined）。 */
