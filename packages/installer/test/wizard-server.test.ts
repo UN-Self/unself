@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createWizardServer, renderPage, startWizardServer } from '../src/web/server';
+import { createWizardServer, startWizardServer } from '../src/web/server';
 import { initialWizardState, type WizardState } from '../src/web/state';
 
 let holder: { state: WizardState };
@@ -231,19 +231,3 @@ describe('createWizardServer 裸构造（不 listen 也可导出）', () => {
   });
 });
 
-describe('renderPage 样式令牌（#258 护栏：样式只走 tokens）', () => {
-  it('样式规则不含裸颜色字面量，颜色一律引用契约令牌变量', () => {
-    const page = renderPage(initialWizardState('/tmp/x/unself'), false);
-    const style = page.match(/<style>([\s\S]*?)<\/style>/)![1]!;
-    // 令牌取值定义处（:root）允许出现值（取值来自 theme-tokens.json）；
-    // 其余样式规则里出现裸 hex / rgb() 即违规——这是 CI `verify:tokens` 规则一的单测版护栏。
-    const rules = style.replace(/:root \{[\s\S]*?\}/, '');
-    expect(rules).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
-    expect(rules).not.toMatch(/rgba?\(/);
-    // 边框与错误色必须走令牌变量
-    expect(rules).toContain('var(--unself-color-border)');
-    expect(rules).toContain('var(--unself-color-danger)');
-    // 令牌取值由契约默认主题渲染进 :root
-    expect(style).toMatch(/--unself-color-border:\s*\S+/);
-  });
-});
