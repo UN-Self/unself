@@ -173,7 +173,9 @@ describe('buildModuleSdkAssets（T3 页面 SDK 装载契约）', () => {
       const mod = (await import(pathToFileURL(esmPath).href)) as Record<string, unknown>;
       expect(typeof mod.createModuleSDK).toBe('function');
       expect(Object.keys(mod).sort()).toEqual([
+        'assertCoreOrigin',
         'createD1Storage',
+        'createModuleApi',
         'createModuleSDK',
         'decodeJwtPayload',
         // #91 通道 B：主题语义名 → CSS 变量名单点转换（模块作者写样式用）
