@@ -29,9 +29,20 @@ export function buildManifestSnapshot(input: {
   moduleId: string;
   /** 实例 base URL（https://domain 或 workers.dev）；空字符串 = workers.dev 占位。 */
   baseUrl: string;
+  /** 已解析的 manifest（sourced 模块，#245）；缺省 = 从 manifestText（YAML）解析。 */
+  manifest?: ModuleManifest;
 }): ModuleManifest {
-  const candidate = manifestFromYamlText(input.manifestText) as Record<string, unknown>;
   const host = input.baseUrl || 'https://unself-module-placeholder.workers.dev';
+  if (input.manifest) {
+    return ModuleManifestSchema.parse({
+      ...input.manifest,
+      id: input.manifest.id ?? input.moduleId,
+      route: input.manifest.route ?? `/m/${input.moduleId}`,
+      entry: `${host}/m/${input.moduleId}/`,
+      version: input.manifest.version ?? '0.0.0',
+    });
+  }
+  const candidate = manifestFromYamlText(input.manifestText) as Record<string, unknown>;
   return ModuleManifestSchema.parse({
     ...candidate,
     id: candidate.id ?? input.moduleId,

@@ -14,12 +14,11 @@
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { Transform } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { writeEntriesSafe } from './tar-write';
 
@@ -303,12 +302,14 @@ export interface ExtractResult {
  * 包根判定：全量 `package/` 前缀（npm 形态）→ 剥前缀；否则取含 manifest.json 的单层目录。
  */
 export async function extractTarball(input: { tarPath: string; dest: string }): Promise<ExtractResult> {
+  // 先读完整 tarball 字节再清 dest：tarPath 允许放在 dest 内（stageFromTarball 把 pkg.tgz 与解包产物同目录）
+  const tarBytes = await readFile(input.tarPath);
   await rm(input.dest, { recursive: true, force: true });
   await mkdir(input.dest, { recursive: true });
 
   const entries: TarEntry[] = [];
   await pipeline(
-    createReadStream(input.tarPath),
+    Readable.from(Buffer.from(tarBytes)),
     createGunzip(),
     new TarStreamParser((entry) => entries.push(entry)),
   );

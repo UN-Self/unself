@@ -166,6 +166,9 @@ async function ensureEmptyDir(path: string): Promise<void> {
  * main 指向的文件不存在 → 人话报错（不在 esbuild 里炸难懂错）。
  */
 export async function moduleWorkerEntry(moduleDir: string): Promise<string> {
+  // 已打包形态（#245）：包根直接带预构建 worker.js（manifest.runtimes ∋ worker 的模块包标准入口）
+  const prebuilt = join(moduleDir, 'worker.js');
+  if (existsSync(prebuilt)) return prebuilt;
   const fallback = join(moduleDir, 'src/index.ts');
   const pkgPath = join(moduleDir, 'package.json');
   if (!existsSync(pkgPath)) return fallback;
