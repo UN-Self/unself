@@ -63,6 +63,12 @@ export interface ControlPlane {
   applyMigrations(module: string, files: Array<{ name: string; sql: string }>): Promise<ApplyReport>;
   /** 查某模块已应用的迁移名（升级预检/幂等对照用）。 */
   appliedMigrations(module: string): Promise<string[]>;
+  /**
+   * 记一条「已应用」事件（不执行 SQL）：DO 迁移 tag 等非 SQL 迁移与文件记账
+   * **同一张** `unself_migrations_<module>` 表（#255/#55：不另造第二套记账）。
+   * 由调用方在外部动作确认成功后调用；重复调用幂等（同 name 只留一行）。
+   */
+  markMigrationApplied(module: string, name: string): Promise<void>;
 }
 
 export interface ApplyReport {

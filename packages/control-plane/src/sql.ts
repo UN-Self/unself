@@ -55,6 +55,11 @@ export function migrationsInsertSql(module: string): string {
   return `INSERT INTO ${migrationsTableFor(module)} (name) VALUES (?1)`;
 }
 
+/** 幂等记账写入（非 SQL 迁移事件，如 DO 迁移 tag；#255 与文件记账同表）。 */
+export function migrationsInsertIgnoreSql(module: string): string {
+  return `INSERT OR IGNORE INTO ${migrationsTableFor(module)} (name) VALUES (?1)`;
+}
+
 export function migrationsListSql(module: string): string {
   return `SELECT name FROM ${migrationsTableFor(module)} ORDER BY name`;
 }

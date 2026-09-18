@@ -90,6 +90,10 @@ export class D1ControlPlane implements ControlPlane {
   async appliedMigrations(): Promise<never> {
     throw new Error('D1ControlPlane 不做迁移记账（迁移走装配器 REST import / wrangler 历史）；用 SqliteControlPlane');
   }
+
+  async markMigrationApplied(): Promise<never> {
+    throw new Error('D1ControlPlane 不做迁移记账（迁移走装配器 REST import / wrangler 历史）；用 SqliteControlPlane');
+  }
 }
 
 function readVersion(manifest: unknown): string {
