@@ -39,7 +39,14 @@ export interface FakeAccountOptions {
   importFailure?: { marker: string; errors: string[] };
 }
 
-const UUID = 'a1b2c3d4-0000-0000-0000-000000000001';
+/**
+ * D1 uuid：按库名确定性派生（#270 卸载测试要区分 core / modules / dedicated 三个库的落点）。
+ * 同一名字两次调用同值；不同名字不同值。
+ */
+export function fakeD1Uuid(name: string): string {
+  const h = createHash('sha256').update(name).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
 
 interface Call {
   method: string;
@@ -51,7 +58,7 @@ interface Call {
 
 export function makeCfRestFake(options: FakeAccountOptions = {}) {
   const state = {
-    d1: new Map<string, string>([...(options.existingD1 ?? [])].map((n) => [n, UUID])),
+    d1: new Map<string, string>([...(options.existingD1 ?? [])].map((n) => [n, fakeD1Uuid(n)])),
     buckets: new Set(options.existingBuckets ?? []),
     kv: new Map<string, string>([...(options.existingKv ?? [])].map((t) => [t, 'd1d2e3f4-0000-0000-0000-0000000000d5'])),
     secrets: new Map<string, Set<string>>(
@@ -81,6 +88,12 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
     ),
     legacyLedger: options.legacyLedger ?? [],
     subdomain: 'test-subdomain',
+    /** #270 卸载：被 DROP 的表名（断言「只删清单表」用）。 */
+    droppedTables: [] as string[],
+    /** #270 卸载：按库分组记录 DROP（断言 shared/dedicated 落到对的库）。 */
+    droppedByDb: new Map<string, string[]>(),
+    /** #270 卸载：被删除的 worker 名。 */
+    deletedWorkers: new Set<string>(),
   };
 
   const calls: Call[] = [];
@@ -122,15 +135,16 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
     if (path.endsWith('/d1/database') && method === 'GET') return env([...state.d1].map(([name, uuid]) => ({ name, uuid })));
     if (path.endsWith('/d1/database') && method === 'POST') {
       const name = (body as { name: string }).name;
-      state.d1.set(name, UUID);
-      return env({ name, uuid: UUID });
+      const uuid = fakeD1Uuid(name);
+      state.d1.set(name, uuid);
+      return env({ name, uuid });
     }
 
     // ---- D1：query（迷你 SQL 态）----
     const qm = path.match(/\/d1\/database\/([^/]+)\/query$/);
     if (qm && method === 'POST') {
       const { sql, params } = body as { sql: string; params?: unknown[] };
-      return d1Query(sql, params ?? []);
+      return d1Query(sql, params ?? [], qm[1]!);
     }
 
     // ---- D1：import（init / ingest / poll + presigned PUT）
@@ -214,6 +228,15 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
       if (rest === '' && method === 'PUT') {
         state.uploads.push({ worker, metadata: metadata! });
         state.existingWorkers.add(worker);
+        return env({ id: worker });
+      }
+      // 卸载（#270）：删脚本；不存在 → 404（引擎按 404/10049 幂等）
+      if (rest === '' && method === 'DELETE') {
+        const had = state.existingWorkers.delete(worker);
+        if (!had) {
+          return new Response(JSON.stringify({ success: false, result: null, errors: [{ code: 10049, message: 'workers.api.error.script_not_found' }] }), { status: 404 });
+        }
+        state.deletedWorkers.add(worker);
         return env({ id: worker });
       }
       if (rest === '/settings' && method === 'GET' && !state.existingWorkers.has(worker)) {
@@ -300,7 +323,7 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
   }) as typeof fetch;
 
   /** 迷你 SQL 执行（仅覆盖共用 SQL 的形状）。 */
-  function d1Query(sql: string, params: unknown[]): Response {
+  function d1Query(sql: string, params: unknown[], dbId = 'db'): Response {
     const envRow = (rows: Array<Record<string, unknown>>, changes = 0): Response =>
       new Response(
         JSON.stringify({ success: true, result: [{ results: rows, success: true, meta: { changes, duration: 0 } }], errors: [] }),
@@ -336,6 +359,23 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
       const [id, enabled, version, manifestJson] = params as [string, number, string, string];
       state.registry.set(id, { enabled, version, manifest_json: manifestJson });
       return envRow([{ id, enabled, version, manifest_json: manifestJson }], 1);
+    }
+    if (sql.startsWith('DELETE FROM module_registry')) {
+      const id = String(params[0]);
+      const had = state.registry.delete(id);
+      return envRow([], had ? 1 : 0);
+    }
+    // 卸载（#270）：DROP TABLE 记录到 droppedTables（断言只删清单表 + 记账表）
+    if (sql.startsWith('DROP TABLE')) {
+      const m = /DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?/i.exec(sql);
+      if (!m) return env(null, false, 7500, `fake 无法解析 DROP：${sql.slice(0, 60)}`, 400);
+      state.droppedTables.push(m[1]!);
+      const list = state.droppedByDb.get(dbId) ?? [];
+      list.push(m[1]!);
+      state.droppedByDb.set(dbId, list);
+      state.ledgerTables.delete(m[1]!);
+      state.ledgerRows.delete(m[1]!);
+      return envRow([], 1);
     }
     if (sql.startsWith('UPDATE module_registry')) {
       const [id, enabled] = params as [string, number];
