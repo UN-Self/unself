@@ -12,14 +12,14 @@ import { applyRegistryFrameOrigins, frameSrcFromMeta, tightenFrameSrcInMeta } fr
 
 function docWith(csp: string): Document {
   const meta = document.createElement('meta')
-  meta.setAttribute('name', 'unself-csp-frame')
+  meta.setAttribute('http-equiv', 'Content-Security-Policy')
   meta.setAttribute('content', csp)
   document.head.appendChild(meta)
   return document
 }
 
 function cleanup(): void {
-  document.querySelector('meta[name="unself-csp-frame"]')?.remove()
+  document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.remove()
 }
 
 const BASE_CSP = "default-src 'self'; frame-src 'self'; object-src 'none'"
@@ -37,7 +37,7 @@ describe('frameSrcFromMeta / tightenFrameSrcInMeta', () => {
     const next = tightenFrameSrcInMeta(document, ['https://mod.example.com'])
     expect(next).toContain("frame-src 'self' https://mod.example.com")
     expect(next).toContain("object-src 'none'")
-    expect(document.querySelector('meta[name="unself-csp-frame"]')!.getAttribute('content')).toBe(next)
+    expect(document.querySelector('meta[http-equiv="Content-Security-Policy"]')!.getAttribute('content')).toBe(next)
     cleanup()
   })
 
@@ -64,7 +64,7 @@ describe('applyRegistryFrameOrigins（拉取 + 收紧；失败 fail-closed 不�
       vi.fn(async () => new Response(JSON.stringify(['https://mod.example.com']), { status: 200 })),
     )
     await applyRegistryFrameOrigins(document)
-    expect(document.querySelector('meta[name="unself-csp-frame"]')!.getAttribute('content')).toContain(
+    expect(document.querySelector('meta[http-equiv="Content-Security-Policy"]')!.getAttribute('content')).toContain(
       'https://mod.example.com',
     )
     vi.unstubAllGlobals()
@@ -76,13 +76,13 @@ describe('applyRegistryFrameOrigins（拉取 + 收紧；失败 fail-closed 不�
     docWith(BASE_CSP)
     vi.stubGlobal('fetch', vi.fn(async () => new Response('boom', { status: 500 })))
     await applyRegistryFrameOrigins(document)
-    expect(document.querySelector('meta[name="unself-csp-frame"]')!.getAttribute('content')).toBe(BASE_CSP)
+    expect(document.querySelector('meta[http-equiv="Content-Security-Policy"]')!.getAttribute('content')).toBe(BASE_CSP)
 
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new Error('network down')
     }))
     await applyRegistryFrameOrigins(document)
-    expect(document.querySelector('meta[name="unself-csp-frame"]')!.getAttribute('content')).toBe(BASE_CSP)
+    expect(document.querySelector('meta[http-equiv="Content-Security-Policy"]')!.getAttribute('content')).toBe(BASE_CSP)
     vi.unstubAllGlobals()
     cleanup()
   })
