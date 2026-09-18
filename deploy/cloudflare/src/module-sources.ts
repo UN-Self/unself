@@ -21,6 +21,7 @@ import {
 } from '@unself/contracts';
 import { buildLockPlan, formatIntegrityFailures, manifestHashOf, verifyLockIntegrity, type LockFile, type LockPlan } from './lock';
 import { downloadTo, extractTarball, fileStage, githubResolve, npmResolve, parseSource } from './sources';
+import { builtinModuleDir, type ArtifactRoots } from './artifacts';
 
 /** 单个来源模块的解析产物。 */
 export interface SourcedModule {
@@ -104,6 +105,8 @@ export async function resolveSources(input: {
   /** 漂移已确认（-y / 交互确认后）。false 且有漂移 → 抛错并列 diff。 */
   confirmed?: boolean;
   log?: (msg: string) => void;
+  /** 产物根（#257）：`official:` 来源改从 `<artifacts>/modules/<name>` 取包（与 builtin 包同源）。 */
+  artifacts?: ArtifactRoots | null;
   /** 测试注入口：替换默认的远端抓取（npmResolve/downloadTo/githubResolve）。 */
   fetchers?: {
     npm?: typeof npmResolve;
@@ -134,7 +137,8 @@ export async function resolveSources(input: {
           lock: input.lock,
           rootDir: input.rootDir,
           outDir: input.outDir,
-          fetchers: input.fetchers,
+          ...(input.artifacts !== undefined ? { artifacts: input.artifacts } : {}),
+          ...(input.fetchers ? { fetchers: input.fetchers } : {}),
           log,
         });
         sourced.push(mod);
@@ -176,6 +180,7 @@ async function resolveOne(input: {
   lock: LockFile;
   rootDir: string;
   outDir: string;
+  artifacts?: ArtifactRoots | null;
   fetchers?: {
     npm?: typeof npmResolve;
     download?: typeof downloadTo;
@@ -189,9 +194,9 @@ async function resolveOne(input: {
   const stageRoot = join(outDir, 'module-sources', item.id);
   await mkdir(stageRoot, { recursive: true });
 
-  // ---- builtin：仓库 modules/<id> 直接当包根（不走暂存）----
+  // ---- builtin：模块包目录直接当包根（产物形态 = <artifacts>/modules/<id> 包；仓库形态 = rootDir/modules/<id> 源码）----
   if (source.startsWith('builtin:')) {
-    const dir = join(rootDir, 'modules', item.id);
+    const dir = builtinModuleDir({ rootDir, moduleId: item.id, artifacts: input.artifacts ?? null });
     if (!existsSync(dir)) {
       throw new Error(`builtin 模块目录不存在：${dir}`);
     }
@@ -228,8 +233,10 @@ async function resolveOne(input: {
 
   // ---- 取包（added / changed / reuse-but-evicted）----
   if (kind === 'official' || kind === 'file') {
-    // file:（与 official: 的仓库内取法一致）：本地目录直接用（唯一允许源码形态）
-    const rel = kind === 'file' ? parseSource(source).path! : `modules/${item.id}`;
+    // file:（与 official: 的取法一致）：本地目录直接用（file: 是唯一允许源码形态的本地路径）
+    const rel = kind === 'file'
+      ? parseSource(source).path!
+      : builtinModuleDir({ rootDir, moduleId: item.id, artifacts: input.artifacts ?? null });
     const staged = await fileStage({ path: rel, rootDir, log });
     const { manifest, text } = await readManifest(staged.packageDir);
     return {
