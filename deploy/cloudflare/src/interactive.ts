@@ -8,18 +8,26 @@
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { PassThrough } from 'node:stream';
+// 注入面（决策 #67）：TokenSource/PermissionProbeResult/RestClient 全部 type-only import——
+// 编译期擦除，零运行时依赖。绝不在此文件写运行时的跨模块 import（./auth 等）：
+// 裸 node 直跑 bin.ts 解析不了无后缀路径（ERR_MODULE_NOT_FOUND，实测）；依赖装配由调用方（main.ts）完成。
+import type { TokenSource } from './auth';
+import type { PermissionProbeResult } from './permissions';
+import type { RestClient } from './rest/client';
 
 /** CLI 参数（bin.ts 传入 process.argv.slice(2)）。 */
 export interface CliArgs {
   domain?: string;
   modules?: string[];
   yes: boolean;
+  /** --check-auth：只跑凭证解析与权限自检，不装配（#246 §5.5 ①前置）。 */
+  checkAuth?: boolean;
   /** 帮助/版本请求：bin.ts 短路打印后退出，不进入装配。 */
   info?: 'help' | 'version';
 }
 
 /** 已知参数拼写建议表（did-you-mean 用）。 */
-const KNOWN_FLAGS = ['--domain', '--modules', '--yes', '-y', '--help', '-h', '--version'] as const;
+const KNOWN_FLAGS = ['--domain', '--modules', '--yes', '-y', '--help', '-h', '--version', '--check-auth'] as const;
 
 /** 抛错型解析：未知参数是人输入的拼错（如 --domian=），静默忽略会把错误配置静默吞掉（#249）。 */
 export class UnknownFlagError extends Error {}
@@ -68,6 +76,8 @@ export function parseCliArgs(argv: string[]): CliArgs {
     } else if (raw.startsWith('--modules=')) {
       const v = raw.slice('--modules='.length).trim();
       args.modules = v === '' ? [] : v.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    } else if (raw === '--check-auth') {
+      args.checkAuth = true;
     } else if (raw === '--domain' || raw === '--modules') {
       throw new UnknownFlagError(`参数 ${raw} 需要等号取值：${raw}=<值>（如 --domain=team.example.com）`);
     } else {
@@ -89,11 +99,12 @@ export function usageText(version: string): string[] {
     '参数：',
     '  --domain=<域名>    自有域名（如 team.example.com）；缺省 = 交互选择或 workers.dev 免费域名',
     '  --modules=<a,b>    启用模块（逗号分隔）；缺省 = 交互确认或配置文件值',
+    '  --check-auth      只跑凭证解析与权限自检后退出（0=可开跑，1=缺凭证/缺权限），不装配',
     '  -y, --yes          静默模式：跳过全部提问（CI 用），缺省值取配置文件',
     '  -h, --help         显示本帮助后退出（不部署）',
     '  --version          显示版本号后退出（不部署）',
     '',
-    '凭证：优先环境变量 CLOUDFLARE_API_TOKEN；未设置时交互粘贴（仅本次进程内存，不落盘）。',
+    '凭证：优先环境变量 CLOUDFLARE_API_TOKEN；未设置时 TTY 交互粘贴（仅本次进程内存，不落盘），或借用已登录 wrangler 的 OAuth 令牌。',
     '文档：docs/deploy.md（失败三要素 / 域名与 DNS 说明）。',
   ];
 }
@@ -396,4 +407,85 @@ export async function collectToken(io: { out: (line: string) => void }, ttyIn: b
 /** TTY 探测（测试经参数/tty 注入，不直接依赖此函数）。 */
 export function isTty(): boolean {
   return process.stdout.isTTY === true;
+}
+
+/** 图形环境触点（注入面；缺省回落 process.env 的对应键）。 */
+export interface CallbackEnvProbe {
+  /** X11 display（DISPLAY）。 */
+  display?: string;
+  /** Wayland display（WAYLAND_DISPLAY）。 */
+  wayland?: string;
+  /** SSH 会话标识（SSH_CONNECTION）：非空 = 远程 shell，本机浏览器环境不可达。 */
+  ssh?: string;
+  /** 浏览器重定向（BROWSER）：远程机也可有。 */
+  browserEnv?: string;
+}
+
+/**
+ * OAuth 回调可达性预探（#246 决策 #67：只探 2 项之二；不新增平台分支函数，WSL 就是 Linux）。
+ * 判定（仅看注入值，不做 I/O）：
+ * - display 或 wayland 非空 → 本机图形会话，浏览器回调可达；
+ * - 两者全空但 browserEnv 非空 → BROWSER 指向了可用浏览器/转发（如 Windows 侧 wslview），可达；
+ * - 全空且 ssh 非空 → 远程 shell 无图形，wrangler login 开不出浏览器：给出 API Token/设备码指引；
+ * - 全空且无 ssh → 视为桌面直连机，可达（不做更深的探测——只探 2 项，决策 #67）。
+ * 参数缺省才回落 process.env（真实触点只在生产路径发生一次）；全部经参数注入在 Linux 上测（含 win32/darwin 注入用例）。
+ */
+export function oauthCallbackReachable(io?: CallbackEnvProbe): boolean {
+  const env = process.env;
+  const display = io?.display ?? env.DISPLAY;
+  const wayland = io?.wayland ?? env.WAYLAND_DISPLAY;
+  const ssh = io?.ssh ?? env.SSH_CONNECTION;
+  const browserEnv = io?.browserEnv ?? env.BROWSER;
+  if (display || wayland) return true;
+  if (browserEnv) return true;
+  return !ssh; // 全空：远程 shell 不可达；无 ssh 视为桌面 → 可达
+}
+
+/** authPreflight 依赖注入面（测试替身直测纯函数，不碰真终端/真网络）。 */
+export interface AuthPreflightDeps {
+  /** 凭证解析（auth.ts resolveAuth；注入替身）。 */
+  resolveAuth: () => Promise<TokenSource | null>;
+  /** 权限探测（permissions.ts probePermissions；仅 cred 就绪后调用）。 */
+  probePermissions: (client: RestClient) => Promise<PermissionProbeResult>;
+  /** 报告行输出（人话；不含 token 明文——TokenSource.note 本就不含值）。 */
+  log: (msg: string) => void;
+  /** 无浏览器环境 + 无凭证的退出指引（TTY 时调用方在 prefight 前保留粘贴交互，见 main.ts）。 */
+  out: (line: string) => void;
+}
+
+/**
+ * 开跑前凭证 + 权限编排（§5.5 ①前置；main.ts --check-auth 与正常路径共用）：
+ * ① resolveAuth → null：无凭证 → 打印无浏览器环境指引（含 API Token 深链接）后返回 { outcome: 'no-credentials' }
+ *   （调用方 exit 1，不装配）；OAuth 借用产生的版本警告（cred.warning）原样转达人话，不打印 token。
+ * ② cred 就绪：new RestClient + probePermissions + 报告逐行打印（渲染形状同 describePermissions）；
+ *   全绿 → { outcome: 'ok' }（开跑）；缺项 → { outcome: 'missing', result, deepLink }（调用方 exit 1）。
+ * 不做设备码流程实现（本阶段边界）：只给人话指引。
+ */
+export async function authPreflight(deps: AuthPreflightDeps): Promise<
+  | { outcome: 'ok'; result: PermissionProbeResult }
+  | { outcome: 'no-credentials' }
+  | { outcome: 'missing'; result: PermissionProbeResult; deepLink: string }
+> {
+  const cred = await deps.resolveAuth();
+  if (!cred) {
+    deps.out('无浏览器环境（SSH 远程会话且无 DISPLAY/WAYLAND/BROWSER）：wrangler login 的浏览器授权在此开不出来。');
+    deps.out('两条路：');
+    deps.out(`  ① API Token（零工具链）：打开 ${buildTokenDeepLink()} → 权限已预选，点两次创建；`);
+    deps.out('     然后 export CLOUDFLARE_API_TOKEN=<粘贴> 重跑（Web 向导用户把 token 粘到向导的密码框）。');
+    deps.out('  ② 设备码：在有浏览器的机器上跑 `wrangler login` 完成授权，再回本机重跑（本工具借用其 OAuth 令牌）。');
+    return { outcome: 'no-credentials' };
+  }
+  deps.log(`凭证：${cred.note}`);
+  if (cred.warning) deps.log(cred.warning);
+  const { RestClient } = await import('./rest/client');
+  const result = await deps.probePermissions(new RestClient({ token: cred.token }));
+  // 渲染同 permissions.describePermissions 的行形状（本文件不运行时 import permissions——裸 node 无后缀 import 会炸）
+  for (const line of result.lines) deps.log(line);
+  if (result.ok) {
+    deps.log('权限自检通过：以上能力足够装配。');
+    return { outcome: 'ok', result };
+  }
+  deps.log(`权限自检未通过，缺 ${result.missing.length} 项（开跑前拦下）：`);
+  for (const m of result.missing) deps.log(`  · ${m}`);
+  return { outcome: 'missing', result, deepLink: buildTokenDeepLink() };
 }
