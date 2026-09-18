@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createInstanceDir, instanceLayout, INSTANCE_DIR_NAME, loadInstance } from '../src/lib/dir';
+import { createInstanceDir, deriveNamespace, instanceLayout, INSTANCE_DIR_NAME, loadInstance } from '../src/lib/dir';
 
 let root: string;
 
@@ -36,6 +36,9 @@ describe('createInstanceDir', () => {
     expect(config).toContain('"domain": ""');
     expect(config).toContain('"modules": ["hello"]');
     expect(config).toContain('"provider": "r2"');
+    // #272：命名空间落成显式字段（从实例目录名派生）
+    expect(config).toContain(`"namespace": "${deriveNamespace(root.split('/').pop() as string)}"`);
+    expect(res.namespace).toBe(deriveNamespace(root.split('/').pop() as string));
 
     const lock = JSON.parse(readFileSync(res.layout.lockPath, 'utf8')) as Record<string, unknown>;
     expect(lock).toEqual({ lockVersion: 1, instance: {}, modules: [] });
@@ -44,6 +47,20 @@ describe('createInstanceDir', () => {
   it('opts.modules 覆盖默认模块列表', () => {
     const res = createInstanceDir(root, { modules: ['notes'] });
     expect(readFileSync(res.layout.configPath, 'utf8')).toContain('"modules": ["notes"]');
+  });
+
+  it('#272 deriveNamespace：非法字符转 -、去首尾/重复、空回退 unself、限长', () => {
+    expect(deriveNamespace('mysite')).toBe('mysite');
+    expect(deriveNamespace('My Site')).toBe('my-site');
+    expect(deriveNamespace('--a--b--')).toBe('a-b');
+    expect(deriveNamespace('   ')).toBe('unself');
+    expect(deriveNamespace('x'.repeat(60)).length).toBeLessThanOrEqual(40);
+  });
+
+  it('#272 显式 opts.namespace 写进配置', () => {
+    const res = createInstanceDir(root, { namespace: 'custom-ns' });
+    expect(res.namespace).toBe('custom-ns');
+    expect(readFileSync(res.layout.configPath, 'utf8')).toContain('"namespace": "custom-ns"');
   });
 
   it('幂等：二跑不覆盖用户手改的 config 与已有 lock', () => {

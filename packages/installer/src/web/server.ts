@@ -52,6 +52,10 @@ export interface WizardDeps {
     storageChoices?: Record<string, string>;
     storage: { provider: 'r2'; bucket: string };
     onEvent: (text: string) => void;
+    /** 向导①粘贴的 token（#272）：只进本次部署调用内存，不落盘不回显。 */
+    token?: string;
+    /** 撞车守卫放行开关（#272）：④ 显式勾选「允许接管」。 */
+    allowAdopt?: boolean;
   }) => Promise<{ baseUrl: string; setupToken: string | null }>;
   /**
    * 模块存储声明投影（#55）：③½ 渲染单选 + accepts 校验的依据。
@@ -133,6 +137,21 @@ function authDetails(hint: WizardEnvHint): string {
 </details>`;
 }
 
+/** 资源名预览段（#272）：本实例会占用的 CF 资源名（只读；只展示，不影响装配决策）。 */
+function resourceNamesSection(state: WizardState): string {
+  if (state.resourceNames.length === 0) return '';
+  const rows = state.resourceNames
+    .map((r) => `<li><code>${r.name}</code><span class="kind">${r.kind}</span></li>`)
+    .join('\n    ');
+  return `<section>
+  <h2>本实例资源名</h2>
+  <p>这些名字会在你的 Cloudflare 账户里创建/绑定；与其他实例靠命名空间隔离。</p>
+  <ul class="res-names">
+    ${rows}
+  </ul>
+</section>`;
+}
+
 /** ③½ 存储选择段（#55）：逐模块单选 + shared 知情同意。无可选模块（全 core）时整段省略。 */
 function storageSection(state: WizardState): string {
   const options: WizardStorageOption[] = state.storageOptions;
@@ -197,6 +216,8 @@ export function renderPage(state: WizardState, envHint: WizardEnvHint): string {
   .ok { color: var(--unself-color-success); }
   details.auth-fold { border: 1px solid var(--unself-color-border); border-radius: var(--unself-radius-md); padding: var(--unself-space-2) var(--unself-space-3); margin: var(--unself-space-2) 0; }
   details.auth-fold summary { cursor: pointer; color: var(--unself-color-info); }
+  ul.res-names { padding-left: 1.2rem; }
+  ul.res-names .kind { color: var(--unself-color-info); margin-left: .6rem; }
 </style>
 </head>
 <body>
@@ -229,9 +250,11 @@ ${banner}
   <button type="submit">下一步</button> <span class="err" id="err-modules"></span></form>
 </section>
 ${storageSection(state)}
+${resourceNamesSection(state)}
 <section>
   <h2>④ 装配</h2>
   <p id="confirm-line">域名：${state.domainChoice === 'custom' ? state.domain : 'workers.dev 免费域'}；模块：${state.modules.join('、')}</p>
+  <label class="consent"><input type="checkbox" id="allow-adopt"> 允许接管既有同名资源（撞车守卫放行，仅在确认这些资源确属本实例时勾选）</label>
   <button id="btn-deploy" type="button">开始装配（九步）</button>
   <pre id="events"></pre>
   <p class="err" id="err-deploy"></p>
@@ -275,7 +298,8 @@ $('btn-storage')?.addEventListener('click', async () => {
 });
 $('btn-deploy').addEventListener('click', async () => {
   $('btn-deploy').disabled = true;
-  const r = await post('/api/step4', {});
+  const allowAdopt = document.getElementById('allow-adopt')?.checked ?? false;
+  const r = await post('/api/step4', { allowAdopt });
   if (!r.ok) { showErr('err-deploy', r.data.problem); $('btn-deploy').disabled = false; return; }
   const es = new EventSource('/api/events');
   es.onmessage = (m) => { $('events').textContent += m.data + '\\n'; };
@@ -295,6 +319,9 @@ export function createWizardServer(opts: ServeOptions): Server {
   const { deps } = opts;
   // 宿主环境提示：初始由 deps 注入（#246）；② 选自有域后就地更新 needsTotalTls，不改调用方对象。
   let envHint = resolveEnvHint(deps);
+  // 向导①粘贴的 token（#272）：只活在本次服务进程内存（不写 state、不进 /api/state、不落盘不回显）。
+  // ⑥ 重跑（reset）时清空，与状态机「token 明文不留存」语义一致。
+  let sessionToken: string | null = null;
   const sseClients = new Set<ServerResponse>();
   const broadcast = (text: string): void => {
     for (const res of sseClients) {
@@ -347,6 +374,8 @@ export function createWizardServer(opts: ServeOptions): Server {
             json(res, 400, { problem: r.problem });
             return;
           }
+          // #272 接线：token 只留在本次服务内存（sessionToken），由 ④ 部署调用传给引擎（此前只置 hasToken，从未传给引擎）。
+          sessionToken = String(body.token ?? '').trim();
           deps.setState(r.state);
           json(res, 200, { step: r.state.step });
           return;
@@ -418,6 +447,9 @@ export function createWizardServer(opts: ServeOptions): Server {
           }
           // ⑥ 幂等重跑：failed/done 重开前先 reset 回干净状态（token 明文本就不留存，重填）。
           const base = state.step === 'ready' ? state : resetWizard(state);
+          if (state.step !== 'ready') sessionToken = null; // reset 连带丢弃上一轮粘贴的 token
+          const body = await readJsonBody(req);
+          const allowAdopt = body.allowAdopt === true;
           const st = beginDeploy({ ...base, hasToken: true, domainChoice: base.domainChoice ?? (base.domain ? 'custom' : 'workers') });
           deps.setState(st);
           void deps
@@ -426,6 +458,8 @@ export function createWizardServer(opts: ServeOptions): Server {
               modules: st.modules,
               storageChoices: Object.keys(st.storageChoices).length > 0 ? { ...st.storageChoices } : undefined,
               storage: { provider: 'r2', bucket: 'unself-storage' },
+              ...(sessionToken ? { token: sessionToken } : {}),
+              ...(allowAdopt ? { allowAdopt: true } : {}),
               onEvent: (text) => {
                 // pushEvent 原地追加到当前状态（返回值是事件对象，不是状态——不能拿去 setState）。
                 const cur = deps.getState();

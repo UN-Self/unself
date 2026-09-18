@@ -42,6 +42,9 @@ const CONFIG_TEMPLATE = `// SPDX-License-Identifier: AGPL-3.0-only
 {
   // 实例对外域名；留空/省略 → 用 <worker>.workers.dev 临时域（#15 验收路径）
   "domain": "",
+  // 资源命名空间（#272）：CF 资源名前缀（<namespace>-core / <namespace>-core-api / <namespace>-storage）。
+  // 同一 CF 账户多实例靠它隔离；改动会让已部署资源变成孤儿（需显式 --allow-adopt 接管）。
+  "namespace": "__NAMESPACE__",
   // 选中启用的模块（未列出的已存在模块注册表翻转 not_deployed）
   "modules": ["hello"],
   // 对象存储：r2（脚本建桶）或 s3（外部 S3/MinIO 参数）
@@ -62,6 +65,27 @@ const LOCK_SKELETON = JSON.stringify(
 export interface CreateInstanceDirOptions {
   /** 写入默认配置的启用模块列表，默认 ["hello"] */
   modules?: string[];
+  /**
+   * 资源命名空间（#272）：写入 unself.config.jsonc 的 `namespace` 字段。
+   * 缺省 = 从实例目录名派生（`mysite` → `mysite`；非法字符转 `-`）。
+   */
+  namespace?: string;
+}
+
+/** 命名空间形态（与引擎 naming.NAMESPACE_RE 同源；一致性由测试锁住）。 */
+const NAMESPACE_RE = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
+
+/** 由实例名派生合法命名空间（小写、非法字符转 `-`、去首尾/重复 `-`、限长 40；空则回退 `unself`）。 */
+export function deriveNamespace(instanceName: string): string {
+  const cleaned = instanceName
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/g, '');
+  const candidate = cleaned.length > 0 ? cleaned : 'unself';
+  return NAMESPACE_RE.test(candidate) ? candidate : 'unself';
 }
 
 export interface CreateInstanceDirResult {
@@ -70,6 +94,8 @@ export interface CreateInstanceDirResult {
   configCreated: boolean;
   /** 本次运行是否新写入了锁骨架（false = 已存在） */
   lockCreated: boolean;
+  /** 写入配置的命名空间（#272；config 已存在时为 undefined——保留用户手改）。 */
+  namespace?: string;
 }
 
 /**
@@ -85,13 +111,18 @@ export function createInstanceDir(
   const layout = instanceLayout(chosenDir);
   mkdirSync(layout.generatedDir, { recursive: true });
 
+  // 命名空间（#272）：显式给或从实例目录名派生（实例名 = basename(chosenDir)，与 loadInstance 一致）。
+  const namespace = opts.namespace ?? deriveNamespace(basename(resolve(chosenDir)));
+
   const configCreated = !existsSync(layout.configPath);
   if (configCreated) {
     const modules = opts.modules ?? ['hello'];
-    const body = CONFIG_TEMPLATE.replace(
-      '"modules": ["hello"]',
-      `"modules": [${modules.map((m) => `"${m}"`).join(', ')}]`,
-    );
+    const body = CONFIG_TEMPLATE
+      .replace('"__NAMESPACE__"', `"${namespace}"`)
+      .replace(
+        '"modules": ["hello"]',
+        `"modules": [${modules.map((m) => `"${m}"`).join(', ')}]`,
+      );
     writeFileSync(layout.configPath, body);
   }
 
@@ -100,7 +131,12 @@ export function createInstanceDir(
     writeFileSync(layout.lockPath, LOCK_SKELETON);
   }
 
-  return { layout, configCreated, lockCreated };
+  return {
+    layout,
+    configCreated,
+    lockCreated,
+    ...(configCreated ? { namespace } : {}),
+  };
 }
 
 export interface LoadedInstance {
