@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * check-migrations-upgrade：跨版本迁移闸门（issue #195 机制③）。
+ * check-migrations-upgrade：跨版本迁移闸门（issue #195 机制③；#248 自动发现）。
  *
  * 背景（AGENTS.md 已知坑 + docs/testing.md「跨版本升级要测」）：
  *   wrangler d1 migrations 按**文件名**记账（d1_migrations 表）——已应用过的旧文件
@@ -13,36 +13,25 @@
  *
  * 本脚本用 node:sqlite（Node ≥ 22 内置，零依赖）模拟老库升级路径，对每个迁移目录：
  *   1. 对每个「切断点 k」（1 ≤ k ≤ N-1）：先按文件名序应用前 k 个迁移 = 老库；
- *   2. 在老库里写入既有数据（每张表一行代表性老数据，见 seedLegacyRows）；
+ *   2. 在老库里写入既有数据（每张表一行代表性老数据，见 LEGACY_SEEDS）；
  *   3. 再继续应用第 k+1..N 个迁移 = 模拟 `d1 migrations apply` 升级；
- *   4. 断言升级不抛错，且 d1_migrations 记账与文件一一对应。
+ *   4. 断言升级不抛错，且记账与文件一一对应。
  *   切断点覆盖「任意历史版本升级到最新」；比「只测 0.1.0 → 当前」更强。
  *
- * 注意：这里**不用** d1_migrations 表记账（那是 wrangler 的实现细节）——脚本
- * 直接按文件名序逐个执行，等价于「文件名记账跳过已应用」语义：升级路径 = 从未
- * 执行过的文件接着执行。仓库没有 ALTER 型迁移（升级纪律：新迁移一律新表/新索引），
- * 若未来引入 ALTER，须同步更新 seedLegacyRows 与本脚本的兼容性断言。
+ * 目录发现（#248）：**自动遍历**仓库内全部「migrations」目录（modules/<id>/migrations/<id>/、
+ * services 下的 migrations 目录）——新模块带 migrations/ 目录进仓即入闸门，
+ * 无需改本脚本。红灯验证：把 DISCOVER 换回硬编码清单 → 新模块断言必红。
  *
  * 退出码：全部通过 = 0；任何切断点失败 = 1（CI 闸门）。
  */
 import { DatabaseSync } from 'node:sqlite';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url)); // scripts/ 的上一级 = 仓库根
 
-/** 受闸门的迁移目录（相对仓库根）。modules 库新模块接入时在此追加。 */
-const MIGRATION_DIRS = [
-  'services/core-api/migrations/core',
-  'modules/hello/migrations/hello',
-];
-
-/**
- * 老库既有数据（代表性行）：升级必须能在这些行上跑通。
- * 列名与 NOT NULL 约束以各迁移文件为准；只填必填列 + 迁移语义关键列。
- * 若新迁移给老表加约束（如 UNIQUE），这里的老数据就是它的第一道红/绿灯。
- */
+/** 老库既有数据（代表性行）：升级必须能在这些行上跑通。 */
 const LEGACY_SEEDS = {
   'services/core-api/migrations/core': {
     // users（0001）：老数据含大写 email——0007 若加 lower(email) 唯一索引，重复大小写变体必须先归一
@@ -85,6 +74,40 @@ const LEGACY_SEEDS = {
   },
 };
 
+/**
+ * 自动发现受闸门的迁移目录（#248）：自动遍历仓库内的「migrations」目录。
+ * 规则：目录名 migrations 下一层子目录（按模块 id 分组）各为一个受闸门单元；
+ * 兼容「包根直放」形态（migrations 下直接是 .sql，无 id 子目录）→ 目录本身即单元。
+ */
+function discoverMigrationDirs() {
+  const dirs = [];
+  const scan = (rel) => {
+    const abs = join(ROOT, rel);
+    if (!existsSync(abs)) return;
+    for (const entry of readdirSync(abs, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+      const child = join(abs, entry.name);
+      const relChild = `${rel}/${entry.name}`;
+      if (entry.name === 'migrations') {
+        // 候选迁移根：子目录逐个入闸门；无子目录且含 .sql → 根自身入闸门
+        const inner = readdirSync(child, { withFileTypes: true });
+        const subDirs = inner.filter((e) => e.isDirectory());
+        const hasSql = inner.some((e) => e.isFile() && e.name.endsWith('.sql'));
+        if (subDirs.length === 0 && hasSql) {
+          dirs.push(relChild);
+        } else {
+          for (const sub of subDirs) dirs.push(`${relChild}/${sub.name}`);
+        }
+        continue;
+      }
+      scan(relChild); // 继续下钻找 migrations/（两层足够：services/core-api、modules/<id>）
+    }
+  };
+  scan('.');
+  return dirs.sort();
+}
+
 /** 按文件名序读迁移文件（与 wrangler d1 migrations 的应用序一致）。 */
 function readMigrations(dir) {
   const abs = join(ROOT, dir);
@@ -106,7 +129,7 @@ function tableExists(db, table) {
 
 /** 在老库种既有数据：只种当前 schema 已有的表（多余种子会被跳过并留档）。 */
 function seedLegacyRows(db, dir, label) {
-  const seeds = LEGACY_SEEDS[dir] ?? {};
+  const seeds = LEGACY_SEEDS[dir.replace(/^\.\//, '')] ?? {}; // seeds 键不带 ./ 前缀
   let seeded = 0;
   let skipped = 0;
   for (const [table, inserts] of Object.entries(seeds)) {
@@ -129,7 +152,7 @@ function checkDir(dir) {
   const n = migrations.length;
   console.log(`\n▣ ${dir}（${n} 个迁移文件）`);
   if (n < 2) {
-    console.log('  只有 1 个迁移文件：无升级路径可测（全新库路径由 migrations.test.ts 覆盖）');
+    console.log('  只有 1 个迁移文件：无升级路径可测（全新库路径由各包测试覆盖）');
     return true;
   }
 
@@ -158,6 +181,10 @@ function checkDir(dir) {
 }
 
 // ---- 入口 ----
+const MIGRATION_DIRS = discoverMigrationDirs();
+console.log('受闸门的迁移目录（自动发现）：');
+for (const dir of MIGRATION_DIRS) console.log(`  - ${dir}`);
+
 let ok = true;
 for (const dir of MIGRATION_DIRS) {
   if (!checkDir(dir)) ok = false;
