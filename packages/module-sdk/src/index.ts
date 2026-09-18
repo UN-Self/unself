@@ -13,3 +13,5 @@ export { createCoreApiStorage, createModuleStorage, createD1Storage } from './st
 // 跨域模块的「模块 → core」通道（决策 #63）：coreOrigin 必填禁 '*'，fetch 以壳 origin 为基准。
 export { createModuleApi, assertCoreOrigin } from './module-api';
 export type { CreateModuleApiOptions, ModuleApi, ModuleApiFetcher, ModuleApiPath } from './module-api';
+// 壳 origin 解析（#277）：workers.dev 跨子域 iframe 下模块据此取 coreOrigin，不再写死 location.origin。
+export { resolveShellOrigin, SHELL_ORIGIN_META_NAME } from './shell-origin';
