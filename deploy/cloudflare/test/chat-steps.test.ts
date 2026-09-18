@@ -58,7 +58,7 @@ async function discoverIds(rootDir: string, selected: string[]): Promise<string[
 }
 
 describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
-  it('专属 D1/KV/R2 补建请求在场；chat 不进记账迁移链、基线 schema import 灌入', { timeout: 120_000 }, async () => {
+  it('专属 D1/KV/R2 补建请求在场；chat 走**通用 dedicated 迁移链**（独立记账 + 基线 import）', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake();
     await runNineSteps({
       rootDir: ROOT,
@@ -72,8 +72,10 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     expect(fake.state.d1.has(CHAT_DB_NAME)).toBe(true);
     expect(fake.state.kv.has(CHAT_KV_NAME)).toBe(true);
     expect(fake.state.buckets.has(CHAT_R2_NAME)).toBe(true);
-    // ② chat 不走记账迁移链（豁免纪律）：无 unself_migrations_chat 记账表；chat 库的 import 只灌基线 schema
-    expect(fake.state.ledgerTables.has('unself_migrations_chat')).toBe(false);
+    // ② #248 存储面去豁免：chat 与任何 dedicated 模块同一条链——独立记账表 unself_migrations_chat
+    //    + 基线 schema（migrations/chat/0001_baseline.sql）按文件 import，记账名即模块 id。
+    expect(fake.state.ledgerTables.has('unself_migrations_chat')).toBe(true);
+    expect([...fake.state.ledgerRows.get('unself_migrations_chat') ?? []]).toEqual(['0001_baseline.sql']);
     expect(fake.state.importEtags.size).toBeGreaterThanOrEqual(1);
     expect(fake.state.registry.get('chat')).toBeDefined();
   });

@@ -22,7 +22,7 @@ import {
   type Provisioned,
 } from './assemble';
 import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type ModuleRef, type NormalizedModuleEntry, type UnselfConfig } from './config';
-import { CONTRACT_VERSION, ModuleManifestSchema } from '@unself/contracts';
+import { CONTRACT_VERSION, ModuleManifestSchema, type ModuleManifest } from '@unself/contracts';
 import { LOCK_FILENAME, emptyLock, parseLockText, serializeLock, manifestHashOf, type LockFile } from './lock';
 import { lockRecordFrom, resolveSources } from './module-sources';
 import { createCoreControlPlane } from './control-plane';
@@ -64,6 +64,7 @@ import {
   migrationFailure,
   readSqlFiles,
   storageLevelFor,
+  type StorageLevel,
 } from './migrate';
 import { buildChatFrontendAssets } from './chat-frontend';
 import { buildManifestSnapshot } from './registry';
@@ -128,6 +129,51 @@ export async function discoverModules(
     }
   }
   return refs;
+}
+
+/**
+ * 模块的存储落点（#248）：sourced 包用解析产物里的 manifest；**builtin 模块读盘上的 manifest.yaml**
+ * ——不读就会把 hello/chat 全默认成 core（落点判定失守，chat 的 dedicated 被静默降级）。
+ * 结果缓存：步骤②（迁移）与步骤④（绑定/生成配置）必须用同一个落点，避免两处各读一次走偏。
+ */
+interface StoragePlan {
+  level: StorageLevel;
+  /** 模块 manifest（builtin 从 manifest.yaml 解析；sourced 用解析产物）——shared 护栏②的 tables 来自这里。 */
+  manifest?: ModuleManifest;
+}
+
+/** 单个模块的落点计划：sourced 用解析产物；builtin 读盘上 manifest.yaml（不读就会被默认成 core）。 */
+async function storagePlanOf(mod: ModuleRef): Promise<StoragePlan> {
+  if (mod.resolved) {
+    return {
+      level: storageLevelFor({ manifest: mod.resolved.manifest, id: mod.id }),
+      manifest: mod.resolved.manifest,
+    };
+  }
+  const yaml = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
+  const manifest = ModuleManifestSchema.parse(
+    buildManifestSnapshot({ manifestText: yaml, moduleId: mod.id, baseUrl: '' }),
+  );
+  return { level: storageLevelFor({ manifest, id: mod.id }), manifest };
+}
+
+async function storagePlansFor(modules: ModuleRef[]): Promise<Map<string, StoragePlan>> {
+  const out = new Map<string, StoragePlan>();
+  for (const mod of modules) {
+    if (mod.resolved) {
+      out.set(mod.id, {
+        level: storageLevelFor({ manifest: mod.resolved.manifest, id: mod.id }),
+        manifest: mod.resolved.manifest,
+      });
+      continue;
+    }
+    const yaml = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
+    const manifest = ModuleManifestSchema.parse(
+      buildManifestSnapshot({ manifestText: yaml, moduleId: mod.id, baseUrl: '' }),
+    );
+    out.set(mod.id, { level: storageLevelFor({ manifest, id: mod.id }), manifest });
+  }
+  return out;
 }
 
 /** 多级子域判定：Universal SSL 只覆盖 apex + 一级通配（*.zone），更深的需要 Total TLS。 */
@@ -226,6 +272,9 @@ export async function runNineSteps(input: {
   const entries = normalizeModuleEntries(config.modules);
   const modules = await discoverModules(rootDir, moduleIds(entries), entries);
   const selected = modules.filter((m) => m.selected);
+  // 数据落点（#248 四级）：声明来自模块 manifest（builtin 读盘 / sourced 用解析产物），
+  // 用户选择覆写在 config 条目的 storage.declaration（契约层已保证 ∈ accepts）。
+  const storagePlans = await storagePlansFor(selected.filter((m) => m.dir));
   validateS3Storage(config);
   /** chat 密钥环动作（选中 chat 时在步骤④赋值；未选中 undefined）。 */
   let chatKeyringAction: 'created' | 'existing' | undefined;
@@ -285,8 +334,13 @@ export async function runNineSteps(input: {
       });
     }
   }
-  for (const mod of selected) {
-    const level = storageLevelFor({ manifest: mod.resolved?.manifest, id: mod.id });
+  /**
+   * 单个模块的落点迁移（#248）：core/external 无事；shared 走三护栏 + 共享库；dedicated 走专属库。
+   * 抽成闭包是为了 sourced 模块能在**来源解析之后**补跑一趟（解析前 mod.dir 还空，读不到 manifest 与 migrations/）。
+   */
+  const applyModuleStorage = async (mod: ModuleRef): Promise<void> => {
+    const plan = mod.dir ? await storagePlanOf(mod) : storagePlans.get(mod.id);
+    const level: StorageLevel = plan?.level ?? 'core';
     if (mod.id === CHAT_MODULE_ID && chatResources) {
       // chat（#74/#248 普通化）：专属库在步骤①建（`unself-chat`），这里把 id 记进落点表——
       // 之后与任何 dedicated 模块走**同一条**通用迁移链（migrations/chat/0001_baseline.sql +
@@ -296,11 +350,11 @@ export async function runNineSteps(input: {
     }
     if (level === 'core') {
       rep.log(`模块 ${mod.id} 落点 core：数据经 Core API 代理，无模块建表`);
-      continue;
+      return;
     }
     if (level === 'external') {
       rep.log(`模块 ${mod.id} 落点 external：自备外部库，装配器不接线（连接串走配置页）`);
-      continue;
+      return;
     }
     const migDir = migrationDirFor(mod.dir, mod.id);
     const files = await readSqlFiles(migDir);
@@ -309,7 +363,7 @@ export async function runNineSteps(input: {
         `模块 ${mod.id} 落点 ${level}（自建表）但包内没有 migrations/${mod.id}/ 迁移文件——装一半的库没人受益，先补迁移再装`,
       );
     }
-    const manifest = mod.resolved?.manifest;
+    const manifest = plan?.manifest;
     const tables = manifest?.tables ?? [];
     if (level === 'shared') {
       // shared 三护栏③：命名前缀 + 禁止跨模块外键（装配时硬校验，违者停住）；
@@ -355,6 +409,9 @@ export async function runNineSteps(input: {
       // 逐文件重放全部成功（竞态/瞬时差异）→ 保留原始错误上下文人话化
       throw migrationFailure({ moduleId: mod.id, file: pending[pending.length - 1]?.name ?? '(未知)', sql: pending[pending.length - 1]?.sql ?? '', cause: err });
     }
+  };
+  for (const mod of selected) {
+    if (mod.dir) await applyModuleStorage(mod);
   }
   // node:sqlite 探测（Docker 落点可用性预检；不可用给人话不崩——仅提示，不阻断 CF 部署）
   const sqlite = probeSqlite();
@@ -390,6 +447,11 @@ export async function runNineSteps(input: {
         ref.dir = mod.packageDir;
         ref.resolved = mod;
       }
+    }
+    // sourced 模块的落点迁移补跑（#248）：包落地后才有 manifest 与 migrations/，
+    // 与 builtin 走**同一套**落点逻辑与三护栏（不因为「来自包」而少一道）。
+    for (const mod of selected) {
+      if (mod.dir && mod.source) await applyModuleStorage(mod);
     }
   }
   // lock 记录（决策 #60「builtin 也进 lock」）：sourced 由解析产物生成；builtin 从 manifest.yaml 提取。
@@ -547,7 +609,7 @@ export async function runNineSteps(input: {
     // chat 包配置（DO 绑定 + 首部署 DO migrations 元数据）；readChatPackageConfig 已在步骤①通过形状检查
     const chatPkgMeta = isChat && chatPkg ? chatPkg : null;
     // 数据落点（#248）：shared 走 modules 库绑定；dedicated 额外绑专属库；core/external 仅 MODULES_DB
-    const modLevel = storageLevelFor({ manifest: mod.manifest, id: mod.id });
+    const modLevel: StorageLevel = storagePlans.get(mod.id)?.level ?? 'core';
     await writeConfig(
       join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`),
       isChat && chatResources && chatPkg
