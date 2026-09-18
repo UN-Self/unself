@@ -8,7 +8,7 @@
  */
 
 /** 向导步骤（①→⑥ 对应 auth→…→done/failed，reset 回 auth）。 */
-export type WizardStep = 'auth' | 'domain' | 'modules' | 'ready' | 'deploying' | 'done' | 'failed';
+export type WizardStep = 'auth' | 'domain' | 'modules' | 'storage' | 'ready' | 'deploying' | 'done' | 'failed';
 
 /** 失败三要素（语义同 deploy/cloudflare errors.advise）。 */
 export interface WizardError {
@@ -25,6 +25,21 @@ export interface WizardEvent {
   title?: string;
   text: string;
 }
+
+/** 数据四级（决策 #55）：模块存储落点词表。 */
+export type StorageLevel = 'core' | 'shared' | 'dedicated' | 'external';
+
+/** 模块存储声明（manifest.storage 的向导投影）：用户从 accepts 里选。 */
+export interface WizardStorageOption {
+  id: string;
+  accepts: StorageLevel[];
+  preferred?: StorageLevel;
+}
+
+/** 数据四级中需要知情同意的级别（#55：shared = 共享库完整访问权 + 零隔离）。 */
+export const SHARED_CONSENT_NOTE =
+  '该模块将在共享数据库中自建表：它将获得共享数据库的完整访问权（与其他模块零隔离）；' +
+  '表名以模块 id 为前缀，禁止跨模块外键（三护栏由装配器硬校验）。';
 
 /** 部署结果（⑤ 收尾：baseUrl + setup 深链）。 */
 export interface WizardResult {
@@ -59,13 +74,23 @@ export interface WizardState {
   domain: string;
   /** 确认启用的模块 id。 */
   modules: string[];
+  /** 模块存储声明投影（③ 步渲染单选；空 = 全部按 preferred ?? core）。 */
+  storageOptions: WizardStorageOption[];
+  /** 用户对每模块的存储选择（#55）；缺省模块 = preferred ?? core。 */
+  storageChoices: Record<string, StorageLevel>;
+  /** shared 知情同意已勾选（有模块选 shared 时必须 true 才能进 ④）。 */
+  sharedConsent: boolean;
   events: WizardEvent[];
   error: WizardError | null;
   result: WizardResult | null;
 }
 
 /** 初始状态（① auth）。instancePath 必填——页头常驻可见（决策 #53）。 */
-export function initialWizardState(instancePath: string, options?: { modules?: string[] }): WizardState {
+export function initialWizardState(
+  instancePath: string,
+  options?: { modules?: string[]; storageOptions?: WizardStorageOption[] },
+): WizardState {
+  const storageOptions = options?.storageOptions ?? [];
   return {
     step: 'auth',
     instancePath,
@@ -73,6 +98,9 @@ export function initialWizardState(instancePath: string, options?: { modules?: s
     domainChoice: null,
     domain: '',
     modules: options?.modules ?? ['hello'],
+    storageOptions,
+    storageChoices: {},
+    sharedConsent: false,
     events: [],
     error: null,
     result: null,
@@ -162,7 +190,39 @@ export function confirmModules(s: WizardState, modules: string[]): { state: Wiza
   for (const id of ids) {
     if (!/^[a-z][a-z0-9-]+$/.test(id)) return { state: s, problem: `模块 id 不合法：${id}（小写字母开头，小写字母/数字/连字符）` };
   }
-  return { state: { ...s, modules: ids, step: 'ready' }, problem: null };
+  return { state: { ...s, modules: ids, step: 'storage' }, problem: null };
+}
+
+/**
+ * ③½ 存储选择（#55）：逐模块从 accepts 里选；选了 accepts 之外 → 拒绝（不进 ④）。
+ * 有模块选 shared → 必须勾知情同意；未声明 storage 的模块固定 core。
+ */
+export function chooseStorage(
+  s: WizardState,
+  choices: Record<string, string>,
+  sharedConsent: boolean,
+): { state: WizardState; problem: string | null } {
+  const next: Record<string, StorageLevel> = {};
+  const LEVELS: StorageLevel[] = ['core', 'shared', 'dedicated', 'external'];
+  for (const opt of s.storageOptions) {
+    const raw = choices[opt.id] ?? opt.preferred ?? 'core';
+    if (!(LEVELS as string[]).includes(raw)) {
+      return { state: s, problem: `模块 ${opt.id} 的存储选择「${raw}」不是四级词表之一（core/shared/dedicated/external）` };
+    }
+    const level = raw as StorageLevel;
+    if (!opt.accepts.includes(level)) {
+      return {
+        state: s,
+        problem: `模块 ${opt.id} 不支持「${level}」（声明仅支持 ${opt.accepts.join('/')}）——选了 accepts 之外的模式即拒绝安装（#55）`,
+      };
+    }
+    next[opt.id] = level;
+  }
+  const needsConsent = Object.values(next).some((v) => v === 'shared');
+  if (needsConsent && !sharedConsent) {
+    return { state: s, problem: '有模块选择 shared（共享库建表）：请先勾选知情同意' };
+  }
+  return { state: { ...s, storageChoices: next, sharedConsent, step: 'ready' }, problem: null };
 }
 
 /** ④ 由状态构造装配输入（workers.dev = domain 空串；storage 沿用 r2 默认）。 */
@@ -187,7 +247,10 @@ export function failDeploy(s: WizardState, err: WizardError): WizardState {
 
 /** ⑥ 幂等重跑：清错误/结果/事件回 ①（token 需重填——明文本就不留存）。 */
 export function resetWizard(s: WizardState): WizardState {
-  return { ...initialWizardState(s.instancePath, { modules: s.modules }), step: 'auth' };
+  return {
+    ...initialWizardState(s.instancePath, { modules: s.modules, storageOptions: s.storageOptions }),
+    step: 'auth',
+  };
 }
 
 /** 对外（GET /api/state）暴露的状态投影：永不携带 token 明文。 */

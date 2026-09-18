@@ -32,7 +32,13 @@ export interface RunOptions {
   /** 显式退出；缺省调用方在 run 返回后自行决定（测试不断言 process）。 */
   exit?: (code: number) => void;
   /** 部署/向导惰性加载（隔离 node 侧副作用，测试注入替身）。 */
-  startWizard?: (opts: { instancePath: string; hasEnvToken: boolean; port?: number }) => Promise<number>;
+  startWizard?: (opts: {
+    instancePath: string;
+    hasEnvToken: boolean;
+    port?: number;
+    /** 模块存储声明投影（#55）：CLI 从模块包 manifest 读出后传入（③½ 渲染与校验依据）。 */
+    storageOptions?: Array<{ id: string; accepts: string[]; preferred?: string }>;
+  }) => Promise<number>;
   deployNineSteps?: (input: { instancePath: string }) => Promise<{ baseUrl: string; setupToken: string | null }>;
 }
 
@@ -188,7 +194,9 @@ async function exec(opts: RunOptions): Promise<number> {
     const start = opts.startWizard ?? (async (o) => {
       const { startWizardServer } = await import('./web/server');
       const stateMod = await import('./web/state');
-      let state = stateMod.initialWizardState(o.instancePath);
+      let state = stateMod.initialWizardState(o.instancePath, {
+        ...(o.storageOptions ? { storageOptions: o.storageOptions as never[] } : {}),
+      });
       const { server, port: actual } = await startWizardServer({
         port: o.port,
         deps: {
@@ -197,9 +205,16 @@ async function exec(opts: RunOptions): Promise<number> {
             state = s;
           },
           hasEnvToken: o.hasEnvToken,
+          ...(o.storageOptions ? { storageOptions: o.storageOptions as never[] } : {}),
           deploy: async (input) => {
             const fn = (await import('./deploy')).runDeploy;
-            return fn({ instancePath: o.instancePath, domain: input.domain, modules: input.modules, onEvent: input.onEvent });
+            return fn({
+              instancePath: o.instancePath,
+              domain: input.domain,
+              modules: input.modules,
+              ...(input.storageChoices ? { storageChoices: input.storageChoices } : {}),
+              onEvent: input.onEvent,
+            });
           },
         },
       });
@@ -213,7 +228,13 @@ async function exec(opts: RunOptions): Promise<number> {
         });
       });
     });
-    await start({ instancePath: inst.path, hasEnvToken: Boolean(env.CLOUDFLARE_API_TOKEN), port: port ? Number(port.slice('--port='.length)) : undefined });
+    await start({
+      instancePath: inst.path,
+      hasEnvToken: Boolean(env.CLOUDFLARE_API_TOKEN),
+      port: port ? Number(port.slice('--port='.length)) : undefined,
+      // #55：读仓库内模块 manifest 的 storage 声明，供向导③½ 做四级单选与 accepts 校验
+      storageOptions: await (await import('./deploy')).wizardStorageOptions(inst.path.replace(/[/\\]unself$/, '')),
+    });
     return 0;
   }
 
