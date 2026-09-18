@@ -104,9 +104,12 @@ app.get('/', (c) => {
   <script type="module">
     // 装配产物中 sdk/module-sdk.js 是 esbuild IIFE 无顶层 export，浏览器 ESM 具名导入会报 SyntaxError；
     // module-sdk.esm.js 是同包二次打包的 ESM 产物（assemble.ts 已生成），具名导出可用。
-    import { createModuleSDK } from './sdk/module-sdk.esm.js';
+    import { createModuleSDK, resolveShellOrigin } from './sdk/module-sdk.esm.js';
 
-    const sdk = createModuleSDK({ moduleId: 'hello', coreOrigin: window.location.origin });
+    // coreOrigin = 壳 origin，不是本页 origin：workers.dev 形态下模块挂自有子域（跨子域 iframe），
+    // location.origin 是模块自己 → 入站 token 校验永远不中。resolveShellOrigin() 优先级 =
+    // ancestorOrigins[0]（浏览器给的祖先 origin）→ wrapper 注入 meta → location.origin（非 iframe 直开回落）。
+    const sdk = createModuleSDK({ moduleId: 'hello', coreOrigin: resolveShellOrigin() });
     const who = document.getElementById('who');
     const email = document.getElementById('email');
     const count = document.getElementById('count');

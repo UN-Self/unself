@@ -13,22 +13,22 @@ const CORE_ORIGIN = 'https://team.example.com'
 
 type Listener = (event: { origin: string; data: unknown }) => void
 
-function installFakeWindow(origin = CORE_ORIGIN): {
+function installFakeWindow(origin = CORE_ORIGIN, ancestorOrigins?: string[]): {
   postMessage: ReturnType<typeof vi.fn>
   dispatch: (data: unknown, from?: string) => void
 } {
   const postMessage = vi.fn()
   const listeners = new Set<Listener>()
+  const locationLike = { origin, ...(ancestorOrigins ? { ancestorOrigins } : {}) }
   vi.stubGlobal('window', {
-    location: { origin },
+    location: locationLike,
     parent: { postMessage },
     addEventListener: (_type: string, listener: Listener) => listeners.add(listener),
     removeEventListener: (_type: string, listener: Listener) => listeners.delete(listener),
   })
-  // session.ts 的 coreOrigin 读 globalThis.location.origin（同源装载语义）——必须一起 stub
-  vi.stubGlobal('location', { origin })
-  // session.ts 读 globalThis.location.origin 作 coreOrigin（同源装载语义）
-  vi.stubGlobal('location', { origin })
+  // session.ts 的 coreOrigin 走 SDK resolveShellOrigin()（#277）：读 globalThis.location
+  // ——必须一起 stub；ancestorOrigins = 跨子域 iframe 的壳 origin（workers.dev 形态模块自有子域装载）。
+  vi.stubGlobal('location', locationLike)
   return {
     postMessage,
     dispatch: (data, from) => {
@@ -115,6 +115,31 @@ describe('createChatSession（#218 SDK 握手）', () => {
         expect(storage.getItem(key) ?? '').not.toContain('ey')
       }
     }
+    session.dispose()
+  })
+
+  it('#277 跨子域装载：coreOrigin 取 ancestorOrigins[0]（壳 origin），接受壳下发的 token、拒收模块自身 origin 的', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const SHELL = 'https://unself-core-api.sub.workers.dev'
+    const MODULE = 'https://unself-module-chat.sub.workers.dev'
+    // workers.dev 形态：模块在自己子域（location.origin = MODULE），壳是另一个子域（ancestorOrigins[0]）
+    const fake = installFakeWindow(MODULE, [SHELL])
+    const session = createChatSession()
+
+    const pending = session.handshake(2_000)
+    // 模块自己 origin 发的 token 不得被接受（旧行为 package 会误收 → 真浏览器里永远等不到壳的）
+    fake.dispatch({ type: 'token', token: makeToken() }, MODULE)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(session.getToken()).toBeNull()
+
+    // 壳 origin（ancestorOrigins[0]）发的 token 必须被接受
+    const shellToken = makeToken()
+    fake.dispatch({ type: 'token', token: shellToken }, SHELL)
+    await pending
+    expect(session.getToken()).toBe(shellToken)
+    expect(session.getUserId()).toBe(42)
+    // 出站 ready 也发向壳 origin
+    expect(fake.postMessage).toHaveBeenCalledWith({ type: 'ready' }, SHELL)
     session.dispose()
   })
 
