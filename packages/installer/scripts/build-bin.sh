@@ -1,14 +1,17 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-only
-# 打包单文件 CLI（#242 零克隆）：esbuild bundle 成 dist/unself.mjs（bin 入口，npm bin 直接指向它）。
+# 打包单文件 CLI（#242 零克隆；#257 引擎进 bundle）：esbuild bundle 成 dist/unself.mjs（bin 入口）。
 # - 平台 node、ESM、target node22；
 # - banner 注入 createRequire：bundle 内第三方依赖的 CJS require 在 ESM 输出里可用；
-# - @unself/deploy-cloudflare 保持 external：发布后从 registry 装独立版本，
-#   workspace 开发时则由链接的 workspace 包提供（九步引擎不进 bundle）。
+# - @unself/deploy-cloudflare **不再 external**（#257）：九步引擎必须随 tarball 分发，
+#   干净机器没有 node_modules 可解析；引擎随包后安装器运行期零依赖；
+# - esbuild 保持 external 且惰性导入：只有「仓库形态 + 源码模块」的开发路径用得到它，
+#   安装器产物形态（worker.js 已预打包）永不触发 → 干净机器不必装 esbuild；
+# - blake3-wasm 是 createRequire 的运行时路径（wasm 用 fs 加载，进不了 bundle）→ 随包 vendor。
 set -e
 cd "$(dirname "$0")/.."
-exec ./node_modules/.bin/esbuild bin.ts \
+exec ./node_modules/.bin/esbuild scripts/bundle-entry.ts \
   --bundle --platform=node --format=esm --target=node22 \
   "--banner:js=import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" \
-  --external:@unself/deploy-cloudflare \
+  --external:esbuild \
   --outfile=dist/unself.mjs

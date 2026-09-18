@@ -7,8 +7,7 @@
     "unself": "./dist/unself.mjs"
   },
   "files": [
-    "dist",
-    "LICENSE"
+    "dist"
   ],
   "engines": {
     "node": ">=22"
@@ -16,17 +15,19 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "bash scripts/build-bin.sh",
+    "build": "pnpm run build:artifacts && bash scripts/build-bin.sh",
+    "build:artifacts": "tsx scripts/build-artifacts.ts",
+    "build:bin": "bash scripts/build-bin.sh",
     "prepack": "pnpm run build"
   },
-  "dependencies": {},
-  "optionalDependencies": {
-    "@unself/contracts": "workspace:*",
-    "@unself/control-plane": "workspace:*",
-    "@unself/deploy-cloudflare": "workspace:*"
+  "unself": {
+    "note": "#257：引擎（@unself/deploy-cloudflare）与其运行期依赖全部 bundle 进 dist/unself.mjs；core/shell/SDK/builtin 模块包预构建进 dist/artifacts/**。安装器 tarball 因此零运行期依赖：干净机器只装 Node 即可部署。workspace 包仅作构建期 devDependency。"
   },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^24",
+    "@unself/contracts": "workspace:*",
+    "@unself/deploy-cloudflare": "workspace:*",
     "esbuild": "^0.28.0",
     "tsx": "^4.19.0",
     "typescript": "^5.9.0",

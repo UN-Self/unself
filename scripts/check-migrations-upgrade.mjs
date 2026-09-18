@@ -86,7 +86,9 @@ function discoverMigrationDirs() {
     if (!existsSync(abs)) return;
     for (const entry of readdirSync(abs, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+      // node_modules 与隐藏目录跳过；dist 跳过（#257：安装器产物里有 migrations 的**副本**，
+      // 那是打包产物不是迁移真源——重复入闸门只会把「产物陈旧」误报成「迁移不兼容」）
+      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue;
       const child = join(abs, entry.name);
       const relChild = `${rel}/${entry.name}`;
       if (entry.name === 'migrations') {
