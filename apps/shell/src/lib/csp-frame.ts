@@ -11,9 +11,15 @@
  * meta 重写只在 parse 成功且当前值确有 frame-src 时发生（防篡改/重复注入）。
  */
 
-/** meta[name=unself-csp-frame] 的当前值解析：无 meta / 无 frame-src → null。 */
+/**
+ * 壳 CSP meta 的唯一锚点：vite 构建注入的是 http-equiv 形态（index.html 首个 meta），
+ * 选择器必须与之一致（用 name 形态会找不到 → 白名单永远不生效）。
+ */
+const CSP_META_SELECTOR = 'meta[http-equiv="Content-Security-Policy" i]'
+
+/** meta[http-equiv=CSP] 的当前值解析：无 meta / 无 frame-src → null。 */
 export function frameSrcFromMeta(doc: Document): string | null {
-  const meta = doc.querySelector<HTMLMetaElement>('meta[name="unself-csp-frame"]')
+  const meta = doc.querySelector<HTMLMetaElement>(CSP_META_SELECTOR)
   if (!meta) return null
   const csp = meta.getAttribute('content') ?? ''
   for (const part of csp.split(';')) {
@@ -29,7 +35,7 @@ export function frameSrcFromMeta(doc: Document): string | null {
  * meta 缺失/frame-src 不存在时返回 null（不动文档）。
  */
 export function tightenFrameSrcInMeta(doc: Document, origins: string[]): string | null {
-  const meta = doc.querySelector<HTMLMetaElement>('meta[name="unself-csp-frame"]')
+  const meta = doc.querySelector<HTMLMetaElement>(CSP_META_SELECTOR)
   if (!meta) return null
   const csp = meta.getAttribute('content') ?? ''
   const parts = csp.split(';')
