@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { discoverModules, runNineSteps } from '../src/steps';
-import { CHAT_DB_NAME, CHAT_KV_NAME, CHAT_R2_NAME } from '../src/chat-provision';
+import { chatDbName, chatKvName, chatR2Name } from '../src/chat-provision';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { RestClient } from '../src/rest/client';
 
@@ -69,9 +69,9 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
     });
     // ① 专属资源补建：chat D1 + chat KV（平台两库与桶在别的断言覆盖）
-    expect(fake.state.d1.has(CHAT_DB_NAME)).toBe(true);
-    expect(fake.state.kv.has(CHAT_KV_NAME)).toBe(true);
-    expect(fake.state.buckets.has(CHAT_R2_NAME)).toBe(true);
+    expect(fake.state.d1.has(chatDbName())).toBe(true);
+    expect(fake.state.kv.has(chatKvName())).toBe(true);
+    expect(fake.state.buckets.has(chatR2Name())).toBe(true);
     // ② #248 存储面去豁免：chat 与任何 dedicated 模块同一条链——独立记账表 unself_migrations_chat
     //    + 基线 schema（migrations/chat/0001_baseline.sql）按文件 import，记账名即模块 id。
     expect(fake.state.ledgerTables.has('unself_migrations_chat')).toBe(true);
@@ -154,7 +154,7 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
       buildShell: fakeBuildShell,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
     });
-    expect(summary1.chat).toEqual({ db: CHAT_DB_NAME, kv: CHAT_KV_NAME, r2: CHAT_R2_NAME, keyringAction: 'created' });
+    expect(summary1.chat).toEqual({ db: chatDbName(), kv: chatKvName(), r2: chatR2Name(), keyringAction: 'created' });
     expect(first.state.secretPuts).toEqual([
       { worker: 'unself-core-api', name: 'JWT_PRIVATE_KEY' },
       { worker: 'unself-module-chat', name: 'EDGECHAT_ENCRYPTION_KEYRING' },
@@ -180,7 +180,7 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
     });
     expect(second.state.d1.size).toBe(first.state.d1.size);
     expect(second.state.secretPuts).toEqual([]);
-    expect(summary2.chat).toEqual({ db: CHAT_DB_NAME, kv: CHAT_KV_NAME, r2: CHAT_R2_NAME, keyringAction: 'existing' });
+    expect(summary2.chat).toEqual({ db: chatDbName(), kv: chatKvName(), r2: chatR2Name(), keyringAction: 'existing' });
   });
 
   it('首部署密钥环注入后补 deploy（secret 生效）；已有密钥环零补部署', { timeout: 240_000 }, async () => {
@@ -316,7 +316,7 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
     });
-    expect(summary.chat).toEqual({ db: CHAT_DB_NAME, kv: CHAT_KV_NAME, r2: CHAT_R2_NAME, keyringAction: 'existing' });
+    expect(summary.chat).toEqual({ db: chatDbName(), kv: chatKvName(), r2: chatR2Name(), keyringAction: 'existing' });
     const chatUploads = second.state.uploads.filter((u) => u.worker === 'unself-module-chat');
     expect(chatUploads.length).toBeGreaterThanOrEqual(1);
     for (const u of chatUploads) {

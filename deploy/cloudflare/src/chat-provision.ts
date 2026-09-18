@@ -24,10 +24,14 @@ import { ensureD1, ensureKvNamespace, ensureR2Bucket } from './rest';
 import type { RestClient } from './rest';
 import { stripJsonc } from './config';
 import type { UnselfConfig } from './config';
+import { moduleWorkerName, resourceName } from './naming';
 
-/** chat 专属资源名（chat- 前缀，决策 #50）。 */
+/** chat 专属资源名（chat- 前缀，决策 #50；可带 UNSELF_RESOURCE_PREFIX 做同账户隔离，#257）。 */
 export const CHAT_MODULE_ID = 'chat';
-export const CHAT_DB_NAME = 'unself-chat';
+/** chat 专属 D1 名。 */
+export function chatDbName(): string {
+  return resourceName('chat');
+}
 /**
  * SESSIONS KV namespace（#231 状态：**无写入方**）。
  * #217 把本地会话读取面换成 core 模块 JWT + JIT 后，`worker/src/session.js` 已下架；
@@ -37,8 +41,12 @@ export const CHAT_DB_NAME = 'unself-chat';
  * （`readChatPackageConfig` 的形状校验与 dev 绑定）+ `steps.ts` 的摘要面，两者不在 #231
  * 所有权内；待 M3 随本地会话残件一并清退（含删本命名空间）。
  */
-export const CHAT_KV_NAME = 'unself-chat-sessions';
-export const CHAT_R2_NAME = 'unself-chat-files';
+export function chatKvName(): string {
+  return resourceName('chat-sessions');
+}
+export function chatR2Name(): string {
+  return resourceName('chat-files');
+}
 /** chat worker 的加密密钥环 secret 名（上游 Bindings 契约，EDGECHAT_ 前缀）。 */
 export const CHAT_KEYRING_SECRET = 'EDGECHAT_ENCRYPTION_KEYRING';
 
@@ -56,8 +64,8 @@ export async function ensureChatResources(
   accountId: string,
   log: (msg: string) => void,
 ): Promise<{ dbId: string; kvId: string }> {
-  const dbId = await ensureD1(client, accountId, CHAT_DB_NAME, log);
-  const kvId = await ensureKvNamespace(client, accountId, CHAT_KV_NAME, log);
+  const dbId = await ensureD1(client, accountId, chatDbName(), log);
+  const kvId = await ensureKvNamespace(client, accountId, chatKvName(), log);
   return { dbId, kvId };
 }
 
@@ -67,7 +75,7 @@ export async function ensureChatR2Bucket(
   accountId: string,
   log: (msg: string) => void,
 ): Promise<'exists' | 'created'> {
-  return ensureR2Bucket(client, accountId, CHAT_R2_NAME, log);
+  return ensureR2Bucket(client, accountId, chatR2Name(), log);
 }
 
 /**
@@ -144,7 +152,7 @@ export function chatWranglerConfig(input: {
   return JSON.stringify(
     {
       $schema: 'node_modules/wrangler/config-schema.json',
-      name: `unself-module-${CHAT_MODULE_ID}`,
+      name: moduleWorkerName(CHAT_MODULE_ID),
       // wrapper 独占入口（剥 /m/chat 前缀 + ASSETS 回退）；bundle 在 chat/app.js
       main: `${CHAT_MODULE_ID}/worker.js`,
       compatibility_date: '2026-09-01',
@@ -164,7 +172,7 @@ export function chatWranglerConfig(input: {
       d1_databases: [
         {
           binding: pkg.d1Binding,
-          database_name: CHAT_DB_NAME,
+          database_name: chatDbName(),
           database_id: dbIds.chat,
         },
       ],
@@ -177,7 +185,7 @@ export function chatWranglerConfig(input: {
       r2_buckets: [
         {
           binding: R2_BINDING,
-          bucket_name: CHAT_R2_NAME,
+          bucket_name: chatR2Name(),
         },
       ],
       durable_objects: { bindings: pkg.doBindings },

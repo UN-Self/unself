@@ -6,6 +6,7 @@
 import { ensureD1, ensureR2Bucket, ensureKvNamespace } from './rest';
 import type { RestClient } from './rest';
 import type { UnselfConfig } from './config';
+import { modulesDbName, coreDbName } from './naming';
 
 /** 解析 REST 客户端的目标账户 id（多账户取第一个，与旧 findAccountId 行为一致）。 */
 export async function resolveAccount(client: RestClient): Promise<string> {
@@ -17,8 +18,7 @@ export async function resolveAccount(client: RestClient): Promise<string> {
   return id;
 }
 
-export const CORE_DB_NAME = 'unself-core';
-export const MODULES_DB_NAME = 'unself-modules';
+export { modulesDbName, coreDbName };
 
 /** 外部 S3 参数校验（步骤⑥的 s3 分支）：缺参数直接失败，不碰 CF。 */
 export function validateS3Storage(config: UnselfConfig): void {
@@ -36,8 +36,8 @@ export async function ensureDatabases(
   log: (msg: string) => void = console.log,
 ): Promise<{ core: string; modules: string }> {
   return {
-    core: await ensureD1(client, accountId, CORE_DB_NAME, log),
-    modules: await ensureD1(client, accountId, MODULES_DB_NAME, log),
+    core: await ensureD1(client, accountId, coreDbName(), log),
+    modules: await ensureD1(client, accountId, modulesDbName(), log),
   };
 }
 

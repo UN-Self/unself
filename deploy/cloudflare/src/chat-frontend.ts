@@ -24,18 +24,34 @@ export async function buildChatFrontendAssets(input: {
   log: (msg: string) => void;
   /** 测试注入口：拦截构建（默认真实 pnpm --filter … exec vite build）。 */
   run?: (cmd: string, args: string[], cwd: string) => Promise<void>;
+  /**
+   * 产物形态（#257）：已预构建的前端目录（<installer>/dist/artifacts/modules/chat/frontend）。
+   * 给了就搬运，不跑 vite——干净机器没有 pnpm/vite，也不该有本仓库源码树。
+   */
+  prebuiltDir?: string;
 }): Promise<string> {
   const run = input.run ?? runTool;
-  input.log('构建 chat 前端（vite build --base=./，live 模式）…');
-  await run('pnpm', [
-    '--filter', CHAT_FRONTEND_FILTER, 'exec', 'vite', 'build',
-    '--base=./', '--emptyOutDir',
-  ], input.rootDir, { env: { VITE_CHAT_API: 'live' } });
   const assetsDir = 'chat/assets/frontend';
   const dest = `${input.outDir}/modules/${assetsDir}`;
-  const dist = `${input.rootDir}/modules/chat/frontend/dist`;
-  if (!existsSync(dist)) {
-    throw new Error(`chat 前端构建产物缺失（${dist}）：vite build 报成功但无 dist，先查 frontend 构建`);
+  let dist: string;
+  if (input.prebuiltDir !== undefined) {
+    if (!existsSync(input.prebuiltDir)) {
+      throw new Error(
+        `安装器产物不完整：缺 chat 前端产物 ${input.prebuiltDir}——重跑 \`pnpm --filter @unself/installer build\` 重新生成产物`,
+      );
+    }
+    input.log('搬运 chat 前端产物（安装器包内 artifacts/modules/chat/frontend）…');
+    dist = input.prebuiltDir;
+  } else {
+    input.log('构建 chat 前端（vite build --base=./，live 模式）…');
+    await run('pnpm', [
+      '--filter', CHAT_FRONTEND_FILTER, 'exec', 'vite', 'build',
+      '--base=./', '--emptyOutDir',
+    ], input.rootDir, { env: { VITE_CHAT_API: 'live' } });
+    dist = `${input.rootDir}/modules/chat/frontend/dist`;
+    if (!existsSync(dist)) {
+      throw new Error(`chat 前端构建产物缺失（${dist}）：vite build 报成功但无 dist，先查 frontend 构建`);
+    }
   }
   // 无条件重写（#162 同款纪律）：旧哈希命中的残留 chunk 不留给升级部署
   await rm(dest, { recursive: true, force: true });
