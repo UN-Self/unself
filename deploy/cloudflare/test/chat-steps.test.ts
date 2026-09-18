@@ -35,10 +35,10 @@ const FIXED_JWKS = JSON.stringify({
 });
 
 const SMOKE_OK = {
-  smoke: async (b: string, ids: string[]) =>
+  smoke: async (b: string, mods: Array<{ id: string; baseUrl: string }>) =>
     ([{ name: 'core-api', url: `${b}/api/health`, ok: true, status: 200 }] as Array<{
       name: string; url: string; ok: boolean; status: number;
-    }>).concat(ids.map((id) => ({ name: `module:${id}`, url: `${b}/m/${id}/api/health`, ok: true, status: 200 }))),
+    }>).concat(mods.map((m) => ({ name: `module:${m.id}`, url: `${m.baseUrl}/api/health`, ok: true, status: 200 }))),
 };
 
 /** 步骤⑧ 签发经 REST /query（fake 迷你 SQL 态）——不再走 wrangler d1 execute。 */
@@ -120,7 +120,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     await expect(readFile(join(ROOT, '.deploy/cloudflare/modules/chat/worker.js'), 'utf8')).resolves.toContain("const PREFIX = '/m/chat'");
   });
 
-  it('注册表三态之一（启用）：chat upsert enabled=1 且 entry=<baseUrl>/m/chat/；hello 未选 disable', { timeout: 120_000 }, async () => {
+  it('注册表三态之一（启用）：chat upsert enabled=1 且 entry=模块自有子域（#273）；hello 未选 disable', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] } });
     await runNineSteps({
       rootDir: ROOT,
@@ -134,7 +134,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     const chatRow = fake.state.registry.get('chat');
     expect(chatRow).toBeDefined();
     expect(chatRow!.enabled).toBe(1);
-    expect(JSON.parse(chatRow!.manifest_json)).toMatchObject({ id: 'chat', entry: 'https://unself-core-api.test-subdomain.workers.dev/m/chat/' });
+    expect(JSON.parse(chatRow!.manifest_json)).toMatchObject({ id: 'chat', entry: 'https://unself-module-chat.test-subdomain.workers.dev/' });
     // hello 未选 → disable（行不在库 → UPDATE 照发，changes=0；真库同语义）
     expect(
       fake.calls.some((c) => (c.body as { sql?: string; params?: unknown[] } | undefined)?.sql?.startsWith('UPDATE module_registry') &&

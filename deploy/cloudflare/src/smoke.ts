@@ -5,6 +5,7 @@
  *    主题体检 = GET /m/<id>/ 模块页产物，查 --unself-* 引用是否全部在契约白名单（§6.5.8）。
  */
 import { analyzeTokenUsage } from '@unself/contracts';
+import { moduleHealthUrl } from './module-url';
 
 export interface SmokeResult {
   name: string;
@@ -12,6 +13,17 @@ export interface SmokeResult {
   ok: boolean;
   status: number;
   detail?: string;
+}
+
+/**
+ * 模块探测目标（#273）：真实挂载根 URL 由调用方按形态算（domain → zone 路径；
+ * workers.dev → 模块自有子域），冒烟/主题体检只按「根挂载」不变式拼子路径——
+ * 探测点因此永不与注册表 entry 漂移。
+ */
+export interface ModuleTarget {
+  id: string;
+  /** 模块真实挂载根 URL（无尾斜杠）。 */
+  baseUrl: string;
 }
 
 /** setup token 随机长度（字节）；形状与 services/core-api/src/setup.ts 对齐（24B → base64url 无填充）。 */
@@ -44,17 +56,17 @@ export interface ThemeCheckResult {
  * 查 var(--unself-*) 引用是否全部解析成契约值。未解析 = 平台链路坏了 → 当场红；
  * 模块零主题引用 = 独立皮肤 → 标注不红。每个页面只抓根路径、不解析客户端 JS；
  * 单页失败（不可达/超时）只记该页失败，整体不抛异常（结果收集）。
+ * 探测基址由调用方按形态给出（#273：workers.dev = 模块自有子域根，不再拼 /m/<id>）。
  */
 export async function checkModuleThemes(input: {
-  baseUrl: string;
-  moduleIds: string[];
+  modules: ModuleTarget[];
   timeoutMs?: number;
 }): Promise<ThemeCheckResult[]> {
   const results: ThemeCheckResult[] = [];
-  for (const id of input.moduleIds) {
+  for (const target of input.modules) {
     // 与用户实际加载相同的模块页根路径（除 SPA 路由外，模块文档由此进入）
-    const url = `${input.baseUrl}/m/${id}/`;
-    const name = `module:${id}`;
+    const url = `${target.baseUrl.replace(/\/+$/, '')}/`;
+    const name = `module:${target.id}`;
     try {
       const res = await fetch(url, {
         signal: AbortSignal.timeout(input.timeoutMs ?? 10_000),
@@ -81,21 +93,25 @@ export async function checkModuleThemes(input: {
 }
 
 /**
- * 冒烟：core health + 各模块 health。§5.3 单域名路径制：domain 与 workers.dev 两种 baseUrl 同形，
- * 模块均探 <baseUrl>/m/<id>/api/health（无子域分支）。全部 200 且 ok=true 才算通过。
+ * 冒烟：core health + 各模块 health。
+ * 模块探测 URL 由调用方按形态算好后以 ModuleTarget.baseUrl 传入（#273）：
+ * domain → `https://<domain>/m/<id>`；workers.dev → `https://<module>.<sub>.workers.dev`。
+ * 模块**不可达就必须真红**（status=0/非 200/body 无 ok:true），绝不静默跳过——
+ * 旧实现恒拼 core 的 `/m/<id>/api/health`，在 workers.dev 形态命中壳 SPA 回退返回 HTML，
+ * 于是「红」被误读成「假绿」（#269 报告口径说反，issue 已纠正）。
  */
 export async function smokeCheck(input: {
-  baseUrl: string;
-  moduleIds: string[];
+  coreUrl: string;
+  modules: ModuleTarget[];
   timeoutMs?: number;
 }): Promise<SmokeResult[]> {
-  const targets: Array<{ name: string; path: string }> = [
-    { name: 'core-api', path: '/api/health' },
-    ...input.moduleIds.map((id) => ({ name: `module:${id}`, path: `/m/${id}/api/health` })),
+  const targets: Array<{ name: string; url: string }> = [
+    { name: 'core-api', url: `${input.coreUrl.replace(/\/+$/, '')}/api/health` },
+    ...input.modules.map((m) => ({ name: `module:${m.id}`, url: moduleHealthUrl(m.baseUrl) })),
   ];
   const results: SmokeResult[] = [];
   for (const t of targets) {
-    const url = `${input.baseUrl}${t.path}`;
+    const url = t.url;
     try {
       const res = await fetch(url, {
         signal: AbortSignal.timeout(input.timeoutMs ?? 10_000),

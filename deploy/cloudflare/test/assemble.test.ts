@@ -114,11 +114,18 @@ describe('moduleWranglerConfig（④生成的部署配置）', () => {
 });
 
 describe('prefixStripWrapperSource（④挂载前缀剥除）', () => {
-  it('wrapper 剥 /m/<id> 前缀并保留 API 透传', () => {
+  it('domain 形态模板：剥 /m/<id> 前缀并保留 API 透传', () => {
     const src = prefixStripWrapperSource('hello');
     expect(src).toContain("const PREFIX = '/m/hello'");
-    expect(src).toContain("url.pathname = url.pathname.slice(PREFIX.length)");
+    expect(src).toContain('url.pathname.slice(PREFIX.length)');
     expect(src).toContain("import worker from './app.js'");
+  });
+
+  it('workers.dev 形态模板（#273）：根挂载不剥前缀，带 frame-ancestors = 壳 origin', () => {
+    const src = prefixStripWrapperSource('hello', { mount: '', shellOrigin: 'https://unself-core-api.test-subdomain.workers.dev' });
+    expect(src).toContain("const PREFIX = ''");
+    expect(src).toContain("const SHELL_ORIGIN = 'https://unself-core-api.test-subdomain.workers.dev'");
+    expect(src).toContain('frame-ancestors');
   });
 });
 

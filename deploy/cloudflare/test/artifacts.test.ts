@@ -19,9 +19,9 @@ import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { FAKE_CORE_WORKER, writeArtifactFixture } from './helpers/artifacts-fixture';
 
 const SMOKE_OK = {
-  smoke: async (b: string, ids: string[]) =>
+  smoke: async (b: string, mods: Array<{ id: string; baseUrl: string }>) =>
     [{ name: 'core-api', url: `${b}/api/health`, ok: true, status: 200 }].concat(
-      ids.map((id) => ({ name: `module:${id}`, url: `${b}/m/${id}/api/health`, ok: true, status: 200 })),
+      mods.map((m) => ({ name: `module:${m.id}`, url: `${m.baseUrl}/api/health`, ok: true, status: 200 })),
     ),
 };
 

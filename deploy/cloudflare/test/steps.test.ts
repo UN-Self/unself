@@ -6,7 +6,7 @@
  */
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { prefixStripWrapperSource } from '../src/assemble';
 import { coreWorkerEntrySource, needsTotalTls, runNineSteps } from '../src/steps';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
@@ -27,6 +27,8 @@ function runSteps(input: Parameters<typeof runNineSteps>[0]) {
 /** 仓库根（真实文件布局：modules/hello、modules/chat、services/core-api、apps/shell）。 */
 const ROOT = new URL('../../..', import.meta.url).pathname;
 
+afterEach(() => vi.unstubAllGlobals());
+
 /** 合法公钥 JWKS 字符串（真实 P-256 公钥 JWK 形状的静态夹具，与 core GET /.well-known/jwks.json 同形）。 */
 const FIXED_JWKS = JSON.stringify({
   keys: [{
@@ -41,14 +43,14 @@ const FIXED_JWKS = JSON.stringify({
 });
 
 const SMOKE_OK = {
-  smoke: async (b: string, ids: string[]) =>
+  smoke: async (b: string, mods: Array<{ id: string; baseUrl: string }>) =>
     ([{ name: 'core-api', url: `${b}/api/health`, ok: true, status: 200 }] as Array<{
       name: string;
       url: string;
       ok: boolean;
       status: number;
     }>).concat(
-      ids.map((id) => ({ name: `module:${id}`, url: `${b}/m/${id}/api/health`, ok: true, status: 200 })),
+      mods.map((m) => ({ name: `module:${m.id}`, url: `${m.baseUrl}/api/health`, ok: true, status: 200 })),
     ),
 };
 
@@ -373,6 +375,84 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
   });
 });
 
+describe('#273 workers.dev 模块可达 / 自有域回归', () => {
+  it('workers.dev：模块自有子域启用 + registry entry = 子域 URL + 冒烟探测子域', { timeout: 120_000 }, async () => {
+    const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'] });
+    const seen: Array<{ id: string; baseUrl: string }> = [];
+    const summary = await runSteps({
+      rootDir: ROOT,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      http: {
+        ...SMOKE_OK,
+        smoke: async (coreUrl, mods) => {
+          seen.push(...mods);
+          return SMOKE_OK.smoke(coreUrl, mods);
+        },
+      },
+    });
+    // 模块自有子域已启用（core 与模块各自一个）
+    expect([...fake.state.workersDevEnabled].sort()).toEqual(['unself-core-api', 'unself-module-hello']);
+    // 注册表 entry = 模块真实 URL（模块自有 workers.dev 子域）
+    const manifest = JSON.parse(fake.state.registry.get('hello')!.manifest_json) as { entry: string };
+    expect(manifest.entry).toBe('https://unself-module-hello.test-subdomain.workers.dev/');
+    // ⑨ 冒烟拿到就是模块自有子域 target（不是 core 的 /m/hello）
+    expect(seen).toEqual([{ id: 'hello', baseUrl: 'https://unself-module-hello.test-subdomain.workers.dev' }]);
+    expect(summary.baseUrl).toBe('https://unself-core-api.test-subdomain.workers.dev');
+  });
+
+  it('自有域形态回归：zone 路由 + entry=/m/<id>/ + 冒烟走 zone 路径，不启 workers.dev', { timeout: 120_000 }, async () => {
+    const fake = makeCfRestFake({
+      existingD1: ['unself-core', 'unself-modules'],
+      zones: { 'handywote.top': 'zone-1' },
+    });
+    const seen: Array<{ id: string; baseUrl: string }> = [];
+    await runSteps({
+      rootDir: ROOT,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+      configOverride: { domain: 'demo.handywote.top', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      http: {
+        ...SMOKE_OK,
+        smoke: async (coreUrl, mods) => {
+          seen.push(...mods);
+          return SMOKE_OK.smoke(coreUrl, mods);
+        },
+      },
+    });
+    // zone 路径路由逐字不变；entry 仍为同域 /m/<id>/；探测点同域
+    expect(fake.state.routes.get('demo.handywote.top/m/hello/*')).toBe('unself-module-hello');
+    const manifest = JSON.parse(fake.state.registry.get('hello')!.manifest_json) as { entry: string };
+    expect(manifest.entry).toBe('https://demo.handywote.top/m/hello/');
+    expect(seen).toEqual([{ id: 'hello', baseUrl: 'https://demo.handywote.top/m/hello' }]);
+    // 自有域形态不涉及 workers.dev 子域（零启用请求）
+    expect([...fake.state.workersDevEnabled]).toEqual([]);
+  });
+
+  it('workers.dev：模块自有子域不可达 → ⑨ 冒烟真红，不静默跳过', { timeout: 120_000 }, async () => {
+    const fake = makeCfRestFake({
+      existingD1: ['unself-core', 'unself-modules'],
+      existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] },
+    });
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (input: string | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('unself-module-hello')) throw new TypeError('fetch failed');
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    await expect(
+      runSteps({
+        rootDir: ROOT,
+        client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        fetchJwks: async () => FIXED_JWKS,
+      }),
+    ).rejects.toThrow(/冒烟失败：module:hello/);
+    // 探测的确实是模块自有子域（而不是 core 的 /m/hello）
+    expect(calls).toContain('https://unself-module-hello.test-subdomain.workers.dev/api/health');
+  });
+});
+
 describe('D1（#162/#194）：入口产物「存在即跳过」陷阱', () => {
   it('预置旧模板 core-worker.js 在场 → 部署后产物被刷新为当前模板（升级路径不再沿用旧入口）', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'] });
@@ -421,10 +501,17 @@ export default { fetch: (r, e, c) => worker.fetch(r, e, c) };
         http: SMOKE_OK,
       });
       // 行为断言（不测实现）：文件内容 == 当前 wrapper 模板输出（旧内容已被覆写掉）
+      // workers.dev 形态（#273）：根挂载 mount=''，frame-ancestors = 壳 origin
       const after = await readFile(wrapperPath, 'utf8');
-      expect(after).toBe(prefixStripWrapperSource('hello'));
+      expect(after).toBe(
+        prefixStripWrapperSource('hello', {
+          mount: '',
+          shellOrigin: 'https://unself-core-api.test-subdomain.workers.dev',
+        }),
+      );
       expect(after).not.toContain('旧版 wrapper 生成物');
-      expect(after).toContain("const PREFIX = '/m/hello'");
+      expect(after).toContain("const PREFIX = ''");
+      expect(after).toContain('frame-ancestors');
     } finally {
       await rm(wrapperPath, { force: true });
     }
