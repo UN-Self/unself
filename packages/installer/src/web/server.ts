@@ -161,7 +161,7 @@ $('btn-deploy').addEventListener('click', async () => {
   const timer = setInterval(async () => {
     const s = await (await fetch('/api/state')).json();
     if (s.step === 'done') { clearInterval(timer); es.close(); $('events').textContent += '\\n完成：' + s.result.baseUrl + (s.result.setupUrl ?? ''); }
-    if (s.step === 'failed') { clearInterval(timer); es.close(); showErr('err-deploy', s.error.cause + '\\n修复：' + s.error.fix); $('btn-deploy').disabled = false; }
+    if (s.step === 'failed') { clearInterval(timer); es.close(); showErr('err-deploy', s.error.cause); // MUTANT-4 删修复行 $('btn-deploy').disabled = false; }
   }, 800);
 });
 </script>
