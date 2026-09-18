@@ -31,14 +31,12 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { manifestFromYamlText, ModuleManifestSchema } from '@unself/contracts';
 import {
   ARTIFACTS_FORMAT_VERSION,
   buildModuleSdkAssets,
   bundleCoreWorker,
-  bundleModuleWorker,
   coreWorkerEntrySource,
-  moduleWorkerEntry,
+  modulePackageFiles,
 } from '@unself/deploy-cloudflare';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -111,24 +109,19 @@ async function main(): Promise<void> {
   await buildModuleSdkAssets(join(REPO_ROOT, 'packages/module-sdk/src/index.ts'), join(ARTS_DIR, 'sdk'));
   console.log('  ✓ sdk/module-sdk.js + sdk/module-sdk.esm.js');
 
-  // ---- 5. builtin 模块包（manifest.json + worker.js + migrations/ + wrangler.jsonc）----
+  // ---- 5. builtin 模块包（与第三方打包同一条路，#257 验收③：modulePackageFiles 产出 manifest.json + worker.js + …）----
   for (const id of BUILTIN_MODULES) {
     const srcDir = join(REPO_ROOT, 'modules', id);
     const pkgDir = join(ARTS_DIR, 'modules', id);
     await mkdir(pkgDir, { recursive: true });
-    // manifest.yaml → manifest.json（@unself/contracts 单轨解析；与安装期 readManifest 同一份 schema）
-    const manifestText = await readFile(join(srcDir, 'manifest.yaml'), 'utf8');
-    const manifest = ModuleManifestSchema.parse(manifestFromYamlText(manifestText) as Record<string, unknown>);
-    await writeFile(join(pkgDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-    // worker.js：与部署期模块打包**同一函数同一参数**（entry 解析也复用引擎的 moduleWorkerEntry）
-    await bundleModuleWorker(await moduleWorkerEntry(srcDir), join(pkgDir, 'worker.js'));
-    // wrangler.jsonc：chat 的 DO 绑定/迁移声明由 readChatPackageConfig 读（包形态；hello 一并带上保持形状一致）
-    const wranglerSrc = join(srcDir, 'wrangler.jsonc');
-    if (existsSync(wranglerSrc)) await cp(wranglerSrc, join(pkgDir, 'wrangler.jsonc'));
-    // migrations/<id>/*.sql（shared/dedicated 落点的模块迁移链）
-    const migSrc = join(srcDir, 'migrations', id);
-    if (existsSync(migSrc)) await cp(migSrc, join(pkgDir, 'migrations', id), { recursive: true });
-    console.log(`  ✓ modules/${id}/（manifest.json + worker.js${existsSync(migSrc) ? ' + migrations' : ''}）`);
+    // 打包器白名单制：manifest.json/worker.js/wrangler.jsonc/migrations/**/LICENSE/NOTICE；
+    // worker 打包/esbuild 参数/LICENSE 回溯都复用打包器逻辑（不另写一套，防两处漂移）
+    const { files } = await modulePackageFiles({ dir: srcDir });
+    for (const f of files) {
+      await mkdir(dirname(join(pkgDir, f.name)), { recursive: true });
+      await writeFile(join(pkgDir, f.name), f.data);
+    }
+    console.log(`  ✓ modules/${id}/（manifest.json + worker.js${existsSync(join(srcDir, 'migrations')) ? ' + migrations' : ''}）`);
   }
 
   // ---- 6. chat 前端产物（vite，隔离 outDir + live 模式 —— 与部署期 buildChatFrontendAssets 同参数）----

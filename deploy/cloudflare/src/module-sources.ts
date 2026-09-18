@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
 import {
   manifestFromYamlText,
+  MODULE_PERMISSIONS,
   ModuleManifestSchema,
   validateModulePackage,
   CONTRACT_VERSION,
@@ -69,17 +70,56 @@ function manifestJsonOf(m: SourcedModule): ModuleManifest {
 
 export { lockRecordFrom, manifestJsonOf };
 
-/** 解析 manifest：包根有 manifest.yaml → contracts YAML 轨；manifest.json → JSON 轨（#243 单轨解析）。 */
+/**
+ * 未知能力安装期门禁（issue #269 / 决策 #56，docs/modules.md）：在 schema parse **之前**对
+ * manifest 原文做 permissions 前置检查——zod 枚举只会报「Invalid enum value」，用户看不到
+ * 自己写了什么能力名；这里点名每个未知值。
+ *
+ * 安装期硬拒而非静默忽略：静默丢未知能力 → 模块运行期调对应 Core API 莫名 403（#64 同源教训）。
+ * 容错：permissions 非数组 / 无该字段 → 跳过（交由 schema/validate 常规报告）。
+ */
+export function assertKnownPermissions(manifestText: string, json: boolean): void {
+  let rawPermissions: unknown;
+  if (json) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(manifestText) as unknown;
+    } catch {
+      return; // 非法 JSON 交由 schema 报告（错误更具体）
+    }
+    rawPermissions = (parsed as Record<string, unknown> | null)?.permissions;
+  } else {
+    // yaml：复用 contracts 的最小解析（与 schema 入口同一 candidate），拿不到 = 无该字段
+    rawPermissions = manifestFromYamlText(manifestText).permissions;
+  }
+  if (!Array.isArray(rawPermissions)) return;
+  const unknownList = rawPermissions.filter(
+    (p): p is string => typeof p === 'string' && !(MODULE_PERMISSIONS as readonly string[]).includes(p),
+  );
+  if (unknownList.length === 0) return;
+  throw new Error(
+    `模块包声明了未知能力「${unknownList.join('」「')}」：安装时拒绝（决策 #56 / docs/modules.md）。` +
+      `当前词表：${MODULE_PERMISSIONS.join(' / ')}；` +
+      '未知能力被静默忽略会导致模块运行期莫名 403，故安装期硬拒——请改模块 manifest 或升级安装器。',
+  );
+}
+
+/**
+ * 解析 manifest：包根有 manifest.yaml → contracts YAML 轨；manifest.json → JSON 轨（#243 单轨解析）。
+ * 读后先过未知能力门禁（issue #269：schema 报错看不到能力名，前置检查点名；见 assertKnownPermissions）。
+ */
 export async function readManifest(packageDir: string): Promise<{ manifest: ModuleManifest; text: string }> {
   const yamlPath = join(packageDir, 'manifest.yaml');
   const jsonPath = join(packageDir, 'manifest.json');
   if (existsSync(yamlPath)) {
     const text = await readFile(yamlPath, 'utf8');
+    assertKnownPermissions(text, false);
     const manifest = ModuleManifestSchema.parse(manifestFromYamlText(text) as Record<string, unknown>);
     return { manifest, text };
   }
   if (existsSync(jsonPath)) {
     const text = await readFile(jsonPath, 'utf8');
+    assertKnownPermissions(text, true);
     const manifest = ModuleManifestSchema.parse(JSON.parse(text) as Record<string, unknown>);
     return { manifest, text };
   }
@@ -239,6 +279,13 @@ async function resolveOne(input: {
       : builtinModuleDir({ rootDir, moduleId: item.id, artifacts: input.artifacts ?? null });
     const staged = await fileStage({ path: rel, rootDir, log });
     const { manifest, text } = await readManifest(staged.packageDir);
+    // reuse 完整性收紧（issue #269 / 决策 #60）：目录来源无包字节 SRI，但 lock 里的 manifestHash
+    // 必须对得上——否则本地目录内容已变却沿用旧锁定记录（静默漂移）。changed（显式换源/升级）不触发。
+    if (item.action === 'reuse' && prev && manifestHashOf(manifest) !== prev.manifestHash) {
+      throw new Error(
+        `模块 ${item.id}：manifestHash 不匹配（lock 期望 ${prev.manifestHash.slice(0, 16)}…，实测 ${manifestHashOf(manifest).slice(0, 16)}…）——本地来源内容已变，拒绝安装；确认要升级请重跑 \`unself module add\` 重新锁定`,
+      );
+    }
     return {
       id: item.id,
       source,
@@ -310,6 +357,25 @@ async function stageFromTarball(input: {
   const { packageDir } = await extractTarball({ tarPath, dest });
   const { manifest, text } = await readManifest(packageDir);
 
+  // reuse 完整性收紧（issue #269 / 决策 #60）：决策 #60 目前只在「暂存包还在」的 reuse 分支生效；
+  // 暂存被清（干净机器 / .deploy 重建）重新取包时会静默接受新字节。这里补齐重取路径：
+  // (a) lock 期望 SRI vs 本次实测字节；(b) lock 期望 manifestHash vs 包内 manifest。任一不等 → 拒绝。
+  // changed = 显式换源/升级，**不得**触发（用户明确要求换包，比对旧值只会错拦）。
+  const prev = input.prev;
+  if (item.action === 'reuse' && prev) {
+    if (prev.integrity !== undefined && prev.integrity !== input.expected.integrity) {
+      throw new Error(
+        `模块 ${item.id}：包 integrity 不匹配（lock 期望 ${prev.integrity.slice(0, 24)}…，实测 ${input.expected.integrity.slice(0, 24)}…）——tarball 可能被篡改，拒绝安装（决策 #60）；确认要升级请重跑 \`unself module add\` 重新锁定`,
+      );
+    }
+    const actualHash = manifestHashOf(manifest);
+    if (actualHash !== prev.manifestHash) {
+      throw new Error(
+        `模块 ${item.id}：manifestHash 不匹配（lock 期望 ${prev.manifestHash.slice(0, 16)}…，实测 ${actualHash.slice(0, 16)}…）——包内容与 unself.lock 锁定版本不一致，拒绝安装（决策 #60）；确认要升级请重跑 \`unself module add\` 重新锁定`,
+      );
+    }
+  }
+
   // validate（@unself/contracts 单轨校验；包名一致性按 manifest.id）
   const readOptional = async (name: string): Promise<string | undefined> =>
     readFile(join(packageDir, name), 'utf8').catch(() => undefined);
@@ -326,8 +392,7 @@ async function stageFromTarball(input: {
     );
   }
 
-  // lock 已有记录（reuse-but-evicted / changed 的新包也要对齐旧 integrity 吗？changed = 显式升级，不比对旧值）
-  void input.prev;
+  // lock 已有记录且通过了上面的收紧比对（reuse 重取路径）；changed = 显式升级，不比对旧值
   log(`模块 ${item.id}：来源包已解包并校验（v${manifest.version}）`);
   return {
     id: item.id,
