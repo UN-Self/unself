@@ -5,7 +5,6 @@ import { SignJWT, calculateJwkThumbprint, exportJWK, generateKeyPair } from 'jos
 import { ExportBundleSchema } from '@unself/contracts';
 
 import app from '../src/index';
-import { createModuleDb, type ModuleTestDb } from '../../../packages/module-sdk/test/test-factory';
 
 // 隔离网络破坏用例（零网络红测）：每个测试后还原全局 stub。
 afterEach(() => {
@@ -13,11 +12,44 @@ afterEach(() => {
 });
 
 /**
- * #71 测试：真实 ES256 keypair + 部署期注入的 CORE_JWKS_JSON（B 方案本地验签，零运行时网络）+
- * 真 SQLite module_kv（#60：假 D1 换真库——modules 统一迁移真建表，SDK 收口由真库裁决）。
- * 验收链路：SDK 存储读写 hello 计数、跨前缀拒绝由 SDK 层保证（#9/#60 用例），
- * 这里验证 HTTP 面验签/计数/生命周期骨架。
+ * #71 测试：真实 ES256 keypair + 部署期注入的 CORE_JWKS_JSON（B 方案本地验签，零运行时网络）。
+ * 存储面（#248 收敛（a)）：hello 落点 core，计数经 **Core API 代理**（Service Binding CORE_API）——
+ * 这里替身的边界是 **HTTP 形状**（core-api 的 /api/module-api/storage/* 契约），不是 SQL：
+ * 代理侧 SQL 由 services/core-api/test/module-api.test.ts（真路由 + 真 SQLite）裁决，
+ * 本测试只断言「模块发了什么请求、带了谁的身份、如何解释响应」——同一协议两张皮互为免疫。
+ * 验收链路：hello 计数读写、模块 token 原样转交（权限只信服务端）、生命周期骨架。
  */
+
+/** core-api 代理替身：真 KV 语义 + 请求记录（形状对齐 services/core-api/src/routes/module-api.ts）。 */
+function makeCoreApiStub() {
+  const kv = new Map<string, string>();
+  const calls: Array<{ method: string; path: string; auth?: string; body?: unknown }> = [];
+  const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = new URL(String(input));
+    const method = init?.method ?? 'GET';
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
+    calls.push({ method, path: url.pathname, auth: headers.authorization, body });
+    const m = /^\/api\/module-api\/storage\/(.*)$/.exec(url.pathname);
+    if (!m) return Response.json({ error: 'not found' }, { status: 404 });
+    const key = decodeURIComponent(m[1] ?? '');
+    if (key === '') return Response.json({ keys: [...kv.keys()].sort() });
+    if (method === 'GET') {
+      if (!kv.has(key)) return Response.json({ error: 'key not found' }, { status: 404 });
+      return Response.json({ key, value: kv.get(key) });
+    }
+    if (method === 'PUT') {
+      kv.set(key, String((body as { value?: unknown })?.value ?? ''));
+      return Response.json({ ok: true });
+    }
+    if (method === 'DELETE') {
+      kv.delete(key);
+      return Response.json({ ok: true });
+    }
+    return Response.json({ error: 'method not allowed' }, { status: 405 });
+  };
+  return { fetch, kv, calls } as unknown as { fetch: Fetcher['fetch']; kv: Map<string, string>; calls: Array<{ method: string; path: string; auth?: string; body?: unknown }> };
+}
 
 let privateKey: CryptoKey;
 let kid: string;
@@ -33,23 +65,20 @@ async function makeToken(overrides: Record<string, unknown> = {}): Promise<strin
 
 /** 每次测试生成真实 ES256 密钥对；CORE_JWKS_JSON 注入 env（§5.2 B 方案：本地验签，不 stub、不发起任何网络）。 */
 async function envFor(): Promise<{
-  MODULES_DB: D1Database;
+  CORE_API: Fetcher;
   CORE_JWKS_JSON: string;
-  db: ModuleTestDb;
+  stub: ReturnType<typeof makeCoreApiStub>;
 }> {
   const pair = await generateKeyPair('ES256', { extractable: true });
   privateKey = pair.privateKey;
   const publicJwk = await exportJWK(pair.publicKey);
   kid = await calculateJwkThumbprint(publicJwk);
   const coreJwksJson = JSON.stringify({ keys: [{ ...publicJwk, kid, use: 'sig', alg: 'ES256' }] });
-  const db = createModuleDb();
-  afterEach(() => {
-    db.close();
-  });
+  const stub = makeCoreApiStub();
   return {
-    MODULES_DB: db.d1 as unknown as D1Database,
+    CORE_API: stub as unknown as Fetcher,
     CORE_JWKS_JSON: coreJwksJson,
-    db,
+    stub,
   };
 }
 
@@ -64,7 +93,7 @@ describe('module-hello（#13 垂直切片载体）', () => {
     const token = await makeToken();
     const res = await app.request('https://m.example/api/count', {
       headers: { authorization: `Bearer ${token}`, 'x-request-id': 'req-no-jwks' },
-    }, { MODULES_DB: env.MODULES_DB });
+    }, { CORE_API: env.CORE_API });
     expect(res.status).toBe(503);
     const body = (await res.json()) as { error: string; requestId?: string };
     expect(body.error).toBe('jwks not provisioned');
@@ -119,18 +148,19 @@ describe('module-hello（#13 垂直切片载体）', () => {
     expect(await again.json()).toEqual({ count: 1 });
   });
 
-  it('计数写入落在 hello 子域（真库直查 module_kv 行）', async () => {
+  it('计数写入经 Core API 代理落在 hello 子域，且原样转交模块 token（权限只信服务端）', async () => {
     const env = await envFor();
     const token = await makeToken();
     await app.request('https://m.example/api/count', { method: 'POST', headers: { authorization: `Bearer ${token}` } }, env);
-    // SDK 键模型：module_kv(module_id='hello', key='counter')——直查真库行（不经适配器）
-    expect(
-      env.db.first<{ value: string }>(
-        'SELECT value FROM module_kv WHERE module_id = ? AND key = ?',
-        'hello',
-        'counter',
-      )?.value,
-    ).toBe('1');
+    // 代理侧数据：counter=1（键值为模块子域裸键，落 module_kv(module_id='hello', key='counter')）
+    expect(env.stub.kv.get('counter')).toBe('1');
+    // 调用形状：PUT /api/module-api/storage/counter，Bearer 是**本请求的模块 token**（core-api 据此裁决权限）
+    const put = env.stub.calls.find((c) => c.method === 'PUT');
+    expect(put?.path).toBe('/api/module-api/storage/counter');
+    expect(put?.auth).toBe(`Bearer ${token}`);
+    expect(put?.body).toEqual({ value: '1' });
+    // 存与取都经代理（模块侧零直连数据库：无 D1 绑定可用）
+    expect(env.stub.calls.some((c) => c.method === 'GET')).toBe(true);
   });
 
   it('身份行数据源：claims 姓名/邮箱真值只能来自服务端验签通过的 token（签名载荷不可篡改）', async () => {
@@ -169,7 +199,7 @@ describe('module-hello（#13 垂直切片载体）', () => {
     const bundle = ExportBundleSchema.parse(await res.json());
     expect(bundle.version).toBe(1);
     expect(bundle.moduleId).toBe('hello');
-    expect(bundle.tables.hello_counter?.rows).toEqual([{ scope: 'global', n: 1 }]);
+    expect(bundle.tables.module_kv?.rows).toEqual([{ key: 'counter', value: '1' }]);
     expect(bundle.files).toEqual([]);
   });
 

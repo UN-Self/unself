@@ -31,7 +31,7 @@ function officialInput(moduleId: 'hello' | 'chat'): Parameters<typeof validateMo
   if (moduleId === 'chat') {
     input.migrations = {
       '0001_baseline.sql': readFileSync(
-        join(REPO_ROOT, 'modules', 'chat', 'worker', 'schema-baseline.sql'),
+        join(REPO_ROOT, 'modules', 'chat', 'migrations', 'chat', '0001_baseline.sql'),
         'utf8',
       ),
     };
@@ -63,10 +63,10 @@ describe('官方模块迁移到契约 v1 并通过 validate（验收①）', () 
     expect(manifest.permissions).toEqual(['storage', 'notify']);
   });
 
-  it('chat 通过 validate：tables 申报与 schema-baseline.sql 实际建表逐一一致（真实文件）', () => {
+  it('chat 通过 validate：tables 申报与 0001_baseline.sql 实际建表逐一一致（真实文件）', () => {
     const input = officialInput('chat');
     const result = validateModulePackage(input);
-    // 先锚定：schema-baseline.sql 实际建表 = 18 张
+    // 先锚定：0001_baseline.sql 实际建表 = 18 张
     const sql = input.migrations?.['0001_baseline.sql'] ?? '';
     expect(tableNamesFromSql(sql)).toHaveLength(18);
     expect(result.errors).toEqual([]);

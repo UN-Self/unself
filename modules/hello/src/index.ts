@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { Hono, type Context } from 'hono';
 import type { ModuleTokenClaims } from '@unself/contracts';
-import { createD1Storage, verifyModuleToken, type D1MinimalDatabase } from '@unself/module-sdk';
+import { createCoreApiStorage, verifyModuleToken, type ModuleStorage } from '@unself/module-sdk';
 
 /**
  * hello 模块（#13，M0 垂直切片验收载体）：
@@ -9,10 +9,16 @@ import { createD1Storage, verifyModuleToken, type D1MinimalDatabase } from '@uns
  * - GET /api/count：经 SDK 存储接口读写计数（#9 前缀守卫）
  * - GET /life/export、POST /life/purge：模块生命周期骨架（§5.4 契约，requireAuth 同 count 规）
  * - 页面：身份行（claims 姓名/邮箱）+ 计数 + [+1] 并排（≤50 行样式，tokens 化）
+ *
+ * 数据落点 = `core`（#248 收敛（a)）：模块不直连任何数据库，计数经 **Core API 代理**
+ * （`/api/module-api/storage/*` 四形状）读写。跨 worker 走 **Service Binding CORE_API**
+ * （同 zone 明文 fetch 被 CF 平台禁，见 deploy/cloudflare assemble 注释 #71 根因）；模块把自己的
+ * 模块 token 原样转交 core-api，权限裁决只发生在服务端注册表快照（前端只是视图）。
  */
 
 export interface Bindings {
-  MODULES_DB: D1Database;
+  /** core-api worker 的 Service Binding（同名 worker：unself-core-api）。core 级数据的唯一通道。 */
+  CORE_API: Fetcher;
   /** Core 公钥 JWKS 的 JSON 序列化（部署期注入，§5.2 B 方案：模块本地验签，零运行时网络）。 */
   CORE_JWKS_JSON?: string;
   /** Core issuer（可选校验；M0 以 aud 锁定为主）。 */
@@ -22,24 +28,32 @@ export interface Bindings {
 /** 模块 id：aud 锁定 + SDK 存储子域 + 表前缀三处一致。 */
 const MODULE_ID = 'hello';
 
-/** SDK 存储接口（#9）：MODULES_DB + moduleId 子域收口，跨前缀由 SDK 拒绝。 */
-function storage(db: D1Database): D1MinimalDatabase {
-  // D1 绑定满足 SDK 最小结构类型（prepare/bind/first/all/run）
-  return db as unknown as D1MinimalDatabase;
+/** Service Binding 调用用的占位 origin（host 不参与路由；core-api 按路径匹配，决策 #63）。 */
+const CORE_API_ORIGIN = 'https://core-api.internal';
+
+/**
+ * 构造 core 级存储客户端（#248 收敛（a)）：token 取当前请求的模块 token（原样转交 core-api 验签），
+ * 传输走 Service Binding（不经公网、不受同 zone fetch 禁令影响）。
+ */
+function storeFor(c: Context<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }>): ModuleStorage {
+  const bearer = (c.req.header('authorization') ?? '').slice(7);
+  return createCoreApiStorage({
+    coreApiOrigin: CORE_API_ORIGIN,
+    getToken: () => bearer,
+    fetchImpl: (url, init) => c.env.CORE_API.fetch(url, init),
+  });
 }
 
-/** 计数键：SDK 键为模块子域裸键，落 module_kv(module_id='hello', key='counter')。 */
+/** 计数键：SDK 键为模块子域裸键（core-api 侧落 module_kv(module_id='hello', key='counter')）。 */
 const COUNTER_KEY = 'counter';
 
-async function readCount(db: D1Database): Promise<number> {
-  const store = createD1Storage({ db: storage(db), moduleId: MODULE_ID });
+async function readCount(store: ModuleStorage): Promise<number> {
   const raw = await store.get(COUNTER_KEY);
   const n = raw === null ? 0 : Number.parseInt(raw, 10);
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-async function writeCount(db: D1Database, value: number): Promise<void> {
-  const store = createD1Storage({ db: storage(db), moduleId: MODULE_ID });
+async function writeCount(store: ModuleStorage, value: number): Promise<void> {
   await store.put(COUNTER_KEY, String(value));
 }
 
@@ -147,23 +161,24 @@ app.get('/sdk/*', (c) => c.json({ error: 'sdk asset served by deploy bundler (M0
 
 /** 计数读取（验签后）。 */
 app.get('/api/count', async (c) => {
-  if (!c.env.MODULES_DB) {
+  if (!c.env.CORE_API) {
     return c.json({ error: 'storage binding missing' }, 503);
   }
   const authError = await requireAuth(c);
   if (authError) return authError;
-  return c.json({ count: await readCount(c.env.MODULES_DB) });
+  return c.json({ count: await readCount(storeFor(c)) });
 });
 
 /** 计数 +1（验签后；读改写原子性在 M0 单实例串行下可接受）。 */
 app.post('/api/count', async (c) => {
-  if (!c.env.MODULES_DB) {
+  if (!c.env.CORE_API) {
     return c.json({ error: 'storage binding missing' }, 503);
   }
   const authError = await requireAuth(c);
   if (authError) return authError;
-  const next = (await readCount(c.env.MODULES_DB)) + 1;
-  await writeCount(c.env.MODULES_DB, next);
+  const store = storeFor(c);
+  const next = (await readCount(store)) + 1;
+  await writeCount(store, next);
   return c.json({ count: next });
 });
 
@@ -194,30 +209,36 @@ async function requireAuth(
 /** 生命周期骨架（§5.4 契约；M0 返回契约形状，全量实现随 M1 卸载剧本）。
  * 认证与 /api/count 同规（#45 遗留项②）：storage 缺绑定 503，验签不过 401。 */
 app.get('/life/export', async (c) => {
-  if (!c.env.MODULES_DB) {
+  if (!c.env.CORE_API) {
     return c.json({ error: 'storage binding missing' }, 503);
   }
   const authError = await requireAuth(c);
   if (authError) return authError;
-  const count = await readCount(c.env.MODULES_DB);
+  // core 级落点（#248）：模块没有自己的表，导出 = 本模块在 Core API 代理侧的键值行
+  // （表名 module_kv 是平台基建表，行已由 core-api 按 aud 收口到本模块子域）。
+  const store = storeFor(c);
+  const rows: Array<{ key: string; value: string }> = [];
+  for (const key of await store.list()) {
+    rows.push({ key, value: (await store.get(key)) ?? '' });
+  }
   return c.json({
     version: 1,
     moduleId: MODULE_ID,
     exportedAt: new Date().toISOString(),
     tables: {
-      hello_counter: { schemaVersion: 1, rows: count > 0 ? [{ scope: 'global', n: count }] : [] },
+      module_kv: { schemaVersion: 1, rows },
     },
     files: [],
   });
 });
 
 app.post('/life/purge', async (c) => {
-  if (!c.env.MODULES_DB) {
+  if (!c.env.CORE_API) {
     return c.json({ error: 'storage binding missing' }, 503);
   }
   const authError = await requireAuth(c);
   if (authError) return authError;
-  const store = createD1Storage({ db: storage(c.env.MODULES_DB), moduleId: MODULE_ID });
+  const store = storeFor(c);
   for (const key of await store.list()) {
     await store.delete(key);
   }

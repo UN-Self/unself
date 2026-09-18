@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * chat 专属资源供给与部署配置（#219，决策 #50 存储收口豁免）：
- * chat 不经 modules 库/SDK 收口，由装配器直接供给专属资源（chat- 前缀）：
- * - D1 `unself-chat`：基线 schema（modules/chat/worker/schema-baseline.sql，首建一次性灌入；
+ * chat 专属资源供给与部署配置（#219，决策 #50；#248 存储面去豁免）：
+ * chat 落点 = **dedicated 普通实例**（storage.declaration=dedicated，决策 #55/#74）：
+ * 数据落自己的库 `unself-chat`，迁移走标准链（migrations/chat/ + 独立记账 unself_migrations_chat），
+ * 与任何 dedicated 模块同一套装配路径——存储面不再有 chat 专属分支。
+ * 本文件保留的 chat 专属面只有**模块资源**（与存储落点无关）：
+ * - D1 `unself-chat`：迁移链（modules/chat/migrations/chat/0001_baseline.sql，逐文件记账应用；
+ *   上游 23 个 migration 不搬，无「已应用迁移文件」记账问题）；
+ * - KV/R2/DO/Secret：会话、附件、实时 —— 由 chat 包配置声明，装配器按声明供给。
+ * - D1 `unself-chat`：迁移链（modules/chat/migrations/chat/0001_baseline.sql，逐文件记账应用；
  *   上游 23 个 migration 不搬，无「已应用迁移文件」记账问题）；
  * - KV `unself-chat-sessions`：会话/实时票券（worker 绑定名 SESSIONS）；
  * - R2 `unself-chat-files`：附件（worker 绑定名 FILES；可选增强，缺绑定时代码判空降级）；
@@ -12,7 +18,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureD1, ensureKvNamespace, ensureR2Bucket } from './rest';
 import type { RestClient } from './rest';
@@ -64,22 +70,6 @@ export async function ensureChatR2Bucket(
   return ensureR2Bucket(client, accountId, CHAT_R2_NAME, log);
 }
 
-/** 基线 schema 灌入（REST import，幂等：全 IF NOT EXISTS + OR IGNORE 种子）。 */
-export async function applyChatSchema(input: {
-  client: RestClient;
-  accountId: string;
-  chatDbId: string;
-  /** 模块包根（modules/chat）。 */
-  moduleDir: string;
-  log: (msg: string) => void;
-}): Promise<void> {
-  const schemaPath = join(input.moduleDir, 'worker', 'schema-baseline.sql');
-  const { d1Import } = await import('./rest');
-  const sqlText = await readFile(schemaPath, 'utf8');
-  const report = await d1Import(input.client, input.accountId, input.chatDbId, sqlText);
-  input.log(`chat 基线 schema 已应用（${CHAT_DB_NAME} ← worker/schema-baseline.sql，${report.numQueries} 条语句）`);
-}
-
 /**
  * 生成新 chat 加密密钥环（AES-256-GCM，32B 随机 → base64（标准带 padding））：
  * `{ activeKeyId:'v1', keys:{ v1:<base64> } }`——与 worker encryption.js 的 keyring 解析
@@ -111,8 +101,11 @@ export async function readChatPackageConfig(moduleDir: string): Promise<ChatPack
   if (kvList.length !== 1 || kvList[0]!.binding !== KV_BINDING) {
     throw new Error(`modules/chat/wrangler.jsonc 形状不符：需恰好一个 kv_namespaces 绑定 ${KV_BINDING}`);
   }
-  if (!existsSync(join(moduleDir, 'worker', 'schema-baseline.sql'))) {
-    throw new Error('modules/chat/worker/schema-baseline.sql 缺失：chat D1 基线 schema 无法应用');
+  // #248：chat 的 schema 走标准迁移链（migrations/chat/0001_baseline.sql + 独立记账），
+  // 不再有一次性灌 schema 的豁免——包内必须带标准 migrations/<id>/ 目录（落点 dedicated）。
+  const migrationsDir = join(moduleDir, 'migrations', CHAT_MODULE_ID);
+  if (!existsSync(migrationsDir) || readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).length === 0) {
+    throw new Error('modules/chat/migrations/chat/ 缺失或无 .sql：chat 迁移链无法应用（#248）');
   }
   const doRaw = (parsed.durable_objects ?? {}) as { bindings?: unknown };
   return {

@@ -1,15 +1,15 @@
 {
   // SPDX-License-Identifier: AGPL-3.0-only
+  // ⚠️ 本地开发参考（真实部署走装配器生成的 .deploy/cloudflare/modules/hello.wrangler.jsonc）。
+  // #248 收敛（a)：hello 落点 core——模块不再直连任何数据库，数据经 Core API 代理；
+  // 跨 worker 调用用 Service Binding（同 zone 明文 fetch 被 CF 平台禁）。
   "name": "unself-module-hello",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
-  "d1_databases": [
+  "services": [
     {
-      "binding": "MODULES_DB",
-      "database_name": "unself-modules",
-      "database_id": "REPLACE_ME",
-      // migrations_dir：本模块迁移在 migrations/hello/（表前缀 = 模块 id）
-      "migrations_dir": "migrations/hello"
+      "binding": "CORE_API",
+      "service": "unself-core-api"
     }
   ]
 }

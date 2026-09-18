@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createChatDb, type ChatTestDb } from './chat-test-factory';
 
 /**
- * schema 基线守护：真 SQLite 加载 worker/schema-baseline.sql 后，
+ * schema 基线守护：真 SQLite 加载 migrations/chat/0001_baseline.sql 后，
  * 关键表存在、messages 关键列在位——SQL 与建表列错位当场红（#60 教训）。
  * 另断言 telegram 时代残留表不存在（M2 清库遗留）。
  */

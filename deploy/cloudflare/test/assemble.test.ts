@@ -174,9 +174,12 @@ describe('buildModuleSdkAssets（T3 页面 SDK 装载契约）', () => {
       expect(typeof mod.createModuleSDK).toBe('function');
       expect(Object.keys(mod).sort()).toEqual([
         'assertCoreOrigin',
+        // #248 收敛（a)：core 级数据的唯一通道 = Core API 代理；createD1Storage 是兼容别名（形状不变）
+        'createCoreApiStorage',
         'createD1Storage',
         'createModuleApi',
         'createModuleSDK',
+        'createModuleStorage',
         'decodeJwtPayload',
         // #91 通道 B：主题语义名 → CSS 变量名单点转换（模块作者写样式用）
         'tokenCssName',

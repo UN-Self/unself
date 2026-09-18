@@ -68,8 +68,8 @@ const LEGACY_SEEDS = {
     // 0006
     login_attempts: ["INSERT INTO login_attempts (key, failures, window_start) VALUES ('u:old.name', 3, 0)"],
   },
-  'modules/hello/migrations/hello': {
-    hello_counter: ["INSERT INTO hello_counter (scope, n) VALUES ('old-scope', 7)"],
+  'services/core-api/migrations/modules': {
+    // 平台基建表（#248）：老库里已有模块键值行，升级必须能在这些行上继续跑
     module_kv: ["INSERT INTO module_kv (module_id, key, value) VALUES ('hello', 'old-key', 'old-value')"],
   },
 };
