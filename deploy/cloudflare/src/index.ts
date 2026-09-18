@@ -5,7 +5,7 @@
 export { runNineSteps } from './steps';
 export type { Summary, StepReporter } from './steps';
 
-export { loadUnselfConfig, parseUnselfConfigText, UnselfConfigSchema } from './config';
+export { loadUnselfConfig, parseUnselfConfigText } from './config';
 export type { UnselfConfig } from './config';
 
 export { createCoreControlPlane } from './control-plane';
