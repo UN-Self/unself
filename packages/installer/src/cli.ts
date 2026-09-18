@@ -38,8 +38,16 @@ export interface RunOptions {
     port?: number;
     /** 模块存储声明投影（#55）：CLI 从模块包 manifest 读出后传入（③½ 渲染与校验依据）。 */
     storageOptions?: Array<{ id: string; accepts: string[]; preferred?: string }>;
+    /** 本实例资源名预览（#272）：向导页展示「会占用哪些 CF 资源名」。 */
+    resourceNames?: Array<{ kind: string; name: string }>;
   }) => Promise<number>;
-  deployNineSteps?: (input: { instancePath: string }) => Promise<{ baseUrl: string; setupToken: string | null }>;
+  deployNineSteps?: (input: {
+    instancePath: string;
+    /** 撞车守卫放行开关（#272）。 */
+    allowAdopt?: boolean;
+    /** 九步进度事件转发（#272：`unself deploy` 不再吞进度）。 */
+    onEvent?: (text: string) => void;
+  }) => Promise<{ baseUrl: string; setupToken: string | null }>;
 }
 
 const USAGE: string[] = [
@@ -54,18 +62,28 @@ const USAGE: string[] = [
   '  use <名字>           切换当前实例（写注册表 current）',
   '  current              显示当前实例（名字 + 实例目录）',
   '  destroy <名字>       注销实例（--purge 连目录一起删；数据不可恢复，谨慎）',
-  '  deploy               CI/逃生门：对当前实例直达九步装配（等价向导④）',
+  '  deploy [--allow-adopt]  CI/逃生门：对当前实例直达九步装配（等价向导④）',
+  '                    --allow-adopt = 撞车守卫放行（台账证明不了归属时显式接管同名资源）',
   '  help                 显示本帮助',
   '',
   '实例注册表：~/.unself/instances.json（只记「名字 → 路径」，不含秘密；可重建）',
   '环境变量：UNSELF_INSTANCE=<名字|路径> 临时覆盖当前实例',
 ];
 
-/** 解析 argv → 命令与位置参数（--json/--purge 开关）。 */
-export function parseArgs(argv: string[]): { cmd: string; args: string[]; json: boolean; purge: boolean } {
-  const rest = argv.filter((a) => a !== '--json' && a !== '--purge');
+/** 解析 argv → 命令与位置参数（--json/--purge/--allow-adopt 开关）。 */
+export function parseArgs(argv: string[]): {
+  cmd: string;
+  args: string[];
+  json: boolean;
+  purge: boolean;
+  allowAdopt: boolean;
+} {
+  const allowAdopt = argv.includes('--allow-adopt') || argv.includes('--allow-shared-account');
+  const rest = argv.filter(
+    (a) => a !== '--json' && a !== '--purge' && a !== '--allow-adopt' && a !== '--allow-shared-account',
+  );
   const cmd = rest[0] ?? 'wizard';
-  return { cmd, args: rest.slice(1), json: argv.includes('--json'), purge: argv.includes('--purge') };
+  return { cmd, args: rest.slice(1), json: argv.includes('--json'), purge: argv.includes('--purge'), allowAdopt };
 }
 
 /** 取「当前实例」并做磁盘有效性校验（resolveCurrent 纯函数 + loadInstance 校验）。 */
@@ -92,7 +110,7 @@ const KNOWN_COMMANDS = ['wizard', 'init', 'list', 'use', 'current', 'destroy', '
 /** 执行单条命令（不吞异常：由 run 统一转人话 + exit 1）。 */
 async function exec(opts: RunOptions): Promise<number> {
   const { argv, env, home, cwd, log } = opts;
-  const { cmd, args, json, purge } = parseArgs(argv);
+  const { cmd, args, json, purge, allowAdopt } = parseArgs(argv);
 
   // 未知命令先拦：不消耗注册表读取，也不给「没有当前实例」的误导性错误。
   if (!KNOWN_COMMANDS.includes(cmd)) {
@@ -136,6 +154,16 @@ async function exec(opts: RunOptions): Promise<number> {
     saveRegistry(reg, home);
     log(`实例已创建并设为当前：${name}`);
     echoPathline(layout.instanceDir, log);
+    // 资源名预览（#272）：让用户看到本实例会占用哪些 CF 资源名（不用手记环境变量）。
+    try {
+      const { previewInstanceResources } = await import('./deploy');
+      const preview = await previewInstanceResources(layout.instanceDir);
+      log(`资源命名空间：${preview.namespace ?? '（未设置 → 历史命名 unself-*）'}`);
+      log('本实例将占用以下 Cloudflare 资源名（同账户隔离靠它们）：');
+      for (const n of preview.names) log(`  ${n.kind}　${n.name}`);
+    } catch (err) {
+      log(`（资源名预览不可用：${err instanceof Error ? err.message : String(err)}）`);
+    }
     log('下一步：`unself wizard` 打开本地向导（或 `unself deploy` CI 直达）。');
     return 0;
   }
@@ -196,6 +224,7 @@ async function exec(opts: RunOptions): Promise<number> {
       const stateMod = await import('./web/state');
       let state = stateMod.initialWizardState(o.instancePath, {
         ...(o.storageOptions ? { storageOptions: o.storageOptions as never[] } : {}),
+        ...(o.resourceNames ? { resourceNames: o.resourceNames } : {}),
       });
       const { server, port: actual } = await startWizardServer({
         port: o.port,
@@ -213,6 +242,8 @@ async function exec(opts: RunOptions): Promise<number> {
               domain: input.domain,
               modules: input.modules,
               ...(input.storageChoices ? { storageChoices: input.storageChoices } : {}),
+              ...(input.token ? { token: input.token } : {}),
+              ...(input.allowAdopt ? { allowAdopt: true } : {}),
               onEvent: input.onEvent,
             });
           },
@@ -234,13 +265,16 @@ async function exec(opts: RunOptions): Promise<number> {
       port: port ? Number(port.slice('--port='.length)) : undefined,
       // #55：读仓库内模块 manifest 的 storage 声明，供向导③½ 做四级单选与 accepts 校验
       storageOptions: await (await import('./deploy')).wizardStorageOptions(inst.path.replace(/[/\\]unself$/, '')),
+      // #272：本实例会占用的 CF 资源名（ wizard 页预览）
+      resourceNames: (await (await import('./deploy')).previewInstanceResources(inst.path)).names,
     });
     return 0;
   }
 
   if (cmd === 'deploy') {
     const fn = opts.deployNineSteps ?? (async (input) => (await import('./deploy')).runDeploy(input));
-    const result = await fn({ instancePath: inst.path });
+    // #272：转发九步事件（原先不传 onEvent，用户只看得到结果行、看不到哪一步在干什么）+ 撞车守卫开关。
+    const result = await fn({ instancePath: inst.path, allowAdopt, onEvent: (line) => log(line) });
     log(`装配完成：${result.baseUrl}`);
     log(result.setupToken ? `setup 深链：/setup?token=${result.setupToken}` : '已有管理员：setup 已封箱。');
     echoPathline(inst.path, log);
