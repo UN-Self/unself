@@ -83,6 +83,14 @@ export function registryDisableCommand(moduleId: string): string {
 }
 
 /**
+ * 注册表删行（#270 卸载：行没了 = token 门禁 404 = 该模块 token 失效）。
+ * 参数化（?1）避免把 id 内联进 SQL；与 upsert/toggle 同一张表、同一套注册表语义。
+ */
+export function registryDeleteSql(): string {
+  return 'DELETE FROM module_registry WHERE id = ?1';
+}
+
+/**
  * 步骤⑤全量语句：选中 upsert（enabled=1）+ 未选 disable（enabled=0）。
  * 顺序确定，重跑收敛到同一终态。
  */
