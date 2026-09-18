@@ -93,6 +93,22 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
   /** 模块启停写端点（#49 归属切分；#17 管理界面消费）：与 PATCH 同语义，二选一即可。 */
   app.post('/api/admin/modules/:id/toggle', (c) => handleModuleToggle(c, c.req.param('id')));
 
+  /**
+   * 卸载模块（#270 T6）：注册表移除 = token 失效。
+   * 行删除后 checkTokenGate / checkModuleGate 对该 id 查无此行即 404——已签 token 虽未到期，
+   * 但换发与模块 API 门禁都过不了注册表这一关，模块随即整体失联。
+   * 幂等语义：未注册即无操作（404，不伪造成功）；引擎侧（control-plane）另管删 worker/路由/DROP 表。
+   */
+  app.delete('/api/admin/modules/:id', async (c) => {
+    const moduleId = c.req.param('id');
+    const result = await c.env.CORE_DB.prepare('DELETE FROM module_registry WHERE id = ?').bind(moduleId).run();
+    if (!result.meta.changes) {
+      return c.json({ error: 'module not found' }, 404);
+    }
+    await audit(c.env.CORE_DB, (await readSession(c))!.uid, 'module_removed', moduleId);
+    return c.json({ id: moduleId, removed: true });
+  });
+
   /** 全量列表（管理端，含停用）。 */
   app.get('/api/admin/modules', async (c) => {
     return c.json(await listModules(c.env.CORE_DB));
