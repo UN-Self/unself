@@ -54,6 +54,8 @@
 - wrangler 完整安装 213MB，其中 workerd 二进制 147MB 无法剥离（miniflare 启动即 require）→ 装配器不依赖 wrangler（决策 #65）
 - 从 OAuth scope 清单推断权限不可靠（「无 R2 scope」实测仍能建桶）→ 权限类结论只能实测 → docs/audit/241-oauth覆盖实测-2026-09-17.md
 - **CI 门禁不是「三件套」**：还含 `pnpm verify:tokens`（纪律 lint）与 `node scripts/check-migrations-upgrade.mjs`（升级路径测试）→ 只跑三件套会「本地全绿、CI 红」（#258 实锤）
+- **worktree 基座读本地引用**：合并远端后先 `git merge --ff-only origin/m2/dev` 再 `herdr worktree create --base`，否则新 worktree 基于陈旧树（#248 实测：差点让 worker 在缺 #243~#247 的树上开工）
+- **PR 目标非默认分支时 `closes #N` 不会自动关 issue**：合进 `m2/dev` 后要手动 `gh issue close` 并写明合并点（#242/#245/#246/#247 实测滞留）
 
 ## 与用户协作
 
