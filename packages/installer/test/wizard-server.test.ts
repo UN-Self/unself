@@ -7,12 +7,15 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createWizardServer, startWizardServer } from '../src/web/server';
-import { initialWizardState, type WizardState } from '../src/web/state';
+import { createWizardServer, renderPage, startWizardServer } from '../src/web/server';
+import { initialWizardState, type WizardEnvHint, type WizardState } from '../src/web/state';
 
 let holder: { state: WizardState };
 let base: string;
 let close: () => Promise<void>;
+
+/** ①步环境提示基线：OAuth 可用、非 CI、非多级子域（#246 envHint 缺省语义）。 */
+const HINT: WizardEnvHint = { hasEnvToken: false, oauthUsable: true, needsTotalTls: false, ci: false };
 
 beforeEach(async () => {
   const root = mkdtempSync(join(tmpdir(), 'unself-wizsrv-'));
@@ -24,6 +27,7 @@ beforeEach(async () => {
         holder.state = s;
       },
       hasEnvToken: false,
+      envHint: { ...HINT },
       deploy: async ({ onEvent }) => {
         onEvent('九步进度（替身）：步骤 1/9');
         await new Promise((r) => setTimeout(r, 20));
@@ -159,6 +163,7 @@ describe('失败路径（三要素）', () => {
           holder.state = s;
         },
         hasEnvToken: false,
+        envHint: { ...HINT },
         deploy: async () => {
           throw new Error('PUT /zones/../workers/routes: 10405 权限不足');
         },
@@ -223,6 +228,7 @@ describe('createWizardServer 裸构造（不 listen 也可导出）', () => {
         getState: () => initialWizardState('/tmp/x/unself'),
         setState: () => {},
         hasEnvToken: true,
+        envHint: { ...HINT, hasEnvToken: true },
         deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
       },
     });
@@ -231,3 +237,109 @@ describe('createWizardServer 裸构造（不 listen 也可导出）', () => {
   });
 });
 
+describe('① 折叠入口默认态（#246 决策 #66：默认不露，露出条件任一）', () => {
+  it('oauthUsable=true 且非多级子域非 CI → details 无 open（默认收起）', () => {
+    const html = renderPage(initialWizardState('/tmp/x/unself'), HINT);
+    expect(html).toContain('<details class="auth-fold">');
+    expect(html).not.toMatch(/<details class="auth-fold"\s+open/);
+  });
+
+  it('oauthUsable=false → 折叠块默认展开 + 人话「没有可借用的 wrangler OAuth」', () => {
+    const html = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, oauthUsable: false });
+    expect(html).toContain('<details class="auth-fold" open>');
+    expect(html).toContain('没有可借用的 wrangler OAuth');
+  });
+
+  it('ci=true → 折叠块默认展开 + 顶部横幅引导 CLOUDFLARE_API_TOKEN', () => {
+    const html = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, ci: true });
+    expect(html).toContain('<details class="auth-fold" open>');
+    expect(html).toContain('CI/无浏览器环境');
+    expect(html).toContain('CLOUDFLARE_API_TOKEN');
+  });
+
+  it('needsTotalTls=true → 折叠块默认展开 + Total TLS 提示行', () => {
+    const html = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, needsTotalTls: true });
+    expect(html).toContain('<details class="auth-fold" open>');
+    expect(html).toContain('多级子域需要 Total TLS');
+    expect(html).toContain('OAuth 不覆盖，需 API Token');
+  });
+
+  it('oauthUsable=true → 顶部显式「检测到本机 wrangler OAuth，可零输入直跑」；false 则无', () => {
+    const yes = renderPage(initialWizardState('/tmp/x/unself'), HINT);
+    expect(yes).toContain('检测到本机 wrangler OAuth，可零输入直跑');
+    const no = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, oauthUsable: false });
+    expect(no).not.toContain('可零输入直跑');
+  });
+
+  it('hasEnvToken=true → 「已检测」态照旧（envHint.hasEnvToken 向后兼容 hasEnvToken 语义）', () => {
+    const html = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, hasEnvToken: true });
+    expect(html).toContain('已检测到环境变量 CLOUDFLARE_API_TOKEN');
+    // 已带凭证时不再出现「没有可借用」式否定引导
+    expect(html).not.toContain('没有可借用的 wrangler OAuth');
+  });
+});
+
+describe('envHint 投影与多级子域更新（#246）', () => {
+  it('/api/state 带 envHint（四布尔，不含 token 明文）', async () => {
+    await post('/api/step1', { token: 'A'.repeat(40) });
+    const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    const hint = st.envHint as Record<string, unknown>;
+    expect(hint).toEqual({ hasEnvToken: false, oauthUsable: true, needsTotalTls: false, ci: false });
+    // 状态投影永不携带 token 明文（既有语义，envHint 加入后保持）
+    expect(JSON.stringify(st)).not.toContain('A'.repeat(40));
+  });
+
+  it('② 选 custom 多级子域 → 之后 envHint.needsTotalTls=true，页面出现 Total TLS 提示', async () => {
+    await post('/api/step1', { token: 'A'.repeat(40) });
+    const r2 = await post('/api/step2', { choice: 'custom', domain: 'a.team.example.com' });
+    expect(r2.status).toBe(200);
+
+    const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    expect((st.envHint as Record<string, unknown>).needsTotalTls).toBe(true);
+
+    const html = await (await fetch(`${base}/`)).text();
+    expect(html).toContain('多级子域需要 Total TLS');
+    expect(html).toMatch(/<details class="auth-fold"\s+open/);
+  });
+
+  it('② 选 custom 单级子域（zone 下一级）→ needsTotalTls 保持 false，折叠收起', async () => {
+    await post('/api/step1', { token: 'A'.repeat(40) });
+    const r2 = await post('/api/step2', { choice: 'custom', domain: 'team.example.com' });
+    expect(r2.status).toBe(200);
+
+    const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    expect((st.envHint as Record<string, unknown>).needsTotalTls).toBe(false);
+    const html = await (await fetch(`${base}/`)).text();
+    expect(html).not.toMatch(/<details class="auth-fold"\s+open/);
+  });
+
+  it('② 选 workers.dev → 不触发多级子域（免费域永远不需要 Total TLS）', async () => {
+    await post('/api/step1', { token: 'A'.repeat(40) });
+    await post('/api/step2', { choice: 'workers' });
+    const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    expect((st.envHint as Record<string, unknown>).needsTotalTls).toBe(false);
+  });
+});
+
+describe('envHint 缺省向后兼容（不传 envHint 只传 hasEnvToken）', () => {
+  it('缺省语义 = oauthUsable/非 CI/非多级子域，hasEnvToken 映射进 envHint', async () => {
+    const { server, port } = await startWizardServer({
+      deps: {
+        getState: () => initialWizardState('/tmp/x/legacy/unself'),
+        setState: () => {},
+        hasEnvToken: true,
+        deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+      },
+    });
+    try {
+      const st = (await (await fetch(`http://127.0.0.1:${port}/api/state`)).json()) as Record<string, unknown>;
+      expect(st.envHint).toEqual({ hasEnvToken: true, oauthUsable: true, needsTotalTls: false, ci: false });
+      expect(st.hasEnv).toBe(true);
+      const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+      expect(html).toContain('已检测到环境变量 CLOUDFLARE_API_TOKEN');
+      expect(html).not.toMatch(/<details class="auth-fold"\s+open/);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});

@@ -33,6 +33,21 @@ export interface WizardResult {
   setupUrl: string | null;
 }
 
+/**
+ * 宿主环境提示（#246 决策 #66/#67）：server 启动方（CLI/测试）注入合成结论，
+ * 向导壳不读 process.env、不 import 引擎（oauthCallbackReachable 等探测在启动方做）。
+ */
+export interface WizardEnvHint {
+  /** CLOUDFLARE_API_TOKEN 已设（环境已带凭证）。 */
+  hasEnvToken: boolean;
+  /** wrangler OAuth 借用可用（启动时用 oauthCallbackReachable + wrangler 探测的合成结论）。 */
+  oauthUsable: boolean;
+  /** 用户配置了多级子域（域名选择后可更新；初态 false）。 */
+  needsTotalTls: boolean;
+  /** 无 TTY / CI。 */
+  ci: boolean;
+}
+
 export interface WizardState {
   step: WizardStep;
   /** 实例目录绝对路径（页头常驻显示，可复制）。 */
@@ -109,8 +124,7 @@ export function domainProblem(domain: string): string | null {
   return null;
 }
 
-/** ② 域名三选（workers.dev 显式第一项）：choice=workers → domain 留空语义。 */
-export function chooseDomain(
+/** ② 域名三选（workers.dev 显式第一项）：choice=workers → domain 留空语义。 */export function chooseDomain(
   s: WizardState,
   choice: 'workers' | 'custom',
   domain?: string,
@@ -121,6 +135,23 @@ export function chooseDomain(
   const problem = domainProblem(domain ?? '');
   if (problem) return { state: s, problem };
   return { state: { ...s, domainChoice: 'custom', domain: (domain ?? '').trim(), step: 'modules' }, problem: null };
+}
+
+/**
+ * 多级子域判定（#246 决策 #66：Universal SSL 只盖 apex + 一级通配（*.zone），更深的要 Total TLS）。
+ * 判定式与语义同 deploy/cloudflare steps.needsTotalTls（向导壳零引擎依赖，故此处按同源语义内联）。
+ */
+export function needsTotalTls(domain: string, zone: string): boolean {
+  return domain.split('.').length > zone.split('.').length + 1;
+}
+
+/**
+ * 从自有域猜测其 zone（apex）：取末两段（如 a.team.example.com → example.com）。
+ * 只用于向导①折叠入口的默认展开提示；部署期以真实 zone 查询为准（引擎侧判定不变）。
+ */
+export function apexZone(domain: string): string {
+  const labels = domain.trim().split('.').filter((l) => l.length > 0);
+  return labels.slice(-2).join('.');
 }
 
 /** ③ 模块确认：非空 id 清单（去空格去重）；空清单不合法（至少确认一次选择）。 */
