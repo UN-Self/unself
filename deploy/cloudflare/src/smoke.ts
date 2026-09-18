@@ -80,7 +80,10 @@ export async function checkModuleThemes(input: {
   return results;
 }
 
-/** 冒烟：core health + 各模块 health。§5.3 单域名路径制：domain 与 workers.dev 两种 baseUrl 同形，模块均探 <baseUrl>/m/<id>/api/health（无子域分支）。全部 200 且 ok=true 才算通过。 */
+/**
+ * 冒烟：core health + 各模块 health。§5.3 单域名路径制：domain 与 workers.dev 两种 baseUrl 同形，
+ * 模块均探 <baseUrl>/m/<id>/api/health（无子域分支）。全部 200 且 ok=true 才算通过。
+ */
 export async function smokeCheck(input: {
   baseUrl: string;
   moduleIds: string[];
@@ -120,3 +123,65 @@ export async function smokeCheck(input: {
   return results;
 }
 
+
+/**
+ * connect（external）模块可达性体检（决策 #63，issue #247）：
+ * 复用冒烟语义逐个探用户填的 publicUrl（模块恒挂根路径：探 <publicUrl>/api/health，
+ * 无前缀重写）。**诚实标注（硬要求）**：体检从安装器/部署机发出，只证明
+ * 「安装器可达」——不证明用户浏览器可达（用户侧可能有内网 DNS / 代理 / 证书信任差异）。
+ * 每条结果带 notice 字段承载该口径；汇总行由调用方（steps ⑨ 或文档）原样输出。
+ */
+export interface ConnectReachabilityResult {
+  moduleId: string;
+  url: string;
+  ok: boolean;
+  status: number;
+  /** 诚实标注：本体检的能力边界（成功与失败都带）。 */
+  notice: string;
+  detail?: string;
+}
+
+/** 诚实标注文案（单一出处；测试断言它永不消失）。 */
+export const CONNECT_REACHABILITY_NOTICE =
+  '此体检只证明安装器可达，不证明用户浏览器可达（DNS/代理/证书信任可能因人而异）';
+
+/**
+ * 逐个探 external 模块的 publicUrl 健康端点。
+ * 输入形状与 steps ⑨ 的模块清单解耦：调用方从注册表/配置取 (id, publicUrl) 喂入。
+ * 单个失败只记该条，不抛（与 smokeCheck 同口径：结果收集，整体判定归调用方）。
+ */
+export async function checkConnectReachability(input: {
+  /** external 模块清单：id + 用户填的 publicUrl（https 强制已在注册面校验）。 */
+  modules: Array<{ id: string; publicUrl: string }>;
+  timeoutMs?: number;
+}): Promise<ConnectReachabilityResult[]> {
+  const results: ConnectReachabilityResult[] = [];
+  for (const mod of input.modules) {
+    const url = `${mod.publicUrl.replace(/\/+$/, '')}/api/health`;
+    try {
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(input.timeoutMs ?? 10_000),
+      });
+      let ok = res.status === 200;
+      let detail: string | undefined;
+      if (ok) {
+        const body = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+        ok = body?.ok === true;
+        if (!ok) detail = '响应体缺 ok:true';
+      } else {
+        detail = `HTTP ${res.status}`;
+      }
+      results.push({ moduleId: mod.id, url, ok, status: res.status, notice: CONNECT_REACHABILITY_NOTICE, detail });
+    } catch (err) {
+      results.push({
+        moduleId: mod.id,
+        url,
+        ok: false,
+        status: 0,
+        notice: CONNECT_REACHABILITY_NOTICE,
+        detail: `不可达：${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
+  return results;
+}
