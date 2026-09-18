@@ -28,6 +28,8 @@ export interface FakeAccountOptions {
   dnsA?: string[];
   /** 模拟 wrangler 时代老库记账（d1_migrations 已应用文件名）。 */
   legacyLedger?: string[];
+  /** 让含 marker 的迁移文件 import 失败（#248 迁移失败三要素定位的注入点）。 */
+  importFailure?: { marker: string; errors: string[] };
 }
 
 const UUID = 'a1b2c3d4-0000-0000-0000-000000000001';
@@ -71,6 +73,8 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
   };
 
   const calls: Call[] = [];
+  /** #248：import 失败明细（PUT 命中 marker 后置入，poll 时回给调用方）。 */
+  let importError: string[] | null = null;
   for (const w of state.secrets.keys()) state.existingWorkers.add(w);
 
   const env = (result: unknown, ok = true, code = 0, message = '', status = ok ? 200 : 400): Response =>
@@ -133,10 +137,17 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
       }
       if (action === 'poll') {
         state.importCalls.push({ action, bookmark: (body as { current_bookmark: string }).current_bookmark });
+        // #248：注入的 import 失败（迁移失败定位测试用；真实 D1 在轮询里回 errors 明细）
+        if (importError) return env({ status: 'error', errors: importError });
         return env({ status: 'complete', num_queries: 3, final_bookmark: 'bm-done' });
       }
     }
     if (path.startsWith('/upload?etag=') && method === 'PUT') {
+      const sqlText = body instanceof Uint8Array ? new TextDecoder().decode(body) : '';
+      if (options.importFailure && sqlText.includes(options.importFailure.marker)) {
+        importError = options.importFailure.errors;
+        return new Response(JSON.stringify({ status: 'pending', at_bookmark: 'bm-err' }), { status: 200 });
+      }
       return new Response(JSON.stringify({ status: 'complete', num_queries: 3, final_bookmark: 'bm-done' }), { status: 200 });
     }
 
