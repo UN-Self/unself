@@ -132,6 +132,7 @@ export async function main(argv: string[] = []): Promise<Summary> {
       rootDir,
       reporter: tracker.reporter,
       configOverride: effective,
+      yes: cli.yes,
     });
     tracker.complete();
   } catch (err) {

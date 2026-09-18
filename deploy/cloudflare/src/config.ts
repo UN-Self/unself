@@ -8,6 +8,7 @@
  */
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
+import type { SourcedModule } from './module-sources';
 
 /** 选中 R2：脚本负责建桶。 */
 export const R2StorageSchema = z.object({
@@ -143,16 +144,20 @@ export async function loadUnselfConfig(rootDir: string): Promise<UnselfConfig> {
 }
 
 /**
- * 模块发现类型（扫描在 main.ts）：扫描 modules 目录下各 manifest.yaml（最小 YAML 顶层键读取，只取 id 行）。
- * 未被 config.modules 选中的目录 → notDeployed（⑤ 注册表翻转 enabled=0）。
+ * 模块发现类型（扫描在 steps.discoverModules）：builtin 来自 modules 目录扫描；
+ * sourced（{id, source}，#245）来自来源解析器取包后的包根。
  */
 export interface ModuleRef {
   /** 模块 id（manifest.yaml 的 id 行；与目录名一致约束由注册表校验兜底）。 */
   id: string;
-  /** 模块包目录绝对路径。 */
+  /** 模块包目录绝对路径（sourced 条目在取包前为空串，取包后回填）。 */
   dir: string;
   /** 是否被本次配置选中（enabled）。 */
   selected: boolean;
+  /** 来源字符串（#245）；undefined = builtin 目录模块。 */
+  source?: string;
+  /** 取包后的解析产物（sourced 条目；步骤②/④/⑤ 共用 manifest/版本/SRI）。 */
+  resolved?: SourcedModule;
 }
 
 /** 从 manifest.yaml 文本取顶层 `id:` 值（最小实现，不需要完整 YAML 解析）。 */
