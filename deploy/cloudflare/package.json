@@ -9,6 +9,14 @@
   "bin": {
     "deploy-cloudflare": "./bin.ts"
   },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "unself": {
+    "note": "类型/库消费场景：packages/installer 经 workspace 依赖复用九步引擎（#242 薄壳方案）；包内均 TS 源直发（同 @unself/control-plane 形态），零构建；发布形态不在本 issue 范围"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
