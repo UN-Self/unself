@@ -90,3 +90,44 @@ export async function listModules(db: D1Database): Promise<RegistryEntry[]> {
     .all<{ id: string; enabled: number; version: string | null; manifest_json: string }>();
   return result.results.map(rowToEntry);
 }
+
+/**
+ * URL → origin 归一化（决策 #63/#73 白名单统一口径）：
+ * https://team.example.com/m/hello/ → https://team.example.com
+ * 端口按 URL 标准保留（非默认端口是 origin 的一部分）；非 http(s) 协议 → null；解析失败 → null。
+ */
+export function normalizeFrameOrigin(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 注册表 → 外壳 frame-src 白名单 origin 集合（决策 #63/#73）：
+ * 全模块 manifest.entry 的 origin，去掉实例自身 origin（同域路径制已由 'self' 覆盖）。
+ * 只信「解析成功」的 http(s) entry；坏值/坏协议静默跳过——白名单宁可窄不可宽。
+ */
+export async function registryFrameOrigins(
+  db: D1Database,
+  options: { selfOrigin?: string | null } = {},
+): Promise<string[]> {
+  const rows = await db
+    .prepare('SELECT manifest_json FROM module_registry WHERE enabled = 1')
+    .all<{ manifest_json: string }>();
+  const origins = new Set<string>();
+  for (const row of rows.results) {
+    try {
+      const manifest = JSON.parse(row.manifest_json) as { entry?: unknown };
+      if (typeof manifest.entry !== 'string') continue;
+      const origin = normalizeFrameOrigin(manifest.entry);
+      if (origin && origin !== options.selfOrigin) origins.add(origin);
+    } catch {
+      // 快照损坏 ≠ 放宽白名单：跳过该行
+    }
+  }
+  return [...origins].sort();
+}

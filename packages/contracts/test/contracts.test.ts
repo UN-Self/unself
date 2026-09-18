@@ -150,6 +150,50 @@ describe('ModuleManifestSchema（契约 v1 字段冻结）', () => {
       ModuleManifestSchema.parse({ ...validManifest, compat: { min: '1.1', max: '1.0' } }),
     ).toThrow();
   });
+
+  // ---- 决策 #63（#247）：coreOrigin / entry https 硬护栏 ----
+
+  it('coreOrigin = "*" → 拒绝（决策 #63 硬禁止回落通配）', () => {
+    expect(() =>
+      ModuleManifestSchema.parse({ ...validManifest, coreOrigin: '*' }),
+    ).toThrow(/coreOrigin/);
+  });
+
+  it('coreOrigin 必须是确切 https origin：http 明文 / 带路径 / 垃圾串全拒', () => {
+    expect(() =>
+      ModuleManifestSchema.parse({ ...validManifest, coreOrigin: 'http://team.example.com' }),
+    ).toThrow(/coreOrigin/);
+    expect(() =>
+      ModuleManifestSchema.parse({ ...validManifest, coreOrigin: 'https://team.example.com/app/' }),
+    ).toThrow(/coreOrigin/);
+    expect(() =>
+      ModuleManifestSchema.parse({ ...validManifest, coreOrigin: 'https://team.example.com' }),
+    ).not.toThrow();
+  });
+
+  it('跨域 http entry（公网明文）→ 拒绝；localhost/127.0.0.1 明文豁免；https entry 通过', () => {
+    expect(() =>
+      ModuleManifestSchema.parse({
+        ...validManifest,
+        entry: 'http://todo.example.org/',
+        runtimes: ['external'],
+      }),
+    ).toThrow(/https/);
+    expect(() =>
+      ModuleManifestSchema.parse({
+        ...validManifest,
+        entry: 'http://localhost:8788/',
+        runtimes: ['external'],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      ModuleManifestSchema.parse({
+        ...validManifest,
+        entry: 'https://todo.example.org/',
+        runtimes: ['external'],
+      }),
+    ).not.toThrow();
+  });
 });
 
 describe('ModuleTokenClaimsSchema', () => {
