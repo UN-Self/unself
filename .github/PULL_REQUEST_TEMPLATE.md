@@ -36,11 +36,13 @@ PR 模板（issue #195 机制①落地）：「开工前边界自查 8 项」从
 （贴红灯输出）
 ```
 
-## 三件套
+## 门禁（= CI 同一套，缺一不可）
 
-- [ ] `pnpm -r typecheck`
 - [ ] `pnpm -r test`
+- [ ] `node scripts/check-migrations-upgrade.mjs`（跨版本迁移闸门）
+- [ ] `pnpm -r typecheck`
 - [ ] `pnpm -r build`
+- [ ] `pnpm verify:tokens`（纪律 lint：样式只走 tokens）
 
 ## 未做 / 已知限制 / 未证实
 
