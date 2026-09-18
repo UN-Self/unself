@@ -167,7 +167,7 @@ describe('红灯验证（T7 汇编引用：变异必红）', () => {
 
   it('守卫：destroy --purge 必须真删目录（变异 rmSync → 本用例红）', async () => {
     await run(opts(['init', 'demo', cwd]));
-    const inst = join(cwd, 'demo');
+    const inst = join(cwd, 'unself'); // 决策 #53：实例目录 = <chosen>/unself
     await run(opts(['destroy', 'demo', '--purge']));
     expect(existsSync(inst)).toBe(false);
   });
