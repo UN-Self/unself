@@ -24,16 +24,55 @@ export const S3StorageSchema = z.object({
 });
 export const StorageSchema = z.discriminatedUnion('provider', [R2StorageSchema, S3StorageSchema]);
 
+/**
+ * 模块条目：字符串（builtin 目录形态，存量兼容）或对象（带 source 的第三方来源，#58）。
+ * 对象只收 id+source；mode 等部署参数不在本 issue 范围（现有装配路径只有 worker 落点）。
+ */
+export const ModuleEntrySchema = z.union([
+  z.string().regex(/^[a-z][a-z0-9-]+$/),
+  z.object({
+    /** 实例内模块 id（决策 #59：全局唯一身份=包名/来源，id 只是实例内名字）。 */
+    id: z.string().regex(/^[a-z][a-z0-9-]+$/),
+    /** 来源：official:/npm:/github:/https:/file:（docs/modules.md §1）。 */
+    source: z.string().min(1),
+  }),
+]);
+
 export const UnselfConfigSchema = z.object({
   /** 实例对外域名（如 team.example.com）；空/省略 → workers.dev 临时域。 */
   domain: z.string().trim().default(''),
-  /** 选中启用的模块 id；空数组 = 全停用（未列出的已存在模块 → 注册表 not_deployed、其 zone 路由删除）。 */
-  modules: z.array(z.string().regex(/^[a-z][a-z0-9-]+$/)),
+  /** 选中启用的模块（字符串=builtin 目录；{id,source}=第三方来源）；空数组 = 全停用（未列出的已存在模块 → 注册表 not_deployed、其 zone 路由删除）。 */
+  modules: z.array(ModuleEntrySchema),
   storage: StorageSchema.default({ provider: 'r2', bucket: 'unself-storage' }),
 });
 
 export type UnselfConfig = z.infer<typeof UnselfConfigSchema>;
 export type StorageConfig = z.infer<typeof StorageSchema>;
+
+/** 归一化模块条目：统一为 {id, source?}（source 缺省 = builtin modules/ 目录）。 */
+export interface NormalizedModuleEntry {
+  id: string;
+  /** 来源字符串（official:/npm:/github:/https:/file:）；undefined = builtin。 */
+  source?: string;
+}
+
+/** config.modules 归一化：字符串与对象两种形态 → 统一 {id, source?}；同 id 重复条目拒绝。 */
+export function normalizeModuleEntries(modules: UnselfConfig['modules']): NormalizedModuleEntry[] {
+  const seen = new Set<string>();
+  return modules.map((m) => {
+    const entry: NormalizedModuleEntry = typeof m === 'string' ? { id: m } : { id: m.id, source: m.source };
+    if (seen.has(entry.id)) {
+      throw new Error(`unself.config.jsonc modules 出现重复模块 id："${entry.id}"（同 id 只允许一个条目）`);
+    }
+    seen.add(entry.id);
+    return entry;
+  });
+}
+
+/** 提取纯 id 列表（存量 discoverModules/交互确认等消费方不变）。 */
+export function moduleIds(entries: NormalizedModuleEntry[]): string[] {
+  return entries.map((e) => e.id);
+}
 
 /**
  * 剥离 JSONC 的注释与尾逗号（零依赖，字符串感知）。

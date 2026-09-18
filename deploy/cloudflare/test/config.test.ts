@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { manifestId, parseUnselfConfigText, stripJsonc } from '../src/config';
+import { manifestId, moduleIds, normalizeModuleEntries, parseUnselfConfigText, stripJsonc } from '../src/config';
 
 describe('stripJsonc', () => {
   it('剥离行注释与块注释（字符串内容不受伤）', () => {
@@ -56,5 +56,39 @@ describe('manifestId', () => {
   });
   it('缺 id 返回 null', () => {
     expect(manifestId('route: /m/x\n')).toBeNull();
+  });
+});
+
+describe('modules 对象形态 {id, source}（#245 来源协议）', () => {
+  it('对象条目通过校验，字符串与对象混排合法', () => {
+    const cfg = parseUnselfConfigText(
+      '{"modules":["hello",{"id":"todo","source":"npm:@acme/unself-todo@1.2.0"},{"id":"sync","source":"github:acme/sync#v0.3.0"}]}',
+    );
+    expect(cfg.modules[0]).toBe('hello');
+    expect(cfg.modules[1]).toEqual({ id: 'todo', source: 'npm:@acme/unself-todo@1.2.0' });
+    expect(cfg.modules[2]).toEqual({ id: 'sync', source: 'github:acme/sync#v0.3.0' });
+  });
+
+  it('对象缺 source / 坏 id 拒绝', () => {
+    expect(() => parseUnselfConfigText('{"modules":[{"id":"todo"}]}')).toThrow();
+    expect(() => parseUnselfConfigText('{"modules":[{"id":"Todo","source":"npm:x@1.0.0"}]}')).toThrow();
+  });
+
+  it('normalizeModuleEntries：两种形态归一化为 {id, source?}', () => {
+    const cfg = parseUnselfConfigText('{"modules":["hello",{"id":"todo","source":"file:./modules/todo"}]}');
+    expect(normalizeModuleEntries(cfg.modules)).toEqual([
+      { id: 'hello' },
+      { id: 'todo', source: 'file:./modules/todo' },
+    ]);
+  });
+
+  it('normalizeModuleEntries：重复 id 拒绝（字符串与对象撞也算）', () => {
+    const cfg = parseUnselfConfigText('{"modules":["hello",{"id":"hello","source":"npm:x@1.0.0"}]}');
+    expect(() => normalizeModuleEntries(cfg.modules)).toThrow(/重复模块 id/);
+  });
+
+  it('moduleIds：纯 id 提取（存量消费方视角）', () => {
+    const cfg = parseUnselfConfigText('{"modules":["a1",{"id":"todo","source":"official:todo"}]}');
+    expect(moduleIds(normalizeModuleEntries(cfg.modules))).toEqual(['a1', 'todo']);
   });
 });
