@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { probeSqlite } from './sqlite-probe';
 import {
   migrationsCreateSql,
+  migrationsInsertIgnoreSql,
   migrationsInsertSql,
   migrationsListSql,
   REGISTRY_LIST_SQL,
@@ -19,6 +20,7 @@ import {
   SETUP_STATUS_SQL,
   SETUP_VALID_SQL,
 } from './sql';
+import { migrationsTableFor } from './types';
 import type {
   ApplyReport,
   BoundQuery,
@@ -195,8 +197,20 @@ export class SqliteControlPlane implements ControlPlane {
   }
 
   async appliedMigrations(module: string): Promise<string[]> {
+    // 表未建（该模块尚无任何记账）→ 空账，不抛（与 RestD1ControlPlane 同语义）
+    const table = migrationsTableFor(module);
+    const exists = this.db
+      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(table);
+    if (!exists) return [];
     const { results } = await this.exec.prepare(migrationsListSql(module)).bind().all<{ name: unknown }>();
     return results.map((r) => String(r.name));
+  }
+
+  async markMigrationApplied(module: string, name: string): Promise<void> {
+    // 与 applyMigrations 同一张表（#255）：非 SQL 事件（DO 迁移 tag）不另造记账
+    this.db.exec(migrationsCreateSql(module));
+    await this.exec.prepare(migrationsInsertIgnoreSql(module)).bind(name).run();
   }
 }
 
