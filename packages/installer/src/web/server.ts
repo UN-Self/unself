@@ -10,16 +10,28 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { DEFAULT_THEME, tokenCssName } from '@unself/contracts';
 import {
+  apexZone,
   beginDeploy,
   chooseDomain,
   completeDeploy,
   confirmModules,
   failDeploy,
+  needsTotalTls,
   pushEvent,
   resetWizard,
   submitToken,
+  type WizardEnvHint,
   type WizardState,
 } from './state';
+
+/** envHint 缺省（向后兼容 #258）：只给 hasEnvToken 时其余字段的安全默认值。 */
+const DEFAULT_ENV_HINT: WizardEnvHint = { hasEnvToken: false, oauthUsable: true, needsTotalTls: false, ci: false };
+
+/** 合成宿主环境提示：deps.envHint（#246 新）逐字段覆盖默认；旧调用方只传 hasEnvToken → 映射进同名字段。 */
+function resolveEnvHint(deps: WizardDeps): WizardEnvHint {
+  if (deps.envHint) return { ...DEFAULT_ENV_HINT, ...deps.envHint };
+  return { ...DEFAULT_ENV_HINT, hasEnvToken: deps.hasEnvToken };
+}
 
 export interface WizardDeps {
   /** 读当前状态（测试注入共享持有器）。 */
@@ -38,6 +50,12 @@ export interface WizardDeps {
   }) => Promise<{ baseUrl: string; setupToken: string | null }>;
   /** 环境已带凭证（CLOUDFLARE_API_TOKEN）：① 步页面展示「已检测」态。 */
   hasEnvToken: boolean;
+  /**
+   * 宿主环境提示（#246）：OAuth 可用性 / CI 态 / 多级子域——server 启动时由调用方
+   * （oauthCallbackReachable + wrangler 探测）注入，壳内不读环境、不 import 引擎。
+   * 缺省 = 全默认（oauthUsable=true、非 CI、非多级子域）。
+   */
+  envHint?: Partial<WizardEnvHint>;
 }
 
 export interface ServeOptions {
@@ -82,11 +100,42 @@ function themeVarBlock(): string {
     .join(' ');
 }
 
+/** ① 步引导语（#246）：oauthUsable=false 或 CI 态 → 人话引导创建 API Token；否则引导点开折叠入口。 */
+function authGuidance(hint: WizardEnvHint): string {
+  if (hint.ci) return '<p>没有可借用的 wrangler OAuth：创建 API Token 填进下面密码框（已设 CLOUDFLARE_API_TOKEN 则本步可跳过）。</p>';
+  if (!hint.oauthUsable) return '<p>没有可借用的 wrangler OAuth：创建 API Token 填进下面密码框。</p>';
+  return '<p>或点开下方 API Token 入口创建 Token，粘贴到下面密码框。</p>';
+}
+
+/**
+ * ① 步折叠入口（决策 #66）：API Token 深链接默认收起，露出条件（任一）——
+ * 需 Total TLS（多级子域）/ CI 态（无浏览器）/ oauthUsable=false。`<details>` 天然支持用户点开，无需 JS。
+ */
+function authDetails(hint: WizardEnvHint): string {
+  const open = !hint.oauthUsable || hint.ci || hint.needsTotalTls ? ' open' : '';
+  const title = hint.needsTotalTls
+    ? '多级子域需要 Total TLS：OAuth 不覆盖，需 API Token'
+    : '手动创建 API Token（深链接入口，权限已预选）';
+  return `<details class="auth-fold"${open}>
+  <summary>${title}</summary>
+  <p><a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer noopener">打开 Cloudflare 创建 API Token</a></p>
+  <p>权限清单与向导失败提示一致（Account：Workers Scripts/D1/R2 Edit；Zone：Workers Routes/DNS/SSL Edit），创建后整段复制粘贴到下面密码框（掩码输入，不落盘）。</p>
+</details>`;
+}
+
 /** 页面：页头常驻实例目录（可复制）+ 六段流表单。 */
-export function renderPage(state: WizardState, hasEnvToken: boolean): string {
-  const authNote = hasEnvToken
+export function renderPage(state: WizardState, envHint: WizardEnvHint): string {
+  const hint = envHint;
+  const authNote = hint.hasEnvToken
     ? '<p>已检测到环境变量 CLOUDFLARE_API_TOKEN，本步可跳过。</p>'
-    : '<p>无凭证时：点开深链接创建 API Token（权限已预选），粘贴到下面密码框（掩码输入，不落盘）。</p>';
+    : authGuidance(hint);
+  const oauthNote =
+    hint.oauthUsable && !hint.ci
+      ? '<p class="ok">检测到本机 wrangler OAuth，可零输入直跑（跳过本步）。</p>'
+      : '';
+  const banner = hint.ci
+    ? '<p class="banner">CI/无浏览器环境：请用 CLOUDFLARE_API_TOKEN 或展开 API Token 入口</p>'
+    : '';
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -103,6 +152,10 @@ export function renderPage(state: WizardState, hasEnvToken: boolean): string {
   input[type=password], input[type=text] { width: 100%; box-sizing: border-box; padding: .5rem; margin-top: .25rem; }
   .err { color: var(--unself-color-danger); white-space: pre-wrap; }
   ol li { margin: .25rem 0; }
+  .banner { border: 1px solid var(--unself-color-warning); border-radius: var(--unself-radius-md); padding: var(--unself-space-2) var(--unself-space-3); background: var(--unself-color-surface); margin-bottom: var(--unself-space-3); }
+  .ok { color: var(--unself-color-success); }
+  details.auth-fold { border: 1px solid var(--unself-color-border); border-radius: var(--unself-radius-md); padding: var(--unself-space-2) var(--unself-space-3); margin: var(--unself-space-2) 0; }
+  details.auth-fold summary { cursor: pointer; color: var(--unself-color-info); }
 </style>
 </head>
 <body>
@@ -111,10 +164,13 @@ export function renderPage(state: WizardState, hasEnvToken: boolean): string {
   <button class="copy" type="button" data-copy="instance-path">复制</button>
 </header>
 <main data-step="${state.step}">
+${banner}
 <p>当前步骤：${state.step}。任何时候重跑都收敛同一终态（幂等）。</p>
 <section>
   <h2>① Cloudflare 凭证</h2>
+  ${oauthNote}
   ${authNote}
+  ${authDetails(hint)}
   <form id="form-auth"><label>API Token <input type="password" name="token" autocomplete="off"></label>
   <button type="submit">下一步</button> <span class="err" id="err-auth"></span></form>
 </section>
@@ -184,6 +240,8 @@ $('btn-deploy').addEventListener('click', async () => {
 /** 建向导服务（不 listen；端口由调用方/测试决定）。 */
 export function createWizardServer(opts: ServeOptions): Server {
   const { deps } = opts;
+  // 宿主环境提示：初始由 deps 注入（#246）；② 选自有域后就地更新 needsTotalTls，不改调用方对象。
+  let envHint = resolveEnvHint(deps);
   const sseClients = new Set<ServerResponse>();
   const broadcast = (text: string): void => {
     for (const res of sseClients) {
@@ -202,14 +260,15 @@ export function createWizardServer(opts: ServeOptions): Server {
       try {
         if (req.method === 'GET' && url.pathname === '/') {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-          res.end(renderPage(state, deps.hasEnvToken));
+          res.end(renderPage(state, envHint));
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/state') {
-          // ⑥ 幂等重跑标语随状态查询返回；状态投影永不含 token 明文。
+          // ⑥ 幂等重跑标语随状态查询返回；状态投影永不含 token 明文（envHint 只有布尔字段）。
           json(res, 200, {
             ...state,
-            hasEnv: deps.hasEnvToken,
+            hasEnv: envHint.hasEnvToken,
+            envHint,
             idempotent: true,
             idempotentNote: '任何时候重跑收敛同一终态',
           });
@@ -252,6 +311,13 @@ export function createWizardServer(opts: ServeOptions): Server {
             return;
           }
           deps.setState(r.state);
+          // #246：自有域 → 更新 needsTotalTls（apexZone 猜 zone 只做向导提示；部署期以真实 zone 查询为准）。
+          if (r.state.domainChoice === 'custom') {
+            envHint = {
+              ...envHint,
+              needsTotalTls: needsTotalTls(r.state.domain, apexZone(r.state.domain)),
+            };
+          }
           json(res, 200, { step: r.state.step });
           return;
         }

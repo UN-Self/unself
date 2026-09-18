@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  apexZone,
   beginDeploy,
   buildConfigInput,
   chooseDomain,
@@ -11,6 +12,7 @@ import {
   confirmModules,
   failDeploy,
   initialWizardState,
+  needsTotalTls,
   pushEvent,
   resetWizard,
   submitToken,
@@ -149,5 +151,26 @@ describe('④ 进度事件 + ⑤ 收尾 + ⑥ 幂等重跑', () => {
     expect(r.result).toBeNull();
     expect(r.instancePath).toBe(instancePath);
     expect(r.modules).toEqual(['chat']);
+  });
+});
+
+describe('needsTotalTls / apexZone（#246 决策 #66 内联判定，语义同 steps.needsTotalTls）', () => {
+  it('多级子域（超过 zone 一层）→ true；单级 → false', () => {
+    expect(needsTotalTls('a.team.example.com', 'example.com')).toBe(true);
+    expect(needsTotalTls('deep.a.team.example.com', 'example.com')).toBe(true);
+    expect(needsTotalTls('team.example.com', 'example.com')).toBe(false);
+    expect(needsTotalTls('example.com', 'example.com')).toBe(false);
+  });
+
+  it('apexZone 取末两段；多段输入与空段容错', () => {
+    expect(apexZone('a.team.example.com')).toBe('example.com');
+    expect(apexZone('team.example.com')).toBe('example.com');
+    expect(apexZone('example.com')).toBe('example.com');
+    expect(apexZone('a..team.example.com')).toBe('example.com');
+  });
+
+  it('组合语义：向导①折叠入口露出条件（多级子域 → 需 API Token/Total TLS）', () => {
+    const domain = 'a.team.example.com';
+    expect(needsTotalTls(domain, apexZone(domain))).toBe(true);
   });
 });
