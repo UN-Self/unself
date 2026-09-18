@@ -14,8 +14,10 @@ import { SqliteControlPlane } from '@unself/control-plane';
 import {
   checkSharedGuards,
   dedicatedDbNameFor,
+  doMigrationLedgerName,
   foreignKeyTargets,
   migrationFailure,
+  planDoMigrations,
   storageLevelFor,
   tablePrefixFor,
 } from '../src/migrate';
@@ -94,6 +96,59 @@ describe('checkSharedGuards（#55 三护栏③：命名 + 申报 + 跨模块外�
   it('tablePrefixFor / dedicatedDbNameFor 命名约定', () => {
     expect(tablePrefixFor('my-mod')).toBe('my_mod_');
     expect(dedicatedDbNameFor('my-mod')).toBe('unself-my-mod');
+  });
+});
+
+describe('planDoMigrations（#255：DO 迁移判定 = 记账事实，不是脚本存在与否）', () => {
+  const CHAT = [{ tag: 'v1', new_sqlite_classes: ['ChannelRoom', 'Scheduler', 'UserInbox'] }];
+  const APPLIED = (tags: string[]) => tags.map((t) => doMigrationLedgerName(t));
+
+  it('未记账（含「脚本已存在但类未建」的 stub 场景）→ 必须发迁移：无 oldTag、newTag=v1、三类各一步', () => {
+    const plan = planDoMigrations({ declared: CHAT, appliedNames: [] });
+    expect(plan).toEqual({
+      newTag: 'v1',
+      steps: [{ new_sqlite_classes: ['ChannelRoom', 'Scheduler', 'UserInbox'] }],
+      tags: ['v1'],
+    });
+    // stub 场景的记账态与「记账表里只有 SQL 文件」等价（没有 do-migration 条目）：照样发
+    expect(planDoMigrations({ declared: CHAT, appliedNames: ['0001_baseline.sql'] })).toBeDefined();
+  });
+
+  it('tag 已记账 → 不发（幂等重传不带 migrations；重复 tag 会被 CF 拒，10079）', () => {
+    expect(planDoMigrations({ declared: CHAT, appliedNames: [...APPLIED(['v1']), '0001_baseline.sql'] })).toBeUndefined();
+  });
+
+  it('多 tag：待应用从第一个未记账开始，oldTag=前一个已记账，steps 按声明序累积', () => {
+    const declared = [
+      { tag: 'v1', new_sqlite_classes: ['A'] },
+      { tag: 'v2', new_sqlite_classes: ['B'] },
+      { tag: 'v3', new_sqlite_classes: ['C'] },
+    ];
+    expect(planDoMigrations({ declared, appliedNames: APPLIED(['v1']) })).toEqual({
+      oldTag: 'v1',
+      newTag: 'v3',
+      steps: [{ new_sqlite_classes: ['B'] }, { new_sqlite_classes: ['C'] }],
+      tags: ['v2', 'v3'],
+    });
+    expect(planDoMigrations({ declared, appliedNames: APPLIED(['v1', 'v2']) })).toEqual({
+      oldTag: 'v2',
+      newTag: 'v3',
+      steps: [{ new_sqlite_classes: ['C'] }],
+      tags: ['v3'],
+    });
+    expect(planDoMigrations({ declared, appliedNames: APPLIED(['v1', 'v2', 'v3']) })).toBeUndefined();
+  });
+
+  it('记账夹缝（后一个已记、前一个未记）→ 停住报出具体 tag，不静默续跑', () => {
+    const declared = [
+      { tag: 'v1', new_sqlite_classes: ['A'] },
+      { tag: 'v2', new_sqlite_classes: ['B'] },
+    ];
+    expect(() => planDoMigrations({ declared, appliedNames: APPLIED(['v2']) })).toThrow(/v2/);
+  });
+
+  it('未声明任何 DO 迁移 → undefined（普通模块不受影响）', () => {
+    expect(planDoMigrations({ declared: [], appliedNames: [] })).toBeUndefined();
   });
 });
 
