@@ -124,7 +124,8 @@ export function domainProblem(domain: string): string | null {
   return null;
 }
 
-/** ② 域名三选（workers.dev 显式第一项）：choice=workers → domain 留空语义。 */export function chooseDomain(
+/** ② 域名三选（workers.dev 显式第一项）：choice=workers → domain 留空语义。 */
+export function chooseDomain(
   s: WizardState,
   choice: 'workers' | 'custom',
   domain?: string,
