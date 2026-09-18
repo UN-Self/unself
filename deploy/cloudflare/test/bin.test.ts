@@ -45,9 +45,11 @@ async function runFail(args: string[]): Promise<RunResult> {
 
 describe('bin.ts 自举冒烟（node 直跑入口）', () => {
   it('无凭证 + 非 TTY：打印 token 第一屏并优雅退出（exit 1、无堆栈）', { timeout: 60_000 }, async () => {
-    // 子进程不带 CLOUDFLARE_API_TOKEN；vitest worker 的 stdout 是管道 → isTty()=false → exit 分支
+    // 子进程不带 CLOUDFLARE_API_TOKEN 且注入 UNSELF_WRANGLER_BIN=空串（禁用 OAuth 借用，模拟无 wrangler 机器，#246）；
+    // vitest worker 的 stdout 是管道 → isTty()=false → exit 分支
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.CLOUDFLARE_API_TOKEN;
+    env.UNSELF_WRANGLER_BIN = '';
 
     const { stdout, stderr } = await run(
       process.execPath,
