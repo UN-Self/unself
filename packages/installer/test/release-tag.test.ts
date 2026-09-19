@@ -58,5 +58,7 @@ describe('发布 tag → 包与版本（tag 即版本）', () => {
     expect(workflow).not.toContain('NPM_TOKEN');
     // 不重复跑测试套件（PR 阶段六步门禁已过，决策 #79）
     expect(workflow).not.toMatch(/pnpm -r test|vitest/);
+    // 模块发布必须把 tag 解析出的包名传给打包器（否则官方包名落成裸 id，如 `hello`）
+    expect(workflow).toContain('--name "${{ steps.rel.outputs.package }}"');
   });
 });
