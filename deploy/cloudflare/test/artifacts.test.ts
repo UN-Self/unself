@@ -155,6 +155,6 @@ describe('runNineSteps（产物模式：空 rootDir 也能装配出实例）', (
         configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: SMOKE_OK,
       }),
-    ).rejects.toThrow(/产物不完整/);
+    ).rejects.toThrow(/SDK 浏览器资产缺失/);
   });
 });
