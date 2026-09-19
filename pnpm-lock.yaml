@@ -116,6 +116,12 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
+      '@unself/chat':
+        specifier: workspace:*
+        version: link:../../modules/chat
+      '@unself/hello':
+        specifier: workspace:*
+        version: link:../../modules/hello
       '@unself/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
@@ -270,6 +276,16 @@ importers:
         version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
 
   packages/installer:
+    dependencies:
+      '@unself/chat':
+        specifier: workspace:*
+        version: link:../../modules/chat
+      '@unself/hello':
+        specifier: workspace:*
+        version: link:../../modules/hello
+      '@unself/sdk':
+        specifier: workspace:*
+        version: link:../sdk
     devDependencies:
       '@types/node':
         specifier: ^24
@@ -280,9 +296,6 @@ importers:
       '@unself/deploy-cloudflare':
         specifier: workspace:*
         version: link:../../deploy/cloudflare
-      '@unself/sdk':
-        specifier: workspace:*
-        version: link:../sdk
       esbuild:
         specifier: ^0.28.0
         version: 0.28.2
