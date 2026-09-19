@@ -11,7 +11,7 @@
  * 为什么不用手搓假 D1（docs/testing.md 禁项 / #60）：假替身按字符串匹配解释 SQL，
  * SQL 漏 WHERE、引用幻影列、语义写偏都能全绿；真 SQLite 加载真 schema 后，
  * 列错位/表缺失当场抛错。适配器对齐真 D1 语义（实现思路抄自本仓 AGPL 代码
- * packages/module-sdk/test/test-factory.ts）：
+ * packages/sdk/test/test-factory.ts）：
  * - prepare(sql).bind(...).first()/all()/run() 链式；
  * - all() 回 { results, success, meta }，run() 回 meta.changes/last_row_id；
  * - first() 无行回 null，支持 first('col') 单列；行是普通对象（非 null 原型）；

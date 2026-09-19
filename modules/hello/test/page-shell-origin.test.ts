@@ -8,7 +8,7 @@ import app from '../src/index';
  * workers.dev 形态下模块挂**自有子域**（跨子域 iframe），写死 location.origin 会把模块自己当壳
  * → SDK 入站 token 校验（event.origin === coreOrigin）永远不中 → 浏览器里握手死（HTTP 级看不出来）。
  * 页面内联脚本在 Node 里不可执行（浏览器 ESM），本文件只锁「页面引用 SDK 壳 origin 解析器」；
- * 取值行为（ancestorOrigins / 注入 meta / 直开三场景）由 packages/module-sdk 行为用例
+ * 取值行为（ancestorOrigins / 注入 meta / 直开三场景）由 packages/sdk 行为用例
  * 与真机探针（workers.dev 形态模块页 HTML + 部署后的 SDK 字节）裁决。
  */
 describe('module-hello 页面 coreOrigin（#277）', () => {

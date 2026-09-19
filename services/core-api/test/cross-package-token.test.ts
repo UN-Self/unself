@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ModuleTokenClaimsSchema } from '@unself/contracts';
-import { verifyModuleToken } from '@unself/module-sdk';
+import { verifyModuleToken } from '@unself/sdk';
 
 import { createApp } from '../src/index';
 
@@ -14,7 +14,7 @@ import { createCoreDb } from './test-factory';
  * 跨包契约链（#81 验收项 2）：
  *   core-api 签发（POST /api/modules/hello/token）
  *   → @unself/contracts ModuleTokenClaimsSchema.parse（claims 过 schema）
- *   → @unself/module-sdk verifyModuleToken（JWKS 验签 + aud + schema）
+ *   → @unself/sdk verifyModuleToken（JWKS 验签 + aud + schema）
  * 一条测试走完全链，任一边契约漂移（aud/sub 语义、name 字段、JWKS 不匹配）即红。
  */
 const helloManifest = {
