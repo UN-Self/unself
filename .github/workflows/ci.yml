@@ -22,6 +22,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # 工作流文件结构闸（真实事故：release.yml 里「- name: 改写 workspace: 协议依赖」未加引号
+      # → GitHub 静默拒绝解析整份文件 → tag 推送不触发、0s 失败无日志，而 PR 上 CI 照样绿）
+      - run: node scripts/verify-workflows.mjs
       # 顺序（issue #283）：**build 必须在 typecheck / test 之前**——
       # `@unself/sdk` 的 main/types 指向 dist（发布的形态），干净树上先 typecheck 会
       # 「Cannot find module '@unself/sdk'」（本地因 dist 已存在而绿，CI 红）。

@@ -70,7 +70,7 @@ jobs:
 
       # npm publish **不改写** workspace: 协议（pnpm publish 才会），原样发布会让消费者装不上
       # （Unsupported URL Type "workspace:"）→ 发布前先改写为真实版本号。
-      - name: 改写 workspace: 协议依赖
+      - name: "改写 workspace: 协议依赖"
         if: steps.rel.outputs.kind == 'workspace'
         run: node scripts/release/pin-workspace-deps.mjs "${{ steps.rel.outputs.dir }}"
 
