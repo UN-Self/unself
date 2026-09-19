@@ -197,6 +197,43 @@ describe('#270 module validate', () => {
     expect(out.join('\n')).toContain('✓ 模块校验通过：demo v1.0.0');
   });
 
+  it('包根 package.json 版本与 manifest 一致：仍通过（#285 C3 不误伤）', async () => {
+    const dir = join(cwd, 'ok-pkg');
+    writePassFixture(dir);
+    writeFileSync(
+      join(dir, 'package.json'),
+      `${JSON.stringify({ name: 'demo', version: '1.0.0', files: ['manifest.json'], license: 'AGPL-3.0-only' }, null, 2)}\n`,
+    );
+    const o = opts(['module', 'validate', dir]);
+    await run(o);
+    expect(errs.join('\n')).toBe('');
+    expect(out.join('\n')).toContain('✓ 模块校验通过：demo v1.0.0');
+  });
+
+  it('包根 package.json 版本与 manifest 不一致：退出码非 0（#285 C3 报红）', async () => {
+    const dir = join(cwd, 'bad-pkg-version');
+    writePassFixture(dir);
+    writeFileSync(
+      join(dir, 'package.json'),
+      `${JSON.stringify({ name: 'demo', version: '2.0.0', files: ['manifest.json'], license: 'AGPL-3.0-only' }, null, 2)}\n`,
+    );
+    const o = opts(['module', 'validate', dir]);
+    await run(o);
+    expect(out.join('\n')).toContain('[error]');
+    expect(out.join('\n') + errs.join('\n')).toContain('不一致');
+    expect(errs.join('\n')).toContain('✗ 模块校验未通过');
+  });
+
+  it('包根 package.json 不是合法 JSON：发布前拦下', async () => {
+    const dir = join(cwd, 'bad-pkg-json');
+    writePassFixture(dir);
+    writeFileSync(join(dir, 'package.json'), '{ not json\n');
+    const o = opts(['module', 'validate', dir]);
+    await run(o);
+    expect(out.join('\n') + errs.join('\n')).toContain('package.json');
+    expect(errs.join('\n')).toContain('✗ 模块校验未通过');
+  });
+
   it('缺 LICENSE/worker.js：退出码 1 + [error] 诊断', async () => {
     const dir = join(cwd, 'bad-mod');
     mkdirSync(dir, { recursive: true });

@@ -390,7 +390,15 @@ export async function addModuleSource(input: {
  * `unself module pack <dir>`：打包并返回 tgz 路径与 SRI。
  * 与 builtin 产物同一条路（引擎 `modulePackageFiles`），故 `file:` 与本地 tarball 结果一致。
  */
-export async function packModule(input: { dir: string; outDir?: string; log?: (msg: string) => void }): Promise<{
+export async function packModule(input: {
+  dir: string;
+  outDir?: string;
+  /** npm 包名覆盖（缺省 = manifest.id；issue #285 C2）。 */
+  npmName?: string;
+  /** 版本覆盖（tag 即版本）：同时写进 packed manifest.json 与生成的 package.json（C8）。 */
+  version?: string;
+  log?: (msg: string) => void;
+}): Promise<{
   tarballPath: string;
   integrity: string;
   id: string;
@@ -401,6 +409,8 @@ export async function packModule(input: { dir: string; outDir?: string; log?: (m
   const result = await engine.packModuleDir({
     dir: input.dir,
     ...(input.outDir !== undefined ? { outDir: input.outDir } : {}),
+    ...(input.npmName !== undefined ? { npmName: input.npmName } : {}),
+    ...(input.version !== undefined ? { version: input.version } : {}),
     ...(input.log ? { log: input.log } : {}),
   });
   return {

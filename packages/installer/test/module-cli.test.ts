@@ -71,6 +71,22 @@ describe('#269 unself module pack', () => {
     expect(existsSync(join(cwd, 'hello-0.1.0.tgz'))).toBe(true);
   }, 60_000);
 
+  it('--version 覆盖版本（C8）：tarball 文件名与打印版本随之', async () => {
+    const o = opts(['module', 'pack', HELLO_DIR, '--out', cwd, '--version', '9.9.9']);
+    await run(o);
+    expect(o.exitCode()).toBe(0);
+    expect(out.join('\n')).toContain('已打包模块：hello v9.9.9');
+    expect(existsSync(join(cwd, 'hello-9.9.9.tgz'))).toBe(true);
+  }, 60_000);
+
+  it('--name 覆盖 npm 包名：旗标接线不报错（字段断言在引擎测试）', async () => {
+    const o = opts(['module', 'pack', HELLO_DIR, '--out', cwd, '--name', '@acme/unself-hello']);
+    await run(o);
+    expect(o.exitCode()).toBe(0);
+    expect(out.join('\n')).toContain('已打包模块：hello v0.1.0');
+    expect(existsSync(join(cwd, 'hello-0.1.0.tgz'))).toBe(true);
+  }, 60_000);
+
   it('目录缺 manifest → 退出码 1 + 人话错误', async () => {
     const o = opts(['module', 'pack', cwd]);
     await run(o);
