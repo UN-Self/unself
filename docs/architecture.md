@@ -421,7 +421,7 @@ component 层  组件接口令牌（button-bg、card-radius…）→ packages/ui
 通道 A（同源直注）  模块挂 /m/<id>/* 同域 → 壳在 iframe 加载后直接向
                    contentDocument 注入 <style id="unself-tokens">
                    手写页（不用 SDK）也自动有值
-通道 B（SDK 握手）  模块用 @unself/module-sdk → ready 握手时壳经
+通道 B（SDK 握手）  模块用 @unself/sdk → ready 握手时壳经
                    postMessage 下发 {type:'tokens', tokens} → SDK 写入 :root
                    标准件自动跟随，模块作者零配置
 ```
