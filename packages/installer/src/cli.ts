@@ -6,7 +6,7 @@
  * 路径可见性（#53）：每次输出都以 pathline 开头，操作结束再重复一次（echoPathline）。
  */
 import { rmSync, existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 // 只依赖实例管理三库（零引擎依赖）：装配引擎仅在 deploy 分支动态加载——
 // 独立安装制品（npx tarball）里核心命令不 import 引擎即可工作。
 import { createInstanceDir, instanceLayout, loadInstance } from './lib/dir';
@@ -118,6 +118,19 @@ export function parseArgs(argv: string[]): {
   );
   const cmd = rest[0] ?? 'wizard';
   return { cmd, args: rest.slice(1), json: argv.includes('--json'), purge: argv.includes('--purge'), allowAdopt, yes };
+}
+
+/**
+ * 向导自举时的缺省实例名：当前目录名按注册表同规净化（小写、非法字符转 `-`、≤64 位）；
+ * 净化后仍不合法（全符号 / 空 / 超长）就退回 `unself`。
+ */
+export function defaultInstanceName(cwd: string): string {
+  const raw = basename(resolve(cwd))
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+  return /^[a-z0-9][a-z0-9-]{0,63}$/.test(raw) ? raw : 'unself';
 }
 
 /** 取「当前实例」并做磁盘有效性校验（resolveCurrent 纯函数 + loadInstance 校验）。 */
@@ -348,8 +361,37 @@ async function exec(opts: RunOptions): Promise<number> {
   }
 
   // ---- wizard（默认）/ deploy：都需要当前实例 ----
-  const reg = loadRegistry(home);
-  const inst = resolveCurrentInstance(reg, env, cwd);
+  // 零克隆主路径（README「一条命令」）：全新机器上没有任何实例时，`unself`/`unself wizard [名字]`
+  // 就地建一个再进向导——向导里的 ②③④ 才是用户要填的东西，不该先逼他学 `init`。
+  // `deploy` 保持原口径（CI/逃生门：必须有实例，不隐式建目录）。
+  let inst: { name: string; path: string };
+  try {
+    inst = resolveCurrentInstance(loadRegistry(home), env, cwd);
+  } catch (err) {
+    if (cmd !== 'wizard') throw err;
+    const given = args.find((a) => !a.startsWith('--'));
+    // 没给名字：实例就落在当前目录下（`<cwd>/unself`），实例名 = 当前目录名（净化后）——
+    // 与 `init <名字> <目录>` 语义一致（避免 `unself/unself` 这种多一层）。
+    const name = given ?? defaultInstanceName(cwd);
+    const chosenDir = given === undefined ? cwd : join(cwd, given);
+    let reg = loadRegistry(home);
+    const registered = reg.instances[name];
+    if (registered !== undefined && existsSync(registered)) {
+      // 同名实例已注册且目录还在：切过去，不再建（避免两处同名各指一半）。
+      reg = { ...reg, current: name };
+      saveRegistry(reg, home);
+      log(`没有当前实例 → 切换到你已注册的实例：${name}`);
+      echoPathline(registered, log);
+      inst = { name, path: registered };
+    } else {
+      const { layout } = createInstanceDir(chosenDir);
+      reg = registerInstance(reg, name, layout.instanceDir);
+      saveRegistry({ ...reg, current: name }, home);
+      log(`没有当前实例 → 已在此目录新建并设为当前：${name}`);
+      echoPathline(layout.instanceDir, log);
+      inst = { name, path: layout.instanceDir };
+    }
+  }
 
   if (cmd === 'wizard') {
     const port = args.find((a) => /^--port=\d+$/.test(a));

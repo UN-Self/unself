@@ -323,6 +323,90 @@ describe('envHint 投影与多级子域更新（#246）', () => {
   });
 });
 
+describe('① OAuth 直跑（页面文案「可零输入直跑（跳过本步）」的接线）', () => {
+  it('宿主 OAuth 可用且非 CI → 留空即跳过①，不再报「token 为空」', async () => {
+    const r = await post('/api/step1', { token: '' });
+    expect(r.status).toBe(200);
+    expect(r.json.step).toBe('domain');
+    expect(holder.state.hasToken).toBe(true);
+    expect(holder.state.error).toBeNull();
+  });
+
+  it('OAuth 不可用 → 留空仍拒绝（不能静默降级成“用不存在的凭据”）', async () => {
+    const { server, port } = await startWizardServer({
+      deps: {
+        getState: () => initialWizardState('/tmp/x/no-oauth/unself'),
+        setState: () => {},
+        hasEnvToken: false,
+        envHint: { ...HINT, oauthUsable: false },
+        deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+      },
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/step1`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: '' }),
+      });
+      expect(res.status).toBe(400);
+      expect(String(((await res.json()) as Record<string, unknown>).problem)).toContain('token 为空');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('CI 态（没有浏览器可授权）→ 留空仍拒绝', async () => {
+    const { server, port } = await startWizardServer({
+      deps: {
+        getState: () => initialWizardState('/tmp/x/ci/unself'),
+        setState: () => {},
+        hasEnvToken: false,
+        envHint: { ...HINT, ci: true },
+        deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+      },
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/step1`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: '' }),
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+describe('页面脚本必须可解析（防「HTTP 200 但所有按钮都点不动」）', () => {
+  /** 从渲染页里取出全部内联 <script> 源码。 */
+  function inlineScripts(html: string): string[] {
+    return [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map((m) => m[1] as string);
+  }
+
+  it('渲染页的内联脚本能被 JS 引擎解析（语法错 = 整页按钮全挂）', () => {
+    const html = renderPage(initialWizardState('/tmp/x/unself'), HINT);
+    const scripts = inlineScripts(html);
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const src of scripts) {
+      // `new Function` 只做语法解析（不执行）；失败会抛 SyntaxError。
+      expect(() => new Function(src)).not.toThrow();
+    }
+  });
+
+  it('脚本里每处 addEventListener 的目标元素都存在于同一页面（防选择器写错）', () => {
+    const html = renderPage(initialWizardState('/tmp/x/unself'), HINT);
+    const src = inlineScripts(html).join('\n');
+    const ids = [...src.matchAll(/\$\('([^']+)'\)/g)].map((m) => m[1] as string);
+    expect(ids.length).toBeGreaterThan(0);
+    for (const id of ids) {
+      // 页面里要么真有这个元素（id="x"），要么脚本里已用 `?.` 容忍缺失。
+      const optional = new RegExp(`\\$\\('${id}'\\)\\?\.`).test(src);
+      if (!optional) expect(html).toContain(`id="${id}"`);
+    }
+  });
+});
+
 describe('envHint 缺省向后兼容（不传 envHint 只传 hasEnvToken）', () => {
   it('缺省语义 = oauthUsable/非 CI/非多级子域，hasEnvToken 映射进 envHint', async () => {
     const { server, port } = await startWizardServer({

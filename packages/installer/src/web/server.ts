@@ -23,6 +23,7 @@ import {
   pushEvent,
   resetWizard,
   SHARED_CONSENT_NOTE,
+  submitOAuthSkip,
   submitToken,
   type WizardEnvHint,
   type WizardModuleAdd,
@@ -373,7 +374,12 @@ $('btn-deploy').addEventListener('click', async () => {
   const timer = setInterval(async () => {
     const s = await (await fetch('/api/state')).json();
     if (s.step === 'done') { clearInterval(timer); es.close(); $('events').textContent += '\\n完成：' + s.result.baseUrl + (s.result.setupUrl ?? ''); }
-    if (s.step === 'failed') { clearInterval(timer); es.close(); showErr('err-deploy', s.error.cause); // MUTANT-4 删修复行 $('btn-deploy').disabled = false; }
+    if (s.step === 'failed') {
+      clearInterval(timer);
+      es.close();
+      showErr('err-deploy', s.error.cause);
+      $('btn-deploy').disabled = false;
+    }
   }, 800);
 });
 </script>
@@ -437,6 +443,15 @@ export function createWizardServer(opts: ServeOptions): Server {
           }
           const body = await readJsonBody(req);
           const raw = String(body.token ?? '');
+          // 「可零输入直跑」的接线（让 #246 的文案与行为一致）：宿主探测到可用 wrangler OAuth
+          // 且非 CI → 留空 = 用本机 OAuth 凭据（引擎按凭证优先级自取），不再报「token 为空」。
+          if (raw.trim() === '' && envHint.oauthUsable && !envHint.ci) {
+            sessionToken = '';
+            const skipped = submitOAuthSkip(state);
+            deps.setState(skipped);
+            json(res, 200, { step: skipped.step });
+            return;
+          }
           const r = submitToken(state, raw);
           if (r.problem) {
             json(res, 400, { problem: r.problem });

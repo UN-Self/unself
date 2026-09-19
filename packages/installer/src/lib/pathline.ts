@@ -15,7 +15,6 @@ export function pathline(instancePath: string): string {
  */
 export function echoPathline(instancePath: string, out: (line: string) => void): void {
   out(pathline(instancePath));
-  out(pathline(instancePath));
 }
 
 /** 尾部路径行（与首行等值），供操作结束时输出。 */

@@ -14,12 +14,10 @@ describe('pathline', () => {
 });
 
 describe('echoPathline', () => {
-  it('输出两行且等值（首行 + 操作结束后重复）', () => {
+  it('只输出一行（路径可见性哨兵，不重复打印）', () => {
     const lines: string[] = [];
     echoPathline('/srv/demo/unself', (line) => lines.push(line));
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toBe('实例目录：/srv/demo/unself');
-    expect(lines[1]).toBe(lines[0]);
+    expect(lines).toEqual(['实例目录：/srv/demo/unself']);
   });
 });
 
