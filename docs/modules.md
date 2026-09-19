@@ -204,7 +204,7 @@ npm publish                        # ⑤ 发到你自己的 scope（如 @acme/un
 - **`coreOrigin` 必填**：跨域模块必须显式配置，**禁止回落到 `'*'`**（决策 #63）。
 - **模块恒挂根路径**：模块代码按「部署在根路径」编写；`/m/<id>/` 前缀由**宿主**剥离（CF wrapper / 反代 / 独立域名本就挂根）。模块不要自己实现前缀逻辑。
 - **CSP / CORS**：自托管模块页必须带 `frame-ancestors <壳的 origin>`；Core API 按注册表 origin 白名单放行。
-- **浏览器侧 SDK 由平台注入**（`assets/sdk/module-sdk.esm.js`），模块**不要自带**——它实现的是壳↔模块的 postMessage 协议，必须与 core 同版本。worker 侧的 `@unself/module-sdk` 则是普通依赖，随 bundle。
+- **浏览器侧 SDK 由平台注入**（`assets/sdk/module-sdk.esm.js`），模块**不要自带**——它实现的是壳↔模块的 postMessage 协议，必须与 core 同版本。worker 侧的 `@unself/sdk` 则是普通依赖，随 bundle。
 - **健康检查**：`GET /api/health`（冒烟与可达性体检用）。
 - **生命周期**：`GET /life/export`、`POST /life/purge`（卸载「导出并删除」/「直接删除」用）。
 
