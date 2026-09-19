@@ -20,15 +20,16 @@
 
 **全局唯一身份 = 包名/来源**（决策 #59）。`manifest.id` 只是**作者建议的实例内名字**，部署者安装时可以改；撞名由安装器提示改名。注册表主键是实例内 id，升级靠 `source` 定位包。
 
-来源协议（决策 #58）：
+来源协议（决策 #58 / #77）：
 
 | 写法 | 含义 | 是否允许本地构建 |
 |---|---|---|
-| `official:hello` | 默认官方源里的包 | 否 |
 | `npm:@acme/unself-todo@1.2.0` | npm / 私有 registry（走 npm 配置） | 否 |
 | `github:acme/unself-todo#v1.2.0` | git 仓库的 **release 产物** | 否 |
 | `https://内网/…/todo-1.2.0.tgz` | 任意 tarball URL | 否 |
 | `file:./modules/my-todo` | 本地目录（**唯一允许源码**的路径） | **是** |
+
+**没有 `official:` 特权来源（决策 #77）**：官方模块就是普通 npm 包（`@unself/hello`、`@unself/chat`），与第三方走同一个解析器、同一套安装与卸载路径。安装器 `dependencies` 里精确预装了官方模块，因此 `npm:@unself/hello@0.1.0` 这类串**本地有就直接用（零网络）**、缺了才去 registry 取——这是「默认值」，不是「特权」。
 
 **信任边界（硬）**：远端来源一律要求**已打包**。安装器直接从 registry 取 tarball 解包，**不走 `npm install`**（`postinstall` 没有执行机会），**不执行包内任何脚本**。作者的构建只发生在作者自己的 CI 或本地目录模式。
 
@@ -45,8 +46,11 @@ unself-todo-1.2.0.tgz
 ├─ config.schema     可选：配置页字段声明（见第 5 节）
 ├─ theme.json        可选：模块自己的皮肤（默认跟随实例主题）
 ├─ docker/           可选：runtimes 含 docker 时的镜像/端口/健康检查声明
-└─ LICENSE / NOTICE  许可证随包走；GPL 类模块必须自带
+├─ LICENSE / NOTICE  许可证随包走；GPL 类模块必须自带
+└─ package.json      生成的 npm 元数据（name/version/files）；`npm publish` 用它
 ```
+
+`manifest.json` 是**安装侧的真相**；生成的 `package.json` 只服务 npm 发布（决策 #78），二者版本号必须一致。
 
 **包里不得出现**：`node_modules/`、`.env` / 密钥、测试残留、源码（除非是 `file:` 本地模式）。
 
@@ -158,7 +162,25 @@ unself module pack      # 在作者自己的 CI / 本地跑：构建 → 产出 
 unself module validate  # 跑第 7 节全部检查
 ```
 
-发布到 npm（含私有 registry）、或作为 git release 产物、或任意 HTTPS 可取的 tarball。**官方模块走同一条路**（`official:` 只是默认源里的普通包），没有特权通道。
+### 8.1 发布到 npm（模块作者路径）
+
+```sh
+npm i @unself/sdk                  # ① 唯一要装的包（能力全在里面，按需 import）
+# ② 写你的模块：worker 后端（+ 可选前端）+ manifest.yaml
+unself module validate             # ③ 发布前自检（第 7 节六类硬检查）
+unself module pack                 # ④ 打包 → 产出可直接 `npm publish` 的 .tgz（含生成的 package.json）
+npm publish                        # ⑤ 发到你自己的 scope（如 @acme/unself-todo）
+```
+
+实例侧用安装串消费：`npm:@acme/unself-todo@1.2.0`。也可以作为 git release 产物、或任意 HTTPS 可取的 tarball。**官方模块就是同一条路**（`@unself/hello` 只是恰好由项目自己发布的普通 npm 包），没有任何特权通道（决策 #77）。
+
+### 8.2 热更边界（决策 #81）
+
+模块可热更：重新上传模块 Worker 即可，**core 不停机**。三条边界：
+
+1. **已打开的页面要刷新**才拿到新资产（资产哈希变了）
+2. **模块迁移必须向后兼容**（记账按文件名，只有新增安全——见第 6 节）
+3. **契约版本或权限声明变更**时，核心会在装配期重新签发 module-token（同样不需要重启核心）
 
 实例侧由部署者用配置或安装器加入：
 

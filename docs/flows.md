@@ -2,6 +2,33 @@
 
 > 来源：docs/PRODUCT_SPEC.md v3（2026-09-10）§4。
 
+## 链路 0：部署到出实例（#242 / #272 / #269 / #273 / #277 / #270 / W5）
+
+```
+干净机器（只装 Node）
+npx @unself/installer
+  └─ 本地 Web 向导（#242）：
+       ① CF API Token（只进内存：不落盘、不回显；真验走 GET /user/tokens/verify）
+       ② 域名：workers.dev 免费域名 或 自有域名（自有域名先做体检；多级子域需 API Token）
+       ③ 模块：安装串（npm: / github: / https: / file:）—— 装配前展示来源 / 版本 / SRI / 权限 / 数据落点，未知能力当场点名拒给
+       ③½ 存储落点四级单选（core / shared / dedicated），按 manifest.storage 声明校验
+       ④ 资源名预览（本实例将占用的 CF 资源名）+ 「允许接管」开关（默认关）
+  └─ 九步装配（幂等，可随时重跑）：
+       ① D1（core / modules）② 迁移（按模块独立记账）③ R2 ④ 密钥 ⑤ Worker ⑥ 模块 Worker + 路由
+       ⑦ 壳资产与注册表 ⑧ 域名 / DNS / TLS ⑨ 冒烟（health + 各模块 health + 主题体检；不可达必红）
+  └─ 收尾屏：setup 深链 + 引擎版本与 commit（决策 #80）
+
+浏览器打开 setup 深链 → 设管理员用户名密码 → 进工作台（壳）
+  └─ 点侧栏模块 → 跨子域 iframe 加载 → 模块用 resolveShellOrigin() 取壳 origin（#277）
+       → module-token 握手 → 主题通道 → 模块存储走 Core API 代理
+```
+
+**未封箱窗口 = 接管面（#165）**：setup token 的签发权只在部署者手里；实例未封箱前，拿到 deep link 的人就是接管者。
+
+**模块增删（免重装）**：`unself module add <来源>` / 向导③「安装串」增装；`unself module remove <id>` 卸载（撤路由 → 删 Worker → 按 `manifest.tables` 清单删表 → 清记账 → 注册表移除，决策 #270），卸到库里无残留表。
+
+**升级**：`npx @unself/installer@latest deploy` 幂等重跑；数据原地保留（迁移只增不改），资源名不变。
+
 ## 链路 1：新人入职（2026-09-10 修订：双门·注册矩阵·门型表）
 
 **门型表（拍板）**：入职入口保留邀请制，无开放注册。
