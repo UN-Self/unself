@@ -63,11 +63,33 @@ M2 原范围（聊天模块化）已收官；本轮在其上**增补「模块化
 
 | 项 | 去向 |
 |---|---|
-| 发版约定（破坏性变更定义、弃用周期、`CONTRACT_VERSION` bump、CI 卡点） | 留档待定（决策 #57） |
+| 发版约定（破坏性变更定义、弃用周期、`CONTRACT_VERSION` bump、CI 卡点） | ✅ 已定案（决策 #79，2026-09-19；#57 的「待定」关闭）——见下节 W5 |
 | 一键入口（Deploy Button + Workers Builds）重定案 | 决策 #68 登记；本阶段不实现 |
 | Docker target 真落地、DO/realtime 平替 | M3 |
 | 无 Node 环境（`npx` 都不可用）的兜底 | 更后；Docker 方向 |
 | `--scopes` 最小 scope 集、`node:sqlite` 免 flag 的 Node 下限、Total TLS（多级子域需 API Token） | 实现时顺手定 |
+
+## npm 真实发布波次（W5，2026-09-19 定案）
+
+**为什么有这一波**：M2 增补验收的 ①「干净机器 `npx @unself/installer`」与 ③「builtin 与第三方同一条路」在验收时**未达成**——安装器只有仓库内打的 `.tgz`，npm 上一个包都没有；官方模块与第三方模块走两条路（安装器内嵌一份私有副本）。本波把它们真正做出来，依据决策 #76–#82。
+
+| issue | 内容 |
+|---|---|
+| #282 | 发布波次总账（口径、发布顺序、验收） |
+| #283 | `@unself/sdk` 可发布（改名 `@unself/sdk` + `contracts` 收敛为内部 + JS/d.ts 产物） |
+| #284 | 官方模块改走 npm 包（删 `official:`、安装器 `dependencies` 预装、`npm:` 本地优先解析） |
+| #285 | `unself module pack` 直接产出可 `npm publish` 的包 |
+| #286 | 发布流水线 `release.yml`（tag 即版本 + Trusted Publisher） |
+| #287 | 版本可见（产物带版本/commit，`--version` 与部署收尾屏打印） |
+
+**验收（①与③的达成口径，缺一不可）**
+
+1. npm 上能查到 4 个包；干净机器（只装 Node）跑 `npx @unself/installer --help` 出帮助 → **①达成**
+2. 干净机器真机走查：向导填表 → 部署 → 出可登录实例 → **真浏览器**打开模块可用（验收口径见 docs/testing.md「真浏览器渲染」）
+3. 官方与第三方**同一条路**：`npm:@unself/hello@x` 与同内容 tarball 安装结果一致 → **③达成**
+4. 推 tag 能自动发版（Trusted Publisher），npm 页面出现 provenance 标记
+
+**本轮不做**：Docker 镜像渠道（M3）· 私有 registry 凭据方案 · `unself module update`（只更单个模块）· 管理台检测 npm 最新版
 
 ## 未决与交接
 

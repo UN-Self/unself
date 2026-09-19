@@ -3,19 +3,18 @@
 ## 直接跑（复制粘贴，从上到下）
 
 ```sh
-# 前置：Node.js ≥ 22 和 pnpm ≥ 11（node -v 自查）
+# 前置：Node.js ≥ 22（`node -v` 自查；不需要 git、不需要 pnpm）
 
-git clone https://github.com/UN-Self/unself.git && cd unself
-pnpm install
+# ① 启动本地 Web 向导（安装器的默认命令）
+npx @unself/installer
 
-# ① 启动装配器：浏览器授权（推荐，OAuth）或粘贴 CF API Token
-node deploy/cloudflare/bin.ts
-
-# ② 按提示选域名（回车 = workers.dev 免费域名）、确认模块（回车 = 默认）
-# ③ 等九步跑完，终端末尾打印 setup 链接
+# ② 向导里填：CF API Token → 域名（workers.dev 免费域名是默认）→ 模块（默认 hello）→ 「允许接管」保持关闭
+# ③ 等九步跑完，终端末尾打印 setup 链接（同时打印引擎版本与 commit，报障时用它）
 
 # ④ 浏览器打开 setup 链接 → 设管理员用户名密码 → 登录工作台
 ```
+
+> **仓库内运行（贡献者 / 装机前）：** `git clone https://github.com/UN-Self/unself.git && cd unself && pnpm install && node deploy/cloudflare/bin.ts` —— 与 `npx` 是同一条装配路径（同一个引擎）。
 
 **完成。** 拉人：管理台 → 邀请 → 生成链接发给新人 → 新人填表 → 你批准（秒回，开户+签激活令牌；发信后台尽力，失败不阻塞）→ 新人凭原邀请链接回邀请页自助激活（设邮箱密码）→ 登录。
 想要团队邮箱：管理台 → 设置 → 邮件服务（运行时配置，随时改即生效免重部署；填了之后批准邀请会后台尽力开邮箱并发信；发信受 CF Workers 出站限制只是尽力增强，激活必经通道=邀请页三态自助）。
@@ -35,8 +34,10 @@ node deploy/cloudflare/bin.ts
 ## 升级已有实例
 
 ```sh
-cd unself && git pull && node deploy/cloudflare/bin.ts
+npx @unself/installer@latest deploy    # 用新版安装器重跑一次部署（幂等）
 ```
+
+数据原地保留（迁移只增不改）、资源名不变（命名空间来自实例配置）。收尾屏会打印本次部署的引擎版本与 commit。
 
 数据原地保留（迁移只增不改）。升级纪律：
 

@@ -13,15 +13,15 @@ Unself 是**跑在你自己 Cloudflare 账户上的团队工作台**：不是 Sa
 
 ## 跑起来
 
-> 目标形态是一条命令 `npx @unself/installer`（[issue #242](https://github.com/UN-Self/unself/issues/242) 开发中）。**当前可用路径**（需要 Node ≥ 22 + pnpm ≥ 11）：
+> 一条命令 `npx @unself/installer`（[issue #242](https://github.com/UN-Self/unself/issues/242)）——**不需要 git、不需要 pnpm**：
 
 ```sh
-git clone https://github.com/UN-Self/unself.git && cd unself
-pnpm install
-node deploy/cloudflare/bin.ts
+npx @unself/installer
 ```
 
-按提示授权 → 选域名（没有就用免费的 workers.dev）→ 选模块 → 等九步跑完 → 浏览器打开末尾打印的一次性链接设管理员。约 5–10 分钟。
+浏览器里会打开本地向导：粘 CF API Token → 选域名（没有就用免费的 workers.dev）→ 确认模块（默认 hello）→ 等九步跑完 → 浏览器打开末尾打印的一次性链接设管理员。约 5–10 分钟。
+
+> 贡献者 / 仓库内运行：`git clone` → `pnpm install` → `node deploy/cloudflare/bin.ts`（同一条装配路径）。
 
 失败自救、升级已有实例、备份：[docs/deploy.md](docs/deploy.md)。
 
@@ -37,14 +37,16 @@ node deploy/cloudflare/bin.ts
 
 ## 装第三方模块
 
-模块可以来自官方源、npm（含私有 registry）、git release 产物、任意 HTTPS tarball，也可以是你本地的一个目录：
+模块可以来自 npm（含私有 registry）、git release 产物、任意 HTTPS tarball，也可以是你本地的一个目录：
 
 ```sh
 unself module add npm:@acme/unself-todo@1.2.0
 unself deploy
 ```
 
-安装串的五种写法（决策 #58）：`official:hello`、`npm:@acme/unself-todo@1.2.0`、`github:acme/unself-todo#v1.2.0`、`https://…/todo-1.2.0.tgz`、`file:./modules/my-todo`。
+安装串的四种写法（决策 #58 / #77）：`npm:@acme/unself-todo@1.2.0`、`github:acme/unself-todo#v1.2.0`、`https://…/todo-1.2.0.tgz`、`file:./modules/my-todo`。
+
+**官方模块与第三方同一个东西**：`@unself/hello` 就是普通 npm 包（`npm:@unself/hello@0.1.0`），没有 `official:` 特权来源，安装与卸载路径完全一致。
 
 `module add` 会先解析来源，把「将要装什么」打出来（版本、SRI、声明的权限、数据落点），**未知能力直接拒绝并点名**；解析结果写进 `unself.config.jsonc` 与 `unself.lock`，所以紧接着的 `unself deploy` 不会重复下载。Web 向导第③步也可以点「添加模块」把安装串粘进去，装配前同样展示来源 / 版本 / SRI / 权限 / 落点。
 
