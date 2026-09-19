@@ -195,7 +195,7 @@ async function runWithSource(opts: {
     client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
     configOverride: {
       domain: '',
-      modules: ['hello', { id: 'todo', source: opts.source }] as never,
+      modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }, { id: 'todo', source: opts.source }],
       storage: { provider: 'r2', bucket: 'unself-storage' },
     },
     http: SMOKE_OK,
@@ -222,9 +222,9 @@ describe('#245 验收：来源安装 × 装配器路径（runNineSteps）', () =
     expect(todo.version).toBe('1.2.0');
     expect(todo.integrity).toMatch(/^sha512-/);
     expect(todo.contractVersion).toBe('1.0');
-    // builtin hello 也进 lock（决策 #60）
+    // 官方模块也进 lock（决策 #60/#77：写 npm 串，没有 builtin 合成来源）
     const hello = lock.modules.hello!;
-    expect(hello.source).toBe('builtin:hello');
+    expect(hello.source).toBe('npm:@unself/hello@0.1.0');
     expect(hello.version).toBe('0.1.0');
     // 摘要含 todo
     expect(summary.modules.map((m) => m.id)).toContain('todo');
@@ -274,7 +274,7 @@ describe('#245 验收：来源安装 × 装配器路径（runNineSteps）', () =
       client: new RestClient({ token: 't', fetchImpl: fake2.fetchImpl }),
       configOverride: {
         domain: '',
-        modules: ['hello', { id: 'todo', source: 'npm:unself-todo@1.2.0' }] as never,
+        modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }, { id: 'todo', source: 'npm:unself-todo@1.2.0' }],
         storage: { provider: 'r2', bucket: 'unself-storage' },
       },
       http: SMOKE_OK,

@@ -4,7 +4,8 @@
  * 1. **真远端取包**：把 `modules/hello` 用 `unself module pack` 打进 .tgz，经 loopback HTTP
  *    （`http://127.0.0.1:<port>/hello-0.1.0.tgz`）真实 `fetch` 下载 → 九步装配成功；
  * 2. **「同内容的本地 tarball 结果一致」**（验收③）：tarball 来源装配出来的 module worker
- *    与 builtin 装配逐字节相同（且等于 pack 产出的 worker.js）；
+ *    与 npm 本地命中（仓库源码形态）装配逐字节相同（且等于 pack 产出的 worker.js）——#284 起
+ *    「本地优先」的两种来源（node_modules 源码形态 / 远端 tarball 打包形态）必须产出同一份产物；
  * 3. **篡改包必红**：lock 已锁定 SRI，干净重跑（暂存清空）取到篡改字节 → 拒绝安装。
  *
  * CF 侧为替身（`makeCfRestFake`）；取包/解包/SRI 校验走真实代码。真机探针另见 /tmp/report-269.md。
@@ -71,14 +72,14 @@ function port(): number {
 }
 
 /** 跑一次九步（repo 形态 + 替身 CF；模块清单由调用方给）。 */
-async function runDeploy(modules: Array<string | { id: string; source: string }>, opts: { yes?: boolean } = {}) {
+async function runDeploy(modules: Array<{ id: string; source: string }>, opts: { yes?: boolean } = {}) {
   const fake = makeCfRestFake();
   const summary = await runNineSteps({
     rootDir: ROOT,
     client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
     configOverride: {
       domain: '',
-      modules: modules as never,
+      modules,
       storage: { provider: 'r2', bucket: 'unself-storage' },
     },
     http: SMOKE_OK,
@@ -89,7 +90,7 @@ async function runDeploy(modules: Array<string | { id: string; source: string }>
 }
 
 describe.sequential('#269 e2e：真远端取包 + 结果一致 + 篡改必红', () => {
-  it('builtin 与 loopback http tarball 装配结果逐字节一致，且 lock 记下来源/SRI', { timeout: 180_000 }, async () => {
+  it('npm 本地命中 与 loopback http tarball 装配结果逐字节一致，且 lock 记下来源/SRI', { timeout: 180_000 }, async () => {
     await rm(DEPLOY_DIR, { recursive: true, force: true });
     await rm(LOCK_PATH, { force: true });
     const out = join(ROOT, '.scratch-e2e-pack');
@@ -98,8 +99,8 @@ describe.sequential('#269 e2e：真远端取包 + 结果一致 + 篡改必红', 
     served = await readFile(packed.tarballPath);
     hits = 0;
 
-    // ① builtin（仓库形态）
-    await runDeploy(['hello']);
+    // ① 官方模块（npm 本地命中 → 仓库源码形态，装配期 esbuild 打包）
+    await runDeploy([{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], { yes: true });
     const builtinApp = await readFile(join(DEPLOY_DIR, 'cloudflare/modules/hello/app.js'));
 
     // ② 真远端来源（loopback HTTP；不带任何 fetchers 替身）

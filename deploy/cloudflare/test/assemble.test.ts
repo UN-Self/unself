@@ -17,7 +17,7 @@ describe('coreWranglerConfig（③生成的部署配置）', () => {
   const base = {
     config: {
       domain: 'team.example.com',
-      modules: ['hello'],
+      modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
       storage: { provider: 'r2', bucket: 'unself-storage' },
     } as UnselfConfig,
     dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
@@ -66,7 +66,7 @@ describe('moduleWranglerConfig（④生成的部署配置）', () => {
   const input = {
     config: {
       domain: 'team.example.com',
-      modules: ['hello'],
+      modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
       storage: { provider: 'r2', bucket: 'b' },
     } as UnselfConfig,
     dbIds: { modules: 'modules-uuid' },
@@ -231,7 +231,7 @@ describe('provisionAll（③ shell 每次部署重建，#73）', () => {
       const provisioned = await provisionAll({
         rootDir,
         // 最小合法配置（类型断言沿用本文件现有风格）；modules 传空数组：跳过 esbuild，聚焦 shell 重建
-        config: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } } as UnselfConfig,
+        config: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } } as UnselfConfig,
         modules: [],
         dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
         log: () => {},

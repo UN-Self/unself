@@ -9,7 +9,6 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  builtinSource,
   buildLockPlan,
   emptyLock,
   formatIntegrityFailures,
@@ -74,15 +73,15 @@ describe('manifestHash（稳定序）', () => {
 describe('buildLockPlan（重跑用 lock、换源=显式）', () => {
   const lock = baseLock({
     todo: entry({}),
-    hello: entry({ source: 'builtin:hello', integrity: undefined, version: '0.1.0' }),
-    old: entry({ source: 'official:old', version: '0.0.9' }),
+    hello: entry({ source: 'npm:@unself/hello@0.1.0', integrity: undefined, version: '0.1.0' }),
+    old: entry({ source: 'npm:@acme/old@0.0.9', version: '0.0.9' }),
   });
 
   it('config 与 lock 完全一致 → 全 reuse（重跑不重解析）', () => {
     const plan = buildLockPlan({
       entries: [
         { id: 'todo', source: 'npm:@acme/todo@1.2.0' },
-        { id: 'hello' },
+        { id: 'hello', source: 'npm:@unself/hello@0.1.0' },
       ],
       lock,
     });
@@ -109,17 +108,16 @@ describe('buildLockPlan（重跑用 lock、换源=显式）', () => {
     expect(plan.resolve[0]!.previous?.version).toBe('1.2.0');
   });
 
-  it('builtin 模块合成 source（builtin:<id>）进 lock', () => {
-    expect(builtinSource('hello')).toBe('builtin:hello');
-    const plan = buildLockPlan({ entries: [{ id: 'hello' }], lock: emptyLock() });
-    expect(plan.resolve[0]!.source).toBe('builtin:hello');
+  it('#77：官方模块也记 npm 串进 lock（无 builtin 合成来源）', () => {
+    const plan = buildLockPlan({ entries: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], lock: emptyLock() });
+    expect(plan.resolve[0]!.source).toBe('npm:@unself/hello@0.1.0');
   });
 
   it('diff 文案：三种动作可读', () => {
     const plan = buildLockPlan({
       entries: [
         { id: 'todo', source: 'npm:@acme/todo@2.0.0' },
-        { id: 'hello' },
+        { id: 'hello', source: 'npm:@unself/hello@0.1.0' },
         { id: 'newmod', source: 'https://example.com/newmod-0.1.0.tgz' },
       ],
       lock,
