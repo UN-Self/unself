@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import {
-  DEFAULT_THEME,
-  ModuleTokenClaimsSchema,
-  ThemeTokensSchema,
-  tokenCssName,
-  type ModuleTokenClaims,
-  type ThemeTokens,
-} from '@unself/contracts';
+import { DEFAULT_THEME, ModuleTokenClaimsSchema, ThemeTokensSchema, tokenCssName } from '@unself/contracts';
+// 公开类型取本地结构镜像（#283）：保证 d.ts 自包含；与 contracts 的等价性由契约一致性测试守卫。
+import type { ModuleTokenClaims, ThemeTokens } from './contract-types.js';
 
 /**
  * window 最小访问面（不引入 DOM lib：包可运行在 Node 侧，测试用 stub window）。

@@ -6,7 +6,11 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      '@unself/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
 
   adapters/mail-smtp:
     devDependencies:
@@ -112,6 +116,9 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
+      '@unself/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
@@ -121,9 +128,9 @@ importers:
 
   modules/chat:
     dependencies:
-      '@unself/module-sdk':
+      '@unself/sdk':
         specifier: workspace:*
-        version: link:../../packages/module-sdk
+        version: link:../../packages/sdk
       hono:
         specifier: ^4.10.0
         version: 4.13.7
@@ -152,9 +159,9 @@ importers:
       '@unself/contracts':
         specifier: workspace:*
         version: link:../../../packages/contracts
-      '@unself/module-sdk':
+      '@unself/sdk':
         specifier: workspace:*
-        version: link:../../../packages/module-sdk
+        version: link:../../../packages/sdk
       '@unself/ui':
         specifier: workspace:*
         version: link:../../../packages/ui
@@ -207,9 +214,9 @@ importers:
       '@unself/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@unself/module-sdk':
+      '@unself/sdk':
         specifier: workspace:*
-        version: link:../../packages/module-sdk
+        version: link:../../packages/sdk
       hono:
         specifier: ^4.10.0
         version: 4.13.7
@@ -273,6 +280,9 @@ importers:
       '@unself/deploy-cloudflare':
         specifier: workspace:*
         version: link:../../deploy/cloudflare
+      '@unself/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       esbuild:
         specifier: ^0.28.0
         version: 0.28.2
@@ -286,15 +296,18 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
 
-  packages/module-sdk:
+  packages/sdk:
     dependencies:
-      '@unself/contracts':
-        specifier: workspace:*
-        version: link:../contracts
       jose:
         specifier: ^6.1.0
         version: 6.2.12
     devDependencies:
+      '@types/node':
+        specifier: ^24
+        version: 24.13.3
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.2
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
@@ -354,9 +367,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^4.0.0
         version: 4.20260702.1
-      '@unself/module-sdk':
+      '@unself/sdk':
         specifier: workspace:*
-        version: link:../../packages/module-sdk
+        version: link:../../packages/sdk
       typescript:
         specifier: ^5.9.0
         version: 5.9.3

@@ -10,5 +10,8 @@
     "test": "pnpm -r test",
     "build": "pnpm -r build",
     "verify:tokens": "node scripts/verify-tokens.mjs"
+  },
+  "devDependencies": {
+    "@unself/contracts": "workspace:*"
   }
 }
