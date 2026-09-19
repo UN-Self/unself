@@ -33,6 +33,7 @@
 - 视觉与动线走查由**主会话**用浏览器（agent-browser）执行，单测不替代肉眼；worker 在 PR 里标注待走查项，不自行跳过。
 - **真浏览器渲染是部署类与 UI 类改动的标准动作**（#279 血泪教训：HTTP 全绿、`/api/health` 200，页面却是白屏——静态资产 content-type 错）。凡改动装配产物、静态资产、壳/模块前端、CSP 或跨域，验收**必须**含一次真实浏览器打开（看到页面真的渲染、关键交互真的能点），并把响应头/截图作为原件留档。仅凭 curl 返回 200 不算通过。
 - 纯重构 PR：旧测试零改动通过，这是「测行为不测实现」的直接推论。
+- **CI 顺序：`install → build → typecheck → test → lint → 迁移闸门`**（issue #283 起）。原因：`@unself/sdk` 的 `main`/`types` 指向 `dist/`（发布形态），与其他 workspace 包的「`types → ./src/index.ts`」不同——**干净树上不先构建，typecheck/test 会报 `Cannot find module '@unself/sdk'`**。本地因残留 `dist/` 而显示绿色是假绿，验收一律以 CI（或干净树）为准。
 
 ## 开工前边界自查（8 项，每个 issue 开工前逐条自问自答）
 
