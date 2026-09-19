@@ -1,5 +1,5 @@
 {
-  "name": "@unself/module-hello",
+  "name": "@unself/hello",
   "version": "0.1.0",
   "private": true,
   "type": "module",

@@ -7,7 +7,9 @@
   // 实例对外域名；留空/省略 → 用 <worker>.workers.dev 临时域（#15 验收路径）
   "domain": "",
   // 选中启用的模块（未列出的已存在模块注册表翻转 not_deployed）
-  "modules": ["hello"],
+  // 官方模块与第三方一样写 npm 串（决策 #77：没有 official: 特权来源）；
+  // 官方模块由安装器 dependencies 精确预装 → 解析时本地命中，部署零网络。
+  "modules": [{ "id": "hello", "source": "npm:@unself/hello@0.1.0" }],
   // 对象存储：r2（脚本建桶）或 s3（外部 S3/MinIO 参数）
   "storage": { "provider": "r2" }
 }

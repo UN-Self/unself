@@ -1,5 +1,5 @@
 {
-  "name": "@unself/module-chat",
+  "name": "@unself/chat",
   "version": "0.1.0",
   "private": true,
   "type": "module",

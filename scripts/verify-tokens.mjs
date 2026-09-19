@@ -32,6 +32,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url)); // scripts/ 的上一级 = 仓库根
 const SCAN_DIRS = ['apps', 'packages', 'modules', 'services', 'deploy'];
 const EXCLUDE_DIR_NAMES = new Set(['node_modules', 'dist', '.deploy', 'coverage', 'test', '__tests__']);
+/**
+ * 生成物目录（不进 lint）：模块前端产物随模块包发布后落在 `modules/<id>/assets/frontend/`
+ * （vite 构建输出，.gitignore 已忽略）——它带压缩 CSS，不是人写的样式源，扫它只会报噪音。
+ */
+const EXCLUDE_PATH_SUBSTRINGS = ['modules/chat/assets/frontend/'];
 const FILE_EXTS = new Set(['.vue', '.ts', '.css', '.html']);
 const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
 const RULE1_EXEMPT = new Set(['apps/shell/src/tokens.css', 'packages/contracts/src/theme-tokens.json']);
@@ -162,6 +167,7 @@ function* walkFiles(dir) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (EXCLUDE_DIR_NAMES.has(entry.name)) continue;
+      if (EXCLUDE_PATH_SUBSTRINGS.some((sub) => full.replaceAll('\\', '/').includes(sub))) continue;
       yield* walkFiles(full);
     } else if (entry.isFile()) {
       yield full;
