@@ -8,8 +8,9 @@
  * - `modulePackageFiles`：包根文件清单（相对路径 → 字节）；
  * - `packModuleDir`：`.tgz`（成员加 `package/` 前缀 = npm 形态，`extractTarball` 可直接解） + SRI。
  *
- * **builtin 与 pack 同一条路**（#257 验收③）：`packages/installer/scripts/build-artifacts.ts`
- * 用它产出 `<artifacts>/modules/<id>/`，故 pack 出来的包与 builtin 包**字节一致**。
+ * **本地形态与 pack 同一条路**（#257 验收③ / #284）：装配既吃发布形态（包根 manifest.json +
+ * 预构建 worker.js），也吃源码形态（仓库 workspace 符号链接）——后者由本文件的打包逻辑与装配期
+ * esbuild 参数（`bundleModuleWorker`）共用，故「同内容」在两条路径下产出**逐字节一致**。
  * worker 打包复用引擎 assemble 的 `moduleWorkerEntry` / `bundleModuleWorker`（不另写一套 esbuild 参数）。
  *
  * 入选文件（包根相对路径）：
@@ -170,7 +171,7 @@ export async function modulePackageFiles(
     if (existsSync(p) && statSync(p).isDirectory()) await collectTree(p, tree, files);
   }
 
-  // LICENSE / NOTICE：包根没有就沿祖先向上找（builtin 模块自身无 LICENSE，打包需随根 LICENSE 才能过安装校验）
+  // LICENSE / NOTICE：包根没有就沿祖先向上找（仓库内模块自身无 LICENSE，打包需随根 LICENSE 才能过安装校验）
   if (!existsSync(join(dir, 'LICENSE'))) {
     const found = await findAncestorLicense(dir, 8, input.log);
     if (found) {

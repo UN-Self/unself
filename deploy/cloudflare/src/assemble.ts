@@ -43,7 +43,7 @@ export interface ModuleProvision {
   workerEntry: RelPath;
   /** SDK/页面静态资产目录（相对 outDir；无资产模块 undefined）。 */
   assetsDir?: string;
-  /** 解析后的 manifest（#248：存储落点判定用；builtin 模块 undefined 时按 preferred??core）。 */
+  /** 解析后的 manifest（#248：存储落点判定用；缺解析产物时按 preferred??core）。 */
   manifest?: ModuleManifest;
 }
 
@@ -93,8 +93,8 @@ export async function provisionAll(options: {
    */
   buildShell?: (rootDir: string) => Promise<void>;
   /**
-   * 产物根（#257）：给了就**不再读仓库源码树**——shell / SDK / builtin 模块 worker 全部从
-   * `<installer>/dist/artifacts/**` 搬运（预打包产物）；缺省 = 仓库开发形态（现行为不变）。
+   * 产物根（#257）：给了就**不再读仓库源码树**——shell 从 `<installer>/dist/artifacts/**` 搬运
+   * （预打包产物）；SDK 与模块是普通 npm 包（node_modules 本地解析）。缺省 = 仓库开发形态。
    */
   artifacts?: ArtifactRoots | null;
 }): Promise<Provisioned> {
@@ -135,8 +135,8 @@ export async function provisionAll(options: {
     // 无包描述的裸目录回退 src/index.ts（最小仓库场景）。
     const workerEntry = join(modOut, 'app.js');
     // 已打包形态（包根带预构建 worker.js）——**不问 artifacts**：远端来源（npm/github/https tarball）
-    // 与 builtin 包都必须是自包含单文件（决策 #58/#60），重打包会改变字节并可能引入额外包裹。
-    // 只有源码形态（仓库 builtin、file: 本地源码）才走 esbuild。
+    // 与官方模块包都必须是自包含单文件（决策 #58/#60），重打包会改变字节并可能引入额外包裹。
+    // 只有源码形态（仓库 workspace 符号链接、file: 本地源码）才走 esbuild。
     const prebuilt = join(mod.dir, 'worker.js');
     if (existsSync(prebuilt)) {
       await cp(prebuilt, workerEntry);
