@@ -2,17 +2,16 @@
 /**
  * 来源预览（issue #269）：把「将要装什么」在装配前算出来，给向导③ / `unself module add` 展示。
  *
- * 与装配期 `resolveSources` 走**同一批原语**（parseSource / npmResolve / githubResolve /
- * downloadTo / extractTarball / fileStage / readManifest），只少了 lock 记账与落位：
+ * 与装配期 `resolveSources` 走**同一批原语**（parseSource / resolveLocalNpmPackage / npmResolve /
+ * githubResolve / downloadTo / extractTarball / fileStage / readManifest），只少了 lock 记账与落位：
  * 解析来源 → 取包到暂存目录 → 读 manifest（含未知能力门禁）→ 返回 id/版本/SRI/permissions/落点。
  *
- * 五协议（决策 #58）：official: / npm: / github: / https: / file:。
+ * 四协议（决策 #58/#77）：npm: / github: / https: / file:。npm: 本地 node_modules 命中（版本匹配）
+ * 直接用（零网络，与装配期同款），未命中才走 registry。
  */
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { ModuleManifest, ModulePermission } from '@unself/contracts';
-import type { ArtifactRoots } from './artifacts';
-import { builtinModuleDir } from './artifacts';
 import {
   type ParsedSource,
   downloadTo,
@@ -21,6 +20,7 @@ import {
   githubResolve,
   npmResolve,
   parseSource,
+  resolveLocalNpmPackage,
 } from './sources';
 import { readManifest } from './module-sources';
 
@@ -43,8 +43,10 @@ export interface ModulePreview {
   manifest: ModuleManifest;
   /** manifest 原文（快照/哈希用）。 */
   manifestText: string;
-  /** 解包后的包根绝对路径（装配器可直接复用；file:/official: 即源目录）。 */
+  /** 解包后的包根绝对路径（装配器可直接复用；file: / npm 本地命中即本地目录）。 */
   packageDir: string;
+  /** 包形态：packed = 预构建包；source = 本地源码目录。 */
+  form: 'packed' | 'source';
 }
 
 export interface PreviewInput {
@@ -53,8 +55,6 @@ export interface PreviewInput {
   cwd: string;
   /** 暂存目录（预览缓存）。缺省 = `<cwd>/.deploy/module-preview/<source 摘要>`。 */
   stageDir?: string;
-  /** 产物根（official: 从 `<artifacts>/modules/<name>` 取包，与 builtin 同源）。 */
-  artifacts?: ArtifactRoots | null;
   /** 测试注入口：替换远端抓取（形状同 module-sources 的 fetchers）。 */
   fetchers?: {
     npm?: typeof npmResolve;
@@ -73,11 +73,7 @@ export async function previewModuleSource(input: PreviewInput): Promise<ModulePr
   const log = input.log ?? (() => {});
   const stageDir = input.stageDir ?? join(input.cwd, '.deploy', 'module-preview', createHash('sha256').update(input.source).digest('hex').slice(0, 12));
 
-  // ---- official: / file: 目录形态：无下载字节 → integrity 省略（与 resolveOne 同款取法）----
-  if (parsed.kind === 'official') {
-    const dir = builtinModuleDir({ rootDir: input.cwd, moduleId: parsed.name!, artifacts: input.artifacts ?? null });
-    return await previewFromDir({ input, parsed, packageDir: dir });
-  }
+  // ---- file: 本地目录形态：无下载字节 → integrity 省略（与 resolveOne 同款取法）----
   if (parsed.kind === 'file') {
     const staged = await fileStage({ path: parsed.path!, rootDir: input.cwd, log });
     return await previewFromDir({ input, parsed, packageDir: staged.packageDir });
@@ -89,6 +85,11 @@ export async function previewModuleSource(input: PreviewInput): Promise<ModulePr
   let versionHint: string | undefined;
 
   if (parsed.kind === 'npm') {
+    // 决策 #77 A 方案：本地 node_modules 命中（版本匹配）→ 直接用，不上 registry（零网络）。
+    const local = resolveLocalNpmPackage({ pkg: parsed.pkg!, version: parsed.version, rootDir: input.cwd, log });
+    if (local) {
+      return await previewFromDir({ input, parsed, packageDir: local.dir });
+    }
     const meta = await (input.fetchers?.npm ?? npmResolve)({ pkg: parsed.pkg!, version: parsed.version, cwd: input.cwd });
     tarPath = join(stageDir, 'pkg.tgz');
     const dl = await (input.fetchers?.download ?? downloadTo)({ url: meta.tarballUrl, dest: tarPath, log });
@@ -133,10 +134,11 @@ export async function previewModuleSource(input: PreviewInput): Promise<ModulePr
     manifest,
     manifestText: text,
     packageDir,
+    form: 'packed',
   };
 }
 
-/** 目录形态（official:/file:）共用：readManifest（未知能力门禁在此）→ 预览对象。不调 validateModulePackage（与 resolveOne 的 official/file 分支一致：tarball 的 validate 仍留在装配期）。 */
+/** 目录形态（file: / npm 本地命中）共用：readManifest（未知能力门禁在此）→ 预览对象。不调 validateModulePackage（目录形态的校验留在装配期；packed 形态装配期会跑）。 */
 async function previewFromDir(input: {
   input: PreviewInput;
   parsed: ParsedSource;
@@ -157,5 +159,6 @@ async function previewFromDir(input: {
     manifest,
     manifestText: text,
     packageDir: input.packageDir,
+    form: 'source',
   };
 }

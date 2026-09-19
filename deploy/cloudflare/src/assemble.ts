@@ -9,13 +9,14 @@
  */
 import { spawn } from 'node:child_process';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import type { ModuleManifest } from '@unself/contracts';
 import type { UnselfConfig } from './config';
 import type { ModuleRef } from './config';
 import type { ArtifactRoots } from './artifacts';
 import { coreDbName, coreWorkerName, modulesDbName, moduleWorkerName, resourceName } from './naming';
+import { localPackageDir } from './sources';
 
 export type RelPath = string;
 
@@ -122,9 +123,9 @@ export async function provisionAll(options: {
   }
 
   // ---- 步骤④ 构建侧：模块 ----
-  // SDK 浏览器资产单一真源（#283）：产物形态取随包分发的 artifacts/sdk；
-  // 仓库形态取 @unself/sdk 自己构建出的 <rootDir>/packages/sdk/dist（不从此处重新构建）。
-  const sdkAssetsSource = artifacts ? artifacts.sdkDir : join(rootDir, 'packages/sdk/dist');
+  // SDK 浏览器资产单一真源（#283/#284）：@unself/sdk 发布包（安装器 dependencies 预装）的 dist/
+  // ——本地包解析拿到路径，仓库开发形态即 packages/sdk/dist（workspace 符号链接）。
+  const sdkAssetsSource = resolveSdkAssetsDir(rootDir);
   const moduleProvisions: ModuleProvision[] = [];
   for (const mod of modules.filter((m) => m.selected)) {
     const modOut = join(outDir, 'modules', mod.id);
@@ -145,6 +146,12 @@ export async function provisionAll(options: {
     // SDK 浏览器资产（页面 import ./sdk/module-sdk.esm.js → 部署期静态资产；只搬运不重建）
     const sdkAssetsDir = join(modOut, 'assets/sdk');
     await copySdkAssets(sdkAssetsSource, sdkAssetsDir);
+    // 模块包自带静态资产（docs/modules.md §2 的 `assets/`）：随包搬运到部署目录（与 SDK 同目录共存）。
+    // #284：前端资产现在真的在包内（如 @unself/chat 的 assets/frontend），不搬就会静默丢页面。
+    const pkgAssets = join(mod.dir, 'assets');
+    if (existsSync(pkgAssets)) {
+      await cp(pkgAssets, join(modOut, 'assets'), { recursive: true });
+    }
     moduleProvisions.push({
       id: mod.id,
       dir: mod.dir,
@@ -174,14 +181,17 @@ export async function provisionAll(options: {
  */
 export async function bundleModuleWorker(entry: string, outfile: string): Promise<void> {
   const { build } = await import('esbuild');
+  // 入口/产物先绝对化（#284 实测：相对入口 + absWorkingDir 会让 esbuild 在
+  // `<absWorkingDir>/modules/<id>/src/...` 下找不到文件——`module pack modules/<id>` 这种相对目录必炸）。
+  const absEntry = resolvePath(entry);
   await build({
-    entryPoints: [entry],
-    outfile,
+    entryPoints: [absEntry],
+    outfile: resolvePath(outfile),
     bundle: true,
     // 打包可复现（#269）：esbuild 的路径注释相对 `absWorkingDir`（缺省 = esbuild 服务启动时的 cwd，
     // 随调用方 cwd 漂移：同一个模块由 pack 与由装配器打包会产出不同字节）。固定为入口文件所在目录，
     // 使「同内容」在任何 cwd / 任何打包路径下产出逐字节一致（验收③「换成同内容的本地 tarball 结果一致」）。
-    absWorkingDir: dirname(resolvePath(entry)),
+    absWorkingDir: dirname(absEntry),
     format: 'esm',
     platform: 'neutral',
     target: 'es2022',
@@ -211,16 +221,20 @@ async function ensureEmptyDir(path: string): Promise<void> {
  * main 指向的文件不存在 → 人话报错（不在 esbuild 里炸难懂错）。
  */
 export async function moduleWorkerEntry(moduleDir: string): Promise<string> {
+  // 目录先绝对化 + **解符号链接**（#284 实测）：相对目录会让 esbuild 入口解析失败；
+  // 而 pnpm workspace 的 node_modules/<pkg> 是符号链接 —— 不取 realpath 时 esbuild 的路径注释
+  // 会随符号链接路径变化，同一份源码在不同「打包路径」下产出不同字节（违反 #269 可复现要求）。
+  const dir = existsSync(moduleDir) ? realpathSync(moduleDir) : resolvePath(moduleDir);
   // 已打包形态（#245）：包根直接带预构建 worker.js（manifest.runtimes ∋ worker 的模块包标准入口）
-  const prebuilt = join(moduleDir, 'worker.js');
+  const prebuilt = join(dir, 'worker.js');
   if (existsSync(prebuilt)) return prebuilt;
-  const fallback = join(moduleDir, 'src/index.ts');
-  const pkgPath = join(moduleDir, 'package.json');
+  const fallback = join(dir, 'src/index.ts');
+  const pkgPath = join(dir, 'package.json');
   if (!existsSync(pkgPath)) return fallback;
   try {
     const pkg = JSON.parse(await readFile(pkgPath, 'utf8')) as { main?: string };
     if (!pkg.main) return fallback;
-    const main = join(moduleDir, pkg.main);
+    const main = join(dir, pkg.main);
     if (!existsSync(main)) {
       throw new Error(`模块包 package.json main 指向的文件不存在：${pkg.main}`);
     }
@@ -235,11 +249,12 @@ export async function moduleWorkerEntry(moduleDir: string): Promise<string> {
 
 /**
  * 搬运浏览器侧 SDK 资产（IIFE + ESM）——**单一真源**（#283）：
- * 资产由 `@unself/sdk` 构建并随包发布（`packages/sdk/dist/module-sdk.{js,esm.js}`，
- * 安装器产物形态 = `<artifacts>/sdk/` 的那份同字节副本）。装配器只复制字节，
- * **绝不再从源码构建**——两处各构建一遍必然漂移，且页面必须与 core 同版本。
+ * 资产由 `@unself/sdk` 构建并随包发布（`packages/sdk/dist/module-sdk.{js,esm.js}`）；
+ * 安装器 `dependencies` 里预装了 `@unself/sdk`，引擎按**本地包解析**拿到它的 `dist/`
+ * （#284：不再有 `<artifacts>/sdk` 私有副本——装配用的就是随包发布的那一份，字节同一即不证自明）。
+ * 装配器只复制字节，**绝不再从源码构建**——两处各构建一遍必然漂移，且页面必须与 core 同版本。
  *
- * 仓库形态的调用前提：先 `pnpm -r build`（或 `pnpm --filter @unself/sdk build`）生成 SDK dist。
+ * 调用前提：先 `pnpm -r build`（或 `pnpm --filter @unself/sdk build`）生成 SDK dist。
  */
 export async function copySdkAssets(sdkDir: string, assetsDir: string): Promise<void> {
   await mkdir(assetsDir, { recursive: true });
@@ -253,6 +268,22 @@ export async function copySdkAssets(sdkDir: string, assetsDir: string): Promise<
     }
     await cp(from, join(assetsDir, name));
   }
+}
+
+/**
+ * 本地 SDK 浏览器资产目录（`@unself/sdk` 包的 `dist/`）。
+ * 解析顺序与模块来源同一套（#284 单一实现）：`rootDir` → 引擎目录 → cwd 的 node_modules。
+ * 找不到即人话报错（不回落猜测路径：静默用错版本 SDK 会让壳↔模块协议漂移）。
+ */
+export function resolveSdkAssetsDir(rootDir: string): string {
+  const pkgDir = localPackageDir({ pkg: '@unself/sdk', rootDir });
+  if (!pkgDir) {
+    throw new Error(
+      '找不到 @unself/sdk 包（node_modules）：SDK 浏览器资产由该包的 dist/ 提供（单一真源：SDK 自己构建，装配只复制字节）。' +
+        '发布形态应随安装器 dependencies 预装；仓库开发形态请先 `pnpm install` + `pnpm -r build`',
+    );
+  }
+  return join(pkgDir, 'dist');
 }
 
 /** core 资产的 run_worker_first（#273）：domain 形态保持原精确前缀数组（生产路径零变更）；

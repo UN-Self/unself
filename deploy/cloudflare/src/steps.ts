@@ -23,10 +23,10 @@ import {
   type Provisioned,
 } from './assemble';
 import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type ModuleRef, type NormalizedModuleEntry, type UnselfConfig } from './config';
-import { CONTRACT_VERSION, ModuleManifestSchema, type ModuleManifest } from '@unself/contracts';
-import { LOCK_FILENAME, emptyLock, parseLockText, serializeLock, manifestHashOf, type LockFile, type ResourceLedger } from './lock';
-import { lockRecordFrom, readManifest, resolveSources } from './module-sources';
-import { resolveArtifactRoots, setActiveArtifactRoots, type ArtifactRoots } from './artifacts';
+import type { ModuleManifest } from '@unself/contracts';
+import { LOCK_FILENAME, emptyLock, parseLockText, serializeLock, type LockFile, type ResourceLedger } from './lock';
+import { lockRecordFrom, resolveSources } from './module-sources';
+import { resolveArtifactRoots, setActiveArtifactRoots } from './artifacts';
 import { moduleWorkerName, coreWorkerName, coreDbName, modulesDbName, resourceName, resourcePrefix, setResourceNamespace, activeResourceNamespace } from './naming';
 import { decideGuard, probeExisting, targetResources } from './guard';
 import { createCoreControlPlane } from './control-plane';
@@ -101,120 +101,42 @@ export function consoleReporter(): StepReporter {
 }
 
 /**
- * 模块发现：
- * - builtin 条目（无 source）→ 扫模块目录：
- *   · 仓库形态 `rootDir/modules/<id>/manifest.yaml`（源码）；
- *   · 产物形态 `<artifacts>/modules/<id>/manifest.json`（**包形态** —— #257 验收③「builtin 与第三方同一条路」）。
- * - sourced 条目（{id, source}）→ 来源解析器取包落位（远端 tarball 直解/file: 本地目录），
- *   包根即当 module 目录（步骤②迁移/④装配/⑤注册表共用）。
- * sourced 解析需要 outDir（步骤③前里立）——这里先只注册 source 侧表；实际取包延后到步骤③内
- * （provisionAll 之前的 ensureSourcedModules）。
+ * 模块发现（#77 A 方案：不再扫目录）：config `modules` 条目就是全部模块——官方模块也写
+ * `npm:@unself/hello@0.1.0`，与第三方同一个解析器（包根在来源解析后回填 dir/resolved）。
+ * 未在 config 里的已部署模块（lock 有记录）由 `resolveSources` 的 removed 名单交给
+ * 路由清理与注册表 disable（不再依赖「扫描出没选中的 builtin 模块」）。
  */
 export async function discoverModules(
-  rootDir: string,
-  selectedIds: string[],
+  _rootDir: string,
+  _selectedIds: string[],
   entries?: NormalizedModuleEntry[],
-  opts?: {
-    /** 产物根（#257）：给了就扫 `<artifacts>/modules` 的包形态；缺省 = 仓库 modules/ 源码形态。 */
-    artifacts?: ArtifactRoots | null;
-  },
 ): Promise<ModuleRef[]> {
-  const sourcedEntries = (entries ?? []).filter((e): e is NormalizedModuleEntry & { source: string } => !!e.source);
-  const { readdir } = await import('node:fs/promises');
-  const artifacts = opts?.artifacts ?? null;
-  const refs: ModuleRef[] = [];
-  if (artifacts) {
-    // 产物形态：builtin 模块以包被消费（manifest.json + worker.js + migrations/）——与第三方同一条路。
-    if (existsSync(artifacts.modulesDir)) {
-      for (const entry of await readdir(artifacts.modulesDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const dir = join(artifacts.modulesDir, entry.name);
-        if (!existsSync(join(dir, 'manifest.json'))) continue;
-        const { manifest, text } = await readManifest(dir);
-        const id = manifest.id ?? entry.name;
-        if (sourcedEntries.some((s) => s.id === id)) continue;
-        const source = `builtin:${id}`;
-        refs.push({
-          id,
-          dir,
-          selected: selectedIds.includes(id),
-          source,
-          resolved: { id, source, packageDir: dir, manifest, manifestText: text, version: manifest.version },
-        });
-      }
-    }
-  } else {
-    const modulesDir = join(rootDir, 'modules');
-    if (existsSync(modulesDir)) {
-      for (const entry of (await readdir(modulesDir, { withFileTypes: true }))) {
-        if (!entry.isDirectory()) continue;
-        const manifestPath = join(modulesDir, entry.name, 'manifest.yaml');
-        if (!existsSync(manifestPath)) continue;
-        const text = await readFile(manifestPath, 'utf8');
-        const { manifestId } = await import('./config');
-        const id = manifestId(text) ?? entry.name;
-        // config 里同 id 带了 source → sourced 条目优先（目录扫描不产出该 id）
-        if (sourcedEntries.some((s) => s.id === id)) continue;
-        refs.push({ id, dir: join(modulesDir, entry.name), selected: selectedIds.includes(id) });
-      }
-    }
-  }
-  // sourced 条目：占位（dir 在 ensureSourcedModules 取包后回填）
-  for (const s of sourcedEntries) {
-    refs.push({ id: s.id, dir: '', selected: selectedIds.includes(s.id), source: s.source });
-  }
-  // 配置里选了但仓库里不存在的 builtin 模块 → 明确失败（部署半套没人受益）
-  const found = new Set(refs.map((r) => r.id));
-  for (const id of selectedIds) {
-    if (!found.has(id)) {
-      throw new Error(`unself.config.jsonc 选中模块 "${id}" 不存在（modules/ 下无该 manifest.yaml，且 config 未提供 source）`);
-    }
-  }
-  return refs;
+  return (entries ?? []).map((e) => ({ id: e.id, dir: '', selected: true, source: e.source }));
 }
 
 /**
- * 模块的存储落点（#248）：sourced 包用解析产物里的 manifest；**builtin 模块读盘上的 manifest.yaml**
- * ——不读就会把 hello/chat 全默认成 core（落点判定失守，chat 的 dedicated 被静默降级）。
+ * 模块存储落点（#248）：只认 config 条目的 storage.declaration（用户选定）→ 无则按 manifest 声明。
+ * 解析前 mod.dir 为空 → 按 core 处理；来源解析后（步骤②½）按 resolved.manifest 重算。
  * 结果缓存：步骤②（迁移）与步骤④（绑定/生成配置）必须用同一个落点，避免两处各读一次走偏。
  */
 interface StoragePlan {
   level: StorageLevel;
-  /** 模块 manifest（builtin 从 manifest.yaml 解析；sourced 用解析产物）——shared 护栏②的 tables 来自这里。 */
+  /** 模块 manifest（#284 起必来自来源解析产物）；shared 护栏②的 tables 从这里取。 */
   manifest?: ModuleManifest;
 }
 
-/** 单个模块的落点计划：sourced 用解析产物；builtin 读盘上 manifest.yaml（不读就会被默认成 core）。 */
-async function storagePlanOf(mod: ModuleRef): Promise<StoragePlan> {
-  if (mod.resolved) {
-    return {
-      level: storageLevelFor({ manifest: mod.resolved.manifest, id: mod.id }),
-      manifest: mod.resolved.manifest,
-    };
-  }
-  const yaml = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
-  const manifest = ModuleManifestSchema.parse(
-    buildManifestSnapshot({ manifestText: yaml, moduleId: mod.id, baseUrl: '' }),
-  );
-  return { level: storageLevelFor({ manifest, id: mod.id }), manifest };
+/** 从解析产物推落点（无 resolved → core：解析前调用方用，解析后一律有 resolved）。 */
+function storagePlanOf(mod: ModuleRef): StoragePlan {
+  if (!mod.resolved) return { level: 'core' };
+  return {
+    level: storageLevelFor({ manifest: mod.resolved.manifest, id: mod.id }),
+    manifest: mod.resolved.manifest,
+  };
 }
 
-async function storagePlansFor(modules: ModuleRef[]): Promise<Map<string, StoragePlan>> {
+function storagePlansFor(modules: ModuleRef[]): Map<string, StoragePlan> {
   const out = new Map<string, StoragePlan>();
-  for (const mod of modules) {
-    if (mod.resolved) {
-      out.set(mod.id, {
-        level: storageLevelFor({ manifest: mod.resolved.manifest, id: mod.id }),
-        manifest: mod.resolved.manifest,
-      });
-      continue;
-    }
-    const yaml = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
-    const manifest = ModuleManifestSchema.parse(
-      buildManifestSnapshot({ manifestText: yaml, moduleId: mod.id, baseUrl: '' }),
-    );
-    out.set(mod.id, { level: storageLevelFor({ manifest, id: mod.id }), manifest });
-  }
+  for (const mod of modules) out.set(mod.id, storagePlanOf(mod));
   return out;
 }
 
@@ -350,16 +272,14 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     }
   }
   const entries = normalizeModuleEntries(config.modules);
-  const modules = await discoverModules(rootDir, moduleIds(entries), entries, { artifacts });
+  const modules = await discoverModules(rootDir, moduleIds(entries), entries);
   const selected = modules.filter((m) => m.selected);
-  // 数据落点（#248 四级）：声明来自模块 manifest（builtin 读盘 / sourced 用解析产物），
-  // 用户选择覆写在 config 条目的 storage.declaration（契约层已保证 ∈ accepts）。
-  const storagePlans = await storagePlansFor(selected.filter((m) => m.dir));
   validateS3Storage(config);
   /** chat 密钥环动作（选中 chat 时在步骤④赋值；未选中 undefined）。 */
   let chatKeyringAction: 'created' | 'existing' | undefined;
 
-  // unself.lock 提前读取（#272）：撞车守卫要用它的资源台账判定「同名资源是否属于本实例」。
+  // unself.lock 提前读取（#272）：撞车守卫要用它的资源台账判定「同名资源是否属于本实例」；
+  // 来源解析（②½）也要用它做 reuse/drift 决策。
   const lockPath = join(rootDir, LOCK_FILENAME);
   let lock: LockFile = emptyLock();
   if (input.preLock !== undefined) {
@@ -369,6 +289,43 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   }
 
   const client = input.client ?? await defaultClient(rep.log);
+
+  // ②½ 来源解析（#245/#284）——**必须在步骤①之前**：
+  // ① 要读 chat 包配置（dir）与各模块存储落点（dedicated 目标名），那些都得先取到包。
+  // 全部模块都走这条路（#77：官方模块也是 npm 包，npm: 本地命中则零网络）；
+  // 漂移未确认/哈希不匹配在此直接报错，不产生任何 CF 资源（fail before side effect）。
+  // outDir 由 provisionAll 在步骤③建——本步先手动建（module-sources 暂存区要落盘）。
+  const outDirPre = join(rootDir, DEPLOY_DIR);
+  const { mkdir: mkdirPre } = await import('node:fs/promises');
+  await mkdirPre(outDirPre, { recursive: true });
+  const resolution = await resolveSources({
+    rootDir,
+    outDir: outDirPre,
+    entries,
+    lock,
+    confirmed: input.yes,
+    log: rep.log,
+    ...(input.fetchers ? { fetchers: input.fetchers as Parameters<typeof resolveSources>[0]['fetchers'] } : {}),
+  });
+  for (const mod of resolution.sourced) {
+    const ref = modules.find((m) => m.id === mod.id);
+    if (!ref) throw new Error(`来源解析返回了 config 未声明的模块 ${mod.id}（引擎内部不一致）`);
+    ref.dir = mod.packageDir;
+    ref.resolved = mod;
+  }
+  /**
+   * 未选模块（config 已删除但 lock 里还记着的）——步骤④′撤 zone 路由 + 步骤⑤注册表 disable。
+   * 不再靠「扫目录扫出未选中的 builtin 模块」（#284：目录扫描已删）；lock 是实例已装模块的权威记录。
+   */
+  const removedIds = resolution.removed;
+  // 数据落点（#248 四级）：声明来自来源解析产物（manifest），用户选择覆写 config 条目的 storage.declaration。
+  const storagePlans = storagePlansFor(selected);
+  // lock 记录（决策 #60）：只有本次 config 声明的模块进 lock（removed 的旧记录随 removedIds 移除）。
+  const lockModules: LockFile['modules'] = {};
+  for (const mod of selected) {
+    if (!mod.resolved) throw new Error(`模块 ${mod.id} 未完成来源解析（引擎内部不一致）`);
+    lockModules[mod.id] = lockRecordFrom(mod.resolved);
+  }
 
   // ① D1（chat 选中时：包配置先过一道形状检查，再补建专属 D1/KV/R2）
   rep.step(1, '确保 core/modules 两个 D1 存在（chat 选中时含专属 D1/KV/R2）');
@@ -464,7 +421,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
    * 抽成闭包是为了 sourced 模块能在**来源解析之后**补跑一趟（解析前 mod.dir 还空，读不到 manifest 与 migrations/）。
    */
   const applyModuleStorage = async (mod: ModuleRef): Promise<void> => {
-    const plan = mod.dir ? await storagePlanOf(mod) : storagePlans.get(mod.id);
+    const plan = storagePlans.get(mod.id) ?? storagePlanOf(mod);
     const level: StorageLevel = plan?.level ?? 'core';
     if (mod.id === CHAT_MODULE_ID && chatResources) {
       // chat（#74/#248 普通化）：专属库在步骤①建（`unself-chat`），这里把 id 记进落点表——
@@ -543,54 +500,6 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   // node:sqlite 探测（Docker 落点可用性预检；不可用给人话不崩——仅提示，不阻断 CF 部署）
   const sqlite = probeSqlite();
   rep.log(sqlite.usable ? `node:sqlite 可用（${sqlite.version}）：Docker 模块落点就绪` : `node:sqlite 不可用：${sqlite.reason.split('\n')[0]}（Docker 落点暂不可用，CF 部署不受影响）`);
-
-  // ②½ 来源解析（#245）：sourced 模块取包/复用 lock + 完整性校验；builtin 直接登记 lock（决策 #60）。
-  // outDir 此时尚未创建（provisionAll 建）——手动先建：module-sources 暂存区要落盘。
-  const outDirPre = join(rootDir, DEPLOY_DIR);
-  const { mkdir: mkdirPre } = await import('node:fs/promises');
-  await mkdirPre(outDirPre, { recursive: true });
-  const sourcedEntries = entries.filter((e): e is NormalizedModuleEntry & { source: string } => !!e.source);
-  let resolution: Awaited<ReturnType<typeof resolveSources>> | null = null;
-  if (sourcedEntries.length > 0) {
-    resolution = await resolveSources({
-      rootDir,
-      outDir: outDirPre,
-      entries: sourcedEntries,
-      lock,
-      confirmed: input.yes,
-      log: rep.log,
-      ...(artifacts ? { artifacts } : {}),
-      ...(input.fetchers ? { fetchers: input.fetchers as Parameters<typeof resolveSources>[0]['fetchers'] } : {}),
-    });
-    for (const mod of resolution.sourced) {
-      const ref = modules.find((m) => m.id === mod.id);
-      if (ref) {
-        ref.dir = mod.packageDir;
-        ref.resolved = mod;
-      }
-    }
-    // sourced 模块的落点迁移补跑（#248）：包落地后才有 manifest 与 migrations/，
-    // 与 builtin 走**同一套**落点逻辑与三护栏（不因为「来自包」而少一道）。
-    for (const mod of selected) {
-      if (mod.dir && mod.source) await applyModuleStorage(mod);
-    }
-  }
-  // lock 记录（决策 #60「builtin 也进 lock」）：解析产物（sourced 包 / 产物形态 builtin 包）直接用 resolved；
-  // 仓库形态 builtin 从 manifest.yaml 提取。只有本次 config 声明的模块进 lock（removed 的旧记录随 resolution.removed 删掉）。
-  const lockModules: LockFile['modules'] = {};
-  for (const mod of modules.filter((m) => m.selected && !m.resolved && !m.source)) {
-    const yaml = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
-    const manifest = ModuleManifestSchema.parse(buildManifestSnapshot({ manifestText: yaml, moduleId: mod.id, baseUrl: '' }));
-    lockModules[mod.id] = {
-      source: `builtin:${mod.id}`,
-      version: manifest.version,
-      manifestHash: manifestHashOf(manifest),
-      contractVersion: CONTRACT_VERSION,
-    };
-  }
-  for (const mod of modules.filter((m) => m.selected && m.resolved)) {
-    lockModules[mod.id] = lockRecordFrom(mod.resolved!);
-  }
 
   // ③ Shell Worker（构建 + 上传）
   rep.step(3, '构建上传 Shell Worker（壳 + Core API）');
@@ -761,12 +670,17 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   }
   for (const mod of provisioned.modules) {
     const isChat = mod.id === CHAT_MODULE_ID;
+    // chat 前端资产（#284）：包内 `assets/frontend/**` 就是预构建产物（发布形态）；
+    // 源码形态（仓库 workspace 符号链接 / file:）走 vite 重建（#73：不吞旧产物）。
+    const chatPrebuiltDir = isChat && mod.dir && existsSync(join(mod.dir, 'assets', 'frontend'))
+      ? join(mod.dir, 'assets', 'frontend')
+      : undefined;
     const chatAssetsDir = isChat
       ? await (input.buildChatFrontend ??
           ((i: { rootDir: string; outDir: string; log: (msg: string) => void }) =>
             buildChatFrontendAssets({
               ...i,
-              ...(artifacts ? { prebuiltDir: join(artifacts.modulesDir, CHAT_MODULE_ID, 'frontend') } : {}),
+              ...(existsSync(join(mod.dir, 'manifest.json')) && chatPrebuiltDir ? { prebuiltDir: chatPrebuiltDir } : {}),
             })))({
           rootDir,
           outDir: provisioned.outDir,
@@ -927,12 +841,10 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     }
   }
 
-  // ④′ 未选模块（config.modules 未列出但已存在）：删除其 zone 路由 /m/<id>/*。
-  const unselected = modules.filter((m) => !m.selected);
-  if (unselected.length > 0) {
-    const unselectedIds = unselected.map((m) => m.id);
+  // ④′ 未选模块（config 未列出但 lock 里有 = 上次装过）：删除其 zone 路由 /m/<id>/*。
+  if (removedIds.length > 0) {
     if (!config.domain || !resolvedZone) {
-      rep.log(`跳过未选模块路由删除（未配置 domain，无 zone 路由）：${unselectedIds.join('、')}`);
+      rep.log(`跳过未选模块路由删除（未配置 domain，无 zone 路由）：${removedIds.join('、')}`);
     } else {
       const cleanupRoutes = input.cleanupModuleRoutes ?? (async (info) => {
         await removeRoutesForPatterns(
@@ -945,7 +857,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       await cleanupRoutes({
         zoneId: resolvedZone.id,
         domain: config.domain,
-        moduleIds: unselectedIds,
+        moduleIds: removedIds,
         log: rep.log,
       });
     }
@@ -955,12 +867,9 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   rep.step(5, '注册表写入（选中 enabled，未选 not_deployed）');
   const manifestTexts: Record<string, string> = {};
   for (const mod of modules) {
-    if (mod.resolved) {
-      // sourced：解析产物里已有 manifest 原文（yaml/json 双形态均可，#243 单轨解析）
-      manifestTexts[mod.id] = mod.resolved.manifestText;
-    } else {
-      manifestTexts[mod.id] = await readFile(join(mod.dir, 'manifest.yaml'), 'utf8');
-    }
+    // #284：所有模块都经来源解析（official 目录扫描已删），manifest 原文一律来自解析产物。
+    if (!mod.resolved) throw new Error(`模块 ${mod.id} 缺来源解析产物（引擎内部不一致）`);
+    manifestTexts[mod.id] = mod.resolved.manifestText;
   }
   for (const mod of modules) {
     if (!mod.selected) continue;
@@ -987,7 +896,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     await coreCp.upsertModule({ id: mod.id, enabled: true, manifest: snapshot });
     rep.log(`upsert ${mod.id}（enabled=1，快照刷新${declaration ? `，落点 ${declaration}` : ''}）`);
   }
-  for (const mod of unselected) {
+  for (const mod of removedIds.map((id) => ({ id }))) {
     await coreCp.toggleModule(mod.id, false);
     rep.log(`disable ${mod.id}（not_deployed）`);
   }

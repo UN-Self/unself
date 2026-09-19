@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 来源解析编排（步骤④前置，issue #245）：
- * config.modules 的 {id, source} 条目 → 取包（远端 tarball 直解 / file: 本地目录）→
- * validate → 落位到装配区（outDir/modules/<id>/src）。builtin 模块不经此文件。
+ * 来源解析编排（步骤②½，issue #245；#284 起官方模块也走这条路）：
+ * config.modules 的 {id, source} 条目 → npm 本地优先取包（命中零网络）/ 远端 tarball 直解 / file: 本地目录
+ * → validate → 落位到装配区（outDir/modules/<id>/src）。**没有 builtin 来源分支**（决策 #77 A 方案）。
  *
  * **安全边界（硬，决策 #58）**：
  * - 远端来源一律已打包：tarball 直接解包，不走 npm install，包内脚本零执行；
- * - 仅 file: 允许本地源码（本地构建由打包器按需，当前装配器直接以目录为源）；
+ * - `file:` 与本地 `node_modules` 源码形态（仓库 workspace 符号链接）允许本地源码（本地构建）；
  * - reuse 且哈希不匹配 → **拒绝安装**（决策 #60）。
  */
 import { mkdir, readFile, rm } from 'node:fs/promises';
@@ -21,21 +21,22 @@ import {
   type ModuleManifest,
 } from '@unself/contracts';
 import { buildLockPlan, formatIntegrityFailures, manifestHashOf, verifyLockIntegrity, type LockFile, type LockPlan } from './lock';
-import { downloadTo, extractTarball, fileStage, githubResolve, npmResolve, parseSource } from './sources';
-import { builtinModuleDir, type ArtifactRoots } from './artifacts';
+import { downloadTo, extractTarball, fileStage, githubResolve, npmResolve, parseSource, resolveLocalNpmPackage } from './sources';
 
 /** 单个来源模块的解析产物。 */
 export interface SourcedModule {
   id: string;
-  /** 生效来源（config 或 builtin 合成）。 */
+  /** 生效来源（config 条目原文）。 */
   source: string;
   /** 包根目录（磁盘绝对路径；装配器从这里取 worker/资产/迁移）。 */
   packageDir: string;
+  /** 包形态：packed = 预构建包（manifest.json + worker.js）；source = 源码目录（manifest.yaml，本地构建）。 */
+  form: 'packed' | 'source';
   /** 解析后的 manifest（契约 v1 对象）。 */
   manifest: ModuleManifest;
   /** manifest.yaml / manifest.json 原文（注册表快照与 lock 哈希共用）。 */
   manifestText: string;
-  /** 包字节 SRI（sha512-…）；builtin/file: 目录形态无下载字节 → undefined。 */
+  /** 包字节 SRI（sha512-…）；本地目录形态（npm 本地命中 / file:）无下载字节 → undefined。 */
   integrity?: string;
   /** 解析出的确切版本。 */
   version: string;
@@ -140,13 +141,11 @@ export async function readManifest(packageDir: string): Promise<{ manifest: Modu
 export async function resolveSources(input: {
   rootDir: string;
   outDir: string;
-  entries: Array<{ id: string; source?: string }>;
+  entries: Array<{ id: string; source: string }>;
   lock: LockFile;
   /** 漂移已确认（-y / 交互确认后）。false 且有漂移 → 抛错并列 diff。 */
   confirmed?: boolean;
   log?: (msg: string) => void;
-  /** 产物根（#257）：`official:` 来源改从 `<artifacts>/modules/<name>` 取包（与 builtin 包同源）。 */
-  artifacts?: ArtifactRoots | null;
   /** 测试注入口：替换默认的远端抓取（npmResolve/downloadTo/githubResolve）。 */
   fetchers?: {
     npm?: typeof npmResolve;
@@ -177,7 +176,6 @@ export async function resolveSources(input: {
           lock: input.lock,
           rootDir: input.rootDir,
           outDir: input.outDir,
-          ...(input.artifacts !== undefined ? { artifacts: input.artifacts } : {}),
           ...(input.fetchers ? { fetchers: input.fetchers } : {}),
           log,
         });
@@ -220,7 +218,6 @@ async function resolveOne(input: {
   lock: LockFile;
   rootDir: string;
   outDir: string;
-  artifacts?: ArtifactRoots | null;
   fetchers?: {
     npm?: typeof npmResolve;
     download?: typeof downloadTo;
@@ -229,20 +226,13 @@ async function resolveOne(input: {
   log: (msg: string) => void;
 }): Promise<SourcedModule> {
   const { item, rootDir, outDir, log } = input;
-  const source = item.source ?? `builtin:${item.id}`;
+  if (!item.source) {
+    throw new Error(`模块 ${item.id}：config 条目缺 source（#77：条目必须是 { id, source }，不再接受裸字符串/builtin）`);
+  }
+  const source = item.source;
   const kind = parseSource(source).kind;
   const stageRoot = join(outDir, 'module-sources', item.id);
   await mkdir(stageRoot, { recursive: true });
-
-  // ---- builtin：模块包目录直接当包根（产物形态 = <artifacts>/modules/<id> 包；仓库形态 = rootDir/modules/<id> 源码）----
-  if (source.startsWith('builtin:')) {
-    const dir = builtinModuleDir({ rootDir, moduleId: item.id, artifacts: input.artifacts ?? null });
-    if (!existsSync(dir)) {
-      throw new Error(`builtin 模块目录不存在：${dir}`);
-    }
-    const { manifest, text } = await readManifest(dir);
-    return { id: item.id, source, packageDir: dir, manifest, manifestText: text, version: manifest.version };
-  }
 
   // ---- reuse：lock 与 config 一致 → 校验暂存包后直接复用（不重新解析来源）----
   const prev = item.previous;
@@ -262,6 +252,7 @@ async function resolveOne(input: {
         id: item.id,
         source,
         packageDir: staged,
+        form: existsSync(join(staged, 'manifest.json')) ? 'packed' : 'source',
         manifest,
         manifestText: text,
         integrity: prev.integrity,
@@ -272,24 +263,16 @@ async function resolveOne(input: {
   }
 
   // ---- 取包（added / changed / reuse-but-evicted）----
-  if (kind === 'official' || kind === 'file') {
-    // file:（与 official: 的取法一致）：本地目录直接用（file: 是唯一允许源码形态的本地路径）
-    const rel = kind === 'file'
-      ? parseSource(source).path!
-      : builtinModuleDir({ rootDir, moduleId: item.id, artifacts: input.artifacts ?? null });
-    const staged = await fileStage({ path: rel, rootDir, log });
+  if (kind === 'file') {
+    // file: 本地目录直接用（唯一允许源码形态的本地路径）
+    const staged = await fileStage({ path: parseSource(source).path!, rootDir, log });
     const { manifest, text } = await readManifest(staged.packageDir);
-    // reuse 完整性收紧（issue #269 / 决策 #60）：目录来源无包字节 SRI，但 lock 里的 manifestHash
-    // 必须对得上——否则本地目录内容已变却沿用旧锁定记录（静默漂移）。changed（显式换源/升级）不触发。
-    if (item.action === 'reuse' && prev && manifestHashOf(manifest) !== prev.manifestHash) {
-      throw new Error(
-        `模块 ${item.id}：manifestHash 不匹配（lock 期望 ${prev.manifestHash.slice(0, 16)}…，实测 ${manifestHashOf(manifest).slice(0, 16)}…）——本地来源内容已变，拒绝安装；确认要升级请重跑 \`unself module add\` 重新锁定`,
-      );
-    }
+    assertReuseManifestHash({ item, prev, manifest });
     return {
       id: item.id,
       source,
       packageDir: staged.packageDir,
+      form: 'source',
       manifest,
       manifestText: text,
       integrity: undefined,
@@ -299,6 +282,29 @@ async function resolveOne(input: {
 
   if (kind === 'npm') {
     const parsed = parseSource(source);
+    // 决策 #77 A 方案：本地 node_modules 有该包且版本匹配 → 直接用（零网络，不上 registry）。
+    // 本地形态可能是 npm 发布形态（manifest.json）或仓库 workspace 源码形态（manifest.yaml，符号链接）。
+    const local = resolveLocalNpmPackage({ pkg: parsed.pkg!, version: parsed.version, rootDir, log });
+    if (local) {
+      const { manifest, text } = await readManifest(local.dir);
+      assertReuseManifestHash({ item, prev, manifest });
+      // 本地包形态按同一套安装前校验跑（与 registry tarball 同一判据）；源码形态与 file: 同口径（本地构建允许、包校验留给装配）。
+      if (local.form === 'packed') {
+        await validateStagedPackage({ id: item.id, packageDir: local.dir, manifest, manifestText: text });
+      }
+      log(`模块 ${item.id}：npm 本地命中（v${manifest.version}，${local.form} 形态）——零网络安装`);
+      return {
+        id: item.id,
+        source,
+        packageDir: local.dir,
+        form: local.form,
+        manifest,
+        manifestText: text,
+        // 本地目录无 tarball 字节 → 无 SRI；reuse 时守住 lock 里那枚（重取路径也验证了 manifestHash）
+        integrity: item.action === 'reuse' ? prev?.integrity : undefined,
+        version: manifest.version,
+      };
+    }
     const meta = await (input.fetchers?.npm ?? npmResolve)({ pkg: parsed.pkg!, version: parsed.version, cwd: rootDir });
     const tarPath = join(stageRoot, 'pkg.tgz');
     const dl = await (input.fetchers?.download ?? downloadTo)({ url: meta.tarballUrl, dest: tarPath, log });
@@ -343,6 +349,51 @@ function verifyReuse(input: {
   return failures;
 }
 
+/**
+ * 目录来源（file: / npm 本地命中）重取路径的 manifestHash 收紧（issue #269 / 决策 #60）：
+ * 目录来源无包字节 SRI，但 lock 里的 manifestHash 必须对得上——否则本地内容已变却沿用旧锁定记录（静默漂移）。
+ * changed（显式换源/升级）不触发：用户明确要求换包，比对旧值只会错拦。
+ */
+function assertReuseManifestHash(input: {
+  item: { id: string; action: string };
+  prev?: LockFile['modules'][string];
+  manifest: ModuleManifest;
+}): void {
+  if (input.item.action !== 'reuse' || !input.prev) return;
+  const actual = manifestHashOf(input.manifest);
+  if (actual !== input.prev.manifestHash) {
+    throw new Error(
+      `模块 ${input.item.id}：manifestHash 不匹配（lock 期望 ${input.prev.manifestHash.slice(0, 16)}…，实测 ${actual.slice(0, 16)}…）——本地来源内容已变，拒绝安装；确认要升级请重跑 \`unself module add\` 重新锁定`,
+    );
+  }
+}
+
+/**
+ * 安装前包校验（@unself/contracts 单轨校验；包名一致性按 manifest.id）。
+ * registry tarball 与 npm 本地命中（packed 形态）共用同一判据——「官方与第三方同一条路」（决策 #77）。
+ */
+async function validateStagedPackage(input: {
+  id: string;
+  packageDir: string;
+  manifest: ModuleManifest;
+  manifestText: string;
+}): Promise<void> {
+  const readOptional = async (name: string): Promise<string | undefined> =>
+    readFile(join(input.packageDir, name), 'utf8').catch(() => undefined);
+  const validation = validateModulePackage({
+    manifestText: input.manifestText,
+    packageName: input.manifest.id,
+    licenseText: await readOptional('LICENSE'),
+    migrations: await listMigrations(input.packageDir),
+    workerText: input.manifest.runtimes.includes('worker') ? await readOptional('worker.js') : undefined,
+  });
+  if (!validation.ok) {
+    throw new Error(
+      `模块包未通过安装前校验（${input.id}）：\n${validation.errors.map((e) => `  [${e.check}] ${e.message}`).join('\n')}`,
+    );
+  }
+}
+
 /** tarball → 暂存包根（解包 + validate + 完整性比对 + 版本钉死）。 */
 async function stageFromTarball(input: {
   item: { id: string; action: string; source?: string; previous?: LockFile['modules'][string] };
@@ -376,21 +427,8 @@ async function stageFromTarball(input: {
     }
   }
 
-  // validate（@unself/contracts 单轨校验；包名一致性按 manifest.id）
-  const readOptional = async (name: string): Promise<string | undefined> =>
-    readFile(join(packageDir, name), 'utf8').catch(() => undefined);
-  const validation = validateModulePackage({
-    manifestText: text,
-    packageName: manifest.id,
-    licenseText: await readOptional('LICENSE'),
-    migrations: await listMigrations(packageDir),
-    workerText: manifest.runtimes.includes('worker') ? await readOptional('worker.js') : undefined,
-  });
-  if (!validation.ok) {
-    throw new Error(
-      `模块包未通过安装前校验（${item.id}）：\n${validation.errors.map((e) => `  [${e.check}] ${e.message}`).join('\n')}`,
-    );
-  }
+  // validate（@unself/contracts 单轨校验；与 npm 本地命中同一函数，防两处漂移）
+  await validateStagedPackage({ id: item.id, packageDir, manifest, manifestText: text });
 
   // lock 已有记录且通过了上面的收紧比对（reuse 重取路径）；changed = 显式升级，不比对旧值
   log(`模块 ${item.id}：来源包已解包并校验（v${manifest.version}）`);
@@ -398,6 +436,7 @@ async function stageFromTarball(input: {
     id: item.id,
     source: input.source,
     packageDir,
+    form: 'packed',
     manifest,
     manifestText: text,
     integrity: input.expected.integrity,
@@ -432,6 +471,46 @@ async function manifestIdOf(packageDir: string): Promise<string> {
 async function tarballVersion(tarPath: string): Promise<string> {
   void tarPath;
   return '0.0.0'; // 占位：实际版本以解包后的 manifest.version 为准（stageFromTarball 覆写）
+}
+
+/**
+ * 本地解析一个来源（不联网）：
+ * - `npm:` → 本地 node_modules 命中（版本匹配）的包；
+ * - `file:` → 本地目录。
+ * 其余协议（github:/https:/远端 npm:）或本地未命中 → 返回 null（调用方自己决定要不要联网）。
+ * 用途：向导③½ 的存储声明投影（只需本地 manifest，不应因为「看一眼」就跑网络）。
+ */
+export async function localModuleManifest(input: {
+  source: string;
+  rootDir: string;
+  log?: (msg: string) => void;
+}): Promise<{ id: string; dir: string; form: 'packed' | 'source'; manifest: ModuleManifest } | null> {
+  const parsed = parseSource(input.source);
+  let dir: string;
+  let form: 'packed' | 'source';
+  if (parsed.kind === 'npm') {
+    const local = resolveLocalNpmPackage({
+      pkg: parsed.pkg!,
+      ...(parsed.version !== undefined ? { version: parsed.version } : {}),
+      rootDir: input.rootDir,
+      ...(input.log ? { log: input.log } : {}),
+    });
+    if (!local) return null;
+    dir = local.dir;
+    form = local.form;
+  } else if (parsed.kind === 'file') {
+    const staged = await fileStage({
+      path: parsed.path!,
+      rootDir: input.rootDir,
+      ...(input.log ? { log: input.log } : {}),
+    });
+    dir = staged.packageDir;
+    form = 'source';
+  } else {
+    return null;
+  }
+  const { manifest } = await readManifest(dir);
+  return { id: manifest.id, dir, form, manifest };
 }
 
 /** 清理单个模块暂存（卸载/换源时调用方决定）。 */
