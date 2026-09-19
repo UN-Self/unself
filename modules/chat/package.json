@@ -16,7 +16,7 @@
     "build": "tsc --noEmit"
   },
   "dependencies": {
-    "@unself/module-sdk": "workspace:*",
+    "@unself/sdk": "workspace:*",
     "hono": "^4.10.0"
   },
   "devDependencies": {

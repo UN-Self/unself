@@ -2,8 +2,8 @@
 // #217 新增（unself 集成层，非上游件）：模块 JWT 验签收口——替代上游本地会话认证。
 // token 形状以 core 签发侧为准（services/core-api/src/token.ts issueModuleToken，基线 2ab19ef）：
 // ES256 + kid（RFC7638 指纹）；claims iss='unself-core' / sub=<core users.id> / aud=<模块id> / 10 分钟时效。
-// 验签复用 packages/module-sdk/src/verify.ts 的 verifyModuleToken（jose createLocalJWKSet + jwtVerify + 契约解析），不手搓。
-import { verifyModuleToken } from '@unself/module-sdk';
+// 验签复用 packages/sdk/src/verify.ts 的 verifyModuleToken（jose createLocalJWKSet + jwtVerify + 契约解析），不手搓。
+import { verifyModuleToken } from '@unself/sdk';
 
 /** aud 锁定：token 不能跨模块重放（§5.2）。红灯验证即临时改此常量。 */
 export const AUDIENCE = 'chat';

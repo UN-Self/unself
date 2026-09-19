@@ -19,7 +19,7 @@
     "@unself/contracts": "workspace:*",
     "hono": "^4.10.0",
     "jose": "^6.1.0",
-    "@unself/module-sdk": "workspace:*"
+    "@unself/sdk": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",

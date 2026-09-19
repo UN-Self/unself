@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { Hono, type Context } from 'hono';
 import type { ModuleTokenClaims } from '@unself/contracts';
-import { createCoreApiStorage, verifyModuleToken, type ModuleStorage } from '@unself/module-sdk';
+import { createCoreApiStorage, verifyModuleToken, type ModuleStorage } from '@unself/sdk';
 
 /**
  * hello 模块（#13，M0 垂直切片验收载体）：
