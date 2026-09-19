@@ -29,3 +29,6 @@ packages/installer/*.tgz
 
 # unself.lock（#245）：实例侧生成物——样例实例纳入版本管理，仓库根开发实例不落盘
 /unself.lock
+
+# SDK tarball（可重建，不入库）
+packages/sdk/*.tgz

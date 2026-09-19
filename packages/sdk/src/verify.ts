@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { ModuleTokenClaimsSchema, type ModuleTokenClaims } from '@unself/contracts';
+import { ModuleTokenClaimsSchema } from '@unself/contracts';
 import { createLocalJWKSet, jwtVerify } from 'jose';
+
+// 公开返回类型取本地结构镜像（#283）：保证 d.ts 自包含（见 contract-types.ts）。
+import type { ModuleTokenClaims } from './contract-types.js';
 
 export interface VerifyModuleTokenOptions {
   /** Core 公钥 JWKS 的 JSON 序列化（部署期注入，内容 = Core `GET /.well-known/jwks.json` 响应体，§5.2 B 方案）。 */
