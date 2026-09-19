@@ -12,11 +12,11 @@
  * 零引擎依赖（CLI 核心命令不 import 装配引擎：#53 独立安装制品约束）。
  */
 
-/** 待写入 config 的模块条目。 */
+/** 待写入 config 的模块条目（#77：**不再有裸字符串/builtin**——官方模块也写 npm 串）。 */
 export interface ModuleConfigEntry {
   id: string;
-  /** 缺省 = builtin 目录形态（字符串条目）。 */
-  source?: string;
+  /** 来源（npm:/github:/https:/file:）。 */
+  source: string;
   /** 存储选择覆写（#55；向导③½/CLI 写入）。 */
   storage?: { declaration: string };
 }
@@ -107,8 +107,11 @@ function locateModulesArray(text: string): { open: number; close: number } {
   throw new Error('"modules" 数组括号不配对：请手工编辑该字段（不自动修改有语法错误的配置）');
 }
 
+/** config 里读出的模块条目（宽容形态：存量配置里可能还有裸字符串）。 */
+type ReadModuleEntry = string | { id: string; source?: string };
+
 /** 读 `"modules"` 段的原始数组（JSONC 宽容解析；不可解析 → 人话错，不猜）。 */
-export function readModulesArray(text: string): Array<string | ModuleConfigEntry> {
+export function readModulesArray(text: string): ReadModuleEntry[] {
   const { open, close } = locateModulesArray(text);
   const inner = stripComments(text.slice(open, close + 1));
   let parsed: unknown;
@@ -120,11 +123,11 @@ export function readModulesArray(text: string): Array<string | ModuleConfigEntry
     );
   }
   if (!Array.isArray(parsed)) throw new Error('"modules" 段不是数组形态：请手工编辑该字段');
-  return parsed as Array<string | { id: string; source?: string }>;
+  return parsed as ReadModuleEntry[];
 }
 
-/** 数组 → 单行 JSONC（字符串条目用 `"id"`；对象条目单行展开，与模板风格一致）。 */
-function serializeModulesArray(items: Array<string | ModuleConfigEntry>): string {
+/** 数组 → 单行 JSONC（对象条目单行展开，与模板风格一致）。 */
+function serializeModulesArray(items: ReadonlyArray<ReadModuleEntry>): string {
   const parts = items.map((item) => JSON.stringify(item));
   return `[${parts.join(', ')}]`;
 }
@@ -141,7 +144,7 @@ export function addModuleToConfigText(text: string, entry: ModuleConfigEntry): s
       `模块 ${entry.id} 已在 unself.config.jsonc 的 modules 里：要换来源请手工编辑该条目，或用 --as <新名字> 换个实例内名字`,
     );
   }
-  const next = [...existing, entry.source !== undefined ? entry : entry.id];
+  const next = [...existing, entry];
   const { open, close } = locateModulesArray(text);
   return text.slice(0, open) + serializeModulesArray(next) + text.slice(close + 1);
 }

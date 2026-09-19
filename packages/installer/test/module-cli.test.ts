@@ -102,7 +102,10 @@ describe('#269 unself module add', () => {
     expect(init.exitCode()).toBe(0);
     const layout = instanceLayout(join(cwd, 'demo'));
     // 干净实例语义：默认 builtin hello 先移除（否则与包的 manifest.id 撞名，正是 --as 的适用场景）
-    writeFileSync(layout.configPath, readFileSync(layout.configPath, 'utf8').replace('"modules": ["hello"]', '"modules": []'));
+    writeFileSync(
+      layout.configPath,
+      readFileSync(layout.configPath, 'utf8').replace(/"modules": \[[^\]]*\]/, '"modules": []'),
+    );
 
     const add = opts(['module', 'add', `file:${HELLO_DIR}`]);
     await run(add);
@@ -204,7 +207,7 @@ describe('#269 布局不变式：module add 写的 lock 就是 runDeploy 读的 
     const layout = instanceLayout(join(cwd, 'demo'));
     writeFileSync(
       layout.configPath,
-      readFileSync(layout.configPath, 'utf8').replace('"modules": ["hello"]', '"modules": []'),
+      readFileSync(layout.configPath, 'utf8').replace(/"modules": \[[^\]]*\]/, '"modules": []'),
     );
     const add = opts(['module', 'add', `file:${HELLO_DIR}`]);
     await run(add);

@@ -6,6 +6,7 @@
  * → ⑥ 幂等重跑（reset 回 ①，任何时候重跑收敛同一终态）。
  * 纯状态机：不碰 node:* 与网络；token 只记 hasToken，明文不进状态（页面/JSON 均不可回读）。
  */
+import { DEFAULT_MODULE_IDS, isOfficialModule, officialModuleEntry } from '../lib/official-modules';
 
 /** 向导步骤（①→⑥ 对应 auth→…→done/failed，reset 回 auth）。 */
 export type WizardStep = 'auth' | 'domain' | 'modules' | 'storage' | 'ready' | 'deploying' | 'done' | 'failed';
@@ -49,7 +50,7 @@ export interface WizardResourceName {
 export interface WizardModuleAdd {
   id: string;
   source: string;
-  /** 来源协议（official/npm/github/https/file）。 */
+  /** 来源协议（npm/github/https/file；#77 已无 official）。 */
   kind: string;
   version: string;
   /** 包字节 SRI（sha512-…）；目录形态无下载字节时省略。 */
@@ -132,7 +133,7 @@ export function initialWizardState(
     hasToken: false,
     domainChoice: null,
     domain: '',
-    modules: options?.modules ?? ['hello'],
+    modules: options?.modules ?? [...DEFAULT_MODULE_IDS],
     storageOptions,
     moduleAdds,
     resourceNames: options?.resourceNames ?? [],
@@ -220,12 +221,25 @@ export function apexZone(domain: string): string {
   return labels.slice(-2).join('.');
 }
 
-/** ③ 模块确认：非空 id 清单（去空格去重）；空清单不合法（至少确认一次选择）。 */
+/**
+ * ③ 模块确认：非空 id 清单（去空格去重）；空清单不合法。
+ * #77：每个 id 必须有来源——官方模块（走 npm 串）或用「添加模块」加过的来源模块；
+ * 两者都不是就当场拒（不再有「裸 id = builtin 目录」的隐式来源）。
+ */
 export function confirmModules(s: WizardState, modules: string[]): { state: WizardState; problem: string | null } {
   const ids = [...new Set(modules.map((m) => m.trim()).filter((m) => m.length > 0))];
   if (ids.length === 0) return { state: s, problem: '至少确认一个模块（或回到配置文件改 modules）' };
   for (const id of ids) {
     if (!/^[a-z][a-z0-9-]+$/.test(id)) return { state: s, problem: `模块 id 不合法：${id}（小写字母开头，小写字母/数字/连字符）` };
+    if (!isOfficialModule(id) && !s.moduleAdds.some((a) => a.id === id)) {
+      return {
+        state: s,
+        problem:
+          `模块 ${id} 不是官方模块，也没有来源：请先用「添加模块」填安装串` +
+          '（npm:@acme/pkg@1.2.0 / github:acme/pkg#v1.0.0 / https://…/x.tgz / file:./modules/x）' +
+          '——决策 #77 起没有 official 特权来源',
+      };
+    }
   }
   return { state: { ...s, modules: ids, step: 'storage' }, problem: null };
 }
@@ -262,9 +276,14 @@ export function chooseStorage(
   return { state: { ...s, storageChoices: next, sharedConsent, step: 'ready' }, problem: null };
 }
 
-/** ④ 由状态构造装配输入（workers.dev = domain 空串；storage 沿用 r2 默认）。 */
-export function buildConfigInput(s: WizardState): { domain: string; modules: string[]; storage: { provider: 'r2'; bucket: string } } {
-  return { domain: s.domain, modules: s.modules, storage: { provider: 'r2', bucket: 'unself-storage' } };
+/** ④ 由状态构造装配输入（workers.dev = domain 空串；storage 沿用 r2 默认）。
+ * 模块条目一律 `{id, source}`（官方模块写 npm 串——决策 #77 A 方案）。 */
+export function buildConfigInput(s: WizardState): {
+  domain: string;
+  modules: Array<{ id: string; source: string }>;
+  storage: { provider: 'r2'; bucket: string };
+} {
+  return { domain: s.domain, modules: deployModules(s), storage: { provider: 'r2', bucket: 'unself-storage' } };
 }
 
 /** ④ 部署开始：进 deploying，events 起新段。 */
@@ -331,13 +350,13 @@ export function addModule(
 }
 
 /**
- * ③ 确认后交给 ④ 的模块条目（#269）：字符串 = builtin；对象 = 带来源。
+ * ③ 确认后交给 ④ 的模块条目（#269/#77）：**一律对象形态**（官方模块写 npm 串，来源模块写原串）。
  * 只保留仍在 modules 里的条目。
  */
-export function deployModules(s: WizardState): Array<string | { id: string; source: string }> {
+export function deployModules(s: WizardState): Array<{ id: string; source: string }> {
   return s.modules.map((id) => {
     const add = s.moduleAdds.find((a) => a.id === id);
-    return add ? { id, source: add.source } : id;
+    return add ? { id, source: add.source } : officialModuleEntry(id);
   });
 }
 

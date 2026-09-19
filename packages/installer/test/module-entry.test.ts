@@ -205,7 +205,10 @@ describe('#269 ③ 来源入口（向导）', () => {
       expect(start.status).toBe(202);
       for (let i = 0; i < 50 && captures.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
       expect(captures).toHaveLength(1);
-      expect(captures[0]!.modules).toEqual(['hello', { id: 'todo', source: PREVIEW.source }]);
+      expect(captures[0]!.modules).toEqual([
+        { id: 'hello', source: 'npm:@unself/hello@0.1.0' },
+        { id: 'todo', source: PREVIEW.source },
+      ]);
       expect(captures[0]!.yes).toBe(true);
     } finally {
       srv.close();
@@ -326,8 +329,12 @@ describe('#269 状态机纯函数', () => {
   it('deployModules：只保留仍在 modules 里的条目，来源条目带 source', () => {
     const s = initialWizardState(join(root, 'demo', 'unself'), { modules: ['hello'] });
     const added = addModule(s, { ...PREVIEW, storageAccepts: [...PREVIEW.storageAccepts] }).state;
-    expect(deployModules(added)).toEqual(['hello', { id: 'todo', source: PREVIEW.source }]);
-    expect(deployModules({ ...added, modules: ['hello'] })).toEqual(['hello']);
+    // #77：一律对象条目（官方模块写 npm 串，来源模块写原串）
+    expect(deployModules(added)).toEqual([
+      { id: 'hello', source: 'npm:@unself/hello@0.1.0' },
+      { id: 'todo', source: PREVIEW.source },
+    ]);
+    expect(deployModules({ ...added, modules: ['hello'] })).toEqual([{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }]);
   });
 });
 
@@ -335,37 +342,52 @@ describe('#269 config-edit（modules 段安全编辑）', () => {
   const TEMPLATE = `// SPDX-License-Identifier: AGPL-3.0-only
 {
   // 选中启用的模块
-  "modules": ["hello"],
+  "modules": [{"id":"hello","source":"npm:@unself/hello@0.1.0"}],
   "storage": { "provider": "r2" }
 }
 `;
 
-  it('追加来源条目，其余原文（含注释）逐字节保留', () => {
+  it('追加来源条目（全对象形态），其余原文（含注释）逐字节保留', () => {
     const next = addModuleToConfigText(TEMPLATE, { id: 'todo', source: 'npm:@acme/unself-todo@1.2.0' });
     expect(next).toContain('// 选中启用的模块');
     expect(next).toContain('// SPDX-License-Identifier: AGPL-3.0-only');
-    expect(next).toContain('"modules": ["hello", {"id":"todo","source":"npm:@acme/unself-todo@1.2.0"}]');
-    expect(readModulesArray(next)).toEqual(['hello', { id: 'todo', source: 'npm:@acme/unself-todo@1.2.0' }]);
+    expect(next).toContain(
+      '"modules": [{"id":"hello","source":"npm:@unself/hello@0.1.0"}, {"id":"todo","source":"npm:@acme/unself-todo@1.2.0"}]',
+    );
+    expect(readModulesArray(next)).toEqual([
+      { id: 'hello', source: 'npm:@unself/hello@0.1.0' },
+      { id: 'todo', source: 'npm:@acme/unself-todo@1.2.0' },
+    ]);
     // 非 modules 段不动
     expect(next).toContain('"storage": { "provider": "r2" }');
   });
 
-  it('builtin 条目写字符串；重复 id 拒绝（不猜不覆盖）', () => {
-    const next = addModuleToConfigText(TEMPLATE, { id: 'notes' });
-    expect(readModulesArray(next)).toEqual(['hello', 'notes']);
-    expect(() => addModuleToConfigText(next, { id: 'notes' })).toThrowError(/已在 unself.config.jsonc/);
+  it('条目一律对象（#77 无裸字符串）；重复 id 拒绝（不猜不覆盖）', () => {
+    const next = addModuleToConfigText(TEMPLATE, { id: 'notes', source: 'npm:@acme/notes@0.1.0' });
+    expect(readModulesArray(next)).toEqual([
+      { id: 'hello', source: 'npm:@unself/hello@0.1.0' },
+      { id: 'notes', source: 'npm:@acme/notes@0.1.0' },
+    ]);
+    expect(() => addModuleToConfigText(next, { id: 'notes', source: 'npm:@acme/notes@0.2.0' })).toThrowError(/已在 unself.config.jsonc/);
   });
 
   it('已有多行/带注释的 modules 段可读（编辑后归一为单行）', () => {
     const multi = `{
   "modules": [
-    "hello", // 演示模块
+    {"id":"hello","source":"npm:@unself/hello@0.1.0"}, // 演示模块
     {"id":"todo","source":"file:./modules/todo"}
   ]
 }
 `;
-    expect(readModulesArray(multi)).toEqual(['hello', { id: 'todo', source: 'file:./modules/todo' }]);
-    const next = addModuleToConfigText(multi, { id: 'notes' });
-    expect(readModulesArray(next)).toEqual(['hello', { id: 'todo', source: 'file:./modules/todo' }, 'notes']);
+    expect(readModulesArray(multi)).toEqual([
+      { id: 'hello', source: 'npm:@unself/hello@0.1.0' },
+      { id: 'todo', source: 'file:./modules/todo' },
+    ]);
+    const next = addModuleToConfigText(multi, { id: 'notes', source: 'npm:@acme/notes@0.1.0' });
+    expect(readModulesArray(next)).toEqual([
+      { id: 'hello', source: 'npm:@unself/hello@0.1.0' },
+      { id: 'todo', source: 'file:./modules/todo' },
+      { id: 'notes', source: 'npm:@acme/notes@0.1.0' },
+    ]);
   });
 });
