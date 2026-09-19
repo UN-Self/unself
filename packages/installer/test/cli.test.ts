@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parseArgs, run, type RunOptions } from '../src/cli';
+import { parseArgs, run, defaultInstanceName, type RunOptions } from '../src/cli';
 import {
   emptyRegistry,
   loadRegistry,
@@ -69,8 +69,8 @@ describe('init → list → use → current → destroy 全链', () => {
     expect(existsSync(join(inst, 'unself.config.jsonc'))).toBe(true);
     expect(existsSync(join(inst, 'generated'))).toBe(true);
 
-    // 路径可见性：echoPathline 两行
-    expect(out.filter((l) => l === pathline(inst)).length).toBe(2);
+    // 路径可见性：echoPathline 在输出末尾给出实例目录（一次，不重复打印）
+    expect(out.filter((l) => l === pathline(inst))).toHaveLength(1);
 
     // 注册表落盘
     const reg = loadRegistry(home);
@@ -103,7 +103,7 @@ describe('init → list → use → current → destroy 全链', () => {
 
     await run(opts(['use', 'demo']));
     expect(loadRegistry(home).current).toBe('demo');
-    expect(out.filter((l) => l === pathline(join(cwd, 'unself'))).length).toBe(2);
+    expect(out.filter((l) => l === pathline(join(cwd, 'unself'))).length).toBe(1);
 
     errs.length = 0;
     await run(opts(['use', 'ghost']));
@@ -184,5 +184,71 @@ describe('红灯验证（T7 汇编引用：变异必红）', () => {
     out.length = 0;
     await run(opts(['list', '--json']));
     expect(out.join('').toLowerCase()).not.toMatch(/secret|token|password/);
+  });
+});
+
+describe('零克隆主路径：没有任何实例也能直接进向导（README「一条命令」）', () => {
+  function spyWizard(seen: string[]): Partial<RunOptions> {
+    return {
+      startWizard: async (o) => {
+        seen.push(o.instancePath);
+        return 0;
+      },
+    };
+  }
+
+  it('全新目录跑 `wizard` → 就地建实例、设为 current、向导拿到该实例目录', async () => {
+    const seen: string[] = [];
+    await run(opts(['wizard'], spyWizard(seen)));
+    expect(errs).toEqual([]);
+    const inst = join(cwd, 'unself');
+    expect(seen).toEqual([inst]);
+    expect(existsSync(join(inst, 'unself.config.jsonc'))).toBe(true);
+    // 实例名 = 目录名（净化后）；注册表指向刚建的实例目录
+    const reg = loadRegistry(home);
+    expect(reg.current).toBe(defaultInstanceName(cwd));
+    expect(reg.instances[reg.current as string]).toBe(inst);
+  });
+
+  it('缺省命令（无参数）同口径：不再报「没有当前实例」', async () => {
+    const seen: string[] = [];
+    await run(opts([], spyWizard(seen)));
+    expect(errs).toEqual([]);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('`wizard <名字>` → 用该名字建实例（帮助文案承诺的形态）', async () => {
+    const seen: string[] = [];
+    await run(opts(['wizard', 'demo'], spyWizard(seen)));
+    expect(errs).toEqual([]);
+    expect(seen).toEqual([join(cwd, 'demo', 'unself')]);
+    expect(loadRegistry(home).current).toBe('demo');
+  });
+
+  it('已注册同名实例（不在当前目录下、当前指针为空且多于一个）→ 切过去，不重复建目录', async () => {
+    await run(opts(['init', 'demo', join(cwd, 'elsewhere')]));
+    await run(opts(['init', 'other', join(cwd, 'other-root')]));
+    // 模拟「注册表里还在、但当前指针丢了」
+    saveRegistry({ ...loadRegistry(home), current: null }, home);
+    const seen: string[] = [];
+    await run(opts(['wizard', 'demo'], spyWizard(seen)));
+    expect(seen).toEqual([join(cwd, 'elsewhere', 'unself')]);
+    expect(loadRegistry(home).current).toBe('demo');
+    expect(out.join('')).toContain('切换到你已注册的实例');
+    expect(existsSync(join(cwd, 'unself'))).toBe(false);
+  });
+
+  it('已有 current 实例时不自举、不劫持（向导照用当前实例）', async () => {
+    await run(opts(['init', 'other', join(cwd, 'other-root')]));
+    const seen: string[] = [];
+    await run(opts(['wizard'], spyWizard(seen)));
+    expect(seen).toEqual([join(cwd, 'other-root', 'unself')]);
+    expect(existsSync(join(cwd, 'unself'))).toBe(false);
+  });
+
+  it('`deploy` 保持原口径：没有实例就人话报错，不隐式建目录（CI/逃生门）', async () => {
+    await run(opts(['deploy']));
+    expect(errs.join('\n')).toContain('没有当前实例');
+    expect(existsSync(join(cwd, 'unself'))).toBe(false);
   });
 });

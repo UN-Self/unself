@@ -166,6 +166,15 @@ export function tokenProblem(token: string): string | null {
   return null;
 }
 
+/**
+ * ① 用本机 wrangler OAuth 直跑（页面上「检测到本机 wrangler OAuth，可零输入直跑（跳过本步）」）：
+ * 留空即视为使用 OAuth——引擎按凭证优先级自取 wrangler 凭据（决策 #67），向导只把
+ * 「空 token」这个意图显式化，不落任何秘密。
+ */
+export function submitOAuthSkip(s: WizardState): WizardState {
+  return { ...s, hasToken: true, step: 'domain', error: null };
+}
+
 /** ① 提交 token：合法 → hasToken=true 进 ②；非法 → 原地不动带错误。 */
 export function submitToken(s: WizardState, token: string): { state: WizardState; problem: string | null } {
   const problem = tokenProblem(token);
