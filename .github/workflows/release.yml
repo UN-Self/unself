@@ -1,0 +1,85 @@
+# 发布流水线（决策 #79；W5 预期行为清单 E1–E10）
+#
+# 只做四件事：检出 → 装依赖 → 构建（=「打包」）→ 推 npm。
+# **不跑测试套件**：PR 阶段的六步门禁（.github/workflows/ci.yml）已经跑过，发布不再重复。
+#
+# 认证 = npm Trusted Publishing（GitHub Actions OIDC）：仓库里**不存任何 npm token/secret**。
+# 首次发布是人工的（维护者本机 `npm login` 后逐个包发一轮），之后在 npm 每个包的
+# Settings → Trusted publishing 里配：组织 `UN-Self` / 仓库 `unself` / workflow 文件名 `release.yml`
+# （**必须显式勾选允许直接 `npm publish`**——2026-09-03 之后新建的配置默认只允许 `npm stage publish`）。
+# provenance 由 Trusted Publishing 自动生成，不需要 `--provenance`。
+#
+# 打 tag 前的三条前提：
+#   ① tag 必须在 main 上（本 workflow 会校验）
+#   ② 发版前有一次真机走查记录（docs/testing.md）
+#   ③ 模块包形态由 `unself module pack` 提供（#285）；SDK/安装器的可发布形态由 #283 提供
+name: Release
+
+on:
+  push:
+    tags:
+      - 'sdk-v*'
+      - 'hello-v*'
+      - 'chat-v*'
+      - 'installer-v*'
+
+permissions:
+  contents: read
+  id-token: write # Trusted Publishing 的关键授权（OIDC）
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      # E9：发布只从 main 出（决策 #79 前提⑧）
+      - name: 校验 tag 在 main 上
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "::error::tag $GITHUB_REF_NAME 不在 main 上——发布只从 main 出（决策 #79）"
+            exit 1
+          fi
+
+      # E2/E3：tag → 待发布包 + 版本（不认识的前缀直接失败，绝不静默跳过）
+      - name: 解析 tag
+        id: rel
+        run: node scripts/release/tag-to-package.mjs "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+
+      # E3：版本以 tag 为准（workspace 包：直接写进 package.json）
+      - name: 注入版本（workspace 包）
+        if: steps.rel.outputs.kind == 'workspace'
+        run: npm pkg set version="${{ steps.rel.outputs.version }}"
+        working-directory: ${{ steps.rel.outputs.dir }}
+
+      - name: 发布（workspace 包）
+        if: steps.rel.outputs.kind == 'workspace'
+        run: npm publish --access public
+        working-directory: ${{ steps.rel.outputs.dir }}
+
+      # E3：模块包——版本同时要进 packed 的 manifest.json，由打包器负责（#285）
+      - name: 打包（模块）
+        if: steps.rel.outputs.kind == 'module'
+        run: |
+          node packages/installer/dist/unself.mjs module pack "${{ steps.rel.outputs.dir }}" \
+            --out .release --version "${{ steps.rel.outputs.version }}"
+
+      - name: 发布（模块）
+        if: steps.rel.outputs.kind == 'module'
+        run: npm publish .release/*.tgz --access public
