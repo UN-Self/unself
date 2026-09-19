@@ -76,7 +76,7 @@
 
 ### 验签接线（core → chat）
 
-- `worker/src/core-auth.js`（新增，unself 集成层）：`verifyAccessToken(env, token)` → `{ok, claims}|{ok:false,status,message}`。复用 `@unself/module-sdk` 的 `verifyModuleToken`（jose createLocalJWKSet + jwtVerify(audience) + contracts 解析，**不手搓**）；aud 常量 `AUDIENCE='chat'`（红灯验证点）；`CORE_JWKS_JSON` 空 → 503 `'jwks not provisioned'`（与 hello 口径一致）；任何验签失败 → 401 人话 `'请先登录'`（不回显 jose 细节）；`CORE_ISSUER` 非空时额外校验 iss（可选）
+- `worker/src/core-auth.js`（新增，unself 集成层）：`verifyAccessToken(env, token)` → `{ok, claims}|{ok:false,status,message}`。复用 `@unself/sdk` 的 `verifyModuleToken`（jose createLocalJWKSet + jwtVerify(audience) + contracts 解析，**不手搓**）；aud 常量 `AUDIENCE='chat'`（红灯验证点）；`CORE_JWKS_JSON` 空 → 503 `'jwks not provisioned'`（与 hello 口径一致）；任何验签失败 → 401 人话 `'请先登录'`（不回显 jose 细节）；`CORE_ISSUER` 非空时额外校验 iss（可选）
 - token 形状（签发侧源码已核，基线 2ab19ef）：`services/core-api/src/token.ts` issueModuleToken——ES256 + kid（RFC7638 指纹），claims `iss='unself-core'` / `sub=<core users.id>` / `aud=<模块id>` / `iat` / `exp=iat+600`，JWKS 经 `GET /.well-known/jwks.json`。部署装配期由 deploy steps 注入 vars `CORE_JWKS_JSON`（wrangler.jsonc 已声明空默认值）
 
 ### JIT 建档
@@ -98,7 +98,7 @@
 - `test/chat-ws-renewal.test.ts`：建连 101/ready/meta、token_refresh 换绑不断连、无效 refresh 1008、停用/过期下一帧 1008；`test/ws-stub.ts` 提供 WebSocketPair/Response(101) 最小运行时垫片（替运行时面，业务全走真类）
 - `test/chat-messages.test.ts`：login() 助手换成 jose mint token（断言不变，username 变为 `core:<sub>` 形状）
 - `scripts/mint-token.mjs`：dev 自测签发（生成/复用 keypair → 打印 CORE_JWKS_JSON 与 10 分钟 token），替代被裁的本地 dev 登录入口；keypair 缓存 `.mint-token-keys.json` 已 gitignore，dev-only 不进 worker bundle
-- `package.json`：dependencies 增 `@unself/module-sdk: workspace:*`；devDependencies 增 `jose: ^6.1.0`（测试/脚本签名用）；仓库根 pnpm-lock.yaml 被动更新（#218 cd0051a 同款，PR 明示）
+- `package.json`：dependencies 增 `@unself/sdk: workspace:*`；devDependencies 增 `jose: ^6.1.0`（测试/脚本签名用）；仓库根 pnpm-lock.yaml 被动更新（#218 cd0051a 同款，PR 明示）
 
 ## 验收 grep 约定（自检 1）
 `grep -rni "telegram|capacitor" modules/chat/` 的预期命中仅限三类说明性文字，无业务代码命中：

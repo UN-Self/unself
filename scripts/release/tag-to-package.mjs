@@ -15,7 +15,7 @@ import { pathToFileURL } from 'node:url';
 
 /** tag 前缀 → 发布目标。`packDir` 指「构建后可用于打包/发布的目录」。 */
 export const RELEASE_TARGETS = {
-  sdk: { package: '@unself/sdk', kind: 'workspace', dir: 'packages/module-sdk' },
+  sdk: { package: '@unself/sdk', kind: 'workspace', dir: 'packages/sdk' },
   installer: { package: '@unself/installer', kind: 'workspace', dir: 'packages/installer' },
   hello: { package: '@unself/hello', kind: 'module', id: 'hello', dir: 'packages/installer/dist/artifacts/modules/hello' },
   chat: { package: '@unself/chat', kind: 'module', id: 'chat', dir: 'packages/installer/dist/artifacts/modules/chat' },

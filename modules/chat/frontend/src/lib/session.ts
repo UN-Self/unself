@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 /**
- * 模块 SDK 会话装配（#218 T2）：createModuleSDK（@unself/module-sdk）接进 chat——
+ * 模块 SDK 会话装配（#218 T2）：createModuleSDK（@unself/sdk）接进 chat——
  * ① ready 握手 → ② 壳下发 token（origin 校验=壳 origin）→ ③ 静默续期循环（SDK 现成能力）
  * → ④ token/claims 投影给调用方（myUserId = claims.sub 解出的核心用户 id）。
  *
@@ -12,8 +12,8 @@
  *
  * token 只存内存（本文件闭包），localStorage 绝不落凭证；续期换新后 latestToken 即新值。
  */
-import { createModuleSDK, resolveShellOrigin } from '@unself/module-sdk'
-import type { ModuleSDK } from '@unself/module-sdk'
+import { createModuleSDK, resolveShellOrigin } from '@unself/sdk'
+import type { ModuleSDK } from '@unself/sdk'
 
 export interface ChatSession {
   /** SDK 实例（navigate/notify/theme 能力后续接入用）。 */

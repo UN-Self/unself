@@ -4,7 +4,7 @@
  * 23.4+ 免 flag；本仓库真机基线 Node 26 免 flag 可用）。
  * 探测 = 真开一个内存库跑一条语句（「版本号推断」不可靠，实测主义）。
  * 不可用时给人话（怎么升级 / 加什么 flag），绝不抛出崩进程。
- * 静态 import 同 packages/module-sdk/test/test-factory.ts 先例（node: 内置零新依赖）。
+ * 静态 import 同 packages/sdk/test/test-factory.ts 先例（node: 内置零新依赖）。
  */
 import { DatabaseSync } from 'node:sqlite';
 
