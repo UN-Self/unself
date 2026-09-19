@@ -7,7 +7,7 @@
  * 装配主流程 = runNineSteps 整包调用，行为与既有部署完全一致；本文件只做交互编排与输出。
  */
 import { runNineSteps, type Summary } from './steps';
-import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type UnselfConfig } from './config';
+import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type NormalizedModuleEntry, type UnselfConfig } from './config';
 import { CredentialsMissingError, credentialsMissingMessage, resolveAuth } from './auth';
 import { probePermissions } from './permissions';
 import {
@@ -28,12 +28,12 @@ import { progressTracker } from './progress';
 
 const TOTAL_STEPS = 9;
 
-/** 交互结果只改本次运行的内存副本，不回写 unself.config.jsonc（结构不变）。对象条目归一化取 id——交互面只确认启用与否，来源改写走配置文件。 */
-function applyDecision(config: UnselfConfig, domain: string | null, modulesOverride: string[] | null): UnselfConfig {
+/** 交互结果只改本次运行的内存副本，不回写 unself.config.jsonc（结构不变）。**条目原样保留来源**（#77：官方模块也是 npm 串，交互面只确认启用与否）。 */
+function applyDecision(config: UnselfConfig, domain: string | null, modulesOverride: NormalizedModuleEntry[] | null): UnselfConfig {
   return {
     ...config,
     domain: domain ?? '',
-    modules: modulesOverride ?? moduleIds(normalizeModuleEntries(config.modules)),
+    modules: modulesOverride ?? normalizeModuleEntries(config.modules),
   };
 }
 
@@ -116,15 +116,28 @@ export async function main(argv: string[] = []): Promise<Summary> {
 
   // ---- 域名三选 + 模块确认（§5.5 ②③；CLI > 交互 > 配置文件）----
   const config = await loadUnselfConfig(rootDir);
+  const configEntries = normalizeModuleEntries(config.modules);
   const decision = await resolveDomainChoice({
     cli,
     configDomain: config.domain,
     tty,
     interactive: () => chooseDomain({ ask: (q) => asker.ask(q), out }),
   });
-  let modulesOverride: string[] | null = cli.modules ?? null;
-  if (!cli.yes && tty && cli.modules === undefined) {
-    const candidates = moduleIds(normalizeModuleEntries(config.modules));
+  /** 启用条目覆写（#77：条目带 source，故按 config 条目筛选，不重建裸 id）。 */
+  let modulesOverride: NormalizedModuleEntry[] | null = null;
+  const selectByIds = (ids: string[]): NormalizedModuleEntry[] => {
+    const wanted = new Set(ids);
+    const unknown = ids.filter((id) => !configEntries.some((e) => e.id === id));
+    if (unknown.length > 0) {
+      throw new Error(
+        `未知模块：${unknown.join('、')}（#77 起模块必须有来源：先在 unself.config.jsonc 的 modules 里写 { id, source }）`,
+      );
+    }
+    return configEntries.filter((e) => wanted.has(e.id));
+  };
+  if (cli.modules !== undefined) modulesOverride = selectByIds(cli.modules);
+  if (modulesOverride === null && !cli.yes && tty) {
+    const candidates = moduleIds(configEntries);
     out('② 启用模块（逗号分隔，回车=配置文件值）：');
     out(`  候选：${candidates.length > 0 ? candidates.join('、') : '（配置为空 = 全停用）'}`);
     for (let tries = 0; tries < 2; tries++) {
@@ -134,7 +147,7 @@ export async function main(argv: string[] = []): Promise<Summary> {
         out(`  未知模块：${parsed.invalid.join('、')}（候选：${candidates.length > 0 ? candidates.join('、') : '无'}）`);
         continue;
       }
-      modulesOverride = parsed.ids;
+      modulesOverride = selectByIds(parsed.ids ?? []);
       break;
     }
   }
@@ -161,13 +174,13 @@ export async function main(argv: string[] = []): Promise<Summary> {
     // 且 #245 起 config.modules 可为对象条目（{id, source}），直接 join 会印 [object Object]——
     // effective.modules 已经过 moduleIds(normalizeModuleEntries(...)) 归一化。
     out(`  域名   ${effective.domain || 'workers.dev 免费域名（自动分配）'}`);
-    out(`  模块   ${effective.modules.join('、') || '（全停用）'}`);
+    out(`  模块   ${effective.modules.map((m) => m.id).join('、') || '（全停用）'}`);
     return {} as unknown as Summary;
   }
 
   out('──────────── 将装配 ────────────');
   out(`  域名   ${effective.domain || 'workers.dev 免费域名（自动分配）'}`);
-  out(`  模块   ${effective.modules.length > 0 ? effective.modules.join('、') : '（全停用）'}    存储   ${effective.storage.provider === 'r2' ? `R2 自动创建（${effective.storage.bucket}）` : `外部 S3（${effective.storage.endpoint}）`}`);
+    out(`  模块   ${effective.modules.length > 0 ? effective.modules.map((m) => m.id).join('、') : '（全停用）'}    存储   ${effective.storage.provider === 'r2' ? `R2 自动创建（${effective.storage.bucket}）` : `外部 S3（${effective.storage.endpoint}）`}`);
   out('提示：本命令可随时重跑，幂等收敛，不会重复创建资源。');
 
   // ---- 九步进度（§5.5 ④）：每步 [i/9]……，失败 ✗ + 三要素 ----

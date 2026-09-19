@@ -28,7 +28,7 @@ import { readFile, readdir, rm } from 'node:fs/promises';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 import { cwd as processCwd } from 'node:process';
 import type { ModuleManifest } from '@unself/contracts';
 import { ModuleManifestSchema, manifestFromYamlText } from '@unself/contracts';
@@ -111,8 +111,10 @@ async function findAncestorLicense(
 export async function modulePackageFiles(
   input: ModulePackageInput,
 ): Promise<{ manifest: ModuleManifest; files: ModulePackageFile[] }> {
-  const dir = input.dir;
-  if (!existsSync(dir)) throw new Error(`模块目录不存在：${dir}`);
+  // 目录先绝对化（#284 实测）：相对目录会让 ① esbuild 入口解析失败，
+  // ② LICENSE 祖先回溯在 `dirname('.') === '.'` 处提前 break → 包内静默缺 LICENSE。
+  const dir = resolvePath(input.dir);
+  if (!existsSync(dir)) throw new Error(`模块目录不存在：${input.dir}`);
 
   // manifest：优先包根 manifest.json（已打包形态），否则 manifest.yaml 单轨解析（@unself/contracts）
   const files = new Map<string, Buffer>();

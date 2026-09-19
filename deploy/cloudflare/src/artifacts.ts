@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 产物根解析（#257）：引擎从「随安装器分发的产物」读 core / shell / SDK / builtin 模块包，
- * `rootDir` 只当**输出目录**（实例目录的父目录，落 `.deploy/`、`unself.lock`）。
+ * 产物根解析（#257）：引擎从「随安装器分发的产物」读 core / shell / 迁移 SQL / vendor，
+ * `rootDir` 只当**输出目录**（实例目录，落 `.deploy/`、`unself.lock`）。
+ *
+ * **模块与 SDK 不在产物里（#284 / 决策 #76/#77）**：官方模块就是普通 npm 包，SDK 也是发布的包；
+ * 两者都由安装器 `dependencies` 精确预装，引擎从 `node_modules` 解析（本地优先，零网络）。
+ * 平台产物（core worker bundle / 壳 / 迁移 SQL / vendor）保持内嵌。
  *
  * 为什么需要它：`npx` / tarball 装出来的安装器所在的机器**没有本仓库**——九步引擎若仍从
  * `rootDir/modules`、`rootDir/services`、`rootDir/apps/shell/dist` 读源码树，干净机器必然部署不出来。
@@ -43,10 +47,6 @@ export interface ArtifactRoots {
   platformMigrationsDir: string;
   /** shell 静态资产（apps/shell/dist 的产物副本）。 */
   shellDir: string;
-  /** 浏览器侧 SDK 资产（module-sdk.js IIFE + module-sdk.esm.js）。 */
-  sdkDir: string;
-  /** builtin 模块包根（每模块一个目录：manifest.json + worker.js + migrations/ …）。 */
-  modulesDir: string;
   /** 随包第三方依赖（blake3-wasm：createRequire 加载，需真实文件树，无法进 bundle）。 */
   vendorDir: string;
 }
@@ -71,8 +71,6 @@ export function artifactRootsFrom(root: string): ArtifactRoots {
     coreMigrationsDir: join(abs, 'core', 'migrations', 'core'),
     platformMigrationsDir: join(abs, 'core', 'migrations', 'modules'),
     shellDir: join(abs, 'shell'),
-    sdkDir: join(abs, 'sdk'),
-    modulesDir: join(abs, 'modules'),
     vendorDir: join(abs, 'vendor'),
   };
 }
@@ -155,20 +153,4 @@ export function activeArtifactRoots(): ArtifactRoots | null {
 export function vendoredBlake3Dirs(): string[] {
   const roots = activeArtifactRoots();
   return roots ? [join(roots.vendorDir, 'blake3-wasm')] : [];
-}
-
-/**
- * builtin 模块包目录解析（#257 验收③「builtin 与第三方同一条路」）：
- * 产物形态 → `<artifacts>/modules/<id>`（包形态：manifest.json + worker.js）；
- * 仓库形态 → `rootDir/modules/<id>`（源码形态，manifest.yaml）。
- * 两形态**目录形状不同但消费路径同一处**：discoverModules / resolveSources 都只问这一个函数。
- */
-export function builtinModuleDir(input: {
-  rootDir: string;
-  moduleId: string;
-  artifacts?: ArtifactRoots | null;
-}): string {
-  const artifacts = input.artifacts ?? activeArtifactRoots();
-  if (artifacts) return join(artifacts.modulesDir, input.moduleId);
-  return join(input.rootDir, 'modules', input.moduleId);
 }
