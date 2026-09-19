@@ -137,7 +137,7 @@ describe('readChatPackageConfig（包配置子集解析）', () => {
 
 describe('chatWranglerConfig（部署配置生成）', () => {
   const base = {
-    config: { domain: 'team.example.com', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } } as UnselfConfig,
+    config: { domain: 'team.example.com', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } } as UnselfConfig,
     dbIds: { modules: 'modules-uuid', chat: 'chat-uuid' },
     kvId: 'kv-uuid',
     jwksJson: '{"keys":[]}',

@@ -52,9 +52,12 @@ async function fakeChatFrontend(outDir: string): Promise<string> {
   return 'chat/assets/frontend';
 }
 
-/** 与生产 discoverModules 同源：断言面期望从这里派生（参数化核心，#219 验收第 5 条）。 */
-async function discoverIds(rootDir: string, selected: string[]): Promise<string[]> {
-  return (await discoverModules(rootDir, selected)).map((m) => m.id).sort();
+/**
+ * 与生产 discoverModules 同源：断言面期望从这里派生（参数化核心，#219 验收第 5 条）。
+ * #284：discoverModules 只认 config 条目（不再扫模块目录）——期望面 = 传入的条目清单。
+ */
+async function discoverIds(_rootDir: string, entries: Array<{ id: string; source: string }>): Promise<string[]> {
+  return (await discoverModules('', entries.map((e) => e.id), entries)).map((m) => m.id).sort();
 }
 
 describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
@@ -63,7 +66,8 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -89,7 +93,8 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: 'demo.handywote.top', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: 'demo.handywote.top', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -122,10 +127,18 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
 
   it('注册表三态之一（启用）：chat upsert enabled=1 且 entry=模块自有子域（#273）；hello 未选 disable', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] } });
+    // #284：未选 = config 删了但 lock 里还记着（目录扫描已废）
+    const preLock = JSON.stringify({
+      lockVersion: 1,
+      generatedAt: '2026-09-19T00:00:00.000Z',
+      modules: { hello: { source: 'npm:@unself/hello@0.1.0', version: '0.1.0', manifestHash: 'a'.repeat(64), contractVersion: '1.0' } },
+    });
     await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      preLock,
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -149,7 +162,8 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
     const summary1 = await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: first.fetchImpl }),
-      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -172,7 +186,8 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
     const summary2 = await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: second.fetchImpl }),
-      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -188,7 +203,8 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
     await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fresh.fetchImpl }),
-      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -199,40 +215,51 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
 });
 
 describe('#219 模块面断言参数化（验收第 5 条）', () => {
-  it('在仓全集与未选集合均由 discoverModules 现场派生（不硬编码模块名）', async () => {
-    const selectedIds = ['chat'];
-    const all = await discoverIds(ROOT, selectedIds);
-    // 真实仓库现场：hello 与 chat 都在仓；期望集合 = 发现结果（而非手写清单）
-    expect(all).toContain('hello');
-    expect(all).toContain('chat');
-    expect(all).toEqual([...new Set(all)].sort());
-    // 选中/未选划分与 config.modules 一致
-    const refs = await discoverModules(ROOT, selectedIds);
-    expect(refs.find((m) => m.id === 'chat')!.selected).toBe(true);
-    expect(refs.filter((m) => !m.selected).map((m) => m.id).sort()).toEqual(all.filter((id) => !selectedIds.includes(id)));
+  it('discoverModules 只认 config 条目：给什么返回什么（不再扫目录）', async () => {
+    const entries = [
+      { id: 'chat', source: 'npm:@unself/chat@0.1.0' },
+      { id: 'hello', source: 'npm:@unself/hello@0.1.0' },
+    ];
+    const all = await discoverIds(ROOT, entries);
+    expect(all).toEqual(['chat', 'hello']);
+    const refs = await discoverModules(ROOT, ['chat', 'hello'], entries);
+    expect(refs.map((m) => m.id).sort()).toEqual(['chat', 'hello']);
+    // #284：config 是所有条目的唯一来源 —— 目录里存在但 config 未声明的模块不再出现
+    expect(refs.every((m) => m.selected)).toBe(true);
+    expect(refs.every((m) => m.source !== undefined)).toBe(true);
   });
 
-  it('temp-root 双模块：新增目录进仓自动进断言面（discoverModules 通用性）', async () => {
+  it('temp-root 里的模块目录不再影响发现面（#284：目录扫描已删）', async () => {
     const root = await mkdtemp(join(tmpdir(), 'unself-disc-'));
-    for (const [name, manifestId] of [['alpha', 'alpha'], ['beta', 'beta']] as const) {
+    for (const name of ['alpha', 'beta'] as const) {
       const dir = join(root, 'modules', name);
       await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, 'manifest.yaml'), `id: ${manifestId}\nroute: /m/${name}\nversion: 0.1.0\n`);
+      await writeFile(join(dir, 'manifest.yaml'), `id: ${name}\nroute: /m/${name}\nversion: 0.1.0\n`);
     }
-    const refs = await discoverModules(root, ['beta']);
-    expect(refs.map((m) => m.id).sort()).toEqual(['alpha', 'beta']);
-    expect(refs.find((m) => m.id === 'beta')!.selected).toBe(true);
-    expect(refs.find((m) => m.id === 'alpha')!.selected).toBe(false);
+    const refs = await discoverModules(root, ['beta'], [{ id: 'beta', source: 'file:./modules/beta' }]);
+    expect(refs.map((m) => m.id)).toEqual(['beta']);
+    expect(refs[0]!.selected).toBe(true);
+    expect(refs[0]!.source).toBe('file:./modules/beta');
     await rm(root, { recursive: true, force: true });
   });
 
-  it('「全停用」现场：registry 对在仓全集逐一 disable（期望由派生集合生成，chat/hello 同语义）', { timeout: 120_000 }, async () => {
-    const all = await discoverIds(ROOT, []);
+  it('「全停用」现场：lock 里记过的模块被逐一 disable（期望由 lock 派生，chat/hello 同语义）', { timeout: 120_000 }, async () => {
+    const preLock = JSON.stringify({
+      lockVersion: 1,
+      generatedAt: '2026-09-19T00:00:00.000Z',
+      modules: {
+        hello: { source: 'npm:@unself/hello@0.1.0', version: '0.1.0', manifestHash: 'a'.repeat(64), contractVersion: '1.0' },
+        chat: { source: 'npm:@unself/chat@0.1.0', version: '0.1.0', manifestHash: 'b'.repeat(64), contractVersion: '1.0' },
+      },
+    });
+    const all = ['chat', 'hello'];
     const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'] });
     await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       configOverride: { domain: '', modules: [], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      preLock,
+      yes: true,
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
     });
@@ -252,7 +279,8 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
     await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -272,7 +300,8 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
     await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -310,7 +339,8 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
     const summary = await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: second.fetchImpl }),
-      configOverride: { domain: '', modules: ['chat'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       buildShell: fakeBuildShell,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),

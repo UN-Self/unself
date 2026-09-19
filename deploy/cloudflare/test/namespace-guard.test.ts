@@ -72,11 +72,11 @@ afterEach(async () => {
 
 describe('#272 配置命名空间（纯函数）', () => {
   it('配了 namespace 且未显式写桶名 → 桶名跟随命名空间；无 namespace → 历史桶名逐字不变', () => {
-    const ns = parseUnselfConfigText('{"namespace":"mysite","modules":["hello"],"storage":{"provider":"r2"}}');
+    const ns = parseUnselfConfigText('{"namespace":"mysite","modules":[{"id":"hello","source":"npm:@unself/hello@0.1.0"}],"storage":{"provider":"r2"}}');
     expect(ns.namespace).toBe('mysite');
     expect(ns.storage).toEqual({ provider: 'r2', bucket: 'mysite-storage' });
 
-    const legacy = parseUnselfConfigText('{"modules":["hello"],"storage":{"provider":"r2"}}');
+    const legacy = parseUnselfConfigText('{"modules":[{"id":"hello","source":"npm:@unself/hello@0.1.0"}],"storage":{"provider":"r2"}}');
     expect(legacy.namespace).toBeUndefined();
     expect(legacy.storage).toEqual({ provider: 'r2', bucket: 'unself-storage' });
   });
@@ -187,10 +187,11 @@ describe('#272 九步真跑（替身账户）', () => {
       rootDir: rootA,
       artifactRoot: artA,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
+      yes: true,
       configOverride: {
         domain: '',
         namespace: 'sitea',
-        modules: ['hello'],
+        modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
         storage: { provider: 'r2', bucket: 'sitea-storage' },
       },
       http: SMOKE_OK,
@@ -201,10 +202,11 @@ describe('#272 九步真跑（替身账户）', () => {
       rootDir: rootB,
       artifactRoot: artB,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
+      yes: true,
       configOverride: {
         domain: '',
         namespace: 'siteb',
-        modules: ['hello'],
+        modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
         storage: { provider: 'r2', bucket: 'siteb-storage' },
       },
       http: SMOKE_OK,
@@ -241,10 +243,11 @@ describe('#272 九步真跑（替身账户）', () => {
       rootDir: rootA,
       artifactRoot: artA,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
+      yes: true,
       configOverride: {
         domain: '',
         namespace: 'sitea',
-        modules: ['hello'],
+        modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
         storage: { provider: 'r2', bucket: 'sitea-storage' },
       },
       http: SMOKE_OK,
@@ -260,10 +263,11 @@ describe('#272 九步真跑（替身账户）', () => {
         rootDir: rootB,
         artifactRoot: artB,
         client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
-        configOverride: {
+        yes: true,
+      configOverride: {
           domain: '',
           namespace: 'sitea',
-          modules: ['hello'],
+          modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
           storage: { provider: 'r2', bucket: 'sitea-storage' },
         },
         http: SMOKE_OK,
@@ -285,10 +289,11 @@ describe('#272 九步真跑（替身账户）', () => {
       rootDir: rootB,
       artifactRoot: artB,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
+      yes: true,
       configOverride: {
         domain: '',
         namespace: 'sitea',
-        modules: ['hello'],
+        modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
         storage: { provider: 'r2', bucket: 'sitea-storage' },
       },
       http: SMOKE_OK,
@@ -305,13 +310,14 @@ describe('#272 九步真跑（替身账户）', () => {
     const cfg = {
       domain: '',
       namespace: 'sited',
-      modules: ['hello'],
+      modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
       storage: { provider: 'r2' as const, bucket: 'sited-storage' },
     };
     await runNineSteps({
       rootDir: root,
       artifactRoot: art,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
+      yes: true,
       configOverride: cfg,
       http: SMOKE_OK,
     });
@@ -342,7 +348,8 @@ describe('#272 九步真跑（替身账户）', () => {
       rootDir: root,
       artifactRoot: art,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       fetchJwks: async () => FIXED_JWKS,
     });
@@ -367,10 +374,11 @@ describe('#272 九步真跑（替身账户）', () => {
       rootDir: root,
       artifactRoot: art,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
+      yes: true,
       configOverride: {
         domain: '',
         namespace: 'sitec',
-        modules: ['hello'],
+        modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
         storage: { provider: 'r2', bucket: 'sitec-storage' },
       },
       http: SMOKE_OK,

@@ -63,7 +63,8 @@ describe('带前缀的九步（隔离探针口径）', () => {
         rootDir,
         artifactRoot: artifacts,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-probe-257-storage' } },
+        yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-probe-257-storage' } },
         http: {
           smoke: async (b: string, mods: Array<{ id: string; baseUrl: string }>) =>
             [{ name: 'core-api', url: `${b}/api/health`, ok: true, status: 200 }].concat(
