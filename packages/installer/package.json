@@ -28,6 +28,7 @@
     "@types/node": "^24",
     "@unself/contracts": "workspace:*",
     "@unself/deploy-cloudflare": "workspace:*",
+    "@unself/sdk": "workspace:*",
     "esbuild": "^0.28.0",
     "tsx": "^4.19.0",
     "typescript": "^5.9.0",

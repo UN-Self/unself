@@ -4,7 +4,7 @@
  *
  * 为什么：安装器要在**没有本仓库**的干净机器上部署实例。引擎原先从 rootDir 读
  * `modules/`（模块源码）、`services/core-api/migrations`（迁移 SQL）、`apps/shell/dist`（壳产物）、
- * `packages/module-sdk/src/index.ts`（SDK 源码）、`services/core-api/src`（core Worker 入口）——
+ * `packages/sdk/dist`（SDK 浏览器资产，由 @unself/sdk 构建——本脚本只复制）、`services/core-api/src`（core Worker 入口）——
  * 干净机器上这些都不存在。本脚本在**安装器构建期**（有仓库、有 pnpm/vite/esbuild）把它们做成产物：
  *
  *   dist/artifacts/
@@ -13,7 +13,7 @@
  *     core/migrations/core/*.sql   core 迁移 SQL
  *     core/migrations/modules/*.sql 平台基建迁移 SQL
  *     shell/…                      apps/shell 的 vite 产物（壳）
- *     sdk/module-sdk{,.esm}.js     浏览器侧 SDK 资产（与 core 同版本）
+ *     sdk/module-sdk{,.esm}.js     浏览器侧 SDK 资产（@unself/sdk dist 的同字节副本，与 core 同版本）
  *     modules/<id>/…               builtin 模块**包**（manifest.json + worker.js + migrations/ + wrangler.jsonc）
  *                                  —— #257 验收③「builtin 与第三方同一条路」
  *     vendor/blake3-wasm/…         资产哈希依赖（wasm 用 fs 相对路径加载，无法进 bundle）
@@ -21,8 +21,8 @@
  * 纪律：
  * - 所有子构建写**隔离 outDir**（dist/.artifacts-work），不碰仓库内 apps/shell/dist 与各模块自己的 dist——
  *   否则与 `pnpm -r build` 里各包自己的构建并发写同一目录（脏产物/半套）。
- * - 模块 worker / SDK / core worker 的 esbuild 参数**复用引擎的导出函数**（bundleModuleWorker /
- *   bundleCoreWorker / buildModuleSdkAssets），不为「打包」另写一套参数（防两处漂移）。
+ * - 模块 worker / core worker 的 esbuild 参数**复用引擎的导出函数**（bundleModuleWorker / bundleCoreWorker）；
+ *   SDK 浏览器资产由 `@unself/sdk` 自己构建（#283 单一真源），本脚本只复制字节，不再二次构建。
  * - 产物构建失败即非 0 退出：宁可不产出 tarball，也不产出半个产物（引擎会带着残产物「看起来能跑」）。
  */
 import { spawn } from 'node:child_process';
@@ -33,8 +33,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   ARTIFACTS_FORMAT_VERSION,
-  buildModuleSdkAssets,
   bundleCoreWorker,
+  copySdkAssets,
   coreWorkerEntrySource,
   modulePackageFiles,
 } from '@unself/deploy-cloudflare';
@@ -105,9 +105,10 @@ async function main(): Promise<void> {
   await cp(shellOut, join(ARTS_DIR, 'shell'), { recursive: true });
   console.log('  ✓ shell/**（apps/shell 的 vite 产物）');
 
-  // ---- 4. 浏览器侧 SDK 资产（与 core 同版本，随安装器注入）----
-  await buildModuleSdkAssets(join(REPO_ROOT, 'packages/module-sdk/src/index.ts'), join(ARTS_DIR, 'sdk'));
-  console.log('  ✓ sdk/module-sdk.js + sdk/module-sdk.esm.js');
+  // ---- 4. 浏览器侧 SDK 资产（#283 单一真源：@unself/sdk 构建并随包发布，这里只复制字节）----
+  // 同字节约束（A5）：装配注入模块资产的那一份 = packages/sdk/dist 里的这一份。
+  await copySdkAssets(join(REPO_ROOT, 'packages/sdk/dist'), join(ARTS_DIR, 'sdk'));
+  console.log('  ✓ sdk/module-sdk.js + sdk/module-sdk.esm.js（自 @unself/sdk dist 复制）');
 
   // ---- 5. builtin 模块包（与第三方打包同一条路，#257 验收③：modulePackageFiles 产出 manifest.json + worker.js + …）----
   for (const id of BUILTIN_MODULES) {
