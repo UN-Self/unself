@@ -68,9 +68,17 @@ jobs:
         run: npm pkg set version="${{ steps.rel.outputs.version }}"
         working-directory: ${{ steps.rel.outputs.dir }}
 
+      # npm publish **不改写** workspace: 协议（pnpm publish 才会），原样发布会让消费者装不上
+      # （Unsupported URL Type "workspace:"）→ 发布前先改写为真实版本号。
+      - name: 改写 workspace: 协议依赖
+        if: steps.rel.outputs.kind == 'workspace'
+        run: node scripts/release/pin-workspace-deps.mjs "${{ steps.rel.outputs.dir }}"
+
+      # `--ignore-scripts`：pin 改写了 package.json → 本包的 prepack（`pnpm run build`）会因
+      # lockfile 与 package.json 不一致而失败；产物已在上面 `pnpm -r build` 步骤构建完毕。
       - name: 发布（workspace 包）
         if: steps.rel.outputs.kind == 'workspace'
-        run: npm publish --access public
+        run: npm publish --access public --ignore-scripts
         working-directory: ${{ steps.rel.outputs.dir }}
 
       # E3：模块包——版本同时要进 packed 的 manifest.json，由打包器负责（#285）
