@@ -13,7 +13,7 @@
  */
 import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';
-import { cp, mkdir, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -78,6 +78,21 @@ async function main() {
   });
   if (res.status !== 0) {
     throw new Error(`tsc 声明构建失败（退出码 ${res.status}）`);
+  }
+
+  // 3.5 发布面不变量（决策 #78 ① / issue #283 A1+A4）：产物里**不得**残留对 `@unself/contracts`
+  // 的模块引用——第三方只需装 `@unself/sdk` 一个包，契约内容必须已内联（类型侧由 contract-types.ts 保证）。
+  // 放在构建里当硬闸：一旦有人把契约包标成 external，构建当场失败，而不是等发版后第三方装不上。
+  const CONTRACTS_IMPORT = /(?:from|import|require\()\s*['"]@unself\/contracts(?:\/[^'"]*)?['"]/;
+  const emitted = (await readdir(DIST)).filter((f) => /\.(?:js|d\.ts|ts)$/.test(f));
+  for (const rel of emitted) {
+    const text = await readFile(join(DIST, rel), 'utf8');
+    if (CONTRACTS_IMPORT.test(text)) {
+      throw new Error(
+        `产物 ${rel} 残留对 @unself/contracts 的引用（应已内联）：第三方只需装 @unself/sdk 一个包；` +
+          `请检查 esbuild external 与 contract-types.ts 是否漏了导出`,
+      );
+    }
   }
 
   // 4. 许可证随包（AGPL 交付要求；dist 内随 files 发布）。
