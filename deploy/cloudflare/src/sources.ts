@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 模块来源解析与包获取（docs/modules.md §1/§8，决策 #58/#60，issue #245）。
+ * 模块来源解析与包获取（docs/modules.md §1/§8，决策 #58/#60/#77，issue #245/#284）。
  *
- * 五协议：official: / npm:（含私有 registry，走 npm 配置）/ github:（release 产物）/
- * https:（任意 tarball URL）/ file:（唯一允许本地源码）。
+ * 四协议（决策 #77 删除 official 协议）：`npm:`（含私有 registry，走 npm 配置）/ `github:`
+ * （release 产物）/ `https:`（任意 tarball URL）/ `file:`（唯一允许本地源码）。
+ * **官方模块就是普通 npm 包**（`npm:@unself/hello@0.1.0`），没有特权来源通道。
+ *
+ * **`npm:` 解析语义（决策 #77 A 方案）**：先查本地 `node_modules`——有该包且版本匹配就直接用
+ * （**零网络**，安装器 `dependencies` 精确预装官方模块即靠这条），缺了才去 registry 取。
+ * 本地命中只会出现在 `<baseDir>/node_modules/<pkg>`（含 pnpm workspace 符号链接）：
+ * zip 形态（包根 `manifest.json`）按包用；源码形态（包根 `manifest.yaml`）按本地目录用
+ * （= `file:` 同等待遇：允许本地构建，决策 #58）。
  *
  * **显式 loopback http 规则（issue #269 / 决策 #58 信任边界）**：`http://` 仅当 hostname ∈
  * {localhost, 127.0.0.1, ::1} 时接受（仍须指向 .tgz/.tar.gz；返回 kind 复用 'https'，下游按 URL
@@ -12,7 +19,7 @@
  *
  * **信任边界（硬）**：远端来源一律要求已打包——直接取 tarball 解包，**不走 `npm install`、
  * 不执行包内任何脚本**（postinstall 没有执行机会：解包只认 tar 字节，不读 package.json scripts）。
- * 仅 `file:` 允许本地源码 + 本地构建；`official:` 当前从仓库 modules/ 目录取（与 builtin 同源）。
+ * 仅 `file:`（与本地 `node_modules` 源码形态）允许本地源码 + 本地构建。
  *
  * npm 元数据走 `npm view` 子进程（继承部署者 .npmrc：私有 registry / authToken / 代理；
  * 决策 #65 精神：不内置 registry API 客户端）；tarball 下载用全局 fetch + 手写 tar 解包（零依赖）。
@@ -20,8 +27,9 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, resolve as resolvePath } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { createGunzip } from 'node:zlib';
@@ -29,7 +37,7 @@ import { writeEntriesSafe } from './tar-write';
 
 /** 来源解析结果。 */
 export interface ParsedSource {
-  kind: 'official' | 'npm' | 'github' | 'https' | 'file';
+  kind: 'npm' | 'github' | 'https' | 'file';
   /** npm 包名（含 scope），如 @acme/unself-todo。 */
   pkg?: string;
   /** npm 版本/范围（缺省 latest）。 */
@@ -41,19 +49,10 @@ export interface ParsedSource {
   url?: string;
   /** file: 路径（相对实例根或绝对）。 */
   path?: string;
-  /** official: 官方源包名。 */
-  name?: string;
 }
 
 /** 解析来源字符串 → 结构（非法来源人话报错）。 */
 export function parseSource(source: string): ParsedSource {
-  if (source.startsWith('official:')) {
-    const name = source.slice('official:'.length);
-    if (!/^[a-z][a-z0-9-]*$/.test(name)) {
-      throw new Error(`official 来源包名非法：${source}（形如 official:hello）`);
-    }
-    return { kind: 'official', name };
-  }
   if (source.startsWith('npm:')) {
     const rest = source.slice('npm:'.length);
     const m = /^(@[^/\s]+\/[a-zA-Z0-9._-]+|[a-z][a-z0-9._-]*)(@(.+))?$/.exec(rest);
@@ -102,8 +101,190 @@ export function parseSource(source: string): ParsedSource {
     return { kind: 'file', path: p };
   }
   throw new Error(
-    `无法识别的模块来源：${source}（支持 official:/npm:/github:/https:（.tgz）/file:；http: 仅限 loopback 本地取包，见 docs/modules.md §1）`,
+    `无法识别的模块来源：${source}（支持 npm:/github:/https:（.tgz）/file:；http: 仅限 loopback 本地取包，见 docs/modules.md §1）`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// npm 本地优先解析（决策 #77 A 方案：本地 node_modules 有且版本匹配 → 零网络）
+// ---------------------------------------------------------------------------
+
+/** 版本段（严格 semver x.y.z；本仓模块版本全为该形态）。 */
+export interface SemverParts {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+/** 解析 `x` / `x.y` / `x.y.z`（缺段补 0）；非法返回 null。 */
+function parseLooseVersion(text: string): SemverParts | null {
+  const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.exec(text.trim());
+  if (!m) return null;
+  return { major: Number(m[1]), minor: Number(m[2] ?? 0), patch: Number(m[3] ?? 0) };
+}
+
+/** a <=> b（-1/0/1）。 */
+function compareVersions(a: SemverParts, b: SemverParts): number {
+  for (const key of ['major', 'minor', 'patch'] as const) {
+    if (a[key] !== b[key]) return a[key] < b[key] ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * 极简版本范围判定（本地命中用；**不是**完整 semver 实现）：
+ * 支持 `*` / 省略 / `x`，精确 `1.2.3`（`=` 同义），`^`，`~`，`>=` `>` `<=` `<`，
+ * 空格分隔的多条件（AND），`||` 分隔的并集（OR）。
+ * 不支持 prerelease 区间/区间交集写法（如 `1.2.3 - 2.0.0`）——范围写复杂就走 registry（npm 会正确解析）。
+ * 判定不了的范围返回 false（保守：宁走 registry 也不猜）。
+ */
+export function satisfiesVersionRange(version: string, range: string): boolean {
+  const actual = parseLooseVersion(version);
+  if (!actual) return false;
+  const alternatives = range.split('||').map((s) => s.trim()).filter((s) => s.length > 0);
+  if (alternatives.length === 0) return true; // 空范围 = 无约束
+  return alternatives.some((alt) => {
+    const tokens = alt.split(/\s+/).filter((s) => s.length > 0);
+    if (tokens.length === 0) return false;
+    return tokens.every((token) => satisfiesComparator(actual, token));
+  });
+}
+
+function satisfiesComparator(actual: SemverParts, token: string): boolean {
+  if (token === '*' || token === 'x' || token === 'X') return true;
+  const m = /^(\^|~|>=|<=|>|<|=)?\s*(.+)$/.exec(token);
+  if (!m) return false;
+  const op = m[1] ?? '=';
+  const bound = parseLooseVersion(m[2]!);
+  if (!bound) return false;
+  const cmp = compareVersions(actual, bound);
+  switch (op) {
+    case '=':
+      return cmp === 0;
+    case '>':
+      return cmp > 0;
+    case '>=':
+      return cmp >= 0;
+    case '<':
+      return cmp < 0;
+    case '<=':
+      return cmp <= 0;
+    case '^': {
+      // ^1.2.3 → >=1.2.3 <2.0.0；^0.2.3 → >=0.2.3 <0.3.0（首段为 0 时收窄到次段）
+      if (cmp < 0) return false;
+      const upper: SemverParts = bound.major > 0
+        ? { major: bound.major + 1, minor: 0, patch: 0 }
+        : bound.minor > 0
+          ? { major: 0, minor: bound.minor + 1, patch: 0 }
+          : { major: 0, minor: 0, patch: bound.patch + 1 };
+      return compareVersions(actual, upper) < 0;
+    }
+    case '~': {
+      // ~1.2.3 → >=1.2.3 <1.3.0
+      if (cmp < 0) return false;
+      const upper: SemverParts = { major: bound.major, minor: bound.minor + 1, patch: 0 };
+      return compareVersions(actual, upper) < 0;
+    }
+    default:
+      return false;
+  }
+}
+
+/** 引擎自身所在目录（本地包解析的兜底基准：仓库开发形态 = deploy/cloudflare/src；产物形态 = dist/）。 */
+function engineModuleDir(): string {
+  return fileURLToPath(new URL('.', import.meta.url));
+}
+
+/** 本地 npm 包命中结果。 */
+export interface LocalNpmPackage {
+  /** 包目录（node_modules 里的路径；pnpm workspace 形态即指向源码目录的符号链接）。 */
+  dir: string;
+  /** 本地 package.json 的 version。 */
+  version: string;
+  /** 包形态：packed = 包根 manifest.json（npm 发布形态）；source = 包根 manifest.yaml（仓库源码形态）。 */
+  form: 'packed' | 'source';
+}
+
+/**
+ * 从基准目录集合向上逐级找 `<ancestor>/node_modules/<pkg>`（Node 解析算法的核心部分，零依赖）。
+ * 不做 `require.resolve`：pnpm workspace 的符号链接包普遍带 `exports` 白名单，`exports` 会挡住
+ * `<pkg>/package.json` 子路径解析；按目录找包不受 exports 影响。
+ * 找到的多份里以 **baseDirs 顺序**为准（先 rootDir，再引擎目录，最后 cwd）。
+ */
+export function findLocalPackageDir(input: { pkg: string; baseDirs: string[] }): string | null {
+  const seen = new Set<string>();
+  for (const base of input.baseDirs) {
+    let dir = resolvePath(base);
+    for (;;) {
+      const candidate = join(dir, 'node_modules', input.pkg);
+      if (!seen.has(candidate)) {
+        seen.add(candidate);
+        const pkgJson = join(candidate, 'package.json');
+        if (existsSync(pkgJson)) {
+          try {
+            const parsed = JSON.parse(readFileSync(pkgJson, 'utf8')) as { name?: string };
+            // 防同名错包（node_modules 里可能有别的 scope 目录）
+            if (parsed.name === input.pkg) return candidate;
+          } catch {
+            // package.json 非法 → 视同未命中（真坏包由后续 manifest 解析报人话错）
+          }
+        }
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return null;
+}
+
+/**
+ * 本地 npm 包目录解析（不含 manifest/版本判定）：`rootDir` → 引擎目录 → cwd 向上找 node_modules。
+ * SDK 等平台包的本地解析也走这里（单一实现，防两处漂移）。
+ */
+export function localPackageDir(input: { pkg: string; rootDir: string }): string | null {
+  const baseDirs = [input.rootDir, engineModuleDir(), process.cwd()].filter((d) => d.length > 0);
+  return findLocalPackageDir({ pkg: input.pkg, baseDirs });
+}
+
+/**
+ * 本地优先解析 `npm:` 来源（决策 #77 A 方案）：
+ * - 本地 `node_modules/<pkg>` 存在且**版本匹配**（未指定版本 = 任意本地版本算匹配）→ 返回命中；
+ * - 否则返回 null（调用方走 registry，不静默降级）。
+ *
+ * 基准目录：`rootDir`（实例目录）→ 引擎自身目录 → `process.cwd()`。
+ * 产物形态下引擎就在安装器包内，故引擎自身目录即安装器的 node_modules —— 官方模块「随安装器预装、离线可用」靠这条。
+ */
+export function resolveLocalNpmPackage(input: {
+  pkg: string;
+  version?: string;
+  rootDir: string;
+  log?: (msg: string) => void;
+}): LocalNpmPackage | null {
+  const baseDirs = [input.rootDir, engineModuleDir(), process.cwd()].filter((d) => d.length > 0);
+  const dir = findLocalPackageDir({ pkg: input.pkg, baseDirs });
+  if (!dir) {
+    input.log?.(`npm: 本地未命中 ${input.pkg}（${baseDirs.join(' / ')} 向上都没有该包）→ 走 registry`);
+    return null;
+  }
+  let version = '';
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version?: string };
+    version = parsed.version ?? '';
+  } catch {
+    version = '';
+  }
+  if (!version) {
+    input.log?.(`npm: 本地命中 ${dir} 但 package.json 无 version → 走 registry`);
+    return null;
+  }
+  if (input.version !== undefined && !satisfiesVersionRange(version, input.version)) {
+    input.log?.(`npm: 本地命中 ${dir}（v${version}）但版本不满足「${input.version}」→ 走 registry`);
+    return null;
+  }
+  const form: LocalNpmPackage['form'] = existsSync(join(dir, 'manifest.json')) ? 'packed' : 'source';
+  input.log?.(`npm: 本地命中 ${input.pkg}@${version}（${dir}，${form} 形态）→ 零网络`);
+  return { dir, version, form };
 }
 
 /** 子进程跑 CLI 取 stdout（shell=false 参数数组；stderr 尾部随错误抛出）。 */

@@ -25,11 +25,11 @@ import type { NormalizedModuleEntry } from './config';
 
 /** 单模块锁条目。 */
 export const LockEntrySchema = z.object({
-  /** 全局唯一身份 = 包名/来源（决策 #59）；builtin 记 "builtin:<id>"。 */
+  /** 全局唯一身份 = 包名/来源（决策 #59）；官方模块也记 npm 串（#77，如 npm:@unself/hello@0.1.0）。 */
   source: z.string().min(1),
   /** 解析出的确切版本（semver x.y.z）。 */
   version: z.string().regex(/^\d+\.\d+\.\d+$/),
-  /** 包字节 SRI（sha512-<base64>）；builtin 源码目录无 tarball → 缺省。 */
+  /** 包字节 SRI（sha512-<base64>）；本地目录形态（npm 本地命中 / file:）无 tarball → 缺省。 */
   integrity: z.string().regex(/^sha512-[A-Za-z0-9+/]+={0,2}$/).optional(),
   /** manifest 规范化 JSON 的 sha256-hex（manifest 变了 = 内容变了，即使版本没变）。 */
   manifestHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -135,14 +135,6 @@ export interface LockPlan {
 }
 
 /**
- * builtin 来源的合成 source（决策 #60：builtin 也进 lock）。
- * 用 builtin: 协议名，与仓库内置模块目录一一对应。
- */
-export function builtinSource(id: string): string {
-  return `builtin:${id}`;
-}
-
-/**
  * config × lock → 安装计划（纯函数）。
  *
  * 「changed」的定义：source 协议体变了，或 config 显式要求重装。
@@ -158,7 +150,7 @@ export function buildLockPlan(input: {
   const removed: LockPlanItem[] = [];
   const configIds = new Set(input.entries.map((e) => e.id));
   for (const entry of input.entries) {
-    const effectiveSource = entry.source ?? builtinSource(entry.id);
+    const effectiveSource = entry.source;
     const prev = input.lock.modules[entry.id];
     if (!prev) {
       const item: LockPlanItem = { id: entry.id, action: 'added', source: effectiveSource };
