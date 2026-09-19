@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { basename, dirname, join, resolve } from 'node:path';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { defaultModuleEntries } from './official-modules';
 
 /**
  * 实例目录布局（决策 #53）：
@@ -45,8 +46,9 @@ const CONFIG_TEMPLATE = `// SPDX-License-Identifier: AGPL-3.0-only
   // 资源命名空间（#272）：CF 资源名前缀（<namespace>-core / <namespace>-core-api / <namespace>-storage）。
   // 同一 CF 账户多实例靠它隔离；改动会让已部署资源变成孤儿（需显式 --allow-adopt 接管）。
   "namespace": "__NAMESPACE__",
-  // 选中启用的模块（未列出的已存在模块注册表翻转 not_deployed）
-  "modules": ["hello"],
+  // 选中启用的模块（官方模块与第三方一样写 npm 串；决策 #77：没有 official 特权来源）
+  // 官方模块由安装器 dependencies 精确预装 → 解析时本地命中，部署零网络；未列出的已存在模块注册表翻转 not_deployed
+  "modules": __MODULES__,
   // 对象存储：r2（脚本建桶）或 s3（外部 S3/MinIO 参数）
   "storage": { "provider": "r2" }
 }
@@ -71,8 +73,8 @@ function lockSkeleton(): string {
 }
 
 export interface CreateInstanceDirOptions {
-  /** 写入默认配置的启用模块列表，默认 ["hello"] */
-  modules?: string[];
+  /** 写入配置的启用模块条目（`{id, source}`）；缺省 = 官方模块的 npm 串（决策 #77）。 */
+  modules?: Array<{ id: string; source: string }>;
   /**
    * 资源命名空间（#272）：写入 unself.config.jsonc 的 `namespace` 字段。
    * 缺省 = 从实例目录名派生（`mysite` → `mysite`；非法字符转 `-`）。
@@ -124,12 +126,12 @@ export function createInstanceDir(
 
   const configCreated = !existsSync(layout.configPath);
   if (configCreated) {
-    const modules = opts.modules ?? ['hello'];
+    const modules = opts.modules ?? defaultModuleEntries();
     const body = CONFIG_TEMPLATE
       .replace('"__NAMESPACE__"', `"${namespace}"`)
       .replace(
-        '"modules": ["hello"]',
-        `"modules": [${modules.map((m) => `"${m}"`).join(', ')}]`,
+        '"modules": __MODULES__',
+        `"modules": [${modules.map((m) => `{ "id": "${m.id}", "source": "${m.source}" }`).join(', ')}]`,
       );
     writeFileSync(layout.configPath, body);
   }

@@ -51,8 +51,8 @@ export interface WizardDeps {
    */
   deploy: (input: {
     domain: string;
-    /** 模块条目（#269）：字符串 = builtin；对象 = 带来源（official:/npm:/github:/https:/file:）。 */
-    modules: Array<string | { id: string; source?: string }>;
+    /** 模块条目（#269/#77）：一律对象形态（官方模块写 npm 串；已无 builtin 裸字符串）。 */
+    modules: Array<{ id: string; source: string }>;
     /** ③½ 用户存储选择（#55）：模块 id → 四级之一；缺省模块 = preferred ?? core。 */
     storageChoices?: Record<string, string>;
     storage: { provider: 'r2'; bucket: string };
@@ -305,7 +305,8 @@ ${banner}
   <h2>③ 启用模块</h2>
   <form id="form-modules"><label>逗号分隔 <input type="text" name="modules" value="${state.modules.join(',')}"></label>
   <button type="submit">下一步</button> <span class="err" id="err-modules"></span></form>
-  <form id="form-module-add"><label>添加模块（安装串：official:hello / npm:@acme/pkg@1.2.0 / github:acme/pkg#v1.0.0 / https://…/x.tgz / file:./modules/x）
+  <p class="hint">可填的 id：官方模块（hello / chat，安装器已预装 → 部署零网络）或用下方「添加模块」加过的来源模块。</p>
+  <form id="form-module-add"><label>添加模块（安装串：npm:@unself/hello@0.1.0 / npm:@acme/pkg@1.2.0 / github:acme/pkg#v1.0.0 / https://…/x.tgz / file:./modules/x）
   <input type="text" name="source" placeholder="npm:@acme/unself-todo@1.2.0"></label>
   <button type="submit">添加模块</button> <span class="err" id="err-module-add"></span></form>
 </section>
@@ -517,7 +518,7 @@ export function createWizardServer(opts: ServeOptions): Server {
           const body = await readJsonBody(req);
           const source = String(body.source ?? '').trim();
           if (!source) {
-            json(res, 400, { problem: '安装串为空：形如 npm:@acme/unself-todo@1.2.0 / official:hello / file:./modules/x' });
+            json(res, 400, { problem: '安装串为空：形如 npm:@unself/hello@0.1.0 / npm:@acme/unself-todo@1.2.0 / file:./modules/x' });
             return;
           }
           let preview: WizardModuleAdd;

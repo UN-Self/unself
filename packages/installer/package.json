@@ -10,7 +10,7 @@
   },
   "type": "module",
   "bin": {
-    "unself": "./dist/unself.mjs"
+    "unself": "dist/unself.mjs"
   },
   "files": [
     "dist"
@@ -30,14 +30,17 @@
     "prepack": "pnpm run build"
   },
   "unself": {
-    "note": "#257：引擎（@unself/deploy-cloudflare）与其运行期依赖全部 bundle 进 dist/unself.mjs；core/shell/SDK/builtin 模块包预构建进 dist/artifacts/**。安装器 tarball 因此零运行期依赖：干净机器只装 Node 即可部署。workspace 包仅作构建期 devDependency。"
+    "note": "#257/#284：引擎（@unself/deploy-cloudflare）与其运行期依赖全部 bundle 进 dist/unself.mjs；平台产物（core Worker/shell/迁移 SQL/vendor）预构建内嵌进 dist/artifacts/**。官方模块包 @unself/hello、@unself/chat 连同 @unself/sdk 是安装器的**运行期依赖**（仓库内 workspace:*，发布时由 pnpm 改写为版本号）：干净机器装 Node + 本 tarball，npm 一并拉取三个官方包即可部署。"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@unself/hello": "workspace:*",
+    "@unself/chat": "workspace:*",
+    "@unself/sdk": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^24",
     "@unself/contracts": "workspace:*",
     "@unself/deploy-cloudflare": "workspace:*",
-    "@unself/sdk": "workspace:*",
     "esbuild": "^0.28.0",
     "tsx": "^4.19.0",
     "typescript": "^5.9.0",
