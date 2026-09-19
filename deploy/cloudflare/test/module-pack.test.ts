@@ -56,13 +56,14 @@ describe('packModuleDir（modules/hello 真实模块）', () => {
     ({ tarballPath } = await packModuleDir({ dir: join(REPO_ROOT, 'modules', 'hello'), outDir }));
   });
 
-  it('解包往返：extractTarball 成功，包根集合恰为 manifest.json/worker.js/wrangler.jsonc/LICENSE/NOTICE', async () => {
+  it('解包往返：extractTarball 成功，包根集合恰为 manifest.json/package.json/worker.js/wrangler.jsonc/LICENSE/NOTICE', async () => {
     const dest = join(work, 'unpacked-hello');
     const result = await extractTarball({ tarPath: tarballPath, dest });
     expect(result.files.sort()).toEqual([
       'LICENSE',
       'NOTICE',
       'manifest.json',
+      'package.json',
       'worker.js',
       'wrangler.jsonc',
     ]);
@@ -133,7 +134,7 @@ describe('白名单收录/排除（临时最小模块目录）', () => {
     for (const bad of ['src/index.ts', 'node_modules/x.js', '.env', 'test/x.ts', 'shared/x.ts']) {
       expect(names).not.toContain(bad);
     }
-    expect(names).toEqual(['manifest.json']);
+    expect(names).toEqual(['manifest.json', 'package.json']);
   });
 });
 
@@ -160,7 +161,7 @@ describe('递归目录收录（migrations/、docker/）', () => {
   it('migrations/<id>/0001_x.sql 与 docker/Dockerfile 被收录且路径正确', () => {
     // 夹具在仓库 node_modules 内 → 回溯到根 LICENSE/NOTICE 一并收录
     expect(files.map((f) => f.name).sort()).toEqual(
-      ['LICENSE', 'NOTICE', 'docker/Dockerfile', 'manifest.json', 'migrations/abc123/0001_init.sql'],
+      ['LICENSE', 'NOTICE', 'docker/Dockerfile', 'manifest.json', 'migrations/abc123/0001_init.sql', 'package.json'],
     );
     expect(files.find((f) => f.name === 'migrations/abc123/0001_init.sql')?.data.toString()).toBe('CREATE TABLE t(id);\n');
     expect(files.find((f) => f.name === 'docker/Dockerfile')?.data.toString()).toBe('FROM scratch\n');
@@ -205,6 +206,59 @@ describe('worker 运行时 + 错误路径', () => {
     await makeModule(deep, MINI_MANIFEST);
     const result = await modulePackageFiles({ dir: deep, log: (msg) => void msg });
     expect(result.files.find((f) => f.name === 'LICENSE')).toBeUndefined();
+  });
+});
+
+describe('#285 生成的 package.json（npm 发布形态）', () => {
+  const helloDir = () => join(REPO_ROOT, 'modules', 'hello');
+  const readPkg = (files: Array<{ name: string; data: Buffer }>): { name: string; version: string; files: string[]; license: string } =>
+    JSON.parse(files.find((f) => f.name === 'package.json')!.data.toString('utf8')) as {
+      name: string;
+      version: string;
+      files: string[];
+      license: string;
+    };
+
+  it('字段齐 name/version/files/license，且 version 与 manifest.json 一致', async () => {
+    const { files } = await modulePackageFiles({ dir: helloDir() });
+    const pkg = readPkg(files);
+    const manifest = JSON.parse(files.find((f) => f.name === 'manifest.json')!.data.toString('utf8')) as {
+      id: string;
+      version: string;
+    };
+    expect(pkg.name).toBe(manifest.id);
+    expect(pkg.version).toBe(manifest.version); // C3：两处 version 同源
+    expect(pkg.license).toBe('AGPL-3.0-only');
+    // files 清单必须覆盖包根全部文件（目录形态 npm pack/npm publish 的收录面）
+    expect([...pkg.files].sort()).toEqual(files.map((f) => f.name).sort());
+  });
+
+  it('--name 覆盖 npm 包名（作者 scope）', async () => {
+    const { files } = await modulePackageFiles({ dir: helloDir(), npmName: '@acme/unself-hello' });
+    expect(readPkg(files).name).toBe('@acme/unself-hello');
+  });
+
+  it('--version 同时写进 packed manifest.json 与生成的 package.json（C8）', async () => {
+    const out = join(work, 'out-version');
+    const r = await packModuleDir({ dir: helloDir(), outDir: out, version: '9.9.9' });
+    expect(r.tarballPath.endsWith('hello-9.9.9.tgz')).toBe(true);
+    const dest = join(work, 'unpacked-version');
+    await extractTarball({ tarPath: r.tarballPath, dest });
+    const manifest = JSON.parse(await readFile(join(dest, 'package', 'manifest.json'), 'utf8')) as { version: string };
+    const pkg = JSON.parse(await readFile(join(dest, 'package', 'package.json'), 'utf8')) as { version: string };
+    expect(manifest.version).toBe('9.9.9');
+    expect(pkg.version).toBe('9.9.9');
+  });
+
+  it('不传 --version：沿用 manifest 里的版本（C8 行为不变）', async () => {
+    const r = await packModuleDir({ dir: helloDir(), outDir: join(work, 'out-noversion') });
+    expect(r.tarballPath.endsWith('hello-0.1.0.tgz')).toBe(true);
+    expect(r.manifest.version).toBe('0.1.0');
+  });
+
+  it('非法 --version / --name 人话报错', async () => {
+    await expect(modulePackageFiles({ dir: helloDir(), version: 'v1' })).rejects.toThrow(/--version 非法/);
+    await expect(modulePackageFiles({ dir: helloDir(), npmName: 'Bad Name' })).rejects.toThrow(/npm 包名非法/);
   });
 });
 

@@ -15,9 +15,14 @@
  * 入选文件（包根相对路径）：
  * - `manifest.json`（必需；源码形态由 manifest.yaml 单轨解析后序列化）
  * - `worker.js`（`runtimes ∋ worker`；源码形态走 esbuild bundle，已打包形态原样收录）
+ * - `package.json`（**生成**，非收录作者源码目录里那份；issue #285 / 决策 #78：
+ *   npm 只认「npm 布局」的 tarball——根目录 `package/package.json` 是 `npm publish` 的硬要求，
+ *   字段 name/version/files/license 由打包器从 manifest 派生，`version` 恒与 manifest.json 一致）
  * - `wrangler.jsonc` / `migrations/**` / `assets/**` / `config.schema` / `theme.json` / `docker/**`
  * - `LICENSE` / `NOTICE`（存在即随包；docs/modules.md §2）
- * 排除：`node_modules/`、`.env*`、`test/`、`src/`、`tsconfig.json`、`package.json`、`.git/`（docs/modules.md §2 禁令）。
+ * 排除：`node_modules/`、`.env*`、`test/`、`src/`、`tsconfig.json`、作者源码目录里的 `package.json`、`.git/`（docs/modules.md §2 禁令）。
+ *
+ * **npm 布局**：tarball 成员一律加 `package/` 前缀（`extractTarball` 全量剥前缀后即包根）。
  */
 import { readFile, readdir, rm } from 'node:fs/promises';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
@@ -42,7 +47,27 @@ export interface ModulePackageInput {
   dir: string;
   /** 打包进度人话输出（缺省静默）。 */
   log?: (msg: string) => void;
+  /** 生成的 `package.json` 的 npm 包名（缺省 = `manifest.id`；issue #285 C2，作者可用 `--name @scope/pkg` 覆盖）。 */
+  npmName?: string;
+  /**
+   * 版本覆盖（`unself module pack --version x.y.z`，tag 即版本）：
+   * **同时**写进 packed 的 `manifest.json` 与生成的 `package.json`（issue #285 C8）；缺省沿用 manifest 里的版本。
+   */
+  version?: string;
 }
+
+/** semver（与 manifest.version 同规：严格 x.y.z）。 */
+const SEMVER_RE = /^\d+\.\d+\.\d+$/;
+
+/** npm 包名（含可选 scope；小写，不校验 registry 保留名）。 */
+const NPM_NAME_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * 生成 `package.json` 的 license 字段。
+ * manifest 契约（docs/modules.md §3）没有 license 字段，源目录也可能没有 package.json——
+ * 平台默认取自身交付许可（AGPL-3.0-only）。第三方模块如需别的 SPDX，需先有契约字段（docs 偏差已进报告）。
+ */
+const DEFAULT_PACKAGE_LICENSE = 'AGPL-3.0-only';
 
 /** 递归收录目录下所有文件（保持包根相对 posix 路径）。 */
 async function collectTree(rootDir: string, relBase: string, out: Map<string, Buffer>): Promise<void> {
@@ -106,6 +131,16 @@ export async function modulePackageFiles(
     files.set('manifest.json', Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8'));
   }
 
+  // 版本覆盖（C8）：先落到 manifest，后续 packed manifest.json / package.json / tarball 文件名全部随之
+  if (input.version !== undefined) {
+    if (!SEMVER_RE.test(input.version)) {
+      throw new Error(`--version 非法：${input.version}（须形如 1.2.3，与 manifest.version 同规）`);
+    }
+    manifest = { ...manifest, version: input.version };
+    // manifest.json 已按旧版本写入 files：覆盖后必须重序列化，保证 packed manifest 与 package.json 同版本
+    files.set('manifest.json', Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8'));
+  }
+
   // worker.js：runtimes ∋ worker 才产出；已打包形态原样收录，源码形态复用引擎的 esbuild 打包
   if (manifest.runtimes.includes('worker')) {
     if (existsSync(join(dir, 'worker.js'))) {
@@ -144,6 +179,22 @@ export async function modulePackageFiles(
     files.set('LICENSE', await readFile(join(dir, 'LICENSE')));
     if (existsSync(join(dir, 'NOTICE'))) files.set('NOTICE', await readFile(join(dir, 'NOTICE')));
   }
+
+  // 生成 package.json（C2）：npm 布局下 `npm publish` 的硬要求（缺它报 ENOENT package.json）。
+  // name 缺省 = manifest.id，可用 --name 覆盖；version 恒与 manifest.json 一致（C3）；
+  // files 列出包根全部文件——从目录 `npm pack`/`npm publish` 时它决定收录面，必须完整。
+  const npmName = input.npmName ?? manifest.id;
+  if (!NPM_NAME_RE.test(npmName)) {
+    throw new Error(`npm 包名非法：${npmName}（须小写，可带 @scope/，如 @acme/unself-todo）`);
+  }
+  const rootNames = [...files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const packageJson = {
+    name: npmName,
+    version: manifest.version,
+    files: [...rootNames, 'package.json'].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    license: DEFAULT_PACKAGE_LICENSE,
+  };
+  files.set('package.json', Buffer.from(`${JSON.stringify(packageJson, null, 2)}\n`, 'utf8'));
 
   // 打包确定性：按包根相对路径排序输出（Map 插入序不参与输出序）
   const sorted = [...files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
