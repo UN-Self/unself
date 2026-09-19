@@ -17,8 +17,8 @@ import { pathToFileURL } from 'node:url';
 export const RELEASE_TARGETS = {
   sdk: { package: '@unself/sdk', kind: 'workspace', dir: 'packages/sdk' },
   installer: { package: '@unself/installer', kind: 'workspace', dir: 'packages/installer' },
-  hello: { package: '@unself/hello', kind: 'module', id: 'hello', dir: 'packages/installer/dist/artifacts/modules/hello' },
-  chat: { package: '@unself/chat', kind: 'module', id: 'chat', dir: 'packages/installer/dist/artifacts/modules/chat' },
+  hello: { package: '@unself/hello', kind: 'module', id: 'hello', dir: 'modules/hello' },
+  chat: { package: '@unself/chat', kind: 'module', id: 'chat', dir: 'modules/chat' },
 };
 
 /** 严格 semver（允许预发布段与构建元数据）。 */

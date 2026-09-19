@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "VITE_CHAT_API=live vite build",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run"
   },
