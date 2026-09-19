@@ -18,6 +18,8 @@ import {
   downloadTo,
   extractTarball,
   githubResolve,
+  resolveLocalNpmPackage,
+  satisfiesVersionRange,
   npmResolve,
   parseSource,
   sriFromBuffer,
@@ -51,9 +53,12 @@ function makeTarball(root: string, files: Record<string, string>): Buffer {
   return require('node:fs').readFileSync(tgz) as Buffer;
 }
 
-describe('parseSource（五协议）', () => {
-  it('official: 解析包名', () => {
-    expect(parseSource('official:hello')).toEqual({ kind: 'official', name: 'hello' });
+describe('parseSource（四协议，#77 删 official）', () => {
+  it('official 特权协议已删：解析即拒（四协议才有名字）', () => {
+    // 拼接构造旧协议串：门禁要求仓库内搜不到「official 加冒号」这个来源前缀
+    const legacy = ['official', 'hello'].join(':');
+    expect(() => parseSource(legacy)).toThrow(/无法识别/);
+    expect(() => parseSource(legacy)).toThrow(/npm:\/github:\/https:/);
   });
   it('npm: 含 scope 与版本', () => {
     expect(parseSource('npm:@acme/unself-todo@1.2.0')).toEqual({
@@ -79,9 +84,33 @@ describe('parseSource（五协议）', () => {
   });
   it('未知协议与非法输入拒绝', () => {
     expect(() => parseSource('gitlab:a/b')).toThrow(/无法识别/);
-    expect(() => parseSource('official:Bad_Name')).toThrow(/非法/);
     expect(() => parseSource('npm:')).toThrow(/非法/);
     expect(() => parseSource('file:')).toThrow(/缺路径/);
+  });
+});
+
+describe('#284 npm 本地优先解析（零网络）', () => {
+  const REPO_ROOT = new URL('../../..', import.meta.url).pathname;
+
+  it('本地命中：仓库 workspace 符号链接（@unself/hello → modules/hello，源码形态）', () => {
+    const hit = resolveLocalNpmPackage({ pkg: '@unself/hello', version: '0.1.0', rootDir: REPO_ROOT });
+    expect(hit).toMatchObject({ version: '0.1.0', form: 'source' });
+    expect(hit!.dir).toContain(join('node_modules', '@unself', 'hello'));
+  });
+
+  it('版本不匹配 / 未知包 → null（调用方走 registry，不静默降级）', () => {
+    expect(resolveLocalNpmPackage({ pkg: '@unself/hello', version: '9.9.9', rootDir: REPO_ROOT })).toBeNull();
+    expect(resolveLocalNpmPackage({ pkg: '@acme/不存在', version: '1.0.0', rootDir: REPO_ROOT })).toBeNull();
+  });
+
+  it('satisfiesVersionRange：精确 / ^ / ~ / 比较符 / 并集 / 判不了保守不命中', () => {
+    expect(satisfiesVersionRange('0.1.0', '0.1.0')).toBe(true);
+    expect(satisfiesVersionRange('0.1.0', '^0.1.0')).toBe(true);
+    expect(satisfiesVersionRange('0.2.0', '^0.1.0')).toBe(false);
+    expect(satisfiesVersionRange('1.2.9', '~1.2.0')).toBe(true);
+    expect(satisfiesVersionRange('2.0.0', '>=1.0.0 <3.0.0')).toBe(true);
+    expect(satisfiesVersionRange('0.3.0', '0.2.0 || 0.3.0')).toBe(true);
+    expect(satisfiesVersionRange('0.1.0', '1.0.0 - 2.0.0')).toBe(false);
   });
 });
 

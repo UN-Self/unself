@@ -105,9 +105,10 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
         rootDir,
         buildShell: async () => {},
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: {
+        yes: true,
+      configOverride: {
           domain: '',
-          modules: ['core-mod', 'shared-mod', 'ded-mod', 'ext-mod'],
+          modules: ['core-mod', 'shared-mod', 'ded-mod', 'ext-mod'].map((id) => ({ id, source: `file:./modules/${id}` })),
           storage: { provider: 'r2', bucket: 'unself-storage' },
         },
         fetchJwks: async () => FIXED_JWKS,
@@ -177,7 +178,8 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
           rootDir,
           buildShell: async () => {},
           client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-          configOverride: { domain: '', modules: ['bad-mod'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+          yes: true,
+      configOverride: { domain: '', modules: [{ id: 'bad-mod', source: 'file:./modules/bad-mod' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
           fetchJwks: async () => FIXED_JWKS,
           http: { smoke: async () => [] },
           reporter: { step: () => {}, log: () => {} },

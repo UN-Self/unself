@@ -54,8 +54,10 @@ describe('resolveArtifactRoots（产物根解析，显式 > env > 自探测）',
     await writeArtifactFixture(root);
     const roots = resolveArtifactRoots({ artifactRoot: root });
     expect(roots?.coreWorker).toBe(join(root, 'core', 'worker.js'));
-    expect(roots?.modulesDir).toBe(join(root, 'modules'));
     expect(roots?.shellDir).toBe(join(root, 'shell'));
+    // #284：产物根不再承载模块与 SDK（两者都是普通 npm 包，走 node_modules 本地解析）
+    expect(roots).not.toHaveProperty('modulesDir');
+    expect(roots).not.toHaveProperty('sdkDir');
     const viaEnv = resolveArtifactRoots({ env: { UNSELF_ARTIFACTS: root } });
     expect(viaEnv?.root).toBe(roots?.root);
   });
@@ -78,7 +80,8 @@ describe('runNineSteps（产物模式：空 rootDir 也能装配出实例）', (
       rootDir,
       artifactRoot: artifacts,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       // 产物模式**不得**触发仓库构建；一旦触发即测试失败（干净机器没有 pnpm/vite）
       buildShell: async () => {
@@ -96,13 +99,13 @@ describe('runNineSteps（产物模式：空 rootDir 也能装配出实例）', (
     expect(await readFile(join(rootDir, '.deploy/cloudflare/core-worker.js'), 'utf8')).toBe(FAKE_CORE_WORKER);
     // shell 资产来自产物
     expect(await readFile(join(rootDir, '.deploy/cloudflare/assets/shell/index.html'), 'utf8')).toContain('FIXTURE SHELL');
-    // SDK 浏览器资产来自产物
+    // SDK 浏览器资产来自 @unself/sdk 包（#284：不再是产物里的副本）
     expect(existsSync(join(rootDir, '.deploy/cloudflare/modules/hello/assets/sdk/module-sdk.esm.js'))).toBe(true);
-    // builtin 模块以「包」被消费：注册表快照里的 version 来自产物 manifest（9.9.9，不是仓库里的 0.1.0）
+    // 官方模块是普通 npm 包：注册表快照里的 version 来自本地命中的包（仓库开发形态 = 0.1.0）
     const hello = fake.state.registry.get('hello');
     expect(hello?.enabled).toBe(1);
-    expect(JSON.parse(hello!.manifest_json).version).toBe('9.9.9');
-    // 模块 worker 上传内容来自产物
+    expect(JSON.parse(hello!.manifest_json).version).toBe('0.1.0');
+    // 模块 worker 上传（源码形态 → 装配期 esbuild 打包）
     const upload = fake.state.uploads.find((u) => u.worker === 'unself-module-hello');
     expect(upload).toBeDefined();
     // 产物里缺失的选中模块 → 明确失败（不静默半套）
@@ -110,20 +113,23 @@ describe('runNineSteps（产物模式：空 rootDir 也能装配出实例）', (
     expect(fake.state.d1.has('unself-modules')).toBe(true);
   });
 
-  it('产物里没有选中模块 → 人话失败（不是静默跳过）', { timeout: 120_000 }, async () => {
+  it('选中模块的来源解析不了 → 人话失败且不创建任何 CF 资源（不是静默跳过）', { timeout: 120_000 }, async () => {
     const rootDir = await tmp('unself-arts-rootdir2-');
     const artifacts = await tmp('unself-arts-tree2-');
-    await writeArtifactFixture(artifacts); // 只有 hello
+    await writeArtifactFixture(artifacts);
     const fake = makeCfRestFake();
     await expect(
       runNineSteps({
         rootDir,
         artifactRoot: artifacts,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['ghost'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: '', modules: [{ id: 'ghost', source: 'file:./modules/ghost' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: SMOKE_OK,
       }),
     ).rejects.toThrow(/ghost/);
+    // 来源解析在步骤①之前 → 一个 D1 都没建（fail before side effect）
+    expect(fake.state.d1.size).toBe(0);
   });
 
   it('产物根指到空目录 → 红（证明「真在读产物」，不是碰巧没读）', { timeout: 60_000 }, async () => {
@@ -135,26 +141,22 @@ describe('runNineSteps（产物模式：空 rootDir 也能装配出实例）', (
         rootDir,
         artifactRoot: empty,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: SMOKE_OK,
       }),
     ).rejects.toThrow(/产物根不合法/);
   });
 
-  it('缺 SDK 资产的残缺产物 → 人话失败（不产出半套实例）', { timeout: 60_000 }, async () => {
+  it('#284：SDK 浏览器资产从 @unself/sdk 包解析（产物里已无 sdk/）', async () => {
     const rootDir = await tmp('unself-arts-rootdir4-');
     const artifacts = await tmp('unself-arts-tree4-');
     await writeArtifactFixture(artifacts);
-    await rm(join(artifacts, 'sdk'), { recursive: true, force: true });
-    const fake = makeCfRestFake();
-    await expect(
-      runNineSteps({
-        rootDir,
-        artifactRoot: artifacts,
-        client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
-        http: SMOKE_OK,
-      }),
-    ).rejects.toThrow(/SDK 浏览器资产缺失/);
+    // 产物里没有 sdk/，但 SDK 资产仍能装配（来自 @unself/sdk 包）
+    expect(existsSync(join(artifacts, 'sdk'))).toBe(false);
+    const { resolveSdkAssetsDir } = await import('../src/assemble');
+    const sdkDir = resolveSdkAssetsDir(rootDir);
+    expect(sdkDir).toContain(join('node_modules', '@unself', 'sdk', 'dist'));
+    expect(existsSync(join(sdkDir, 'module-sdk.esm.js'))).toBe(true);
   });
 });

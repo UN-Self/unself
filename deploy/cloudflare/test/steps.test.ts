@@ -42,6 +42,13 @@ const FIXED_JWKS = JSON.stringify({
   }],
 });
 
+/** #284：未选模块的判据 = 「lock 里记过、config 里没有」——下面两个「modules: []」用例用它造现场。 */
+const HELLO_PRE_LOCK = JSON.stringify({
+  lockVersion: 1,
+  generatedAt: '2026-09-19T00:00:00.000Z',
+  modules: { hello: { source: 'npm:@unself/hello@0.1.0', version: '0.1.0', manifestHash: 'a'.repeat(64), contractVersion: '1.0' } },
+});
+
 const SMOKE_OK = {
   smoke: async (b: string, mods: Array<{ id: string; baseUrl: string }>) =>
     ([{ name: 'core-api', url: `${b}/api/health`, ok: true, status: 200 }] as Array<{
@@ -72,7 +79,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     const summary1 = await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: first.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
     });
     // workers.dev 模式：resolveBaseUrl 真实路径 = 子域查询 + core 启用
@@ -137,7 +145,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     const summary2 = await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: second.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       fetchJwks: async () => FIXED_JWKS,
     });
@@ -157,7 +166,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
     });
     const calls = fake.calls;
@@ -176,9 +186,9 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     expect(registryUpsert).toBeGreaterThan(firstUpload);
     expect(r2Create).toBeGreaterThan(registryUpsert);
     expect(setupInsert).toBeGreaterThan(r2Create);
-    // registry 终态：hello 未选 → disable
+    // registry 终态：#284 未选模块只来自 lock（config 只有 hello、lock 为空 → 没有可 disable 的）
     const toggles = calls.filter(sqlStartsWith('UPDATE module_registry'));
-    expect(toggles).toHaveLength(1);
+    expect(toggles).toHaveLength(0);
   });
 
   it('domain 设定时：core 上传后立即 ensureDns（先于 registry 与冒烟）', { timeout: 120_000 }, async () => {
@@ -190,7 +200,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: 'demo.handywote.top', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: 'demo.handywote.top', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       cleanupCustomDomains: async () => {
         order.push('__cleanupCustomDomains');
@@ -220,6 +231,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       // 零模块：modules/hello 存在但未选中 → 必须删其 zone 路由（§6.5 全停用空态可表达；真实 removeRoutesForPatterns）
+      yes: true,
+      preLock: HELLO_PRE_LOCK,
       configOverride: { domain: 'demo.handywote.top', modules: [], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
     });
@@ -240,6 +253,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+      yes: true,
+      preLock: HELLO_PRE_LOCK,
       configOverride: { domain: '', modules: [], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       cleanupModuleRoutes: async () => {
@@ -260,7 +275,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
       runSteps({
         rootDir: ROOT,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: {
           smoke: async () => [{ name: 'core-api', url: 'x', ok: false, status: 503, detail: 'HTTP 503' }],
         },
@@ -273,7 +289,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     const summary = await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
     });
     expect(summary.setup).toEqual({ sealed: true });
@@ -286,7 +303,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       // spy：被调用即失败——分支 A 必须完全跳过公网抓取
       fetchJwks: async () => {
@@ -316,7 +334,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       fetchJwks: async (baseUrl) => {
         received.push(baseUrl);
@@ -339,7 +358,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
       runSteps({
         rootDir: ROOT,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: SMOKE_OK,
         fetchJwks: async () => {
           throw new Error('boom');
@@ -350,7 +370,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
       runSteps({
         rootDir: ROOT,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: SMOKE_OK,
         fetchJwks: async () => {
           throw new Error('boom');
@@ -365,7 +386,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
       runSteps({
         rootDir: ROOT,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: {
           ...SMOKE_OK,
           themeCheck: async () => [
@@ -386,7 +408,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     const summary = await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: {
         ...SMOKE_OK,
         themeCheck: async () => themeChecks,
@@ -400,7 +423,8 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     const summary = await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
     });
     expect(summary.themeChecks).toEqual([]);
@@ -414,7 +438,8 @@ describe('#273 workers.dev 模块可达 / 自有域回归', () => {
     const summary = await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: {
         ...SMOKE_OK,
         smoke: async (coreUrl, mods) => {
@@ -442,7 +467,8 @@ describe('#273 workers.dev 模块可达 / 自有域回归', () => {
     await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: 'demo.handywote.top', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: 'demo.handywote.top', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: {
         ...SMOKE_OK,
         smoke: async (coreUrl, mods) => {
@@ -476,7 +502,8 @@ describe('#273 workers.dev 模块可达 / 自有域回归', () => {
       runSteps({
         rootDir: ROOT,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         fetchJwks: async () => FIXED_JWKS,
       }),
     ).rejects.toThrow(/冒烟失败：module:hello/);
@@ -501,7 +528,8 @@ export default { fetch: (r, e, c) => app.fetch(r, e, c) };
       await runSteps({
         rootDir: ROOT,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: SMOKE_OK,
       });
       // 行为断言（不测实现）：文件内容 == 当前模板输出（旧 import default 已被覆写掉）
@@ -529,7 +557,8 @@ export default { fetch: (r, e, c) => worker.fetch(r, e, c) };
       await runSteps({
         rootDir: ROOT,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: '', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: SMOKE_OK,
       });
       // 行为断言（不测实现）：文件内容 == 当前 wrapper 模板输出（旧内容已被覆写掉）
@@ -558,7 +587,8 @@ describe('D3（#194）：域名体检两份入口统一拦截', () => {
         rootDir: ROOT,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
         // CLI --domain= 与配置文件 domain 最终都汇入 configOverride.domain（main.ts applyDecision）
-        configOverride: { domain: 'myteam', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: 'myteam', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: SMOKE_OK,
       }),
     ).rejects.toThrow(/域名体检未通过[\s\S]*myteam[\s\S]*至少要带一个点/);
@@ -572,7 +602,8 @@ describe('D3（#194）：域名体检两份入口统一拦截', () => {
       runSteps({
         rootDir: ROOT,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        configOverride: { domain: 'team..example.com', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+        yes: true,
+      configOverride: { domain: 'team..example.com', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: SMOKE_OK,
       }),
     ).rejects.toThrow(/域名体检未通过[\s\S]*空段/);
@@ -586,7 +617,8 @@ describe('D3（#194）：域名体检两份入口统一拦截', () => {
     await runSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-      configOverride: { domain: 'demo.handywote.top', modules: ['hello'], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      yes: true,
+      configOverride: { domain: 'demo.handywote.top', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
     });
     expect(fake.calls.some((c) => c.url.endsWith('/d1/database'))).toBe(true);

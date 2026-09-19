@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * chat 前端产物装配行为测试（#219 内容 4）：
+ * chat 前端产物装配行为测试（#219 内容 4；#284 产物入包）：
  * - 命令形状：pnpm --filter … exec vite build --base=./ --emptyOutDir + VITE_CHAT_API=live；
- * - 产物搬运：dist → .deploy/cloudflare/modules/chat/assets/frontend（无条件重写：旧产物清空）；
+ * - 产物搬运：modules/chat/assets/frontend → .deploy/cloudflare/modules/chat/assets/frontend（无条件重写：旧产物清空）；
  * - 升级路径：预置旧哈希 chunk 残留 → 装配后被清除（#162 同款纪律，不断言具体哈希）。
  */
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -20,9 +20,9 @@ function fakeRun() {
   return { calls, fn };
 }
 
-/** 最小「构建产物」：dist/index.html + assets/index-<hash>.js。 */
+/** 最小「构建产物」：assets/frontend/index.html + assets/index-<hash>.js（#284：vite outDir = 模块包内 assets/frontend）。 */
 async function seedDist(root: string, hash: string): Promise<string> {
-  const dist = join(root, 'modules/chat/frontend/dist');
+  const dist = join(root, 'modules/chat/assets/frontend');
   await mkdir(join(dist, 'assets'), { recursive: true });
   await writeFile(join(dist, 'index.html'), `<script src="./assets/index-${hash}.js"></script>`);
   await writeFile(join(dist, `assets/index-${hash}.js`), `// ${hash}`);

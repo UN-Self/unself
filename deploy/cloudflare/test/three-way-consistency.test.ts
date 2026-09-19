@@ -14,7 +14,7 @@ import type { UnselfConfig } from '../src/config';
 const DOMAIN = 'demo.handywote.top';
 const CONFIG = {
   domain: DOMAIN,
-  modules: ['hello'],
+  modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
   storage: { provider: 'r2', bucket: 'unself-storage' },
 } as UnselfConfig;
 
