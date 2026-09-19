@@ -23,7 +23,7 @@ export type { ArtifactRoots, ArtifactsManifest } from './artifacts';
 // 装配产物构建原语（#257）：安装器构建期用它产出 dist/artifacts/**（core worker / SDK / 模块 worker bundle）。
 export { coreWorkerEntrySource } from './steps';
 export { DEPLOY_DIR } from './assemble';
-export { buildModuleSdkAssets, bundleCoreWorker, bundleModuleWorker, moduleWorkerEntry, provisionAll } from './assemble';
+export { copySdkAssets, bundleCoreWorker, bundleModuleWorker, moduleWorkerEntry, provisionAll } from './assemble';
 
 // 资源命名（#257/#272）：UNSELF_RESOURCE_PREFIX 显式覆盖 + 实例命名空间 + 资源名预览。
 export {

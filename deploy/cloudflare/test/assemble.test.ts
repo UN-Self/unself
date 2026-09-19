@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { buildModuleSdkAssets, coreWranglerConfig, moduleWranglerConfig, prefixStripWrapperSource, provisionAll } from '../src/assemble';
+import { copySdkAssets, coreWranglerConfig, moduleWranglerConfig, prefixStripWrapperSource, provisionAll } from '../src/assemble';
 import { migrationWranglerConfig } from '../src/assemble';
 import { coreWorkerEntrySource } from '../src/steps';
 import type { UnselfConfig } from '../src/config';
@@ -169,39 +169,33 @@ describe('coreWorkerEntrySource', () => {
   });
 });
 
-describe('buildModuleSdkAssets（T3 页面 SDK 装载契约）', () => {
-  it('ESM 产物可具名 import；IIFE 产物无顶层 export（页面引 .js 即 SyntaxError）', { timeout: 60_000 }, async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'unself-sdk-assets-'));
+describe('copySdkAssets（#283 单一真源：只搬字节，不二次构建）', () => {
+  it('从 SDK dist 逐字节复制 ESM/IIFE 资产；复制后的 ESM 仍可具名 import；缺文件给人话错', async () => {
+    const src = await mkdtemp(join(tmpdir(), 'unself-sdk-src-'));
+    const dest = await mkdtemp(join(tmpdir(), 'unself-sdk-dest-'));
     try {
-      await buildModuleSdkAssets(join(REPO_ROOT, 'packages/module-sdk/src/index.ts'), dir);
+      const esmBytes =
+        "export const createModuleSDK = () => ({});\nexport const resolveShellOrigin = () => undefined;\n";
+      const iifeBytes = 'var __unselfSDK = {};\n';
+      await writeFile(join(src, 'module-sdk.esm.js'), esmBytes);
+      await writeFile(join(src, 'module-sdk.js'), iifeBytes);
 
-      const esmPath = join(dir, 'module-sdk.esm.js');
-      const esm = await readFile(esmPath, 'utf8');
-      const iife = await readFile(join(dir, 'module-sdk.js'), 'utf8');
-      expect(/^export\b/m.test(esm)).toBe(true);
-      expect(/^export\b/m.test(iife)).toBe(false);
+      await copySdkAssets(src, dest);
+      // A5 同字节：复制件与源件完全一致（安装器注入的就是包内那一份）
+      expect(await readFile(join(dest, 'module-sdk.esm.js'), 'utf8')).toBe(esmBytes);
+      expect(await readFile(join(dest, 'module-sdk.js'), 'utf8')).toBe(iifeBytes);
 
-      // 行为断言：ESM 产物真实可 import，且暴露页面用到的具名符号
-      const mod = (await import(pathToFileURL(esmPath).href)) as Record<string, unknown>;
+      // 行为断言：复制后的 ESM 仍可具名 import，且暴露页面用的具名符号
+      const mod = (await import(pathToFileURL(join(dest, 'module-sdk.esm.js')).href)) as Record<string, unknown>;
       expect(typeof mod.createModuleSDK).toBe('function');
-      expect(Object.keys(mod).sort()).toEqual([
-        // #277 子任务 A：SDK 新增壳 origin 解析导出（wrapper 同步注入 meta，两端口对齐）
-        'SHELL_ORIGIN_META_NAME',
-        'assertCoreOrigin',
-        // #248 收敛（a)：core 级数据的唯一通道 = Core API 代理；createD1Storage 是兼容别名（形状不变）
-        'createCoreApiStorage',
-        'createD1Storage',
-        'createModuleApi',
-        'createModuleSDK',
-        'createModuleStorage',
-        'decodeJwtPayload',
-        // #91 通道 B：主题语义名 → CSS 变量名单点转换（模块作者写样式用）
-        'resolveShellOrigin',
-        'tokenCssName',
-        'verifyModuleToken',
-      ]);
+      expect(typeof mod.resolveShellOrigin).toBe('function');
+
+      // 缺文件即报错（指向 SDK 构建），不做静默跳过
+      await rm(join(src, 'module-sdk.js'));
+      await expect(copySdkAssets(src, dest)).rejects.toThrow(/SDK 浏览器资产缺失/);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(src, { recursive: true, force: true });
+      await rm(dest, { recursive: true, force: true });
     }
   });
 

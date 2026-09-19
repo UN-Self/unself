@@ -76,7 +76,8 @@ export function runTool(
  * 装配（步骤③④的构建与生成部分；上传在 steps.deploy*）：
  * 1. vite build shell（每次部署无条件重建，杜绝 dist 陈旧复用，#73）→ 拷贝到 outDir/assets/shell；
  * 2. esbuild 打包每个选中模块 Worker（platform=node_modules 外置 → 无；unself 模块自包含）；
- * 3. esbuild 打包 @unself/module-sdk 为浏览器 ESM（页面具名 import）+ IIFE（兼容）→ assets/<id>/sdk/；
+ * 3. 搬运 @unself/sdk 构建好的浏览器 ESM/IIFE 资产（页面具名 import）→ assets/<id>/sdk/；
+ *    **不在此构建**（#283 单一真源：SDK 包自己构建，装配只复制字节）。
  * 4. 生成 core 与各模块 wrangler jsonc。
  */
 export async function provisionAll(options: {
@@ -121,7 +122,9 @@ export async function provisionAll(options: {
   }
 
   // ---- 步骤④ 构建侧：模块 ----
-  const sdkEntry = join(rootDir, 'packages/module-sdk/src/index.ts');
+  // SDK 浏览器资产单一真源（#283）：产物形态取随包分发的 artifacts/sdk；
+  // 仓库形态取 @unself/sdk 自己构建出的 <rootDir>/packages/sdk/dist（不从此处重新构建）。
+  const sdkAssetsSource = artifacts ? artifacts.sdkDir : join(rootDir, 'packages/sdk/dist');
   const moduleProvisions: ModuleProvision[] = [];
   for (const mod of modules.filter((m) => m.selected)) {
     const modOut = join(outDir, 'modules', mod.id);
@@ -139,10 +142,9 @@ export async function provisionAll(options: {
     } else {
       await bundleModuleWorker(await moduleWorkerEntry(mod.dir), workerEntry);
     }
-    // SDK 浏览器资产（页面 import ./sdk/module-sdk.esm.js → 部署期静态资产）
+    // SDK 浏览器资产（页面 import ./sdk/module-sdk.esm.js → 部署期静态资产；只搬运不重建）
     const sdkAssetsDir = join(modOut, 'assets/sdk');
-    if (artifacts) await copySdkAssets(artifacts.sdkDir, sdkAssetsDir);
-    else await buildModuleSdkAssets(sdkEntry, sdkAssetsDir);
+    await copySdkAssets(sdkAssetsSource, sdkAssetsDir);
     moduleProvisions.push({
       id: mod.id,
       dir: mod.dir,
@@ -232,44 +234,22 @@ export async function moduleWorkerEntry(moduleDir: string): Promise<string> {
 }
 
 /**
- * SDK 浏览器资产构建（IIFE + ESM，§5.3 页面装载）：
- * - module-sdk.js（IIFE，全局名 __unselfSDK）：历史兼容产物，无顶层 export；
- * - module-sdk.esm.js（ESM）：页面 `import { createModuleSDK } from './sdk/module-sdk.esm.js'`
- *   的命中目标——IIFE 无顶层 export，浏览器 ESM 具名导入会报 SyntaxError（T3 线上实锤）。
+ * 搬运浏览器侧 SDK 资产（IIFE + ESM）——**单一真源**（#283）：
+ * 资产由 `@unself/sdk` 构建并随包发布（`packages/sdk/dist/module-sdk.{js,esm.js}`，
+ * 安装器产物形态 = `<artifacts>/sdk/` 的那份同字节副本）。装配器只复制字节，
+ * **绝不再从源码构建**——两处各构建一遍必然漂移，且页面必须与 core 同版本。
+ *
+ * 仓库形态的调用前提：先 `pnpm -r build`（或 `pnpm --filter @unself/sdk build`）生成 SDK dist。
  */
-export async function buildModuleSdkAssets(sdkEntry: string, assetsDir: string): Promise<void> {
-  const { build } = await import('esbuild');
-  await mkdir(assetsDir, { recursive: true });
-  await build({
-    entryPoints: [sdkEntry],
-    outfile: join(assetsDir, 'module-sdk.js'),
-    bundle: true,
-    format: 'iife',
-    platform: 'browser',
-    target: 'es2020',
-    globalName: '__unselfSDK',
-    legalComments: 'inline',
-    logLevel: 'silent',
-  });
-  await build({
-    entryPoints: [sdkEntry],
-    outfile: join(assetsDir, 'module-sdk.esm.js'),
-    bundle: true,
-    format: 'esm',
-    platform: 'browser',
-    target: 'es2020',
-    legalComments: 'inline',
-    logLevel: 'silent',
-  });
-}
-
-/** 产物形态搬运 SDK 资产（module-sdk.js + module-sdk.esm.js）：干净机器无 esbuild，直接抄预构建产物。 */
-async function copySdkAssets(sdkDir: string, assetsDir: string): Promise<void> {
+export async function copySdkAssets(sdkDir: string, assetsDir: string): Promise<void> {
   await mkdir(assetsDir, { recursive: true });
   for (const name of ['module-sdk.js', 'module-sdk.esm.js']) {
     const from = join(sdkDir, name);
     if (!existsSync(from)) {
-      throw new Error(`安装器产物不完整：缺 ${from}（SDK 浏览器资产）——重跑 \`pnpm --filter @unself/installer build\` 重新生成产物`);
+      throw new Error(
+        `SDK 浏览器资产缺失：${from}（issue 283 单一真源：由 @unself/sdk 构建）——` +
+          '请先在仓库根跑 `pnpm -r build`（或 `pnpm --filter @unself/sdk build`）',
+      );
     }
     await cp(from, join(assetsDir, name));
   }
