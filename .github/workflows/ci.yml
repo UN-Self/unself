@@ -22,9 +22,12 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # 顺序（issue #283）：**build 必须在 typecheck / test 之前**——
+      # `@unself/sdk` 的 main/types 指向 dist（发布的形态），干净树上先 typecheck 会
+      # 「Cannot find module '@unself/sdk'」（本地因 dist 已存在而绿，CI 红）。
+      - run: pnpm -r build
       - run: pnpm -r typecheck
       - run: pnpm -r test
-      - run: pnpm -r build
       # lint 闸门（#195 机制③）：主题令牌 lint（仓库唯一 linter，零依赖单文件）
       - run: pnpm verify:tokens
       # 跨版本迁移闸门（#195 机制③）：老库（前 N-1 迁移 + 既有数据）→ 新迁移必须能跑通；
