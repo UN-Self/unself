@@ -79,10 +79,10 @@ const USAGE: string[] = [
   '  use <名字>           切换当前实例（写注册表 current）',
   '  current              显示当前实例（名字 + 实例目录）',
   '  destroy <名字>       注销实例（--purge 连目录一起删；数据不可恢复，谨慎）',
-  '  module pack [目录]   把模块目录打成 .tgz（--out <目录>；可直接 npm publish，与 builtin 产物同一条路）',
+  '  module pack [目录]   把模块目录打成 .tgz（--out <目录>；可直接 npm publish，与官方模块同一套包形态）',
   '                    --version <x.y.z> 覆盖版本（同时写进 manifest.json 与生成的 package.json；tag 即版本）',
   '                    --name <@scope/pkg> 覆盖生成的 package.json 的 npm 包名（缺省 = manifest.id）',
-  '  module add <来源>    解析来源（official:/npm:/github:/https:/file:）→ 写 config+lock 并预暂存',
+  '  module add <来源>    解析来源（npm:/github:/https:/file:）→ 写 config+lock 并预暂存',
   '                    --as <名字> 覆盖实例内 id；解析会做未知能力门禁（点名声拒）',
   '  module validate [目录]  对模块目录跑 §7 六类发布前硬检查（缺 manifest 即人话错）',
   '  module remove <id>    卸载模块：撤路由 → 删 Worker → 按 tables 清单删表 → 清记账 → 注册表移除',
@@ -423,8 +423,9 @@ async function exec(opts: RunOptions): Promise<number> {
       instancePath: inst.path,
       hasEnvToken: Boolean(env.CLOUDFLARE_API_TOKEN),
       port: port ? Number(port.slice('--port='.length)) : undefined,
-      // #55：读仓库内模块 manifest 的 storage 声明，供向导③½ 做四级单选与 accepts 校验
-      storageOptions: await (await import('./deploy')).wizardStorageOptions(inst.path.replace(/[/\\]unself$/, '')),
+      // #55/#284：按 config 条目的来源做本地解析（npm 本地命中 / file: 目录）读模块 manifest
+      // 的 storage 声明，供向导③½ 做四级单选与 accepts 校验（不联网、不下载）
+      storageOptions: await (await import('./deploy')).wizardStorageOptions(inst.path),
       // #272：本实例会占用的 CF 资源名（ wizard 页预览）
       resourceNames: (await (await import('./deploy')).previewInstanceResources(inst.path)).names,
     });

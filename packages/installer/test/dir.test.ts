@@ -26,7 +26,7 @@ describe('instanceLayout', () => {
 });
 
 describe('createInstanceDir', () => {
-  it('首跑生成 config（默认 modules=["hello"]）、lock 骨架与 generated 目录', () => {
+  it('首跑生成 config（默认 modules = 官方模块的 npm 串）、lock 骨架与 generated 目录', () => {
     const res = createInstanceDir(root);
     expect(res.configCreated).toBe(true);
     expect(res.lockCreated).toBe(true);
@@ -34,7 +34,8 @@ describe('createInstanceDir', () => {
     const config = readFileSync(res.layout.configPath, 'utf8');
     expect(config).toContain('SPDX-License-Identifier: AGPL-3.0-only');
     expect(config).toContain('"domain": ""');
-    expect(config).toContain('"modules": ["hello"]');
+    // #77：官方模块也写 npm 串（没有 official/builtin 特权来源）
+    expect(config).toContain('"modules": [{ "id": "hello", "source": "npm:@unself/hello@0.1.0" }]');
     expect(config).toContain('"provider": "r2"');
     // #272：命名空间落成显式字段（从实例目录名派生）
     expect(config).toContain(`"namespace": "${deriveNamespace(root.split('/').pop() as string)}"`);
@@ -45,9 +46,9 @@ describe('createInstanceDir', () => {
     expect(lock).toEqual({ lockVersion: 1, generatedAt: expect.any(String), modules: {} });
   });
 
-  it('opts.modules 覆盖默认模块列表', () => {
-    const res = createInstanceDir(root, { modules: ['notes'] });
-    expect(readFileSync(res.layout.configPath, 'utf8')).toContain('"modules": ["notes"]');
+  it('opts.modules 覆盖默认模块列表（对象条目）', () => {
+    const res = createInstanceDir(root, { modules: [{ id: 'notes', source: 'npm:@acme/notes@0.1.0' }] });
+    expect(readFileSync(res.layout.configPath, 'utf8')).toContain('"modules": [{ "id": "notes", "source": "npm:@acme/notes@0.1.0" }]');
   });
 
   it('#272 deriveNamespace：非法字符转 -、去首尾/重复、空回退 unself、限长', () => {
@@ -74,7 +75,7 @@ describe('createInstanceDir', () => {
     // 模拟用户手改
     writeFileSync(layout.configPath, handEdited);
 
-    const second = createInstanceDir(root, { modules: ['other'] });
+    const second = createInstanceDir(root, { modules: [{ id: 'other', source: 'npm:@acme/other@0.1.0' }] });
     expect(second.configCreated).toBe(false);
     expect(second.lockCreated).toBe(false);
     expect(readFileSync(layout.configPath, 'utf8')).toBe(handEdited);

@@ -13,10 +13,10 @@ import { dirname, join } from 'node:path';
 import { instanceLayout } from './lib/dir';
 
 /**
- * 模块条目输入（#269）：字符串 = builtin 目录形态；对象 = 带来源（决策 #58）。
+ * 模块条目输入（#269/#77）：**一律对象形态** `{id, source}`（官方模块也写 npm 串）。
  * 与引擎 `UnselfConfig.modules` 同形。
  */
-export type ModuleEntryInput = string | { id: string; source?: string; storage?: { declaration: string } };
+export type ModuleEntryInput = { id: string; source: string; storage?: { declaration: string } };
 
 export interface RunDeployOptions {
   instancePath: string;
@@ -65,7 +65,7 @@ export async function previewInstanceResources(
   const engine = await loadEngine();
   const cfg = await effectiveConfig(instancePath);
   const moduleIds = moduleIdsOverride
-    ?? (cfg.modules as Array<string | { id: string }>).map((m) => (typeof m === 'string' ? m : m.id));
+    ?? cfg.modules.map((m) => m.id);
   const bucket = cfg.storage.provider === 'r2' ? cfg.storage.bucket : undefined;
   const names = engine.previewResourceNames({
     ...(cfg.namespace !== undefined ? { namespace: cfg.namespace } : {}),
@@ -79,56 +79,33 @@ export async function previewInstanceResources(
 const STORAGE_LEVELS = ['core', 'shared', 'dedicated', 'external'] as const;
 
 /**
- * 读实例所属模块的 storage 声明（#55）：
- * 返回向导③½ 的单选数据（id + accepts + preferred）。
- * 两个来源（#257）：产物形态读安装器包内 `<artifacts>/modules/<id>/manifest.json`；
- * 仓库形态读 `rootDir/modules/<id>/manifest.yaml`——干净机器没有仓库，必须优先产物。
- * 与九步引擎的 discoverModules 同源（模块目录的两种形态同规）。
+ * 读实例所选模块的 storage 声明（#55）：返回向导③½ 的单选数据（id + accepts + preferred）。
+ *
+ * #284：源不再扫「模块目录」（builtin 目录已废），而是按 config 条目的 `source` 做**本地解析**
+ * （npm 本地命中 / file: 目录 → 引擎 `localModuleManifest`；不联网、不下载）；
+ * 解析不到（远端来源 / 本地未命中）→ 降级为 core 单选（与旧行为同口径：读不到就按 core）。
+ * 与九步引擎同源（engine.localModuleManifest 与装配期同一套解析原语）。
  */
-export async function wizardStorageOptions(rootDir: string): Promise<Array<{ id: string; accepts: string[]; preferred?: string }>> {
-  const { readdir, readFile } = await import('node:fs/promises');
-  const { existsSync } = await import('node:fs');
-  const { join } = await import('node:path');
-  let modulesDir = join(rootDir, 'modules');
-  let packageForm = false;
-  try {
-    const engine = await loadEngine();
-    const artifacts = engine.resolveArtifactRoots({ rootDir });
-    if (artifacts) {
-      modulesDir = artifacts.modulesDir;
-      packageForm = true;
-    }
-  } catch {
-    // 引擎不可用（发布包已内置引擎；此处僅兼容开发态缺依赖）→ 退回仓库形态扫描
-  }
-  if (!existsSync(modulesDir)) return [];
+export async function wizardStorageOptions(instancePath: string): Promise<Array<{ id: string; accepts: string[]; preferred?: string }>> {
+  const engine = await loadEngine();
+  const cfg = await effectiveConfig(instancePath);
   const out: Array<{ id: string; accepts: string[]; preferred?: string }> = [];
-  for (const entry of await readdir(modulesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const manifestPath = join(modulesDir, entry.name, packageForm ? 'manifest.json' : 'manifest.yaml');
-    if (!existsSync(manifestPath)) continue;
-    // 轻量提取 storage.accepts/preferred：不引引擎（installer 零引擎依赖），
-    // 用 @unself/contracts 的 manifestFromYamlText 单轨解析（防解析分叉）。
+  for (const entry of cfg.modules) {
+    let candidate: { storage?: { accepts?: string[]; preferred?: string } } | null = null;
     try {
-      const { manifestFromYamlText } = await import('@unself/contracts');
-      const text = await readFile(manifestPath, 'utf8');
-      const candidate = (packageForm ? JSON.parse(text) : manifestFromYamlText(text)) as {
-        id?: string;
-        storage?: { accepts?: string[]; preferred?: string };
-      };
-      const id = typeof candidate.id === 'string' ? candidate.id : entry.name;
-      const accepts = (candidate.storage?.accepts ?? ['core']).filter((l): l is (typeof STORAGE_LEVELS)[number] =>
-        (STORAGE_LEVELS as readonly string[]).includes(l),
-      );
-      out.push({
-        id,
-        accepts: accepts.length > 0 ? accepts : ['core'],
-        ...(candidate.storage?.preferred ? { preferred: candidate.storage.preferred } : {}),
-      });
+      const local = await engine.localModuleManifest({ source: entry.source, rootDir: instancePath });
+      candidate = local?.manifest ?? null;
     } catch {
-      // 解析失败（非契约形态）：降级为 core 单选，不阻断向导启动
-      out.push({ id: entry.name, accepts: ['core'] });
+      candidate = null; // 解析失败（包不存在/manifest 非法）：降级为 core 单选，不阻断向导启动
     }
+    const accepts = (candidate?.storage?.accepts ?? ['core']).filter((l): l is (typeof STORAGE_LEVELS)[number] =>
+      (STORAGE_LEVELS as readonly string[]).includes(l),
+    );
+    out.push({
+      id: entry.id,
+      accepts: accepts.length > 0 ? accepts : ['core'],
+      ...(candidate?.storage?.preferred ? { preferred: candidate.storage.preferred } : {}),
+    });
   }
   return out;
 }
@@ -185,20 +162,16 @@ export async function runDeploy(input: RunDeployOptions): Promise<DeployResult> 
   // 引擎据此决定四级落点（core 代理 / shared 建表 / dedicated 独立库 / external 接线）。
   const modulesOverride = input.storageChoices
     ? (configOverride.modules ?? []).map((entry) => {
-        const id = typeof entry === 'string' ? entry : entry.id;
-        const source = typeof entry === 'string' ? undefined : entry.source;
-        const choice = input.storageChoices?.[id];
+        const choice = input.storageChoices?.[entry.id];
         if (!choice) {
           return entry;
         }
         if (!(STORAGE_LEVELS as readonly string[]).includes(choice)) {
           throw new Error(
-            `模块 ${id} 的存储选择「${choice}」不是四级词表之一（core/shared/dedicated/external）`,
+            `模块 ${entry.id} 的存储选择「${choice}」不是四级词表之一（core/shared/dedicated/external）`,
           );
         }
-        return source !== undefined
-          ? { id, source, storage: { declaration: choice } }
-          : ({ id, storage: { declaration: choice } } as unknown as EngineUnselfConfig['modules'][number]);
+        return { id: entry.id, source: entry.source, storage: { declaration: choice } };
       })
     : configOverride.modules;
   const summary = await engine.runNineSteps({
@@ -253,11 +226,9 @@ export async function describeModuleSource(
   const engine = await loadEngine();
   // cwd = 实例目录本身（#269）：与装配期引擎的 rootDir 同一基准，file: 相对路径在预览与装配两处解析一致。
   const rootDir = opts.instancePath;
-  const artifacts = engine.resolveArtifactRoots({ rootDir });
   const preview = await engine.previewModuleSource({
     source,
     cwd: rootDir,
-    artifacts,
     ...(opts.log ? { log: opts.log } : {}),
   });
   return {
