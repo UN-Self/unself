@@ -182,7 +182,7 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 
 脚本九步：① 确保 core/modules 两个 D1 存在；② 跑核心迁移与选中模块迁移（表前缀版本化）；③ 构建上传 Shell Worker；④ 每个选中模块构建、上传、绑 `/m/<id>/*` 路由与存储绑定；⑤ 注册表写入（选中 enabled，未选 not_deployed）；⑥ 建 R2 桶或接收外部 S3 参数；⑦ OIDC 不进配置文件——部署后在 setup 向导填写并存 core 库；⑧ 生成一次性 setup token 打印在部署输出末尾；⑨ 冒烟检查 `/api/health` 与各模块 health。
 
-**模块来源与包契约（#58/#59/#60）**：模块不再只能来自仓库 `modules/` 目录。来源协议 `official:` / `npm:` / `github:` / `https:` / `file:`；**远端一律要求已打包**——安装器直接从 registry 取 tarball 解包，不走 `npm install`，不执行任何第三方构建脚本；仅 `file:` 本地目录允许源码 + 本地构建。全局唯一身份是包名/来源，`manifest.id` 只是实例内名字（安装时可改）。worker 依赖全部 bundle 进 `worker.js`；docker 模块 manifest 写 tag、`unself.lock` 钉 digest，哈希不匹配直接拒绝。包格式与 `validate` 清单见 docs/modules.md。
+**模块来源与包契约（#58/#59/#60/#76/#77）**：模块不再只能来自仓库 `modules/` 目录。来源协议四种：`npm:` / `github:` / `https:` / `file:`（`official:` 已在决策 #77 删除）——官方模块就是普通 npm 包，由安装器 `dependencies` 精确预装（决策 #76），与第三方共用同一个解析器；**远端一律要求已打包**——安装器直接从 registry 取 tarball 解包，不走 `npm install`，不执行任何第三方构建脚本；仅 `file:` 本地目录允许源码 + 本地构建。全局唯一身份是包名/来源，`manifest.id` 只是实例内名字（安装时可改）。worker 依赖全部 bundle 进 `worker.js`；docker 模块 manifest 写 tag、`unself.lock` 钉 digest，哈希不匹配直接拒绝。包格式与 `validate` 清单见 docs/modules.md。
 
 **模块数据四级（#55/#71）**：`core`（默认，经 Core API 代理，仅 get/put/delete/list）/ `shared`（共享 modules 库自建表，零隔离，需三护栏与知情同意）/ `dedicated`（装配器供给独立 D1/KV/R2）/ `external`（模块自备外部库）。模块声明 `storage.accepts` + `preferred`，**由用户在安装时选**；选了声明之外的模式即拒绝安装。
 
