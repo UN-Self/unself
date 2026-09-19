@@ -4,7 +4,7 @@
  *
  * lock 记录每个模块的：来源 source、确切版本 version、包 integrity（SRI sha512）、
  * manifestHash（manifest 规范化 JSON 的 sha256-hex）、安装时契约版本 contractVersion。
- * lock **不含用户配置**（那是 config 的职责）；builtin 模块也进 lock（决策 #60）。
+ * lock **不含用户配置**（那是 config 的职责）；官方模块也进 lock（决策 #60）。
  *
  * 三种决策（buildLockPlan）：
  * - reuse：config 与 lock 一致 → 用 lock，**不再解析来源**（重跑一律用 lock）；
@@ -223,7 +223,7 @@ export function verifyLockIntegrity(input: {
   plan: LockPlan;
   /** 模块 id → 解包后包根的 manifest（已解析对象）。 */
   manifests: Record<string, unknown>;
-  /** 模块 id → 包根全部文件的相对路径 → 字节（用于算包 SRI；builtin/file: 无则跳过 SRI 比对）。 */
+  /** 模块 id → 包根全部文件的相对路径 → 字节（用于算包 SRI；本地目录形态无 tarball 字节则跳过 SRI 比对）。 */
   packageFiles?: Record<string, Record<string, Buffer>>;
   /** 模块 id → 本次下载得到的包 SRI（有下载场景优先用这个，免重读盘）。 */
   downloadedSris?: Record<string, string>;
@@ -231,7 +231,7 @@ export function verifyLockIntegrity(input: {
   const failures: IntegrityFailure[] = [];
   for (const item of input.plan.reuse) {
     const prev = item.previous!;
-    // manifest 哈希：无论有无 tarball 都比对（builtin 也有 manifest）
+    // manifest 哈希：无论有无 tarball 都比对（本地目录形态也有 manifest）
     const manifest = input.manifests[item.id];
     if (manifest === undefined) {
       failures.push({ id: item.id, kind: 'manifestHash', expected: prev.manifestHash, actual: '(manifest 缺失)' });
