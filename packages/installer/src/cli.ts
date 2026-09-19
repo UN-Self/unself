@@ -79,7 +79,9 @@ const USAGE: string[] = [
   '  use <名字>           切换当前实例（写注册表 current）',
   '  current              显示当前实例（名字 + 实例目录）',
   '  destroy <名字>       注销实例（--purge 连目录一起删；数据不可恢复，谨慎）',
-  '  module pack [目录]   把模块目录打成 .tgz（--out <目录>；与 builtin 产物同一条路）',
+  '  module pack [目录]   把模块目录打成 .tgz（--out <目录>；可直接 npm publish，与 builtin 产物同一条路）',
+  '                    --version <x.y.z> 覆盖版本（同时写进 manifest.json 与生成的 package.json；tag 即版本）',
+  '                    --name <@scope/pkg> 覆盖生成的 package.json 的 npm 包名（缺省 = manifest.id）',
   '  module add <来源>    解析来源（official:/npm:/github:/https:/file:）→ 写 config+lock 并预暂存',
   '                    --as <名字> 覆盖实例内 id；解析会做未知能力门禁（点名声拒）',
   '  module validate [目录]  对模块目录跑 §7 六类发布前硬检查（缺 manifest 即人话错）',
@@ -269,12 +271,20 @@ async function exec(opts: RunOptions): Promise<number> {
   // ---- module pack / module add（#269）----
   if (cmd === 'module') {
     const sub = args[0] ?? '';
-    const { positionals, values } = splitPositional(args.slice(1), ['--out', '--as']);
+    const { positionals, values } = splitPositional(args.slice(1), ['--out', '--as', '--version', '--name']);
     if (sub === 'pack') {
       const dir = positionals[0] ?? cwd;
       const outDir = values['--out'];
+      const version = values['--version'];
+      const npmName = values['--name'];
       const { packModule } = await import('./deploy');
-      const r = await packModule({ dir, ...(outDir !== undefined ? { outDir } : {}), log });
+      const r = await packModule({
+        dir,
+        ...(outDir !== undefined ? { outDir } : {}),
+        ...(version !== undefined ? { version } : {}),
+        ...(npmName !== undefined ? { npmName } : {}),
+        log,
+      });
       log(`已打包模块：${r.id} v${r.version}`);
       log(`包文件：${r.files.length} 个（${r.files.join('、')}）`);
       log(`tarball：${r.tarballPath}`);

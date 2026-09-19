@@ -82,5 +82,32 @@ export async function validateModuleDir(dir: string): Promise<ModuleValidateResu
   } catch {
     // manifest 解析失败已在 result.errors 里（schema 诊断）；输出层不再重复
   }
-  return { ...result, ...(id !== undefined ? { id } : {}), ...(version !== undefined ? { version } : {}) };
+
+  // C3（#285）：包根若有 package.json（`npm publish` 产物），其 version 必须与 manifest 一致。
+  // 六类硬检查归 contracts（本文件不动它们），这里只加这一条交付侧一致性。
+  const errors = [...result.errors];
+  const warnings = [...result.warnings];
+  const packageJsonPath = join(dir, 'package.json');
+  if (existsSync(packageJsonPath)) {
+    let pkgVersion: unknown;
+    try {
+      pkgVersion = (JSON.parse(await readFile(packageJsonPath, 'utf8')) as { version?: unknown }).version;
+    } catch {
+      errors.push({ level: 'error', check: 'schema', message: '包根 package.json 不是合法 JSON（`npm publish` 会失败）' });
+    }
+    if (typeof pkgVersion === 'string' && version !== undefined && pkgVersion !== version) {
+      errors.push({
+        level: 'error',
+        check: 'schema',
+        message: `包根 package.json 的 version（${pkgVersion}）与 manifest 的 version（${version}）不一致——发布前必须一致（W5 C3 / issue 285）`,
+      });
+    }
+  }
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    ...(id !== undefined ? { id } : {}),
+    ...(version !== undefined ? { version } : {}),
+  };
 }
