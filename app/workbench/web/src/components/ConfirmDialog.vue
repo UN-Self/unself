@@ -6,6 +6,7 @@
  * - F5 契约同款：Esc 关闭 + 打开焦点入内 + 关闭焦点回触发元素（use-layer-focus）
  * - 语义：danger 动作用 danger 色主按钮；取消永远在场（键盘可达）
  * - 一次性链接口径不适用（本组件不显示机密；重置密码输入框 type=password 只写不读）
+ * - #307 ②状态叙事：入场 scale 0.96→1 + fade（rareui dialog）
  */
 import { computed, ref, watch } from 'vue'
 
@@ -173,6 +174,18 @@ function onConfirm(): void {
   border-radius: var(--unself-radius-lg);
   background: var(--unself-color-bg);
   box-shadow: var(--unself-shadow-pop);
+  /* #307 ②状态叙事：弹层入场 scale 0.96→1 + fade（rareui dialog） */
+  animation: u-confirm-in var(--unself-duration-normal) var(--unself-ease-out);
+}
+@keyframes u-confirm-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 .u-confirm:focus {
   outline: none;
@@ -230,3 +243,10 @@ function onConfirm(): void {
   background: var(--unself-color-danger-soft);
 }
 </style>
+
+/* 降低动效偏好：入场动画归零（弹层瞬时出现，语义不受影响） */
+@media (prefers-reduced-motion: reduce) {
+  .u-confirm {
+    animation: none;
+  }
+}
