@@ -6,6 +6,8 @@ import { computed, ref } from 'vue'
 /**
  * 错误卡基元（§6.5 异常规范）：成员只见人话 + request id；
  * 可选「技术详情」折叠区（管理员态由调用方传入详情后展示开关）。
+ * #307 ②状态叙事：入场 slide(8px)+fade（transitions.dev page transition 模式）；
+ * 正文色走 --color-text——#fee2e2 底上 14.5:1（detect 实锤，B 轨证据）。
  */
 export interface ErrorCardProps {
   /** 人话标题（成员视角）。 */
@@ -34,7 +36,7 @@ const hasDetail = computed(() => Boolean(props.detail))
 </script>
 
 <template>
-  <div class="u-error" role="alert">
+  <div class="u-error u-error-enter" role="alert">
     <div class="u-error-head">
       <CircleAlert class="u-error-icon" :size="20" aria-hidden="true" />
       <div class="u-error-body">
@@ -93,8 +95,9 @@ const hasDetail = computed(() => Boolean(props.detail))
   color: var(--unself-color-text);
 }
 .u-error-message {
+  /* #307：danger-soft(#fee2e2) 上 secondary 灰对比不足（3.9:1），正文一律 text 色（14.5:1） */
   font-size: var(--unself-font-size-sm);
-  color: var(--unself-color-text-secondary);
+  color: var(--unself-color-text);
 }
 .u-error-request {
   font-size: var(--unself-font-size-xs);
@@ -145,3 +148,32 @@ const hasDetail = computed(() => Boolean(props.detail))
   word-break: break-all;
 }
 </style>
+
+/* ---------- #307 ②状态叙事：入场 slide(8px)+fade（transitions.dev page transition） ---------- */
+.u-error-enter {
+  animation: u-error-in var(--unself-duration-normal) var(--unself-ease-out);
+}
+@keyframes u-error-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--unself-space-2)));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* 降低动效偏好：位移归零（保留瞬时出现；再压一档用纯 opacity 渐入，无位移） */
+@media (prefers-reduced-motion: reduce) {
+  .u-error-enter {
+    animation: u-error-in-fade var(--unself-duration-normal) var(--unself-ease-out);
+  }
+}
+@keyframes u-error-in-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

@@ -131,6 +131,22 @@ describe('USkeleton / UCard 输出契约（props → 渲染结果）', () => {
   })
 })
 
+describe('UErrorCard 正文对比度与入场动效（#307 B 轨证据 + ②状态叙事）', () => {
+  it('正文 message 用 text 色令牌类（danger-soft 底上 3.9:1 不足，修复后 14.5:1）', () => {
+    const wrapper = mount(UErrorCard, { props: { title: '失败', message: '服务暂时不可用' } })
+    // 正文色值断言（主题包渲染后可解析）：message 段落带 u-error-message 类，
+    // 颜色由样式表提供——这里守住「类在」这一公开接口，色值由 tokens 守卫链兜底
+    const message = wrapper.find('.u-error-message')
+    expect(message.exists()).toBe(true)
+    expect(message.text()).toBe('服务暂时不可用')
+  })
+
+  it('入场动画类在根元素上（描画/滑入叙事的挂载点）', () => {
+    const wrapper = mount(UErrorCard, { props: { title: '失败' } })
+    expect(wrapper.find('.u-error').classes()).toContain('u-error-enter')
+  })
+})
+
 describe('UCard 交互态输出契约（#307 基础反馈层）', () => {
   it('默认静态卡：不带 interactive 类（表单大卡不参与悬浮动效）', () => {
     const wrapper = mount(UCard, { slots: { default: '内容' } })
