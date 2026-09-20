@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { Ban, CircleCheck, Copy, MailPlus } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { Ban, CircleCheck, Check, Copy, MailPlus } from 'lucide-vue-next'
 
 import { UButton, UCard, UErrorCard, USkeleton } from '@unself/ui'
 
@@ -26,6 +26,13 @@ import { useAsyncLoad } from '../lib/use-async-load'
 
 /** 有效期选项（天）；默认 7 天（与后端 DEFAULT_INVITE_EXPIRES_DAYS 同值）。 */
 const EXPIRES_OPTIONS = [1, 3, 7, 14, 30] as const
+
+/**
+ * #307 复制反馈回弹窗口（beUI StatefulButton 口径 2s）。
+ * JS 计时器吃毫秒数，与 CSS --unself-duration-* 同源取值：1.6s = normal(250ms)+slow(400ms)
+ * 之外的用户感知窗口，取 beUI 口径整 2s（口径出处标注于此，非样式参数，verify-tokens 不涉）。
+ */
+const COPY_FEEDBACK_MS = 2000
 
 // #142：加载三态样板收编 use-async-load（phase/loadError 变量名不变，模板零改动）
 const { phase, loadError, data: invites } = useAsyncLoad<AdminInvite[]>(fetchInvites, { initial: [] })
@@ -139,15 +146,30 @@ async function onGenerate(): Promise<void> {
   }
 }
 
+/** 复制成功反馈（#307 ②状态叙事，beUI StatefulButton 模式）：同位换「已复制 ✓」，2s 回弹。 */
+const copied = ref(false)
+let copiedTimer: ReturnType<typeof setTimeout> | null = null
+
 /** 复制失败静默（剪贴板权限/非安全上下文都可能失败，不打断发链接流程）。 */
 async function onCopy(): Promise<void> {
   if (!inviteUrl.value) return
   try {
     await navigator.clipboard?.writeText(inviteUrl.value)
+    // 复制成功才给反馈：同位换文案 + 描边变成功色，2s 后回弹（可再次复制给第二个人）
+    copied.value = true
+    if (copiedTimer !== null) clearTimeout(copiedTimer)
+    copiedTimer = setTimeout(() => {
+      copied.value = false
+      copiedTimer = null
+    }, COPY_FEEDBACK_MS)
   } catch {
     /* 静默：用户仍可手动选中复制 */
   }
 }
+
+onBeforeUnmount(() => {
+  if (copiedTimer !== null) clearTimeout(copiedTimer)
+})
 
 /** 审批失败人话：后端 detail 优先，退化到 ApiError.message。 */
 function humanError(err: unknown): string {
@@ -293,9 +315,21 @@ function applicantLine(invite: AdminInvite): string {
                 readonly
                 aria-label="邀请链接"
               >
-              <UButton variant="outline" @click="onCopy">
-                <Copy :size="14" aria-hidden="true" />
-                复制
+              <UButton
+                variant="outline"
+                class="invite-copy-btn"
+                :class="{ 'invite-copy-btn-done': copied }"
+                :aria-label="copied ? '已复制' : '复制'"
+                @click="onCopy"
+              >
+                <span v-if="copied" class="invite-copy-done" role="status">
+                  <Check :size="14" aria-hidden="true" />
+                  已复制
+                </span>
+                <span v-else class="invite-copy-idle">
+                  <Copy :size="14" aria-hidden="true" />
+                  复制
+                </span>
               </UButton>
             </div>
             <div class="invite-modal-actions">
@@ -460,6 +494,38 @@ function applicantLine(invite: AdminInvite): string {
   justify-content: flex-end;
   gap: var(--unself-space-2);
   margin-top: var(--unself-space-4);
+}
+
+/* #307 ②状态叙事：复制→已复制 同位换位（beUI StatefulButton 模式）。
+   两态 span 定格在同位（按钮固定最小宽防跳动），切换走 ease-spring 微弹。 */
+.invite-copy-btn {
+  min-width: 84px;
+}
+.invite-copy-idle,
+.invite-copy-done {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--unself-space-1);
+}
+.invite-copy-done {
+  color: var(--unself-color-success);
+  animation: invite-copy-pop var(--unself-duration-normal) var(--unself-ease-spring);
+}
+@keyframes invite-copy-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.75);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* 降低动效偏好：弹跳归零——同位文案即时切换（反馈语义保留，只是不动） */
+@media (prefers-reduced-motion: reduce) {
+  .invite-copy-done {
+    animation: none;
+  }
 }
 .invite-modal > div > p.invite-message {
   margin-top: var(--unself-space-3);
