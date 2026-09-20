@@ -328,18 +328,21 @@ export function createWizardServer(opts: ServeOptions): Server {
           const mods = Array.isArray(body.modules)
             ? (body.modules as unknown[]).map(String)
             : String(body.modules ?? '').split(',');
-          const r = confirmModules(state, mods);
+          // #307：③★ 步进门禁按「注入声明 ∩ 本次提交清单」——先合成带声明的判定态再确认。
+          const declared = deps.refreshModuleConfigs
+            ? await deps.refreshModuleConfigs(mods)
+            : (deps.moduleConfigs ?? EMPTY_CONFIGS).filter((c) => mods.includes(c.id));
+          const r = confirmModules({ ...state, moduleConfigs: declared }, mods);
           if (r.problem) {
             json(res, 400, { problem: r.problem });
             return;
           }
           // #269：③ 改了模块清单 → 资源名预览重算（不再沿用启动时快照）。
           // #307：③★ 配置声明同步重算（模块清单变化 → 每模块一页清单变化）。
+          // 步进语义：confirmModules 已按重算声明判定 module-config / storage；这里只落数据。
           const next = {
             ...r.state,
-            moduleConfigs: deps.refreshModuleConfigs
-              ? await deps.refreshModuleConfigs(r.state.modules)
-              : (deps.moduleConfigs ?? EMPTY_CONFIGS).filter((c) => r.state.modules.includes(c.id)),
+            moduleConfigs: declared,
             ...(deps.previewResources
               ? { resourceNames: await deps.previewResources(r.state.modules) }
               : {}),
