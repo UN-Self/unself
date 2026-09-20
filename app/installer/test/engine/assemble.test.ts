@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,9 +7,10 @@ import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { copySdkAssets, coreWranglerConfig, moduleWranglerConfig, prefixStripWrapperSource, provisionAll } from '../../src/engine/assemble';
 import { migrationWranglerConfig } from '../../src/engine/assemble';
-import { coreWorkerEntrySource } from '../../src/engine/steps';
+import { resolvePlatformArtifacts } from '../../src/engine/artifacts';
 import type { UnselfConfig } from '../../src/engine/config';
 import { findRepoRoot } from '../helpers/repo-root';
+import { writeWorkbenchFixture } from './helpers/workbench-fixture';
 
 /** 仓库根（测试进程从 app/installer/test/engine 起算）。 */
 const REPO_ROOT = findRepoRoot();
@@ -152,21 +153,29 @@ describe('migrationWranglerConfig（②迁移专用最小配置）', () => {
   });
 });
 
-describe('coreWorkerEntrySource', () => {
-  it('入口 re-export core-api app（相对路径到 services）', () => {
-    const src = coreWorkerEntrySource('/repo/.deploy/cloudflare', '/repo');
-    expect(src).toContain("from '../../app/workbench/src/index.ts'");
-    expect(src).toContain('SPDX-License-Identifier');
+describe('生产组合根（@unself/workbench 的 src/entry.prod.ts）', () => {
+  // 组合根从「安装器生成」变成「包内真源文件」后，这两条仍是**回归守卫**：
+  // 注入是装配决策（注入丢了 = 生产开户走内存假实现），且这件事静态可判——所以用源码断言，
+  // 不假装成行为断言。真正的运行期行为由 workbench 包内 test/entry-prod.test.ts 覆盖。
+  const entrySource = (): string => readFileSync(join(REPO_ROOT, 'app/workbench/src/entry.prod.ts'), 'utf8');
+
+  it('入口注入真 Stalwart 适配器（经配置校验收口），不落无参 createApp', () => {
+    const src = entrySource();
+    expect(src).toContain('createStalwartMailProvisioner');
+    expect(src).toContain('toStalwartProvisionerConfig');
+    expect(src).toContain('createMailProvisioner:');
+    // 回归守卫：模块级无参固化（createApp() 零参调用）不得出现
+    expect(src).not.toMatch(/createApp\(\s*\)/);
   });
 
-  it('#141 生产组合根：生成入口注入真 Stalwart 适配器，不落无参 createApp', () => {
-    const src = coreWorkerEntrySource('/repo/.deploy/cloudflare', '/repo');
-    expect(src).toContain("import { createApp } from '../../app/workbench/src/index.ts'");
-    expect(src).toContain("from '../../core/adapters/provisioning/stalwart/src/index.ts'");
-    expect(src).toContain('createStalwartMailProvisioner');
-    expect(src).toContain('createMailProvisioner:');
-    // 回归守卫：模块级无参固化（createApp() 零参调用）不得再出现
-    expect(src).not.toMatch(/createApp\(\s*\)/);
+  it('入口自足：只 import 包内相对路径 + 裸包名（不再有「相对路径到仓库根」那一套）', () => {
+    const src = entrySource();
+    expect(src).toContain("from './index'");
+    expect(src).toContain("from './registry'");
+    expect(src).toContain("from './security-headers'");
+    expect(src).toContain("from '@unself/stalwart-provisioner'");
+    // #303：不再有 ../.. 之类仓库根相对路径（那正是「打包方在 app 外面」的产物）
+    expect(src).not.toMatch(/from '\.\.\//);
   });
 });
 
@@ -207,45 +216,34 @@ describe('copySdkAssets（#283 单一真源：只搬字节，不二次构建）'
   });
 });
 
-describe('provisionAll（③ shell 每次部署重建，#73）', () => {
-  it('dist 已存在也强制重建：新产物入 assets/shell，陈旧标记与旧内容不残留', async () => {
+describe('provisionAll（③ 壳产物：搬运 workbench 包内产物，目标目录先清空，#303）', () => {
+  it('搬运 platform.shellDir 的内容；上次部署的陈旧残留零容忍', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'unself-provision-'));
+    const wb = await mkdtemp(join(tmpdir(), 'unself-provision-wb-'));
     try {
-      // 预置陈旧 dist（模拟上次部署残留：过期产物 + 陈旧标记）
-      const staleDist = join(rootDir, 'app/workbench/dist');
-      await mkdir(join(staleDist, 'assets'), { recursive: true });
-      await writeFile(join(staleDist, 'stale.marker'), 'stale');
-      await writeFile(join(staleDist, 'index.html'), '<html><body>OLD BUILD</body></html>');
-      await writeFile(join(staleDist, 'assets/index-OLD.js'), 'console.log("old")');
+      await writeWorkbenchFixture(wb);
+      const platform = resolvePlatformArtifacts({ rootDir: wb, workbenchDir: wb });
 
-      // fake 构建：模拟真实重建——清空 dist 后写当前源码产物（删陈旧标记）
-      let buildCalled = false;
-      const buildShell = async (dir: string) => {
-        expect(dir).toBe(rootDir);
-        buildCalled = true;
-        await rm(staleDist, { recursive: true, force: true });
-        await mkdir(join(staleDist, 'assets'), { recursive: true });
-        await writeFile(join(staleDist, 'index.html'), '<html><body>NEW BUILD</body></html>');
-        await writeFile(join(staleDist, 'assets/index-NEW.js'), 'console.log("new")');
-      };
+      // 预置上次部署的陈旧残留（旧产物 + 陈旧标记）
+      const shellAssets = join(rootDir, '.deploy/cloudflare/assets/shell');
+      await mkdir(join(shellAssets, 'assets'), { recursive: true });
+      await writeFile(join(shellAssets, 'stale.marker'), 'stale');
+      await writeFile(join(shellAssets, 'index.html'), '<html><body>OLD BUILD</body></html>');
+      await writeFile(join(shellAssets, 'assets/index-OLD.js'), 'console.log("old")');
 
       const provisioned = await provisionAll({
         rootDir,
-        // 最小合法配置（类型断言沿用本文件现有风格）；modules 传空数组：跳过 esbuild，聚焦 shell 重建
+        // 最小合法配置（类型断言沿用本文件现有风格）；modules 传空数组：跳过 esbuild，聚焦壳搬运
         config: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } } as UnselfConfig,
         modules: [],
         dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
         log: () => {},
-        buildShell,
+        platform,
       });
 
-      // dist 已存在但构建仍被调用 → 旧产物被真实重建覆盖
-      expect(buildCalled).toBe(true);
-      const shellAssets = join(rootDir, '.deploy/cloudflare/assets/shell');
-      // 新产物已搬运进部署目录
-      expect(await readFile(join(shellAssets, 'index.html'), 'utf8')).toContain('NEW BUILD');
-      expect(await readFile(join(shellAssets, 'assets/index-NEW.js'), 'utf8')).toBe('console.log("new")');
-      // 陈旧残留零容忍：标记与旧资产/旧内容不得出现
+      // 产物来自包内（当前内容，不是上次那份）
+      expect(await readFile(join(shellAssets, 'index.html'), 'utf8')).toContain('FIXTURE SHELL');
+      // 陈旧残留零容忍：标记与旧资产不得出现
       expect(existsSync(join(shellAssets, 'stale.marker'))).toBe(false);
       expect(existsSync(join(shellAssets, 'assets/index-OLD.js'))).toBe(false);
       expect(await readFile(join(shellAssets, 'index.html'), 'utf8')).not.toContain('OLD BUILD');
@@ -253,6 +251,7 @@ describe('provisionAll（③ shell 每次部署重建，#73）', () => {
       expect(provisioned.outDir).toBe(join(rootDir, '.deploy/cloudflare'));
     } finally {
       await rm(rootDir, { recursive: true, force: true });
+      await rm(wb, { recursive: true, force: true });
     }
   });
 });

@@ -12,14 +12,9 @@ import { describe, expect, it } from 'vitest';
 import { runNineSteps } from '../../src/engine/steps';
 import { RestClient } from '../../src/engine/rest/client';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
-import { makeFakeRepoRoot } from './helpers/fake-repo';
+import { makeFakeRepoRoot, workbenchDirOf } from './helpers/fake-repo';
 
 /** 最小 shell 产物（真 vite build 4.4s/次，测试不必跑）。 */
-async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'app/workbench/dist');
-  await mkdir(join(dist, 'assets'), { recursive: true });
-  await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
-}
 
 const FIXED_JWKS = JSON.stringify({
   keys: [{
@@ -93,7 +88,7 @@ describe('迁移失败：停住 + 模块/文件/第几条语句（#248 ⑥）', 
       try {
         await runNineSteps({
           rootDir,
-          buildShell: fakeBuildShell,
+          workbenchDir: workbenchDirOf(rootDir),
           client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
           yes: true,
       configOverride: { domain: '', modules: [{ id: 'broken', source: 'file:./app/modules/broken' }], storage: { provider: 'r2', bucket: 'unself-storage' } },

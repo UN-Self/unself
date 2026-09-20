@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { runNineSteps } from '../../src/engine/steps';
 import { RestClient } from '../../src/engine/rest/client';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
-import { makeFakeRepoRoot, seedShellDist } from './helpers/fake-repo';
+import { makeFakeRepoRoot, workbenchDirOf } from './helpers/fake-repo';
 
 const FIXED_JWKS = JSON.stringify({
   keys: [{
@@ -98,7 +98,7 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
       const logs: string[] = [];
       await runNineSteps({
         rootDir,
-        buildShell: seedShellDist,
+        workbenchDir: workbenchDirOf(rootDir),
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
         yes: true,
       configOverride: {
@@ -168,7 +168,7 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
       try {
         await runNineSteps({
           rootDir,
-          buildShell: seedShellDist,
+          workbenchDir: workbenchDirOf(rootDir),
           client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
           yes: true,
       configOverride: { domain: '', modules: [{ id: 'bad-mod', source: 'file:./app/modules/bad-mod' }], storage: { provider: 'r2', bucket: 'unself-storage' } },

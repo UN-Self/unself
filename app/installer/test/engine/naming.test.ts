@@ -11,7 +11,7 @@ import { coreDbName, coreWorkerName, modulesDbName, moduleWorkerName, resourceNa
 import { runNineSteps } from '../../src/engine/steps';
 import { RestClient } from '../../src/engine/rest/client';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
-import { writeArtifactFixture } from './helpers/artifacts-fixture';
+import { writeWorkbenchFixture } from './helpers/workbench-fixture';
 
 const ENV_KEY = 'UNSELF_RESOURCE_PREFIX';
 const saved = process.env[ENV_KEY];
@@ -56,12 +56,12 @@ describe('带前缀的九步（隔离探针口径）', () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'unself-name-root-'));
     const artifacts = await mkdtemp(join(tmpdir(), 'unself-name-arts-'));
     try {
-      await writeArtifactFixture(artifacts);
+      await writeWorkbenchFixture(artifacts);
       process.env[ENV_KEY] = 'unself-probe-257-';
       const fake = makeCfRestFake();
       await runNineSteps({
         rootDir,
-        artifactRoot: artifacts,
+        workbenchDir: artifacts,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
         yes: true,
       configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-probe-257-storage' } },

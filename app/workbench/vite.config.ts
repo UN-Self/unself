@@ -39,7 +39,9 @@ export default defineConfig({
   // 前端根 = web/（index.html / public/ / src/ 都在里面）；后端在 src/、测试在 test/，同为这个包。
   root: 'web',
   plugins: [vue(), tailwindcss(), shellCspMeta()],
-  build: { outDir: '../dist', emptyOutDir: true },
+  // 产物落 dist/web：dist/ 下另有 dist/worker.js（core Worker bundle，见 scripts/build-worker.ts）。
+  // emptyOutDir 只清自己那层，不动 dist/worker.js。
+  build: { outDir: '../dist/web', emptyOutDir: true },
   test: {
     // #83：行为断言化后不再需要 css 级联（#75 getComputedStyle 类断言已退场）
     // #303：一个包两个半边——后端测试在 test/（node 环境），前端测试与源码同目录

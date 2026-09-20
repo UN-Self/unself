@@ -1,6 +1,6 @@
 # 发布流水线（决策 #79；W5 预期行为清单 E1–E10）
 #
-# 只做四件事：检出 → 装依赖 → 构建（=「打包」）→ 推 npm。
+# 只做四件事：检出 → 装依赖 → 构建（=「打包」）→ 推 npm。（五个包：#303 起含 @unself/workbench）
 # **不跑测试套件**：PR 阶段的六步门禁（.github/workflows/ci.yml）已经跑过，发布不再重复。
 #
 # 认证 = npm Trusted Publishing（GitHub Actions OIDC）：仓库里**不存任何 npm token/secret**。

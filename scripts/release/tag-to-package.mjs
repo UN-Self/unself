@@ -4,7 +4,7 @@
  * tag → 待发布包（决策 #79「tag 即版本」的唯一实现点）。
  *
  * 契约（W5 预期行为清单 E1–E3）：
- * - tag 必须是四种前缀之一：`sdk-v*` / `hello-v*` / `chat-v*` / `installer-v*`
+ * - tag 必须是五种前缀之一：`sdk-v*` / `hello-v*` / `chat-v*` / `workbench-v*` / `installer-v*`
  * - 版本 = tag 去掉 `<name>-v` 后的部分，必须是严格 semver `x.y.z`（可带 -prerelease）
  * - 前缀不认识 / 版本不合法 → **直接失败**（人话错误，绝不静默跳过）
  *

@@ -5,6 +5,7 @@ import {
   MailProvisionerError,
   createStalwartMailProvisioner,
   parsePermissions,
+  toStalwartProvisionerConfig,
   type StalwartProvisionerConfig,
 } from '../src/stalwart-provisioner.ts';
 import { createFakeMailProvisioner } from '../src/fake.ts';
@@ -574,5 +575,36 @@ describe('createFakeMailProvisioner（假实现语义）', () => {
     await expect(fake.enableAccount({ email: 'ghost@example.com' })).rejects.toMatchObject({
       code: 'ACCOUNT_NOT_FOUND',
     });
+  });
+});
+
+describe('toStalwartProvisionerConfig（mail 段边界校验 · #303）', () => {
+  it('三字段齐 → 原样取用；timeoutMs 可带可缺', () => {
+    expect(toStalwartProvisionerConfig({ ...config, timeoutMs: 1234 })).toEqual({ ...config, timeoutMs: 1234 });
+    expect(toStalwartProvisionerConfig(config)).toEqual(config);
+  });
+
+  it('缺字段 / 类型不对 / 非对象 → 当场抛结构化失败（不猜、不静默用 undefined 拼 URL）', () => {
+    for (const bad of [
+      {},
+      undefined,
+      null,
+      'example.com',
+      [],
+      { ...config, baseUrl: '' },
+      { ...config, apiKey: 42 },
+      { ...config, domain: null },
+    ]) {
+      expect(() => toStalwartProvisionerConfig(bad)).toThrow(MailProvisionerError);
+      try {
+        toStalwartProvisionerConfig(bad);
+      } catch (error) {
+        expect((error as MailProvisionerError).code).toBe('UPSTREAM_FAILURE');
+      }
+    }
+  });
+
+  it('多余字段不进入配置（配置形状收敛，不把 DB 里的杂物带进适配器）', () => {
+    expect(toStalwartProvisionerConfig({ ...config, portalUrl: 'https://mail.example.com', enabled: true })).toEqual(config);
   });
 });

@@ -51,6 +51,34 @@ export interface StalwartProvisionerConfig {
   timeoutMs?: number;
 }
 
+/**
+ * mail 段配置的边界校验（#303：组合根从 installer 的生成式入口搬进包内后暴露）。
+ *
+ * 过去入口是 JS，`CreateMailProvisioner = (mailConfig: unknown)` 的 `unknown` 会**原样漏进**适配器，
+ * 缺 baseUrl/apiKey/domain 时报错发生在深处（拿 undefined 拼 URL），看不出病因。
+ * 这里在唯一入口收口：形状不对就**当场**抛结构化失败（同 `permissionMap` 口径：看不懂的配置绝不猜）。
+ */
+export function toStalwartProvisionerConfig(raw: unknown): StalwartProvisionerConfig {
+  const source: Record<string, unknown> =
+    raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const requireString = (key: 'baseUrl' | 'apiKey' | 'domain'): string => {
+    const value = source[key];
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new MailProvisionerError('UPSTREAM_FAILURE', `Stalwart 配置缺失 ${key}（unself.config 的 mail 段）`);
+    }
+    return value;
+  };
+  const config: StalwartProvisionerConfig = {
+    baseUrl: requireString('baseUrl'),
+    apiKey: requireString('apiKey'),
+    domain: requireString('domain'),
+  };
+  if (typeof source['timeoutMs'] === 'number') {
+    config.timeoutMs = source['timeoutMs'];
+  }
+  return config;
+}
+
 /** 账户名 = email 前缀（Stalwart Account.name 为 EmailLocalPart）。 */
 function accountName(email: string): string {
   const at = email.indexOf('@');

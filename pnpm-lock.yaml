@@ -23,6 +23,12 @@ importers:
       '@unself/sdk':
         specifier: workspace:*
         version: link:../../core/sdk
+      '@unself/workbench':
+        specifier: workspace:*
+        version: link:../workbench
+      blake3-wasm:
+        specifier: 2.1.5
+        version: 2.1.5
     devDependencies:
       '@types/node':
         specifier: ^24
@@ -33,9 +39,6 @@ importers:
       '@unself/control-plane':
         specifier: workspace:*
         version: link:../../core/control-plane
-      blake3-wasm:
-        specifier: 2.1.5
-        version: 2.1.5
       esbuild:
         specifier: ^0.28.0
         version: 0.28.2
@@ -170,34 +173,6 @@ importers:
         version: 4.129.0(@cloudflare/workers-types@4.20260702.1)
 
   app/workbench:
-    dependencies:
-      '@unself/contracts':
-        specifier: workspace:*
-        version: link:../../core/contracts
-      '@unself/mail-smtp':
-        specifier: workspace:*
-        version: link:../../core/adapters/mail-smtp
-      '@unself/ui':
-        specifier: workspace:*
-        version: link:../../core/ui
-      hono:
-        specifier: ^4.10.0
-        version: 4.13.7
-      jose:
-        specifier: ^6.1.0
-        version: 6.2.12
-      lucide-vue-next:
-        specifier: ^0.544.0
-        version: 0.544.0(vue@3.5.42(typescript@5.9.3))
-      vue:
-        specifier: ^3.5.0
-        version: 3.5.42(typescript@5.9.3)
-      vue-router:
-        specifier: ^4.5.0
-        version: 4.6.4(vue@3.5.42(typescript@5.9.3))
-      zod:
-        specifier: ^4.1.0
-        version: 4.5.4
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.0.0
@@ -205,21 +180,48 @@ importers:
       '@tailwindcss/vite':
         specifier: ^4.0.0
         version: 4.3.3(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.13))
+      '@unself/contracts':
+        specifier: workspace:*
+        version: link:../../core/contracts
+      '@unself/mail-smtp':
+        specifier: workspace:*
+        version: link:../../core/adapters/mail-smtp
       '@unself/sdk':
         specifier: workspace:*
         version: link:../../core/sdk
+      '@unself/stalwart-provisioner':
+        specifier: workspace:*
+        version: link:../../core/adapters/provisioning/stalwart
+      '@unself/ui':
+        specifier: workspace:*
+        version: link:../../core/ui
       '@vitejs/plugin-vue':
         specifier: ^6.0.0
         version: 6.0.8(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.13))(vue@3.5.42(typescript@5.9.3))
       '@vue/test-utils':
         specifier: ^2.5.0
         version: 2.5.0(@vue/compiler-dom@3.5.42)(@vue/server-renderer@3.5.42)(vue@3.5.42(typescript@5.9.3))
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.2
+      hono:
+        specifier: ^4.10.0
+        version: 4.13.7
+      jose:
+        specifier: ^6.1.0
+        version: 6.2.12
       jsdom:
         specifier: ^27.4.0
         version: 27.4.0(supports-color@10.2.2)
+      lucide-vue-next:
+        specifier: ^0.544.0
+        version: 0.544.0(vue@3.5.42(typescript@5.9.3))
       tailwindcss:
         specifier: ^4.0.0
         version: 4.3.3
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.13
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
@@ -229,12 +231,21 @@ importers:
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
+      vue:
+        specifier: ^3.5.0
+        version: 3.5.42(typescript@5.9.3)
+      vue-router:
+        specifier: ^4.5.0
+        version: 4.6.4(vue@3.5.42(typescript@5.9.3))
       vue-tsc:
         specifier: ^3.0.0
         version: 3.3.11(typescript@5.9.3)
       wrangler:
         specifier: ^4.0.0
         version: 4.129.0(@cloudflare/workers-types@4.20260702.1)
+      zod:
+        specifier: ^4.1.0
+        version: 4.5.4
 
   core/adapters/mail-smtp:
     devDependencies:

@@ -14,7 +14,7 @@ import { runNineSteps } from '../../src/engine/steps';
 import { removeModule } from '../../src/engine/uninstall';
 import { sriFromBuffer } from '../../src/engine/sources';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
-import { makeFakeRepoRoot } from './helpers/fake-repo';
+import { makeFakeRepoRoot, workbenchDirOf } from './helpers/fake-repo';
 import { RestClient } from '../../src/engine/rest/client';
 import { findRepoRoot } from '../helpers/repo-root';
 
@@ -55,11 +55,6 @@ async function makeRootDir(tag: string): Promise<string> {
 }
 
 /** 注入的壳构建：写最小壳产物到 <rootDir>/app/workbench/dist（不跑真 vite build）。 */
-async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'app/workbench/dist');
-  await mkdir(join(dist, 'assets'), { recursive: true });
-  await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
-}
 
 /** 注入的 download：把「同内容 tarball」当成远端产物取回（不联网）。 */
 function localTarballFetcher(tarballPath: string) {
@@ -86,7 +81,7 @@ async function deploy(input: {
   await runNineSteps({
     rootDir: input.rootDir,
     client: new RestClient({ token: 't', fetchImpl: input.fake.fetchImpl }),
-    buildShell: fakeBuildShell,
+    workbenchDir: workbenchDirOf(input.rootDir),
     configOverride: {
       domain: '',
       modules: [{ id: 'hello', source: input.source }],
@@ -224,7 +219,7 @@ describe('#284 B5：卸载一视同仁（官方/第三方同口径，零残留�
       await runNineSteps({
         rootDir,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-        buildShell: fakeBuildShell,
+        workbenchDir: workbenchDirOf(rootDir),
       configOverride: {
           domain: '',
           modules: [{ id: 'todo', source }],

@@ -9,11 +9,10 @@
  */
 import { cp, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 import { probeSqlite } from '@unself/control-plane';
 import {
   DEPLOY_DIR,
-  bundleCoreWorker,
   coreRunWorkerFirst,
   coreWranglerConfig,
   moduleWranglerConfig,
@@ -26,7 +25,7 @@ import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type ModuleRef, ty
 import type { ModuleManifest } from '@unself/contracts';
 import { LOCK_FILENAME, emptyLock, parseLockText, serializeLock, type LockFile, type ResourceLedger } from './lock';
 import { lockRecordFrom, resolveSources } from './module-sources';
-import { resolveArtifactRoots, setActiveArtifactRoots } from './artifacts';
+import { resolvePlatformArtifacts } from './artifacts';
 import { moduleWorkerName, coreWorkerName, coreDbName, modulesDbName, resourceName, resourcePrefix, setResourceNamespace, activeResourceNamespace } from './naming';
 import { decideGuard, probeExisting, targetResources } from './guard';
 import { createCoreControlPlane } from './control-plane';
@@ -203,8 +202,6 @@ export interface RunNineStepsOptions {
   configOverride?: UnselfConfig;
   /** 测试注入口：拦截 secret put（secretName 区分 core JWT 与 chat 密钥环）。 */
   putSecret?: (workerName: string, value: string, secretName: string) => Promise<void>;
-  /** 测试注入口：拦截 shell 构建（默认真实 pnpm --filter @unself/workbench build；#73 每次部署重建）。 */
-  buildShell?: (rootDir: string) => Promise<void>;
   /** 测试注入口：拦截 chat 前端构建（默认真实 vite build；返回产物相对 outDir/modules/ 路径）。 */
   buildChatFrontend?: (input: { rootDir: string; outDir: string; log: (msg: string) => void }) => Promise<string>;
   /**
@@ -223,11 +220,10 @@ export interface RunNineStepsOptions {
   /** 测试注入口：拦截 DNS 自建（默认真实 ensureZoneARecord，#244 前的步骤顺序保留）。 */
   ensureDns?: (domain: string) => Promise<void>;
   /**
-   * 产物根（#257）：显式指定「core / shell / SDK / builtin 模块包」所在目录（随安装器分发的产物）。
-   * 缺省 = 自探测（`UNSELF_ARTIFACTS` → <引擎模块目录>/artifacts）；都缺 → 仓库开发形态（读 rootDir 源码树）。
-   * 显式给的值必须合法（缺 manifest.json 直接抛，不回落到仓库路径）。
+   * 显式指定 `@unself/workbench` 包目录（测试 / 嵌入式）。缺省 = 从 node_modules 解析该包
+   * （安装器依赖它）——**仓库形态与安装形态同源**，没有第二套行为。显式给的值必须合法。
    */
-  artifactRoot?: string;
+  workbenchDir?: string;
   /**
    * 撞车守卫放行开关（#272）：账户里已有同名资源且台账证明不了归属时，默认停住；
    * 显式 `--allow-adopt` / `UNSELF_ALLOW_ADOPT=1` / 向导④「允许接管」才继续。
@@ -255,12 +251,10 @@ export async function runNineSteps(input: RunNineStepsOptions): Promise<Summary>
 async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   const { rootDir } = input;
   const rep = input.reporter ?? consoleReporter();
-  // 产物根解析（#257）：安装器产物形态 = 不读 rootDir 下的源码树（app/modules、app/workbench；只写 .deploy/）。
-  const artifacts = resolveArtifactRoots({ artifactRoot: input.artifactRoot, rootDir });
-  setActiveArtifactRoots(artifacts);
-  if (artifacts) {
-    rep.log(`产物模式：装配产物来自 ${artifacts.root}（安装器包内，未读仓库源码树）`);
-  }
+  // 平台产物解析（#303 修订 #257 口径）：产物随 @unself/workbench 包发布，引擎只当消费者。
+  // 解析不出 / 没构建 → 当场抛人话错（不静默回落，不回读源码树）。
+  const platform = resolvePlatformArtifacts({ rootDir, workbenchDir: input.workbenchDir });
+  rep.log(`平台产物：${platform.root}（@unself/workbench@${platform.version}）`);
   const config = input.configOverride ?? (await loadUnselfConfig(rootDir));
   // 域名体检（#194 D3）：CLI --domain= 与配置文件 domain 都汇入 config.domain，此处统一拦截。
   if (config.domain) {
@@ -378,7 +372,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   //    失败处理（#61）：停住并指出「模块 / 文件 / 第几条语句」，不自动重试、不自动回滚。
   rep.step(2, '跑核心迁移与选中模块迁移（按模块独立记账，REST import）');
   const coreCp = createCoreControlPlane(client, accountId, dbIds.core);
-  const coreMigrationDir = artifacts ? artifacts.coreMigrationsDir : join(rootDir, 'app/workbench/migrations/core');
+  const coreMigrationDir = platform.coreMigrationsDir;
   await coreCp.applyMigrations('core', await readSqlFiles(coreMigrationDir));
   rep.log(`core 迁移已应用（${coreDbName()}，记账 unself_migrations_core）`);
   /** dedicated 模块的独立 D1 id（步骤①补建；摘要与绑定共用）。 */
@@ -392,7 +386,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   // （docs/modules.md §4「core 的 schema 归 core」）——与模块无关，必须在任何 core 级模块跑之前就位。
   // 记账独立（unself_migrations_platform，落在 modules 库）：与各模块记账互不覆盖（#55 护栏①同规）。
   const modulesCp = createCoreControlPlane(client, accountId, dbIds.modules);
-  const platformMigrationDir = artifacts ? artifacts.platformMigrationsDir : join(rootDir, 'app/workbench/migrations/modules');
+  const platformMigrationDir = platform.platformMigrationsDir;
   const platformFiles = await readSqlFiles(platformMigrationDir);
   if (platformFiles.length > 0) {
     try {
@@ -508,8 +502,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     config,
     modules,
     dbIds,
-    buildShell: input.buildShell,
-    artifacts,
+      platform,
   };
   const provisioned: Provisioned = await provisionAll(provisionInput);
 
@@ -552,24 +545,13 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     join(provisioned.outDir, 'core.wrangler.jsonc'),
     coreWranglerConfig({ config, dbIds, coreName: provisioned.coreName, zoneName: resolvedZone?.name }),
   );
-  if (artifacts) {
-    // 产物形态：core Worker 也在安装器构建期打好包（含 core-api + Stalwart 适配器）——照抄，不读仓库源码。
-    await cp(artifacts.coreWorker, join(provisioned.outDir, 'core-worker.js'));
-  } else {
-    await writeConfig(
-      join(provisioned.outDir, 'core-worker.js'),
-      coreWorkerEntrySource(provisioned.outDir, rootDir),
-    );
-    // 入口模板落盘后立即自打包（wrangler 隐式 bundle 的替代；探针实证顺序反了会打到陈旧入口）
-    await bundleCoreWorker(
-      join(provisioned.outDir, 'core-worker.js'),
-      join(provisioned.outDir, 'core-worker.bundle.js'),
-    );
-  }
+  // core Worker bundle 由 @unself/workbench 自己构建（生产组合根 + esbuild 都在包内，#303）：
+  // 引擎只搬不建——干净机器不需要 esbuild，引擎也不需要知道 workbench 内部文件长什么样。
+  await cp(platform.coreWorker, join(provisioned.outDir, 'core-worker.js'));
   // core 上传描述（secret 首部署后补写 → 同描述重传一次；幂等收敛）
   const coreVars: Record<string, string> = {};
   if (config.domain) coreVars.UNSELF_BASE_URL = `https://${config.domain}`;
-  const coreMainModule = artifacts ? 'core-worker.js' : 'core-worker.bundle.js';
+  const coreMainModule = 'core-worker.js';
   const coreSpec: WorkerUploadSpec = {
     name: provisioned.coreName,
     mainModule: coreMainModule,
@@ -1103,67 +1085,6 @@ async function defaultFetchJwks(baseUrl: string): Promise<string> {
     throw new Error(`GET ${url} → JWKS 形状非法（无 keys 数组或为空）`);
   }
   return JSON.stringify(body);
-}
-
-/**
- * core Worker 入口：core-api 优先；未命中（HTML 导航）回退 ASSETS 的 SPA。相对路径按生成文件目录（.deploy/cloudflare/）计。
- *
- * 组合根（#141 返工）：deploy 是唯一生产装配点——生成入口 import { createApp } 并注入真 Stalwart 适配器，
- * core-api 自身不再模块级固化无参实例（那会把 members.ts 的契约回退假实现带进生产开户路径）。
- * 适配器用相对路径导入：生成目录没有 workspace 的 node_modules 链接，裸包名解析不到；
- * 相对路径与 core-api 的导入同构，esbuild 打包确定可解析。
- *
- * #273：workers.dev 形态下 core 资产 run_worker_first=true（见 coreRunWorkerFirst），
- * 所有请求（含壳 HTML 与静态资产）都经本入口——入口先按原路径取资产（保持直出语义），
- * 再对 HTML 下发按注册表生成的 frame-src 白名单（跨子域模块 iframe 需壳响应头含模块 origin）。
- *
- * #279：壳 HTML 过去以 application/octet-stream 存储（上传 part 类型写死），#273 曾在此对「导航请求
- * 命中非 HTML 资产」现场改写成 text/html 兜底（asHtmlDocument）。MIME 已在上传侧修对（rest/mime.ts），
- * 该兜底**删除**：它会把 JS/CSS/图片在带 `Accept: text/html` 的导航下谎报成 text/html，
- * 更会把「资产类型又退化成 octet-stream」的回归藏起来（HTML 照常、只有 module 脚本白屏）。
- * 现在「类型写错」直接原样透出——宁可显式故障，不要伪装。
- */
-export function coreWorkerEntrySource(outDir: string, rootDir: string): string {
-  const rel = (p: string): string => relative(outDir, join(rootDir, p)).replaceAll('\\', '/');
-  return `// SPDX-License-Identifier: AGPL-3.0-only
-// 由装配器生成（生产组合根）：core-api app（注入 Stalwart 适配器）+ 未命中路径回退 SPA 资产。
-import { createApp } from '${rel('app/workbench/src/index.ts')}';
-import { createStalwartMailProvisioner } from '${rel('core/adapters/provisioning/stalwart/src/index.ts')}';
-import { withHtmlSecurityHeaders } from '${rel('app/workbench/src/security-headers.ts')}';
-import { registryFrameOrigins } from '${rel('app/workbench/src/registry.ts')}';
-
-const app = createApp({ createMailProvisioner: (cfg) => createStalwartMailProvisioner(cfg) });
-
-const isHtml = (res) => (res.headers.get('content-type') ?? '').toLowerCase().includes('text/html');
-const isApiPath = (p) => p.startsWith('/api/') || p.startsWith('/life/') || p.startsWith('/.well-known/');
-const wantsHtml = (request) => (request.headers.get('accept') ?? '').includes('text/html');
-
-export default {
-  async fetch(request, env, ctx) {
-    const res = await app.fetch(request, env, ctx);
-    if (res.status !== 404 || !env.ASSETS) return res;
-    const url = new URL(request.url);
-    // API/生命周期路径保持 JSON 404；页面导航回退 SPA
-    if (isApiPath(url.pathname) || request.method !== 'GET') {
-      return res;
-    }
-    // 决策 #63/#73 + #273：壳 HTML 的 frame-src 白名单按注册表现为生成（跨子域模块 iframe 的唯一放行口）。
-    // CORE_DB 未绑定（单测/异常环境）→ 零白名单，安全默认（绝不 frame-src *）。
-    const frameOrigins = env.CORE_DB ? await registryFrameOrigins(env.CORE_DB, { selfOrigin: url.origin }) : [];
-    // run_worker_first=true（workers.dev 形态）后静态资产也经本入口：先按原路径取资产（保持直出语义）。
-    const asset = await env.ASSETS.fetch(request);
-    if (asset.status !== 404) {
-      // 只给真 HTML 补头；其余原样透出（#279：不再按 Accept 伪造 text/html）
-      return isHtml(asset) ? withHtmlSecurityHeaders(asset, frameOrigins) : asset;
-    }
-    if (!wantsHtml(request)) return res;
-    // 决策 #47：SPA 深链（含 /setup*）的 HTML 不经静态资产的 _headers，在此补同一套头
-    // （值同源：security-headers.ts）+ 现场生成的 frame-src 白名单。
-    const fallback = await env.ASSETS.fetch(new URL('/', url.origin).toString(), request);
-    return withHtmlSecurityHeaders(fallback, frameOrigins);
-  },
-};
-`;
 }
 
 export interface Summary {

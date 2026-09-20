@@ -41,7 +41,7 @@ export interface RunDeployOptions {
    */
   yes?: boolean;
   /**
-   * @internal 测试注入口（#269）：透传给引擎 `runNineSteps` 的额外选项（client / http / buildShell /
+   * @internal 测试注入口（#269）：透传给引擎 `runNineSteps` 的额外选项（client / http /
    * artifactRoot / fetchers 等）。`rootDir` 与 `configOverride` 仍由本桥确定，不被透传覆盖。
    */
   engineOverrides?: Partial<Parameters<Engine['runNineSteps']>[0]>;

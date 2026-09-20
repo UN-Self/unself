@@ -10,7 +10,6 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type { RestClient } from './client';
 import { contentTypeForPath } from './mime';
-import { vendoredBlake3Dirs } from '../artifacts';
 
 export interface AssetManifestEntry {
   hash: string;
@@ -48,15 +47,14 @@ function extname(p: string): string {
 }
 
 /**
- * blake3（与 wrangler 4.129.0 hash.ts 同款）：
- * - 仓库形态：blake3-wasm 在 node_modules（workspace 提升依赖）；
- * - 安装器产物形态（#257）：它用 fs 相对路径加载 `blake3_js_bg.wasm`，**无法进 bundle**——
- *   随 tarball 拷一份到 `<artifacts>/vendor/blake3-wasm`，从绝对路径 require。
- * 两路都不行才报错（装一半的装配比报错更糟）。
+ * blake3（与 wrangler 4.129.0 hash.ts 同款）：blake3-wasm 用 fs 相对路径加载 `blake3_js_bg.wasm`，
+ * **无法进 bundle**，只能从 node_modules 真实文件树 require——安装器把它列为直接依赖，
+ * npm/pnpm 装上即可解析（#303 起不再有 `<artifacts>/vendor` 副本这一路）。
+ * 解析不到就报错带病因（装一半的装配比报错更糟）。
  */
 function blake3Hash(input: string): string {
   const require_ = createRequire(import.meta.url);
-  const candidates = ['blake3-wasm', ...vendoredBlake3Dirs()];
+  const candidates = ['blake3-wasm'];
   const failures: string[] = [];
   for (const candidate of candidates) {
     try {
@@ -67,8 +65,7 @@ function blake3Hash(input: string): string {
     }
   }
   throw new Error(
-    `blake3 不可用（资产哈希必需）：${failures.join('；')}——仓库形态请 \`pnpm install\`；` +
-      '安装器产物形态请重跑 `pnpm --filter @unself/installer build`（产物含 vendor/blake3-wasm）',
+    `blake3 不可用（资产哈希必需）：${failures.join('；')}——请跑 'pnpm install'（blake3-wasm 是安装器的直接依赖）`
   );
 }
 

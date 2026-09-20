@@ -21,7 +21,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runNineSteps } from '../../src/engine/steps';
 import { RestClient } from '../../src/engine/rest/client';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
-import { writeArtifactFixture } from './helpers/artifacts-fixture';
+import { writeWorkbenchFixture } from './helpers/workbench-fixture';
 import { parseUnselfConfigText, withNamespacedBucket } from '../../src/engine/config';
 import {
   activeResourceNamespace,
@@ -179,13 +179,13 @@ describe('#272 九步真跑（替身账户）', () => {
     const rootA = await tmp('unself-272-rootA-');
     const artB = await tmp('unself-272-artB-');
     const rootB = await tmp('unself-272-rootB-');
-    await writeArtifactFixture(artA);
-    await writeArtifactFixture(artB);
+    await writeWorkbenchFixture(artA);
+    await writeWorkbenchFixture(artB);
     const account = makeCfRestFake(); // 同一个 CF 账户
 
     await runNineSteps({
       rootDir: rootA,
-      artifactRoot: artA,
+      workbenchDir: artA,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
       yes: true,
       configOverride: {
@@ -200,7 +200,7 @@ describe('#272 九步真跑（替身账户）', () => {
 
     await runNineSteps({
       rootDir: rootB,
-      artifactRoot: artB,
+      workbenchDir: artB,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
       yes: true,
       configOverride: {
@@ -237,11 +237,11 @@ describe('#272 九步真跑（替身账户）', () => {
   it('撞车守卫拦住：B 的命名空间指向 A → 停住列资源；allowAdopt 才继续', { timeout: 120_000 }, async () => {
     const artA = await tmp('unself-272-artA2-');
     const rootA = await tmp('unself-272-rootA2-');
-    await writeArtifactFixture(artA);
+    await writeWorkbenchFixture(artA);
     const account = makeCfRestFake();
     await runNineSteps({
       rootDir: rootA,
-      artifactRoot: artA,
+      workbenchDir: artA,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
       yes: true,
       configOverride: {
@@ -256,12 +256,12 @@ describe('#272 九步真跑（替身账户）', () => {
     // B：全新实例目录，却把命名空间指成 A 的 → 台账在 B 手里不存在 → 停住
     const artB = await tmp('unself-272-artB2-');
     const rootB = await tmp('unself-272-rootB2-');
-    await writeArtifactFixture(artB);
+    await writeWorkbenchFixture(artB);
     let caught: unknown;
     try {
       await runNineSteps({
         rootDir: rootB,
-        artifactRoot: artB,
+        workbenchDir: artB,
         client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
         yes: true,
       configOverride: {
@@ -287,7 +287,7 @@ describe('#272 九步真跑（替身账户）', () => {
     // 显式开关才继续
     await runNineSteps({
       rootDir: rootB,
-      artifactRoot: artB,
+      workbenchDir: artB,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
       yes: true,
       configOverride: {
@@ -305,7 +305,7 @@ describe('#272 九步真跑（替身账户）', () => {
   it('守卫不是无脑拦：本实例幂等重跑（台账对上）无需开关即放行', { timeout: 120_000 }, async () => {
     const art = await tmp('unself-272-artR-');
     const root = await tmp('unself-272-rootR-');
-    await writeArtifactFixture(art);
+    await writeWorkbenchFixture(art);
     const account = makeCfRestFake();
     const cfg = {
       domain: '',
@@ -315,7 +315,7 @@ describe('#272 九步真跑（替身账户）', () => {
     };
     await runNineSteps({
       rootDir: root,
-      artifactRoot: art,
+      workbenchDir: art,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
       yes: true,
       configOverride: cfg,
@@ -325,7 +325,7 @@ describe('#272 九步真跑（替身账户）', () => {
     await expect(
       runNineSteps({
         rootDir: root,
-        artifactRoot: art,
+        workbenchDir: art,
         client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
         configOverride: cfg,
         http: SMOKE_OK,
@@ -337,7 +337,7 @@ describe('#272 九步真跑（替身账户）', () => {
   it('既有实例零影响：无 namespace 的配置资源名逐字不变（历史形态）', { timeout: 120_000 }, async () => {
     const art = await tmp('unself-272-artL-');
     const root = await tmp('unself-272-rootL-');
-    await writeArtifactFixture(art);
+    await writeWorkbenchFixture(art);
     const account = makeCfRestFake({
       // 模拟「已经部署过的老实例」账户态：同名资源都在，但没有本实例台账（root 全新）
       existingD1: ['unself-core', 'unself-modules'],
@@ -346,7 +346,7 @@ describe('#272 九步真跑（替身账户）', () => {
     });
     await runNineSteps({
       rootDir: root,
-      artifactRoot: art,
+      workbenchDir: art,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
       yes: true,
       configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
@@ -368,11 +368,11 @@ describe('#272 九步真跑（替身账户）', () => {
   it('R2 桶名纳入命名空间（真跑建桶用命名空间桶名）', { timeout: 120_000 }, async () => {
     const art = await tmp('unself-272-artBkt-');
     const root = await tmp('unself-272-rootBkt-');
-    await writeArtifactFixture(art);
+    await writeWorkbenchFixture(art);
     const account = makeCfRestFake();
     await runNineSteps({
       rootDir: root,
-      artifactRoot: art,
+      workbenchDir: art,
       client: new RestClient({ token: 't', fetchImpl: account.fetchImpl }),
       yes: true,
       configOverride: {

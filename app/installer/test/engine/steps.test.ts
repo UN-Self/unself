@@ -6,27 +6,29 @@
  */
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { prefixStripWrapperSource } from '../../src/engine/assemble';
-import { coreWorkerEntrySource, needsTotalTls, runNineSteps } from '../../src/engine/steps';
+import { needsTotalTls, runNineSteps } from '../../src/engine/steps';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { RestClient } from '../../src/engine/rest/client';
+import { cleanupTempWorkbenches, tempWorkbenchDir } from './helpers/fake-repo';
 import { findRepoRoot } from '../helpers/repo-root';
+import { FAKE_CORE_WORKER } from './helpers/workbench-fixture';
 
-/** 测试注入口：拦截 shell 构建（真实 vite build 约 4.4s/次，#73 每次部署都重建 → 套件必超时；写最小产物即可）。 */
-async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'app/workbench/dist');
-  await mkdir(join(dist, 'assets'), { recursive: true });
-  await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
-}
-
-/** runNineSteps 带测试默认值的小包装（默认注入 fakeBuildShell）。 */
+/**
+ * runNineSteps 带测试默认值的小包装：默认指向临时合成的平台产物包（WB）。
+ * 壳与 core Worker bundle 现在是**搬运**（来自 workbench 包），测试不再需要假装构建。
+ */
 function runSteps(input: Parameters<typeof runNineSteps>[0]) {
-  return runNineSteps({ buildShell: fakeBuildShell, ...input });
+  return runNineSteps({ workbenchDir: WB, ...input });
 }
 
 /** 仓库根（真实文件布局：app/modules/hello、app/modules/chat、app/workbench、app/workbench）。 */
 const ROOT = findRepoRoot();
+
+// 平台产物夹具（临时合成，测试不依赖仓库 app/workbench 已构建）
+const WB = await tempWorkbenchDir();
+afterAll(cleanupTempWorkbenches);
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -533,11 +535,10 @@ export default { fetch: (r, e, c) => app.fetch(r, e, c) };
       configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
         http: SMOKE_OK,
       });
-      // 行为断言（不测实现）：文件内容 == 当前模板输出（旧 import default 已被覆写掉）
-      const after = await readFile(entryPath, 'utf8');
-      expect(after).toBe(coreWorkerEntrySource(outDir, ROOT));
-      expect(after).not.toContain('import app from');
-      expect(after).toContain('import { createApp } from');
+        // 行为断言（不测实现）：文件内容 == 平台产物包里的 core Worker bundle（陈旧入口被覆写掉）
+        const after = await readFile(entryPath, 'utf8');
+        expect(after).toBe(FAKE_CORE_WORKER);
+        expect(after).not.toContain('import app from');
     } finally {
       await rm(entryPath, { force: true });
     }

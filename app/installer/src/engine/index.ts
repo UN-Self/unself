@@ -9,21 +9,14 @@ export type { Summary, StepReporter } from './steps';
 export { removeModule, assertDroppable } from './uninstall';
 export type { RemoveModuleOptions, RemoveModuleResult } from './uninstall';
 
-// 产物形态（#257）：安装器打包脚本与向导数据层消费；`artifactRootsFrom` 供嵌入式测试构造产物根。
-// #284：产物里**不再有模块与 SDK**（两者都是普通 npm 包，由本地 node_modules 解析）。
-export {
-  ARTIFACTS_FORMAT_VERSION,
-  artifactRootsFrom,
-  defaultArtifactsPath,
-  readArtifactsManifest,
-  resolveArtifactRoots,
-} from './artifacts';
-export type { ArtifactRoots, ArtifactsManifest } from './artifacts';
+// 平台产物（#303 修订 #257 口径）：产物随 @unself/workbench 包发布，引擎只解析与消费。
+// `platformArtifactsFrom` 供嵌入式测试构造产物根；模块与 SDK 是普通 npm 包（node_modules 解析）。
+export { platformArtifactsFrom, resolvePlatformArtifacts, WORKBENCH_PACKAGE } from './artifacts';
+export type { PlatformArtifacts } from './artifacts';
 
-// 装配产物构建原语（#257）：安装器构建期用它产出 dist/artifacts/**（core worker / SDK / 模块 worker bundle）。
-export { coreWorkerEntrySource } from './steps';
+// 装配原语：模块 worker bundle 仍在引擎内（模块是第三方，结构由契约定）；core/壳产物由 workbench 自建。
 export { DEPLOY_DIR } from './assemble';
-export { copySdkAssets, bundleCoreWorker, bundleModuleWorker, moduleWorkerEntry, provisionAll, resolveSdkAssetsDir } from './assemble';
+export { copySdkAssets, bundleModuleWorker, moduleWorkerEntry, provisionAll, resolveSdkAssetsDir } from './assemble';
 
 // 资源命名（#257/#272）：UNSELF_RESOURCE_PREFIX 显式覆盖 + 实例命名空间 + 资源名预览。
 export {

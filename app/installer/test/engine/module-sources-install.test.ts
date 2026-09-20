@@ -19,14 +19,14 @@ import { SourceDriftError } from '../../src/engine/module-sources';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { RestClient } from '../../src/engine/rest/client';
 import { findRepoRoot } from '../helpers/repo-root';
+import { cleanupTempWorkbenches, tempWorkbenchDir } from './helpers/fake-repo';
 
 const ROOT = findRepoRoot();
 
-async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'app/workbench/dist');
-  await mkdir(join(dist, 'assets'), { recursive: true });
-  await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
-}
+// 平台产物夹具（临时合成，测试不依赖仓库 app/workbench 已构建）
+const WB = await tempWorkbenchDir();
+afterAll(cleanupTempWorkbenches);
+
 
 const SMOKE_OK = {
   smoke: async (b: string, mods: Array<{ id: string; baseUrl: string }>) =>
@@ -200,7 +200,7 @@ async function runWithSource(opts: {
       storage: { provider: 'r2', bucket: 'unself-storage' },
     },
     http: SMOKE_OK,
-    buildShell: fakeBuildShell,
+    workbenchDir: WB,
     yes: opts.yes,
     fetchers: opts.fetchers,
     preLock: opts.preLock,
@@ -279,7 +279,7 @@ describe('#245 验收：来源安装 × 装配器路径（runNineSteps）', () =
         storage: { provider: 'r2', bucket: 'unself-storage' },
       },
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
       yes: true,
       fetchers: boom,
     });

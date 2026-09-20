@@ -9,21 +9,21 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { discoverModules, runNineSteps } from '../../src/engine/steps';
 import { chatDbName, chatKvName, chatR2Name } from '../../src/engine/chat-provision';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { RestClient } from '../../src/engine/rest/client';
 import { findRepoRoot } from '../helpers/repo-root';
+import { cleanupTempWorkbenches, tempWorkbenchDir } from './helpers/fake-repo';
 
 /** 仓库根（真实文件布局：app/modules/hello、app/modules/chat、app/workbench、app/workbench）。 */
 const ROOT = findRepoRoot();
 
-async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'app/workbench/dist');
-  await mkdir(join(dist, 'assets'), { recursive: true });
-  await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
-}
+// 平台产物夹具（临时合成，测试不依赖仓库 app/workbench 已构建）
+const WB = await tempWorkbenchDir();
+afterAll(cleanupTempWorkbenches);
+
 
 const FIXED_JWKS = JSON.stringify({
   keys: [{
@@ -70,7 +70,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
       yes: true,
       configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
     });
     // ① 专属资源补建：chat D1 + chat KV（平台两库与桶在别的断言覆盖）
@@ -97,7 +97,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
       yes: true,
       configOverride: { domain: 'demo.handywote.top', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
     });
@@ -141,7 +141,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
       preLock,
       configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
     });
@@ -166,7 +166,7 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
       yes: true,
       configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
     });
     expect(summary1.chat).toEqual({ db: chatDbName(), kv: chatKvName(), r2: chatR2Name(), keyringAction: 'created' });
@@ -190,7 +190,7 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
       yes: true,
       configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
     });
@@ -207,7 +207,7 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
       yes: true,
       configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
     });
     const chatUploads = fresh.state.uploads.filter((u) => u.worker === 'unself-module-chat');
@@ -262,7 +262,7 @@ describe('#219 模块面断言参数化（验收第 5 条）', () => {
       preLock,
       yes: true,
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
     });
     for (const id of all) {
       expect(
@@ -283,7 +283,7 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
       yes: true,
       configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
     });
@@ -304,7 +304,7 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
       yes: true,
       configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
     });
@@ -343,7 +343,7 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
       yes: true,
       configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
-      buildShell: fakeBuildShell,
+      workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
     });

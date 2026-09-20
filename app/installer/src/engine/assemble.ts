@@ -14,7 +14,7 @@ import { dirname, join, resolve as resolvePath } from 'node:path';
 import type { ModuleManifest } from '@unself/contracts';
 import type { UnselfConfig } from './config';
 import type { ModuleRef } from './config';
-import type { ArtifactRoots } from './artifacts';
+import type { PlatformArtifacts } from './artifacts';
 import { coreDbName, coreWorkerName, modulesDbName, moduleWorkerName, resourceName } from './naming';
 import { localPackageDir } from './sources';
 
@@ -87,40 +87,21 @@ export async function provisionAll(options: {
   modules: ModuleRef[];
   dbIds: { core: string; modules: string };
   log?: (msg: string) => void;
-  /**
-   * 测试注入口：拦截 shell 构建（默认真实跑 pnpm --filter @unself/workbench build）。
-   * 签名只吃 rootDir：构建产物约定落 app/workbench/dist，由随后 cp 搬运。
-   */
-  buildShell?: (rootDir: string) => Promise<void>;
-  /**
-   * 产物根（#257）：给了就**不再读仓库源码树**——shell 从 `<installer>/dist/artifacts/**` 搬运
-   * （预打包产物）；SDK 与模块是普通 npm 包（node_modules 本地解析）。缺省 = 仓库开发形态。
-   */
-  artifacts?: ArtifactRoots | null;
+  /** 平台产物（#303：从 @unself/workbench 包解析；壳与 core bundle 都从包内搬，不现场构建）。 */
+  platform: PlatformArtifacts;
 }): Promise<Provisioned> {
-  const { rootDir, config, modules } = options;
-  const artifacts = options.artifacts ?? null;
+  const { rootDir, config, modules, platform } = options;
   const log = options.log ?? console.log;
-  const buildShell =
-    options.buildShell ?? ((dir) => runTool('pnpm', ['--filter', '@unself/workbench', 'build'], dir));
   const outDir = join(rootDir, DEPLOY_DIR);
   await mkdir(outDir, { recursive: true });
 
   // ---- 步骤③ 构建侧：shell ----
   const shellAssets = join(outDir, 'assets/shell');
-  if (artifacts) {
-    // 产物形态：shell 已在安装器构建期用 vite 构建好，随 tarball 分发（干净机器没有 pnpm/vite）
-    log('搬运 shell 产物（安装器包内 artifacts/shell）…');
-    await ensureEmptyDir(shellAssets);
-    await cp(artifacts.shellDir, shellAssets, { recursive: true });
-  } else {
-    // 仓库形态：每次部署无条件重建（vite build，杜绝 dist 陈旧复用，#73）
-    const shellDist = join(rootDir, 'app/workbench/dist');
-    log('构建 shell（vite build）…');
-    await buildShell(rootDir);
-    await ensureEmptyDir(shellAssets);
-    await cp(shellDist, shellAssets, { recursive: true });
-  }
+  // 壳产物由 @unself/workbench 自己构建（vite build → dist/web）；引擎只搬运（#303）。
+  // 过去这里按形态分岔（仓库内现跑 vite / 搬运安装器内嵌产物）——同源后只剩一条路径。
+  log('搬运壳产物（@unself/workbench 的 dist/web）…');
+  await ensureEmptyDir(shellAssets);
+  await cp(platform.shellDir, shellAssets, { recursive: true });
 
   // ---- 步骤④ 构建侧：模块 ----
   // SDK 浏览器资产单一真源（#283/#284）：@unself/sdk 发布包（安装器 dependencies 预装）的 dist/
@@ -435,27 +416,6 @@ export function migrationWranglerConfig(input: {
     }],
   };
   return `${JSON.stringify(cfg, null, 2)}\n`;
-}
-
-/**
- * core Worker 入口打包（REST 化后无 wrangler deploy 的隐式 bundle，自打包）。
- * 必须在 core-worker.js 模板写盘【之后】调用（entry 是它的产物——探针曾因错序用到上一轮陈旧入口，测试已锁）。
- */
-export async function bundleCoreWorker(entry: string, outfile: string): Promise<void> {
-  const { build } = await import('esbuild');
-  await build({
-    entryPoints: [entry],
-    outfile,
-    bundle: true,
-    format: 'esm',
-    platform: 'neutral',
-    target: 'es2022',
-    conditions: ['workerd', 'import'],
-    external: ['@cloudflare/workers-types', 'cloudflare:sockets', 'cloudflare:email'],
-    legalComments: 'inline',
-    banner: { js: '// SPDX-License-Identifier: AGPL-3.0-only' },
-    logLevel: 'silent',
-  });
 }
 
 /** 写文件（自动建目录）。 */
