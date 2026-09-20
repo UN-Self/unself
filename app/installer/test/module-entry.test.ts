@@ -117,7 +117,8 @@ describe('#269 ③ 来源入口（向导）', () => {
       expect(previewCalls.at(-1)).toEqual(['hello', 'todo']);
       expect(holder.state.resourceNames).toEqual([{ kind: 'Worker', name: 'demo-hello-todo' }]);
 
-      // 页面：装配前「将要装什么」可见
+      // 页面：装配前「将要装什么」可见（#307 分屏：预览在③模块屏；把状态推进到 modules 步渲染）
+      holder.state = { ...holder.state, step: 'modules' };
       const page = await srv.get('/');
       expect(page.text).toContain('将要安装的模块');
       expect(page.text).toContain('npm:@acme/unself-todo@1.2.0');

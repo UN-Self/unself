@@ -25,7 +25,6 @@ import {
   pushEvent,
   resetWizard,
   saveConfigValues,
-  SHARED_CONSENT_NOTE,
   submitOAuthSkip,
   submitToken,
   type WizardEnvHint,
@@ -35,6 +34,8 @@ import {
   type WizardState,
   type WizardStorageOption,
 } from './state';
+import { renderPage } from './page';
+export { renderPage };
 
 /** deps.moduleConfigs 未接线时的缺省（全部模块无配置页 → ③★ 自动跳过）。 */
 const EMPTY_CONFIGS: WizardModuleConfig[] = [];
@@ -180,263 +181,12 @@ function advise(err: unknown): { cause: string; owner: 'token' | 'dns' | 'networ
  * 是令牌取值的唯一定义处），页面样式一律引用 `var(--unself-*)`——照 AGENTS「样式只走 tokens」。
  * 源码里不出现任何颜色字面量（取值在运行时由数据渲染出来），故 verify-tokens 规则一通过。
  */
-function themeVarBlock(): string {
+export function themeVarBlock(): string {
   return Object.entries(DEFAULT_THEME)
     .map(([dotted, value]) => `${tokenCssName(dotted)}: ${value};`)
     .join(' ');
 }
 
-/** ① 步引导语（#246）：oauthUsable=false 或 CI 态 → 人话引导创建 API Token；否则引导点开折叠入口。 */
-function authGuidance(hint: WizardEnvHint): string {
-  if (hint.ci) return '<p>没有可借用的 wrangler OAuth：创建 API Token 填进下面密码框（已设 CLOUDFLARE_API_TOKEN 则本步可跳过）。</p>';
-  if (!hint.oauthUsable) return '<p>没有可借用的 wrangler OAuth：创建 API Token 填进下面密码框。</p>';
-  return '<p>或点开下方 API Token 入口创建 Token，粘贴到下面密码框。</p>';
-}
-
-/**
- * ① 步折叠入口（决策 #66）：API Token 深链接默认收起，露出条件（任一）——
- * 需 Total TLS（多级子域）/ CI 态（无浏览器）/ oauthUsable=false。`<details>` 天然支持用户点开，无需 JS。
- */
-function authDetails(hint: WizardEnvHint): string {
-  const open = !hint.oauthUsable || hint.ci || hint.needsTotalTls ? ' open' : '';
-  const title = hint.needsTotalTls
-    ? '多级子域需要 Total TLS：OAuth 不覆盖，需 API Token'
-    : '手动创建 API Token（深链接入口，权限已预选）';
-  return `<details class="auth-fold"${open}>
-  <summary>${title}</summary>
-  <p><a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer noopener">打开 Cloudflare 创建 API Token</a></p>
-  <p>权限清单与向导失败提示一致（Account：Workers Scripts/D1/R2 Edit；Zone：Workers Routes/DNS/SSL Edit），创建后整段复制粘贴到下面密码框（掩码输入，不落盘）。</p>
-</details>`;
-}
-
-/** HTML 转义（来源串/版本/SRI 都来自包元数据，进页面前一律转义）。 */
-function esc(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-}
-
-/**
- * ③ 已添加的第三方模块预览（#269）：装配前把「将要装什么」摊开——来源 / 版本 / SRI / permissions / 落点。
- * 数据来自 ① 之后 ③ 步的实时解析（resolveModule）；未添加时返回空串。
- */
-function moduleAddsSection(state: WizardState): string {
-  if (state.moduleAdds.length === 0) return '';
-  const rows = state.moduleAdds
-    .map((m) => {
-      const sri = m.integrity ? `${esc(m.integrity).slice(0, 24)}…` : '（本地目录形态，无下载字节）';
-      const perms = m.permissions.length > 0 ? esc(m.permissions.join('、')) : '（不声明任何需授权能力）';
-      const storage = `accepts=${esc(m.storageAccepts.join('/'))}${m.storagePreferred ? `，preferred=${esc(m.storagePreferred)}` : ''}`;
-      return `<li data-mod="${esc(m.id)}"><strong>${esc(m.id)}</strong> v${esc(m.version)}
-      <ul>
-        <li>来源：<code>${esc(m.source)}</code>（${esc(m.kind)}）</li>
-        <li>SRI：<code>${sri}</code></li>
-        <li>声明权限：${perms}</li>
-        <li>数据落点：${storage}</li>
-      </ul></li>`;
-    })
-    .join('\n    ');
-  return `<section>
-  <h2>将要安装的模块</h2>
-  <p>以下内容已在装配前解析（来源、版本、SRI、声明权限、落点）；确认后才会进④。</p>
-  <ul class="mod-adds">
-    ${rows}
-  </ul>
-</section>`;
-}
-
-/** 资源名预览段（#272）：本实例会占用的 CF 资源名（只读；只展示，不影响装配决策）。 */
-function resourceNamesSection(state: WizardState): string {
-  if (state.resourceNames.length === 0) return '';
-  const rows = state.resourceNames
-    .map((r) => `<li><code>${r.name}</code><span class="kind">${r.kind}</span></li>`)
-    .join('\n    ');
-  return `<section>
-  <h2>本实例资源名</h2>
-  <p>这些名字会在你的 Cloudflare 账户里创建/绑定；与其他实例靠命名空间隔离。</p>
-  <ul class="res-names">
-    ${rows}
-  </ul>
-</section>`;
-}
-
-/** ③½ 存储选择段（#55）：逐模块单选 + shared 知情同意。无可选模块（全 core）时整段省略。 */
-function storageSection(state: WizardState): string {
-  const options: WizardStorageOption[] = state.storageOptions;
-  if (options.length === 0) return '';
-  const levelNote: Record<string, string> = {
-    core: '经 Core API 代理（默认，推荐）',
-    shared: '共享库自建表（需知情同意）',
-    dedicated: '独立库（占账户配额）',
-    external: '自备外部库（配置页填连接串）',
-  };
-  const rows = options
-    .map((opt) => {
-      const current = state.storageChoices[opt.id] ?? opt.preferred ?? 'core';
-      const radios = opt.accepts
-        .map(
-          (level) =>
-            `<label class="sto-row"><input type="radio" name="sto-${opt.id}" value="${level}" ${current === level ? 'checked' : ''}> ${level}（${levelNote[level] ?? level}）</label>`,
-        )
-        .join('');
-      return `<fieldset class="sto-mod" data-mod="${opt.id}"><legend>${opt.id}</legend>${radios}</fieldset>`;
-    })
-    .join('\n');
-  const consent = `<label class="consent"><input type="checkbox" id="shared-consent"> ${SHARED_CONSENT_NOTE}</label>`;
-  return `<section>
-  <h2>③½ 数据存放（每模块四选一，声明之外的选项已被模块排除）</h2>
-  ${rows}
-  ${consent}
-  <button id="btn-storage" type="button">确认存储选择</button> <span class="err" id="err-storage"></span>
-</section>`;
-}
-
-/** 页面：页头常驻实例目录（可复制）+ 六段流表单。 */
-export function renderPage(state: WizardState, envHint: WizardEnvHint): string {
-  const hint = envHint;
-  const authNote = hint.hasEnvToken
-    ? '<p>已检测到环境变量 CLOUDFLARE_API_TOKEN，本步可跳过。</p>'
-    : authGuidance(hint);
-  const oauthNote =
-    hint.oauthUsable && !hint.ci
-      ? '<p class="ok">检测到本机 wrangler OAuth，可零输入直跑（跳过本步）。</p>'
-      : '';
-  const banner = hint.ci
-    ? '<p class="banner">CI/无浏览器环境：请用 CLOUDFLARE_API_TOKEN 或展开 API Token 入口</p>'
-    : '';
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unself 安装向导</title>
-<style>
-  :root { color-scheme: light dark; font-family: system-ui, sans-serif; ${themeVarBlock()} }
-  body { max-width: 42rem; margin: 0 auto; padding: 1.5rem 1rem; color: var(--unself-color-text); background: var(--unself-color-bg); }
-  header { border: 1px solid var(--unself-color-border); border-radius: 8px; padding: .75rem 1rem; margin-bottom: 1.5rem; }
-  code { user-select: all; word-break: break-all; }
-  section { margin: 1rem 0; padding: 1rem; border: 1px solid var(--unself-color-border); border-radius: 8px; }
-  label { display: block; margin: .5rem 0; }
-  input[type=password], input[type=text] { width: 100%; box-sizing: border-box; padding: .5rem; margin-top: .25rem; }
-  .err { color: var(--unself-color-danger); white-space: pre-wrap; }
-  ol li { margin: .25rem 0; }
-  .banner { border: 1px solid var(--unself-color-warning); border-radius: var(--unself-radius-md); padding: var(--unself-space-2) var(--unself-space-3); background: var(--unself-color-surface); margin-bottom: var(--unself-space-3); }
-  .ok { color: var(--unself-color-success); }
-  details.auth-fold { border: 1px solid var(--unself-color-border); border-radius: var(--unself-radius-md); padding: var(--unself-space-2) var(--unself-space-3); margin: var(--unself-space-2) 0; }
-  details.auth-fold summary { cursor: pointer; color: var(--unself-color-info); }
-  ul.res-names { padding-left: 1.2rem; }
-  ul.res-names .kind { color: var(--unself-color-info); margin-left: .6rem; }
-  ul.mod-adds { padding-left: 1.2rem; }
-  ul.mod-adds ul { padding-left: 1.2rem; }
-  ul.mod-adds li { margin: .4rem 0; }
-</style>
-</head>
-<body>
-<header>
-  <strong>实例目录</strong>：<code id="instance-path">${state.instancePath}</code>
-  <button class="copy" type="button" data-copy="instance-path">复制</button>
-</header>
-<main data-step="${state.step}">
-${banner}
-<p>当前步骤：${state.step}。任何时候重跑都收敛同一终态（幂等）。</p>
-<section>
-  <h2>① Cloudflare 凭证</h2>
-  ${oauthNote}
-  ${authNote}
-  ${authDetails(hint)}
-  <form id="form-auth"><label>API Token <input type="password" name="token" autocomplete="off"></label>
-  <button type="submit">下一步</button> <span class="err" id="err-auth"></span></form>
-</section>
-<section>
-  <h2>② 团队入口域名</h2>
-  <form id="form-domain">
-    <label><input type="radio" name="choice" value="workers" checked> workers.dev 免费域名（推荐起步）</label>
-    <label><input type="radio" name="choice" value="custom"> 自有域名 <input type="text" name="domain" placeholder="team.example.com"></label>
-    <button type="submit">下一步</button> <span class="err" id="err-domain"></span>
-  </form>
-</section>
-<section>
-  <h2>③ 启用模块</h2>
-  <form id="form-modules"><label>逗号分隔 <input type="text" name="modules" value="${state.modules.join(',')}"></label>
-  <button type="submit">下一步</button> <span class="err" id="err-modules"></span></form>
-  <p class="hint">可填的 id：官方模块（hello / chat，安装器已预装 → 部署零网络）或用下方「添加模块」加过的来源模块。</p>
-  <form id="form-module-add"><label>添加模块（安装串：npm:@unself/hello@0.1.0 / npm:@acme/pkg@1.2.0 / github:acme/pkg#v1.0.0 / https://…/x.tgz / file:./modules/x）
-  <input type="text" name="source" placeholder="npm:@acme/unself-todo@1.2.0"></label>
-  <button type="submit">添加模块</button> <span class="err" id="err-module-add"></span></form>
-</section>
-${moduleAddsSection(state)}
-${storageSection(state)}
-${resourceNamesSection(state)}
-<section>
-  <h2>④ 装配</h2>
-  <p id="confirm-line">域名：${state.domainChoice === 'custom' ? state.domain : 'workers.dev 免费域'}；模块：${state.modules.join('、')}</p>
-  <label class="consent"><input type="checkbox" id="allow-adopt"> 允许接管既有同名资源（撞车守卫放行，仅在确认这些资源确属本实例时勾选）</label>
-  <button id="btn-deploy" type="button">开始装配（九步）</button>
-  <pre id="events"></pre>
-  <p class="err" id="err-deploy"></p>
-</section>
-</main>
-<script>
-const $ = (id) => document.getElementById(id);
-for (const b of document.querySelectorAll('button.copy')) {
-  b.addEventListener('click', () => navigator.clipboard.writeText($(b.dataset.copy).textContent));
-}
-async function post(url, body) {
-  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  return { ok: res.ok, data: await res.json() };
-}
-function showErr(id, problem) { $(id).textContent = problem ?? ''; }
-$('form-auth').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const r = await post('/api/step1', { token: e.target.token.value });
-  r.ok ? location.reload() : showErr('err-auth', r.data.problem);
-});
-$('form-domain').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const r = await post('/api/step2', { choice: e.target.choice.value, domain: e.target.domain.value });
-  r.ok ? location.reload() : showErr('err-domain', r.data.problem);
-});
-$('form-modules').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const r = await post('/api/step3', { modules: e.target.modules.value.split(',') });
-  r.ok ? location.reload() : showErr('err-modules', r.data.problem);
-});
-$('form-module-add')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const r = await post('/api/step3/add', { source: e.target.source.value });
-  r.ok ? location.reload() : showErr('err-module-add', r.data.problem);
-});
-$('btn-storage')?.addEventListener('click', async () => {
-  const choices = {};
-  for (const opt of document.querySelectorAll('fieldset.sto-mod')) {
-    const id = opt.dataset.mod;
-    const checked = opt.querySelector('input[type=radio]:checked');
-    if (checked) choices[id] = checked.value;
-  }
-  const consent = document.getElementById('shared-consent')?.checked ?? false;
-  const r = await post('/api/step3b', { choices, sharedConsent: consent });
-  r.ok ? location.reload() : showErr('err-storage', r.data.problem);
-});
-$('btn-deploy').addEventListener('click', async () => {
-  $('btn-deploy').disabled = true;
-  const allowAdopt = document.getElementById('allow-adopt')?.checked ?? false;
-  const r = await post('/api/step4', { allowAdopt });
-  if (!r.ok) { showErr('err-deploy', r.data.problem); $('btn-deploy').disabled = false; return; }
-  const es = new EventSource('/api/events');
-  es.onmessage = (m) => { $('events').textContent += m.data + '\\n'; };
-  const timer = setInterval(async () => {
-    const s = await (await fetch('/api/state')).json();
-    if (s.step === 'done') { clearInterval(timer); es.close(); $('events').textContent += '\\n完成：' + s.result.baseUrl + (s.result.setupUrl ?? ''); }
-    if (s.step === 'failed') {
-      clearInterval(timer);
-      es.close();
-      showErr('err-deploy', s.error.cause);
-      $('btn-deploy').disabled = false;
-    }
-  }, 800);
-});
-</script>
-</body>
-</html>`;
-}
 
 /** 建向导服务（不 listen；端口由调用方/测试决定）。 */
 export function createWizardServer(opts: ServeOptions): Server {

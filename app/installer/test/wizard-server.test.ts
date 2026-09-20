@@ -301,7 +301,8 @@ describe('envHint 投影与多级子域更新（#246）', () => {
 
     const html = await (await fetch(`${base}/`)).text();
     expect(html).toContain('多级子域需要 Total TLS');
-    expect(html).toMatch(/<details class="auth-fold"\s+open/);
+    // #307 六步分屏：auth 折叠只在①屏渲染（banner 常驻提示 Total TLS；①屏 details 默认展开）
+    expect(html).toContain('data-step="modules"');
   });
 
   it('② 选 custom 单级子域（zone 下一级）→ needsTotalTls 保持 false，折叠收起', async () => {
@@ -394,15 +395,44 @@ describe('页面脚本必须可解析（防「HTTP 200 但所有按钮都点不�
     }
   });
 
-  it('脚本里每处 addEventListener 的目标元素都存在于同一页面（防选择器写错）', () => {
-    const html = renderPage(initialWizardState('/tmp/x/unself'), HINT);
-    const src = inlineScripts(html).join('\n');
-    const ids = [...src.matchAll(/\$\('([^']+)'\)/g)].map((m) => m[1] as string);
+  it('脚本里引用的元素 id 都在六屏渲染（#307 分屏：脚本按步共用，跨屏引用必须在任一屏存在）', () => {
+    const steps: WizardState['step'][] = ['auth', 'domain', 'modules', 'module-config', 'storage', 'ready', 'deploying', 'failed', 'done'];
+    const htmls: string[] = [];
+    for (const step of steps) {
+      const base0 = initialWizardState('/tmp/x/unself');
+      if (step === 'failed') {
+        htmls.push(renderPage({ ...base0, step, error: { cause: 'c', owner: 'code', fix: 'f' } }, HINT));
+        continue;
+      }
+      if (step === 'done') {
+        htmls.push(renderPage({ ...base0, step, result: { baseUrl: 'https://x', setupUrl: '/setup?token=t' } }, HINT));
+        htmls.push(renderPage({ ...base0, step, result: { baseUrl: 'https://x', setupUrl: null } }, HINT));
+        continue;
+      }
+      if (step === 'storage') {
+        htmls.push(renderPage({ ...base0, step, storageOptions: [{ id: 'demo', accepts: ['core'] }] }, HINT));
+        continue;
+      }
+      if (step === 'module-config') {
+        htmls.push(
+          renderPage(
+            { ...base0, step, moduleConfigs: [{ id: 'demo', fields: [{ key: 'K', label: 'k', type: 'string' as const }] }] },
+            HINT,
+          ),
+        );
+        continue;
+      }
+      htmls.push(renderPage({ ...base0, step }, HINT));
+    }
+    for (const hint of [HINT, { ...HINT, oauthUsable: false }, { ...HINT, ci: true }, { ...HINT, needsTotalTls: true }, { ...HINT, hasEnvToken: true }]) {
+      htmls.push(renderPage(initialWizardState('/tmp/x/unself'), hint));
+    }
+    const allHtml = htmls.join('\n');
+    const src = htmls.map((h) => inlineScripts(h).join('\n')).join('\n');
+    const ids = [...new Set([...src.matchAll(/\$\('([^']+)'\)/g)].map((m) => m[1] as string))];
     expect(ids.length).toBeGreaterThan(0);
     for (const id of ids) {
-      // 页面里要么真有这个元素（id="x"），要么脚本里已用 `?.` 容忍缺失。
-      const optional = new RegExp(`\\$\\('${id}'\\)\\?\.`).test(src);
-      if (!optional) expect(html).toContain(`id="${id}"`);
+      expect(allHtml).toContain(`id="${id}"`);
     }
   });
 });
