@@ -23,7 +23,15 @@ import {
   testMailConnection,
 } from './lib/admin-api'
 import { testOidcConnection } from './lib/setup-api'
+
 import { resetMemberPassword } from './lib/builtin-auth-api'
+
+/** clipboard stub（#307 复制反馈用例）：可写且记录写入内容。 */
+function stubClipboard(): { writeText: ReturnType<typeof vi.fn> } {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  return { writeText }
+}
 
 /**
  * 管理台行为测试（#17，docs/testing.md 两问检验）：
@@ -760,6 +768,62 @@ describe('InvitesPage 审批与生成（#18）', () => {
     await flushPromises()
 
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('复制成功 → 按钮同位换「已复制」且写入剪贴板；2s 后回弹「复制」（beUI StatefulButton 模式，#307）', async () => {
+    // 剪贴板 stub 先就位（用例开头），fakeTimers 后置：probe 实证 stub Clipboard 后
+    // flushPromises 在 fakeTimers 下解析不出「生成」按钮，顺序换过来即稳定。
+    const { writeText } = stubClipboard()
+    vi.mocked(createInvite).mockResolvedValue({ inviteUrl: 'https://unself.example.com/invite/abc123' })
+
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(InvitesPage)
+      await flushPromises()
+
+      await wrapper.findAll('button').find((b) => b.text().includes('生成邀请'))!.trigger('click')
+      await flushPromises()
+
+      const genBtn = wrapper.findAll('button').find((b) => b.text() === '生成')
+      expect(genBtn).toBeDefined()
+      await genBtn!.trigger('click')
+      await flushPromises()
+
+      const copyBtn = () => wrapper.findAll('button').find((b) => b.text() === '复制')
+      expect(copyBtn()).toBeDefined()
+      await copyBtn()!.trigger('click')
+      await flushPromises()
+
+      // 用户可见反馈：剪贴板确实收到链接 + 按钮同位换「已复制」
+      expect(writeText).toHaveBeenCalledWith('https://unself.example.com/invite/abc123')
+      expect(wrapper.text()).toContain('已复制')
+
+      // 2s 后回弹：文案回到「复制」，可再次复制给第二个人
+      await vi.advanceTimersByTimeAsync(2001)
+      expect(wrapper.text()).not.toContain('已复制')
+      expect(wrapper.text()).toContain('复制')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('复制失败（剪贴板拒绝）→ 不出现「已复制」（不撒谎的反馈，#307）', async () => {
+    const { writeText } = stubClipboard()
+    writeText.mockRejectedValue(new Error('denied'))
+    vi.mocked(createInvite).mockResolvedValue({ inviteUrl: 'https://unself.example.com/invite/abc123' })
+    const wrapper = mount(InvitesPage)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((b) => b.text().includes('生成邀请'))!.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find((b) => b.text() === '生成')!.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find((b) => b.text() === '复制')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('已复制')
     wrapper.unmount()
   })
 
