@@ -62,6 +62,11 @@ export interface WizardModuleAdd {
   storagePreferred?: StorageLevel;
   /** manifest 规范化哈希（进 lock 前展示用；不落盘）。 */
   manifestHash: string;
+  /**
+   * ③★ config 声明投影（#307）：resolveModule 解析时顺带投影（manifest.config 原样投影，
+   * default 归一字符串）。缺省 = 无配置页（模块未声明 config）。
+   */
+  configFields?: WizardConfigField[];
 }
 
 /**
@@ -78,6 +83,9 @@ export interface WizardConfigField {
   options?: string[];
   test?: string;
 }
+
+/** 投影字段 = 输入形状（deps 注入用别名；投影不另造形状）。 */
+export type WizardConfigFieldInput = WizardConfigField;
 
 /** 单个选中模块的 config 声明投影（#307）：无 config 的模块不出现。 */
 export interface WizardModuleConfig {

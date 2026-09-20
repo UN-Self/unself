@@ -40,6 +40,8 @@ export interface RunOptions {
     storageOptions?: Array<{ id: string; accepts: string[]; preferred?: string }>;
     /** 本实例资源名预览（#272）：向导页展示「会占用哪些 CF 资源名」。 */
     resourceNames?: Array<{ kind: string; name: string }>;
+    /** 模块配置声明投影（#307 ③★）：CLI 从模块包 manifest 读（每模块一页的依据）。 */
+    moduleConfigs?: Array<{ id: string; fields: Array<{ key: string; label: string; type: string; required?: boolean; default?: string; options?: string[]; test?: string }> }>;
   }) => Promise<number>;
   deployNineSteps?: (input: {
     instancePath: string;
@@ -401,6 +403,7 @@ async function exec(opts: RunOptions): Promise<number> {
       let state = stateMod.initialWizardState(o.instancePath, {
         ...(o.storageOptions ? { storageOptions: o.storageOptions as never[] } : {}),
         ...(o.resourceNames ? { resourceNames: o.resourceNames } : {}),
+        ...(o.moduleConfigs ? { moduleConfigs: o.moduleConfigs } : {}),
       });
       const { server, port: actual } = await startWizardServer({
         port: o.port,
@@ -418,6 +421,8 @@ async function exec(opts: RunOptions): Promise<number> {
               domain: input.domain,
               modules: input.modules,
               ...(input.storageChoices ? { storageChoices: input.storageChoices } : {}),
+              // #307 ③★：模块配置值透传（引擎侧消费后续任务接；先安全送达调用参数）。
+              ...(input.configValues ? { configValues: input.configValues } : {}),
               ...(input.token ? { token: input.token } : {}),
               ...(input.allowAdopt ? { allowAdopt: true } : {}),
               ...(input.yes ? { yes: true } : {}),
@@ -449,6 +454,25 @@ async function exec(opts: RunOptions): Promise<number> {
           // #269 ③ 改模块后重算资源名预览（不再沿用启动时快照）。
           previewResources: async (moduleIds) =>
             (await (await import('./deploy')).previewInstanceResources(o.instancePath, moduleIds)).names,
+          // #307 ③★ 改模块后重算配置声明（本地解析模块包 manifest，不联网）。
+          refreshModuleConfigs: async (moduleIds) =>
+            (await import('./deploy')).wizardModuleConfigs(o.instancePath, moduleIds),
+          // #307 ② zone 自动发现（sessionToken 透传；'' = 本机 wrangler OAuth）。
+          listZones: async (token) => (await import('./deploy')).wizardListZones(token),
+          // #307 ③★ 测试连接（test:'http'）：服务端代理 HEAD/GET 验证可达，成功/失败人话。
+          testConnection: async (url) => {
+            const started = Date.now();
+            try {
+              const res = await fetch(url, { method: 'GET', redirect: 'follow', signal: AbortSignal.timeout(10_000) });
+              const ms = Date.now() - started;
+              return res.ok
+                ? { ok: true, message: `可达：HTTP ${res.status}（${ms}ms）` }
+                : { ok: false, message: `服务端应答了但状态异常：HTTP ${res.status}（${ms}ms）——确认地址是否正确` };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return { ok: false, message: `连不上：${msg.slice(0, 120)}——检查地址/网络（也可先跳过，装配时会再验证）` };
+            }
+          },
         },
       });
       log(`向导已启动：http://localhost:${actual}`);
@@ -468,6 +492,8 @@ async function exec(opts: RunOptions): Promise<number> {
       // #55/#284：按 config 条目的来源做本地解析（npm 本地命中 / file: 目录）读模块 manifest
       // 的 storage 声明，供向导③½ 做四级单选与 accepts 校验（不联网、不下载）
       storageOptions: await (await import('./deploy')).wizardStorageOptions(inst.path),
+      // #307 ③★：选中模块的 config 声明（每模块一页的依据；本地解析，不联网）
+      moduleConfigs: await (await import('./deploy')).wizardModuleConfigs(inst.path),
       // #272：本实例会占用的 CF 资源名（ wizard 页预览）
       resourceNames: (await (await import('./deploy')).previewInstanceResources(inst.path)).names,
     });
