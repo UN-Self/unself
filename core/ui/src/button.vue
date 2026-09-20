@@ -5,8 +5,10 @@ import { computed } from 'vue'
 /**
  * 按钮基元：primary / outline / ghost 三变体 + sm/md/lg 尺寸。
  * 动效参数（§6.5 查找序）：beUI button-base 的 press-scale/hover-lift 语义
- * 在无 motion 库下以 transition + active:scale 等价移植，时长取 tokens
- * --duration-fast，缓动 --ease-out。
+ * 在无 motion 库下以 transition + active:scale 等价移植：
+ * - 按下 = scale(var(--unself-motion-press-scale))（beUI SPRING_PRESS 语义）
+ * - 悬浮 = 主按钮 scale(1.02) 微浮（beUI hover，阴影在按钮上是脏区，故用 transform）
+ * 时长走 --duration-fast、缓动 --ease-out（#307 基础反馈层）。
  */
 export interface ButtonProps {
   variant?: 'primary' | 'outline' | 'ghost'
@@ -80,7 +82,8 @@ const sizeClass = computed(() => {
     transform var(--unself-duration-fast) var(--unself-ease-out);
 }
 .u-btn:active:not(:disabled) {
-  transform: scale(0.97);
+  /* #307 ①基础反馈层：beUI SPRING_PRESS——数值出自契约令牌，禁魔法数 */
+  transform: scale(var(--unself-motion-press-scale));
 }
 .u-btn:disabled {
   opacity: 0.55;
@@ -97,6 +100,8 @@ const sizeClass = computed(() => {
 }
 .u-btn-primary:hover:not(:disabled) {
   background: var(--unself-color-primary-hover);
+  /* #307 ①基础反馈层：beUI hover 微浮（1.02）——只 transform，不叠阴影 */
+  transform: scale(1.02);
 }
 
 .u-btn-outline {
@@ -144,10 +149,15 @@ const sizeClass = computed(() => {
     transform: rotate(360deg);
   }
 }
-/* 降低动效偏好：旋转退化为静态指示（按钮上仍有 loading 文案/禁用态，不丢信息） */
+/* 降低动效偏好：旋转退化为静态指示（按钮上仍有 loading 文案/禁用态，不丢信息）；
+   按压/悬浮缩放归零——状态语义（active/hover 底色变化）仍在，不丢信息（#307） */
 @media (prefers-reduced-motion: reduce) {
   .u-btn-spinner {
     animation: none;
+  }
+  .u-btn:active:not(:disabled),
+  .u-btn-primary:hover:not(:disabled) {
+    transform: none;
   }
 }
 </style>
