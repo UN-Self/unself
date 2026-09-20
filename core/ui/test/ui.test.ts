@@ -5,7 +5,7 @@ import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { mount } from '@vue/test-utils'
 
-import { UButton, UCard, UErrorCard, UInput, USkeleton, USwitch } from '../src/index'
+import { UButton, UCard, UErrorCard, UDrawCheck, UInput, USkeleton, USwitch } from '../src/index'
 
 /**
  * 基元测试（#60 测试标准执行 · 两问检验）：
@@ -128,6 +128,15 @@ describe('USkeleton / UCard 输出契约（props → 渲染结果）', () => {
 
     const none = mount(UCard, { props: { padding: 'none' } })
     expect(none.find('.u-card').classes()).toContain('u-card-none')
+  })
+})
+
+describe('UDrawCheck 成功勾描画（#307 ②状态叙事）', () => {
+  it('圆底与描画勾同时在场（终态图标的用户可见面）；组件可复用（两处 done 态共享一份实现）', () => {
+    const wrapper = mount(UDrawCheck, { props: { size: 28 } })
+    expect(wrapper.find('.u-draw-check-ring').exists()).toBe(true)
+    expect(wrapper.find('.u-draw-check-tick').exists()).toBe(true)
+    expect(wrapper.find('[role="img"]').attributes('aria-label')).toBe('完成')
   })
 })
 
