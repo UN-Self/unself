@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 // Unself 实例装配配置（唯一配置文件，PRODUCT_SPEC §5.5）：
-// 装配引擎（packages/installer/src/engine）的幂等九步脚本与未来 Docker 编排读同一份。
+// 装配引擎（app/installer/src/engine）的幂等九步脚本与未来 Docker 编排读同一份。
 // OIDC 凭证不进本文件——部署后在 setup 向导填写并存 core 库。
 {
   // 实例对外域名；留空/省略 → 用 <worker>.workers.dev 临时域（#15 验收路径）

@@ -7,7 +7,7 @@
  *
  * 词表六项的落地状态（首版只实现有真实消费者的两个词，其余留 501 占位防静默假成功）：
  * - storage：模块键值存储（module_kv，MODULES_DB）——真实现；**这是 `core` 级数据落点的唯一通道**
- *   （#248 决策 #55/#75 收敛（a)：模块 SDK 不再直连数据库，见 packages/sdk/src/storage.ts）；
+ *   （#248 决策 #55/#75 收敛（a)：模块 SDK 不再直连数据库，见 core/sdk/src/storage.ts）；
  * - notify：向成员发站内通知（module_notify 类型行，迁移 0008 种入）——真实现；
  * - acl / ai / realtime / mail：契约预留（词表冻结、门禁生效），端点 501 待后续 issue 接线。
  */

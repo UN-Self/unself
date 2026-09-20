@@ -1,0 +1,19 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types", "node"],
+    "allowJs": true,
+    "checkJs": false,
+    // 以下三项只为容纳上游搬运件（worker/src 内 5 个 .ts 文件，只删不改，GPL）：
+    // - allowImportingTsExtensions：上游 JS 用 `.ts` 后缀互相 import，运行时（workerd/vitest）支持
+    // - noUncheckedIndexedAccess=false：channel-deletion.ts 对 batch 结果数组的解构依赖索引放宽；
+    //   本包 test/ 对数组访问均有显式断言/长度断言把关
+    // - skipLibCheck：跳过依赖声明文件内部检查（与仓库其他包一致口径）
+    // 上游 .ts 的 Hono 类型面由 test/worker-modules.d.ts 声明合并补齐；类型检查范围 = test/
+    "allowImportingTsExtensions": true,
+    "noUncheckedIndexedAccess": false,
+    "skipLibCheck": true
+  },
+  "include": ["test"],
+  "exclude": ["worker"]
+}

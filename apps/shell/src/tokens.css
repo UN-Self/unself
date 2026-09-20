@@ -4,8 +4,8 @@
  * Unself 设计令牌单一来源（PRODUCT_SPEC §6.5）：
  * 契约名 + 默认值定义于此，组件/模块禁止裸颜色值与魔法数。
  * 命名空间（§6.5.3）：全部语义令牌前缀 --unself-（与契约键 .→- 一一对应）；
- * 机器可读真值在 packages/contracts/src/theme-tokens.json（默认主题包），
- * 本文件与同值由 packages/contracts/test/theme.test.ts 守卫（单一份值防漂移）。
+ * 机器可读真值在 core/contracts/src/theme-tokens.json（默认主题包），
+ * 本文件与同值由 core/contracts/test/theme.test.ts 守卫（单一份值防漂移）。
  * 亮色单主题（M0）；暗色主题 = 未来换一份值，零组件改动。
  * 动效令牌（duration/ease）为平台内部默认值，不属契约（§6.5.2 拍板
  * 2026-09-09：动效归模块作者自治，平台不评审、不统一、不体检），勿加进任何契约文件。

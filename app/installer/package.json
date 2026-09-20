@@ -1,0 +1,52 @@
+{
+  "name": "@unself/installer",
+  "version": "0.1.0",
+  "description": "Unself 零克隆安装器：本地 Web 向导 → 九步装配到你自己的 Cloudflare 账户（不需要 clone 仓库）",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UN-Self/unself.git",
+    "directory": "app/installer"
+  },
+  "type": "module",
+  "bin": {
+    "unself": "dist/unself.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "pnpm run build:artifacts && bash scripts/build-bin.sh",
+    "build:artifacts": "tsx scripts/build-artifacts.ts",
+    "build:bin": "bash scripts/build-bin.sh",
+    "prepack": "pnpm run build"
+  },
+  "unself": {
+    "note": "#257/#284：引擎（@unself/deploy-cloudflare）与其运行期依赖全部 bundle 进 dist/unself.mjs；平台产物（core Worker/shell/迁移 SQL/vendor）预构建内嵌进 dist/artifacts/**。官方模块包 @unself/hello、@unself/chat 连同 @unself/sdk 是安装器的**运行期依赖**（仓库内 workspace:*，发布时由 pnpm 改写为版本号）：干净机器装 Node + 本 tarball，npm 一并拉取三个官方包即可部署。"
+  },
+  "dependencies": {
+    "@unself/hello": "workspace:*",
+    "@unself/chat": "workspace:*",
+    "@unself/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "@unself/contracts": "workspace:*",
+    "@unself/control-plane": "workspace:*",
+    "blake3-wasm": "2.1.5",
+    "esbuild": "^0.28.0",
+    "jose": "^6.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "zod": "^4.1.0"
+  }
+}
