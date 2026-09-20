@@ -220,11 +220,11 @@ describe('wrapper 形态化（#273）：workers.dev 根挂载 + 模块侧 frame-
       moduleId: 'hello',
       mount: '',
       origin: MODULE_ORIGIN,
-      shellOrigin: 'https://unself-core-api.test-subdomain.workers.dev',
+      shellOrigin: 'https://unself-workbench.test-subdomain.workers.dev',
     });
     const res = await w.fetch('/');
     expect(res.headers.get('content-security-policy')).toBe(
-      'frame-ancestors https://unself-core-api.test-subdomain.workers.dev',
+      'frame-ancestors https://unself-workbench.test-subdomain.workers.dev',
     );
   });
 
@@ -237,7 +237,7 @@ describe('wrapper 形态化（#273）：workers.dev 根挂载 + 模块侧 frame-
 
 describe('wrapper 壳 origin meta 注入（#277）：unself-shell-origin', () => {
   const MODULE_ORIGIN = 'https://unself-module-hello.test-subdomain.workers.dev';
-  const CORE_ORIGIN = 'https://unself-core-api.test-subdomain.workers.dev';
+  const CORE_ORIGIN = 'https://unself-workbench.test-subdomain.workers.dev';
   const HTML_HEAD = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>mod</title></head><body>module page</body></html>';
 
   it('workers.dev 根挂载 + shellOrigin：/ 命中 ASSETS /index.html（text/html）→ <head> 后注入 meta，status/content-type 保留', async () => {

@@ -37,5 +37,5 @@ jobs:
       # lint 闸门（#195 机制③）：主题令牌 lint（仓库唯一 linter，零依赖单文件）
       - run: pnpm verify:tokens
       # 跨版本迁移闸门（#195 机制③）：老库（前 N-1 迁移 + 既有数据）→ 新迁移必须能跑通；
-      # 全新库路径由 services/core-api/test/migrations.test.ts 覆盖，此处补升级路径。
+      # 全新库路径由 app/workbench/test/migrations.test.ts 覆盖，此处补升级路径。
       - run: node scripts/check-migrations-upgrade.mjs

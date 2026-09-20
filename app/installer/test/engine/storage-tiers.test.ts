@@ -10,17 +10,15 @@
  * - external：装配器不接线（不建库、不记账、不建表）。
  * 平台基建（module_kv，modules 库）记账 unself_migrations_platform 与四者并存不互相覆盖。
  */
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { runNineSteps } from '../../src/engine/steps';
 import { RestClient } from '../../src/engine/rest/client';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
+import { makeFakeRepoRoot, seedShellDist } from './helpers/fake-repo';
 
-const REPO_ROOT = fileURLToPath(new URL('../../../..', import.meta.url));
 const FIXED_JWKS = JSON.stringify({
   keys: [{
     kty: 'EC',
@@ -76,13 +74,8 @@ async function writeFixture(rootDir: string, f: TierFixture): Promise<void> {
 
 describe('四级数据落点各跑一个模块（#248 ①）', () => {
   it('shared/dedicated 各建各的表与库并独立记账；core/external 不建表不记账', { timeout: 180_000 }, async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), 'unself-tiers-'));
+    const rootDir = await makeFakeRepoRoot('unself-tiers-');
     try {
-      // app 不整目录 symlink：下面的 writeFixture 要往 rootDir/app/modules/<id> 写夹具，
-      // 整目录软链会让写入穿透进真仓库（#303 踩过）→ 只让 core/services/apps 走软链。
-      for (const rel of ['core', 'services', 'apps']) {
-        await symlink(join(REPO_ROOT, rel), join(rootDir, rel), 'dir');
-      }
       await writeFixture(rootDir, {
         id: 'core-mod',
         level: 'core',
@@ -105,7 +98,7 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
       const logs: string[] = [];
       await runNineSteps({
         rootDir,
-        buildShell: async () => {},
+        buildShell: seedShellDist,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
         yes: true,
       configOverride: {
@@ -161,13 +154,8 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
   });
 
   it('shared 落点装到没申报的表 → 装配停住（护栏②：共享库不接收未经申报的表）', { timeout: 120_000 }, async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), 'unself-tiers-bad-'));
+    const rootDir = await makeFakeRepoRoot('unself-tiers-bad-');
     try {
-      // app 不整目录 symlink：下面的 writeFixture 要往 rootDir/app/modules/<id> 写夹具，
-      // 整目录软链会让写入穿透进真仓库（#303 踩过）→ 只让 core/services/apps 走软链。
-      for (const rel of ['core', 'services', 'apps']) {
-        await symlink(join(REPO_ROOT, rel), join(rootDir, rel), 'dir');
-      }
       await writeFixture(rootDir, {
         id: 'bad-mod',
         level: 'shared',
@@ -180,7 +168,7 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
       try {
         await runNineSteps({
           rootDir,
-          buildShell: async () => {},
+          buildShell: seedShellDist,
           client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
           yes: true,
       configOverride: { domain: '', modules: [{ id: 'bad-mod', source: 'file:./app/modules/bad-mod' }], storage: { provider: 'r2', bucket: 'unself-storage' } },

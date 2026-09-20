@@ -12,10 +12,10 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile, cp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { findRepoRoot } from '../helpers/repo-root';
 
-const REPO_ROOT = fileURLToPath(new URL('../../../..', import.meta.url));
+const REPO_ROOT = findRepoRoot();
 const SCRIPT = join(REPO_ROOT, 'scripts', 'check-migrations-upgrade.mjs');
 
 /** 跑闸门脚本，回 { code, out }（stdout+stderr 合并，审计可见原文）。 */
@@ -33,8 +33,8 @@ describe('迁移闸门目录自动发现（#248）', () => {
   it('真仓库：发现清单含 chat 迁移链与平台 modules 库迁移（硬编码清单会漏掉它们）', { timeout: 120_000 }, async () => {
     const { code, out } = await runGate(REPO_ROOT);
     expect(out).toContain('app/modules/chat/migrations/chat');
-    expect(out).toContain('services/core-api/migrations/modules');
-    expect(out).toContain('services/core-api/migrations/core');
+    expect(out).toContain('app/workbench/migrations/modules');
+    expect(out).toContain('app/workbench/migrations/core');
     expect(code).toBe(0);
   });
 

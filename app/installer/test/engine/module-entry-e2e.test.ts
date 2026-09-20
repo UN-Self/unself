@@ -21,14 +21,15 @@ import { parseLockText } from '../../src/engine/lock';
 import { sriFromBuffer } from '../../src/engine/sources';
 import { RestClient } from '../../src/engine/rest/client';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
+import { findRepoRoot } from '../helpers/repo-root';
 
-const ROOT = new URL('../../../..', import.meta.url).pathname;
+const ROOT = findRepoRoot();
 const HELLO_DIR = join(ROOT, 'app/modules/hello');
 const LOCK_PATH = join(ROOT, 'unself.lock');
 const DEPLOY_DIR = join(ROOT, '.deploy');
 
 async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'apps/shell/dist');
+  const dist = join(rootDir, 'app/workbench/dist');
   await mkdir(join(dist, 'assets'), { recursive: true });
   await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
 }

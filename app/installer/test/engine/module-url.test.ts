@@ -15,7 +15,7 @@ import {
   parseWorkersDevSubdomain,
 } from '../../src/engine/module-url';
 
-const CORE_WORKER = 'unself-core-api';
+const CORE_WORKER = 'unself-workbench';
 
 describe('mountShapeOf（形态判定）', () => {
   it('domain 非空 → domain；空串/空白/undefined → workers-dev', () => {
@@ -75,13 +75,13 @@ describe('moduleRoutePattern / moduleHealthUrl', () => {
 describe('parseWorkersDevSubdomain（从 core URL 反解账号子域，避免二次 API 请求）', () => {
   it('标准 core workers.dev URL → 子域', () => {
     expect(
-      parseWorkersDevSubdomain('https://unself-core-api.test-subdomain.workers.dev', CORE_WORKER),
+      parseWorkersDevSubdomain('https://unself-workbench.test-subdomain.workers.dev', CORE_WORKER),
     ).toBe('test-subdomain');
   });
 
   it('自带域 / 非 https / 名字不匹配 / 坏 URL → null', () => {
     expect(parseWorkersDevSubdomain('https://demo.handywote.top', CORE_WORKER)).toBeNull();
-    expect(parseWorkersDevSubdomain('http://unself-core-api.test-subdomain.workers.dev', CORE_WORKER)).toBeNull();
+    expect(parseWorkersDevSubdomain('http://unself-workbench.test-subdomain.workers.dev', CORE_WORKER)).toBeNull();
     expect(parseWorkersDevSubdomain('https://other.example.workers.dev', CORE_WORKER)).toBeNull();
     expect(parseWorkersDevSubdomain('not a url', CORE_WORKER)).toBeNull();
   });
@@ -89,8 +89,8 @@ describe('parseWorkersDevSubdomain（从 core URL 反解账号子域，避免二
 
 describe('originOf（frame-ancestors 值 = 壳 origin）', () => {
   it('取 origin，丢掉路径', () => {
-    expect(originOf('https://unself-core-api.test-subdomain.workers.dev')).toBe(
-      'https://unself-core-api.test-subdomain.workers.dev',
+    expect(originOf('https://unself-workbench.test-subdomain.workers.dev')).toBe(
+      'https://unself-workbench.test-subdomain.workers.dev',
     );
     expect(originOf('https://demo.handywote.top/m/hello')).toBe('https://demo.handywote.top');
   });

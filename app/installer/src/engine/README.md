@@ -10,7 +10,7 @@ Unself 的 Cloudflare 装配引擎（M0 #14，PRODUCT_SPEC §5.5）：幂等九�
 |---|------|------|
 | ① | 确保 core/modules 两个 D1 存在 | `d1 list` 查漏 → `d1 create`（幂等：已存在即跳过） |
 | ② | 跑核心迁移与选中模块迁移 | `wrangler d1 migrations apply`（core 与各模块自管 migrations_dir；表前缀版本化） |
-| ③ | 构建上传 Shell Worker | `vite build`（apps/shell）→ 生成 `.deploy/cloudflare/` 装配产物 → `wrangler deploy` |
+| ③ | 构建上传 Shell Worker | `vite build`（app/workbench）→ 生成 `.deploy/cloudflare/` 装配产物 → `wrangler deploy` |
 | ④ | 每个选中模块构建、上传、绑 `/m/<id>/*` 路由与存储绑定 | esbuild 打包模块 Worker + module-sdk 资产 → `wrangler deploy`（route = `<domain>/m/<id>/*`） |
 | ⑤ | 注册表写入 | `wrangler d1 execute` upsert `module_registry`（选中 enabled=1，未选 enabled=0/not_deployed；manifest 快照随注册刷新） |
 | ⑥ | 建 R2 桶或接收外部 S3 参数 | `r2 bucket list` 查漏 → `r2 bucket create unself-storage`（provider=s3 时校验外部参数即可） |

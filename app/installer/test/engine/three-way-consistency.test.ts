@@ -100,7 +100,7 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
     const entry = buildManifestSnapshot({
       manifestText: MANIFEST,
       moduleId: 'hello',
-      baseUrl: 'https://unself-core-api.test-subdomain.workers.dev',
+      baseUrl: 'https://unself-workbench.test-subdomain.workers.dev',
       entry: moduleEntryUrl(urlInput),
     });
     expect(entry.entry).toBe('https://unself-module-hello.test-subdomain.workers.dev/');
@@ -114,7 +114,7 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
       });
     });
     await smokeCheck({
-      coreUrl: 'https://unself-core-api.test-subdomain.workers.dev',
+      coreUrl: 'https://unself-workbench.test-subdomain.workers.dev',
       modules: [{ id: 'hello', baseUrl: moduleBaseUrl(urlInput) }],
     });
     // 探测点 == entry 装载点（同 origin，模块恒挂根路径）
@@ -133,7 +133,7 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
     const core = JSON.parse(coreWranglerConfig({
       config: CONFIG,
       dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
-      coreName: 'unself-core-api',
+      coreName: 'unself-workbench',
       zoneName: 'handywote.top',
     })) as { routes: unknown };
     const mod = JSON.parse(moduleWranglerConfig({

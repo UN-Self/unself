@@ -1,0 +1,44 @@
+{
+  "name": "@unself/workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "pnpm typecheck && vite build",
+    "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@unself/contracts": "workspace:*",
+    "@unself/mail-smtp": "workspace:*",
+    "@unself/ui": "workspace:*",
+    "hono": "^4.10.0",
+    "jose": "^6.1.0",
+    "lucide-vue-next": "^0.544.0",
+    "vue": "^3.5.0",
+    "vue-router": "^4.5.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.0.0",
+    "@tailwindcss/vite": "^4.0.0",
+    "@unself/sdk": "workspace:*",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "@vue/test-utils": "^2.5.0",
+    "jsdom": "^27.4.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.0",
+    "vue-tsc": "^3.0.0",
+    "wrangler": "^4.0.0"
+  }
+}

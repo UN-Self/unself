@@ -4,7 +4,7 @@
  * 临时目录（与 .deploy/cloudflare 同深度，相对 import 才解析得到）后**真实 import 执行**，
  * 断言打在「回退出来的 HTML 有没有安全头」——而不是断言源码里有没有那行调用。
  *
- * 为什么必须测生成物：静态资产路径的头上在 `apps/shell/public/_headers`，
+ * 为什么必须测生成物：静态资产路径的头上在 `app/workbench/web/public/_headers`，
  * 而 `/setup*` 走 Worker（run_worker_first）→ 头只在生成入口里补。两者漏一个就是漏一面。
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -13,8 +13,9 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { coreWorkerEntrySource } from '../../src/engine/steps';
+import { findRepoRoot } from '../helpers/repo-root';
 
-const REPO_ROOT = new URL('../../../..', import.meta.url).pathname;
+const REPO_ROOT = findRepoRoot();
 const temps: string[] = [];
 
 afterEach(async () => {
@@ -107,16 +108,16 @@ describe('生成的 core 入口（#209）：SPA 回退的 HTML 必须带安全�
     const entry = await loadGeneratedEntry({
       registryManifests: [
         { entry: 'https://unself-module-hello.test-subdomain.workers.dev/' },
-        { entry: 'https://unself-core-api.test-subdomain.workers.dev/' },
+        { entry: 'https://unself-workbench.test-subdomain.workers.dev/' },
       ],
     });
     const res = await entry.fetch(
-      new Request('https://unself-core-api.test-subdomain.workers.dev/', { headers: { accept: 'text/html' } }),
+      new Request('https://unself-workbench.test-subdomain.workers.dev/', { headers: { accept: 'text/html' } }),
     );
     const csp = res.headers.get('content-security-policy') ?? '';
     // 模块 origin 入选；壳自身 origin 不当白名单（同源已由 'self' 覆盖）
     expect(csp).toContain('https://unself-module-hello.test-subdomain.workers.dev');
-    expect(csp).not.toContain('https://unself-core-api.test-subdomain.workers.dev');
+    expect(csp).not.toContain('https://unself-workbench.test-subdomain.workers.dev');
     expect(csp).toContain("frame-src 'self'");
     // 同时改写下发 HTML 的 CSP meta（#247b：meta∩头部交集）
     const body = await res.text();
@@ -132,7 +133,7 @@ describe('生成的 core 入口（#209）：SPA 回退的 HTML 必须带安全�
       registryManifests: [{ entry: 'https://unself-module-hello.test-subdomain.workers.dev/' }],
     });
     const res = await entry.fetch(
-      new Request('https://unself-core-api.test-subdomain.workers.dev/', {
+      new Request('https://unself-workbench.test-subdomain.workers.dev/', {
         headers: { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
       }),
     );
@@ -146,7 +147,7 @@ describe('生成的 core 入口（#209）：SPA 回退的 HTML 必须带安全�
       assetsBody: 'export const x = 1;',
     });
     const res = await entry.fetch(
-      new Request('https://unself-core-api.test-subdomain.workers.dev/assets/index-abc.js', {
+      new Request('https://unself-workbench.test-subdomain.workers.dev/assets/index-abc.js', {
         headers: { accept: 'text/html,application/xhtml+xml,*/*;q=0.8' },
       }),
     );

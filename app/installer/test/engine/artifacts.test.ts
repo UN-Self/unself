@@ -2,7 +2,7 @@
 /**
  * 产物模式行为测试（#257）：引擎从「随安装器分发的产物根」装配，而不是从 rootDir 读仓库源码树。
  *
- * 取证方式（硬）：rootDir 是一个**空目录**（没有 modules/ services/ apps/ packages/），
+ * 取证方式（硬）：rootDir 是一个**空目录**（没有 app/modules、app/workbench 这些源码树），
  * 产物根是**从零合成**的字典树——九步能跑通即证明「没读仓库」：真去读会因文件不存在炸掉。
  * 反向（红灯）：把产物根指到空目录必须抛错——否则「产物模式」会静默回落成仓库路径，
  * 干净机器上就变成「看起来在跑产物、其实在读不存在的源码树」。
@@ -70,7 +70,7 @@ describe('resolveArtifactRoots（产物根解析，显式 > env > 自探测）',
 
 describe('runNineSteps（产物模式：空 rootDir 也能装配出实例）', () => {
   it('空 rootDir + 合成产物根：九步跑通，core/shell/模块 worker 全部来自产物', { timeout: 120_000 }, async () => {
-    const rootDir = await tmp('unself-arts-rootdir-'); // 空目录：无 modules/ services/ apps/
+    const rootDir = await tmp('unself-arts-rootdir-'); // 空目录：无 app/modules、app/workbench
     const artifacts = await tmp('unself-arts-tree-');
     await writeArtifactFixture(artifacts);
     const fake = makeCfRestFake();
@@ -94,7 +94,7 @@ describe('runNineSteps（产物模式：空 rootDir 也能装配出实例）', (
     });
 
     expect(shellBuildCalled).toBe(false);
-    expect(summary.baseUrl).toBe('https://unself-core-api.test-subdomain.workers.dev');
+    expect(summary.baseUrl).toBe('https://unself-workbench.test-subdomain.workers.dev');
     // core Worker 来自产物（字节级一致）
     expect(await readFile(join(rootDir, '.deploy/cloudflare/core-worker.js'), 'utf8')).toBe(FAKE_CORE_WORKER);
     // shell 资产来自产物

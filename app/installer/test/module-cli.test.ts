@@ -14,8 +14,9 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseArgs, run, type RunOptions } from '../src/cli';
 import { instanceLayout } from '../src/lib/dir';
+import { findRepoRoot } from './helpers/repo-root';
 
-const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
+const REPO_ROOT = findRepoRoot();
 const HELLO_DIR = join(REPO_ROOT, 'app/modules/hello');
 
 let home: string;

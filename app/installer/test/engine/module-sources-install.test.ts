@@ -18,11 +18,12 @@ import { runNineSteps } from '../../src/engine/steps';
 import { SourceDriftError } from '../../src/engine/module-sources';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { RestClient } from '../../src/engine/rest/client';
+import { findRepoRoot } from '../helpers/repo-root';
 
-const ROOT = new URL('../../../..', import.meta.url).pathname;
+const ROOT = findRepoRoot();
 
 async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'apps/shell/dist');
+  const dist = join(rootDir, 'app/workbench/dist');
   await mkdir(join(dist, 'assets'), { recursive: true });
   await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
 }

@@ -24,6 +24,7 @@ import {
 import { moduleWorkerEntry } from '../../src/engine/assemble';
 import { RestClient } from '../../src/engine/rest/client';
 import type { UnselfConfig } from '../../src/engine/config';
+import { findRepoRoot } from '../helpers/repo-root';
 
 
 /** REST 替身：按请求序列回放（D1 list/create、KV list/create 的 v4 信封）。 */
@@ -97,7 +98,7 @@ describe('generateChatKeyring（AES-256-GCM 密钥环）', () => {
 });
 
 describe('readChatPackageConfig（包配置子集解析）', () => {
-  const REPO = new URL('../../../..', import.meta.url).pathname;
+  const REPO = findRepoRoot();
 
   it('真实包配置：vars/DO/migrations 全量解析，D1 绑定=DB', async () => {
     const pkg = await readChatPackageConfig(join(REPO, 'app/modules/chat'));
@@ -179,7 +180,7 @@ describe('chatWranglerConfig（部署配置生成）', () => {
 });
 
 describe('moduleWorkerEntry（模块入口解析，#219）', () => {
-  const REPO = new URL('../../../..', import.meta.url).pathname;
+  const REPO = findRepoRoot();
 
   it('hello：包 main = src/index.ts；chat：包 main = worker/src/index.js', async () => {
     await expect(moduleWorkerEntry(join(REPO, 'app/modules/hello'))).resolves.toBe(join(REPO, 'app/modules/hello/src/index.ts'));

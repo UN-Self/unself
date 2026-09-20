@@ -220,7 +220,7 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
   it('更新 unself.lock：去模块条目与 worker 台账，保留其它资源', async () => {
     const fake = makeCfRestFake({
       existingD1: ['unself-core', 'unself-modules'],
-      existingWorkers: ['unself-module-todo', 'unself-core-api'],
+      existingWorkers: ['unself-module-todo', 'unself-workbench'],
     });
     const { client, coreUuid } = await seed({ id: 'todo', level: 'shared', tables: ['todo_items'], fake });
     const lock = emptyLock();
@@ -240,7 +240,7 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
       d1: [{ name: 'unself-core', id: coreUuid }],
       kv: [],
       r2: [],
-      workers: [{ name: 'unself-module-todo' }, { name: 'unself-core-api' }],
+      workers: [{ name: 'unself-module-todo' }, { name: 'unself-workbench' }],
     };
     const rootDir = await makeInstance('lock', serializeLock(lock));
 
@@ -253,7 +253,7 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
     };
     expect(next.modules.todo).toBeUndefined();
     expect(next.modules.other).toBeDefined();
-    expect(next.resources.workers.map((w) => w.name)).toEqual(['unself-core-api']);
+    expect(next.resources.workers.map((w) => w.name)).toEqual(['unself-workbench']);
     expect(next.resources.d1.map((d) => d.name)).toEqual(['unself-core']);
     await rm(rootDir, { recursive: true, force: true });
   });

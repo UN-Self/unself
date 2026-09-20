@@ -104,7 +104,7 @@ describe('#272 配置命名空间（纯函数）', () => {
       (n) => n.name,
     );
     expect(names).toContain('mysite-core');
-    expect(names).toContain('mysite-core-api');
+    expect(names).toContain('mysite-workbench');
     expect(names).toContain('mysite-module-hello');
     expect(names).toContain('mysite-storage');
     expect(names).not.toContain('unself-core');
@@ -132,14 +132,14 @@ describe('#272 撞车守卫（纯逻辑）', () => {
 
   it('目标名只列本次会创建/绑定的资源（含桶与模块 Worker）', () => {
     expect(targets.map((t) => `${t.kind}:${t.name}`).sort()).toEqual(
-      ['d1:sitea-core', 'd1:sitea-modules', 'r2:sitea-storage', 'worker:sitea-core-api', 'worker:sitea-module-hello'].sort(),
+      ['d1:sitea-core', 'd1:sitea-modules', 'r2:sitea-storage', 'worker:sitea-workbench', 'worker:sitea-module-hello'].sort(),
     );
   });
 
   it('无同名资源 → clear；台账对上 → owned；对不上 → 停住；allowAdopt → adopted', () => {
     const existing = [
       { kind: 'd1' as const, name: 'sitea-core', id: 'uuid-1' },
-      { kind: 'worker' as const, name: 'sitea-core-api' },
+      { kind: 'worker' as const, name: 'sitea-workbench' },
     ];
     expect(decideGuard({ existing: [], allowAdopt: false }).status).toBe('clear');
 
@@ -147,7 +147,7 @@ describe('#272 撞车守卫（纯逻辑）', () => {
       d1: [{ name: 'sitea-core', id: 'uuid-1' }],
       kv: [],
       r2: [],
-      workers: [{ name: 'sitea-core-api' }],
+      workers: [{ name: 'sitea-workbench' }],
     };
     expect(decideGuard({ existing, ledger, allowAdopt: false }).status).toBe('owned');
 
@@ -158,7 +158,7 @@ describe('#272 撞车守卫（纯逻辑）', () => {
 
     const adopted = decideGuard({ existing, allowAdopt: true });
     expect(adopted.status).toBe('adopted');
-    expect(adopted.foreign.map((f) => f.name).sort()).toEqual(['sitea-core', 'sitea-core-api']);
+    expect(adopted.foreign.map((f) => f.name).sort()).toEqual(['sitea-core', 'sitea-workbench']);
 
     // 停住原文含资源名与继续方式
     try {
@@ -342,7 +342,7 @@ describe('#272 九步真跑（替身账户）', () => {
       // 模拟「已经部署过的老实例」账户态：同名资源都在，但没有本实例台账（root 全新）
       existingD1: ['unself-core', 'unself-modules'],
       existingBuckets: ['unself-storage'],
-      existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] },
+      existingSecrets: { 'unself-workbench': ['JWT_PRIVATE_KEY'] },
     });
     await runNineSteps({
       rootDir: root,
@@ -356,10 +356,10 @@ describe('#272 九步真跑（替身账户）', () => {
     // 资源名逐字不变（没有因为命名空间化变成孤儿）
     expect([...account.state.d1.keys()].sort()).toEqual(['unself-core', 'unself-modules']);
     expect([...account.state.buckets]).toEqual(['unself-storage']);
-    expect(account.state.uploads.some((u) => u.worker === 'unself-core-api')).toBe(true);
+    expect(account.state.uploads.some((u) => u.worker === 'unself-workbench')).toBe(true);
     expect(account.state.uploads.some((u) => u.worker === 'unself-module-hello')).toBe(true);
     expect(activeResourceNamespace()).toBeUndefined();
-    expect(coreWorkerName()).toBe('unself-core-api');
+    expect(coreWorkerName()).toBe('unself-workbench');
     expect(modulesDbName()).toBe('unself-modules');
     expect(withNamespacedBucket({ domain: '', modules: [], storage: { provider: 'r2', bucket: 'unself-storage' } }).storage)
       .toEqual({ provider: 'r2', bucket: 'unself-storage' });

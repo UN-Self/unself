@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * ES256 实例密钥生成（deploy 侧最小副本）：
- * 与 services/core-api/src/keys.ts 的 generateInstanceKeyPair 同构（jose generateKeyPair +
+ * 与 app/workbench/src/keys.ts 的 generateInstanceKeyPair 同构（jose generateKeyPair +
  * PKCS8 导出 + RFC 7638 thumbprint；SPKI 备份导出 deploy 无消费者，不生成，#194 D4）。
  * 不 import core 源码，避免把 Workers 类型拖进 deploy 包的 Node 类型空间。
  */

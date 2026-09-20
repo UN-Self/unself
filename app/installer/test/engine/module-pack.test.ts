@@ -14,8 +14,9 @@ import { manifestFromYamlText, ModuleManifestSchema } from '@unself/contracts';
 import { extractTarball } from '../../src/engine/sources';
 import { modulePackageFiles, packModuleDir } from '../../src/engine/module-pack';
 import { writeTarball } from '../../src/engine/tar-write';
+import { findRepoRoot } from '../helpers/repo-root';
 
-const REPO_ROOT = join(import.meta.dirname, '..', '..', '..', '..');
+const REPO_ROOT = findRepoRoot();
 
 let work: string;
 let longNameDir: string;

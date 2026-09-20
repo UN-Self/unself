@@ -4,12 +4,10 @@ packages:
   - core/adapters/*
   - core/adapters/provisioning/*
   # app = 开发好的 app，可被装配（全部发 npm）#303
+  - app/workbench
   - app/installer
   - app/modules/*
   - app/modules/*/frontend
-  # 临时：shell 与 core-api 仍在原位，提交 3 合并成 app/workbench 后删除下面两行
-  - apps/*
-  - services/*
 allowBuilds:
   esbuild: true
   workerd: true

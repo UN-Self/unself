@@ -15,12 +15,12 @@ afterEach(() => {
  * #71 测试：真实 ES256 keypair + 部署期注入的 CORE_JWKS_JSON（B 方案本地验签，零运行时网络）。
  * 存储面（#248 收敛（a)）：hello 落点 core，计数经 **Core API 代理**（Service Binding CORE_API）——
  * 这里替身的边界是 **HTTP 形状**（core-api 的 /api/module-api/storage/* 契约），不是 SQL：
- * 代理侧 SQL 由 services/core-api/test/module-api.test.ts（真路由 + 真 SQLite）裁决，
+ * 代理侧 SQL 由 app/workbench/test/module-api.test.ts（真路由 + 真 SQLite）裁决，
  * 本测试只断言「模块发了什么请求、带了谁的身份、如何解释响应」——同一协议两张皮互为免疫。
  * 验收链路：hello 计数读写、模块 token 原样转交（权限只信服务端）、生命周期骨架。
  */
 
-/** core-api 代理替身：真 KV 语义 + 请求记录（形状对齐 services/core-api/src/routes/module-api.ts）。 */
+/** core-api 代理替身：真 KV 语义 + 请求记录（形状对齐 app/workbench/src/routes/module-api.ts）。 */
 function makeCoreApiStub() {
   const kv = new Map<string, string>();
   const calls: Array<{ method: string; path: string; auth?: string; body?: unknown }> = [];

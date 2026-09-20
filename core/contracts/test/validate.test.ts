@@ -6,9 +6,10 @@ import { describe, expect, it } from 'vitest';
 
 import { CONTRACT_VERSION, ModuleManifestSchema } from '../src/manifest';
 import { manifestFromYamlText, validateModulePackage } from '../src/validate';
+import { findRepoRoot } from './helpers/repo-root';
 
 /** 仓库根（core/contracts → 上两级）。 */
-const REPO_ROOT = join(import.meta.dirname, '..', '..', '..');
+const REPO_ROOT = findRepoRoot();
 
 /** 读官方模块真实文件（验收：官方 hello/chat 以仓库真实文件过 validate）。 */
 function readRepoFile(...parts: string[]): string {
