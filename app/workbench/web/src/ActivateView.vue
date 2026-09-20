@@ -2,8 +2,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { KeyRound, LogIn, MailCheck } from 'lucide-vue-next'
-import { UButton, UCard, UErrorCard, UInput } from '@unself/ui'
+import { KeyRound, LogIn } from 'lucide-vue-next'
+import { UButton, UCard, UDrawCheck, UErrorCard, UInput } from '@unself/ui'
 import { activateAccount, fetchActivation } from './lib/invite-api'
 
 /**
@@ -85,7 +85,8 @@ function goLogin() {
       <UErrorCard v-else-if="phase === 'error'" title="激活链接不可用" :message="loadError" />
 
       <div v-else-if="phase === 'done'" class="activate-done" role="status">
-        <MailCheck class="activate-done-icon" :size="28" aria-hidden="true" />
+        <!-- #307 ②状态叙事：成功勾描画（core/ui UDrawCheck，与 InviteView 共用一份实现） -->
+        <UDrawCheck class="activate-done-icon" :size="34" />
         <h1 class="activate-title">激活完成</h1>
         <p class="activate-desc">{{ loginHint }}</p>
         <UButton size="lg" class="activate-submit" @click="goLogin">
