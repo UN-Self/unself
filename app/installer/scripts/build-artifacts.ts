@@ -3,7 +3,7 @@
  * 安装器产物构建（#257；#284 只搬「平台产物」）：把九步装配运行期需要的**平台产物**预构建进 `dist/artifacts/**`。
  *
  * 为什么：安装器要在**没有本仓库**的干净机器上部署实例。引擎原先从 rootDir 读
- * `services/core-api/migrations`（迁移 SQL）、`apps/shell/dist`（壳产物）、`services/core-api/src`（core Worker 入口）——
+ * `app/workbench/migrations`（迁移 SQL）、`app/workbench/dist`（壳产物）、`app/workbench/src`（core Worker 入口）——
  * 干净机器上这些都不存在。本脚本在**安装器构建期**（有仓库、有 pnpm/vite/esbuild）把它们做成产物：
  *
  *   dist/artifacts/
@@ -11,7 +11,7 @@
  *     core/worker.js               预打包 core Worker bundle（core-api + Stalwart 适配器 + 安全头）
  *     core/migrations/core/*.sql   core 迁移 SQL
  *     core/migrations/modules/*.sql 平台基建迁移 SQL
- *     shell/…                      apps/shell 的 vite 产物（壳）
+ *     shell/…                      app/workbench 的 vite 产物（壳）
  *     vendor/blake3-wasm/…         资产哈希依赖（wasm 用 fs 相对路径加载，无法进 bundle）
  *
  * **模块与 SDK 不在产物里（#284 / 决策 #76/#77）**：官方模块（`@unself/hello` / `@unself/chat`）
@@ -21,7 +21,7 @@
  * 随模块包打包——本脚本不再插手模块内部。
  *
  * 纪律：
- * - 所有子构建写**隔离 outDir**（dist/.artifacts-work），不碰仓库内 apps/shell/dist——
+ * - 所有子构建写**隔离 outDir**（dist/.artifacts-work），不碰仓库内 app/workbench/dist——
  *   否则与 `pnpm -r build` 里各包自己的构建并发写同一目录（脏产物/半套）。
  * - core worker 的 esbuild 参数**复用引擎的导出函数**（bundleCoreWorker）。
  * - 产物构建失败即非 0 退出：宁可不产出 tarball，也不产出半个产物（引擎会带着残产物「看起来能跑」）。
@@ -79,8 +79,8 @@ async function main(): Promise<void> {
   console.log('  ✓ core/worker.js（预打包 core Worker）');
 
   // ---- 2. core / 平台 迁移 SQL ----
-  const coreMigSrc = join(REPO_ROOT, 'services/core-api/migrations/core');
-  const platformMigSrc = join(REPO_ROOT, 'services/core-api/migrations/modules');
+  const coreMigSrc = join(REPO_ROOT, 'app/workbench/migrations/core');
+  const platformMigSrc = join(REPO_ROOT, 'app/workbench/migrations/modules');
   if (!existsSync(coreMigSrc)) throw new Error(`core 迁移目录缺失：${coreMigSrc}`);
   await cp(coreMigSrc, join(ARTS_DIR, 'core', 'migrations', 'core'), { recursive: true });
   if (existsSync(platformMigSrc)) {
@@ -88,18 +88,18 @@ async function main(): Promise<void> {
   }
   console.log('  ✓ core/migrations/**（core + 平台基建 SQL）');
 
-  // ---- 3. shell（隔离 outDir，避免与 apps/shell 自己的 build 抢 dist/）----
+  // ---- 3. shell（隔离 outDir，避免与 app/workbench 自己的 build 抢 dist/）----
   const shellOut = join(WORK_DIR, 'shell');
   await run(
     'pnpm',
-    ['--filter', '@unself/shell', 'exec', 'vite', 'build', '--outDir', shellOut, '--emptyOutDir'],
+    ['--filter', '@unself/workbench', 'exec', 'vite', 'build', '--outDir', shellOut, '--emptyOutDir'],
     REPO_ROOT,
   );
   if (!existsSync(join(shellOut, 'index.html'))) {
     throw new Error(`shell 产物缺失 index.html：${shellOut}（vite build 报成功但无产物？）`);
   }
   await cp(shellOut, join(ARTS_DIR, 'shell'), { recursive: true });
-  console.log('  ✓ shell/**（apps/shell 的 vite 产物）');
+  console.log('  ✓ shell/**（app/workbench 的 vite 产物）');
 
   // ---- 4. vendor：blake3-wasm（createRequire 加载，wasm 必须真实文件树）----
   const engineRequire = createRequire(join(INSTALLER_DIR, 'package.json'));

@@ -48,14 +48,14 @@ describe('smokeCheck 请求 URL 形态（§5.3 单域名路径制）', () => {
       return jsonResponse(200, { ok: true });
     });
     await smokeCheck({
-      coreUrl: 'https://unself-core-api.test-subdomain.workers.dev',
+      coreUrl: 'https://unself-workbench.test-subdomain.workers.dev',
       modules: [
         { id: 'hello', baseUrl: 'https://unself-module-hello.test-subdomain.workers.dev' },
         { id: 'meet', baseUrl: 'https://unself-module-meet.test-subdomain.workers.dev' },
       ],
     });
     expect(captured).toEqual([
-      'https://unself-core-api.test-subdomain.workers.dev/api/health',
+      'https://unself-workbench.test-subdomain.workers.dev/api/health',
       'https://unself-module-hello.test-subdomain.workers.dev/api/health',
       'https://unself-module-meet.test-subdomain.workers.dev/api/health',
     ]);
@@ -68,7 +68,7 @@ describe('smokeCheck 请求 URL 形态（§5.3 单域名路径制）', () => {
       return jsonResponse(200, { ok: true });
     });
     const results = await smokeCheck({
-      coreUrl: 'https://unself-core-api.test-subdomain.workers.dev',
+      coreUrl: 'https://unself-workbench.test-subdomain.workers.dev',
       modules: [{ id: 'hello', baseUrl: 'https://unself-module-hello.test-subdomain.workers.dev' }],
     });
     expect(results).toHaveLength(2);

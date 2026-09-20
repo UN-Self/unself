@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * verify-tokens：主题令牌轻量 lint（任务第七条「选最轻方案」——node 单文件，零依赖）。
- * 扫描 apps/ core/ app/ services/（排除 node_modules/ dist/ .deploy/ coverage/、
+ * 扫描 core/ app/（排除 node_modules/ dist/ .deploy/ coverage/、
  * 任意层级 test/ 与 __tests__/ 目录、*.test.* 与 *.spec.* 测试文件——用例里的 issue 引用
  * 与颜色夹具不是生产样式，此前 `#139` 之类的引用被误判为裸颜色值），
  * 只处理 *.vue *.ts *.css *.html。
  *
  * 规则一（裸值）：生产源码不得有裸 hex（#[0-9a-fA-F]{3,8}）与裸 rgb(/rgba( 颜色值；
- *   豁免：apps/shell/src/tokens.css（:root 令牌定义与 @theme 映射允许值）、
+ *   豁免：app/workbench/web/src/tokens.css（:root 令牌定义与 @theme 映射允许值）、
  *         core/contracts/src/theme-tokens.json（默认主题包数据）。
  * 规则二（var 白名单）：所有 var(--xxx) 引用必须在白名单 = 契约白名单
  *   （从 core/contracts/src/theme-tokens.json 派生：'--' + 键.replaceAll('.', '-')）
@@ -30,7 +30,7 @@ import { extname, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url)); // scripts/ 的上一级 = 仓库根
-const SCAN_DIRS = ['apps', 'core', 'app', 'services'];
+const SCAN_DIRS = ['core', 'app'];
 const EXCLUDE_DIR_NAMES = new Set(['node_modules', 'dist', '.deploy', 'coverage', 'test', '__tests__']);
 /**
  * 生成物目录（不进 lint）：模块前端产物随模块包发布后落在 `app/modules/<id>/assets/frontend/`
@@ -39,9 +39,9 @@ const EXCLUDE_DIR_NAMES = new Set(['node_modules', 'dist', '.deploy', 'coverage'
 const EXCLUDE_PATH_SUBSTRINGS = ['app/modules/chat/assets/frontend/'];
 const FILE_EXTS = new Set(['.vue', '.ts', '.css', '.html']);
 const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
-const RULE1_EXEMPT = new Set(['apps/shell/src/tokens.css', 'core/contracts/src/theme-tokens.json']);
+const RULE1_EXEMPT = new Set(['app/workbench/web/src/tokens.css', 'core/contracts/src/theme-tokens.json']);
 /** 规则三豁免：tokens.css 是时长取值的定义处（其余文件只准引用令牌）。 */
-const RULE3_EXEMPT = new Set(['apps/shell/src/tokens.css']);
+const RULE3_EXEMPT = new Set(['app/workbench/web/src/tokens.css']);
 const CONTRACT_PACKAGE = 'core/contracts/src/theme-tokens.json';
 
 const HEX_RE = /#[0-9a-fA-F]{3,8}\b/g;
@@ -52,7 +52,7 @@ const MEDIA_PX_RE = /@media[^{;]*?(\d+)px/g;
 
 /** 读 tokens.css 里声明的断点取值集合（--unself-bp-*: Npx）。 */
 function loadBreakpoints() {
-  const tokensCss = join(ROOT, 'apps/shell/src/tokens.css');
+  const tokensCss = join(ROOT, 'app/workbench/web/src/tokens.css');
   if (!existsSync(tokensCss)) return new Set();
   const css = readFileSync(tokensCss, 'utf8');
   return new Set([...css.matchAll(/--unself-bp-[a-zA-Z0-9-]+\s*:\s*(\d+)px/g)].map((m) => m[1]));
@@ -69,7 +69,7 @@ function loadVarWhitelist() {
   const map = JSON.parse(readFileSync(pkg, 'utf8'));
   const whitelist = new Set(Object.keys(map).map((k) => `--${k.replaceAll('.', '-')}`));
   // 平台内部令牌：tokens.css 中已声明（--unself-*）的即视为“平台提供了值”
-  const tokensCss = join(ROOT, 'apps/shell/src/tokens.css');
+  const tokensCss = join(ROOT, 'app/workbench/web/src/tokens.css');
   if (existsSync(tokensCss)) {
     const css = readFileSync(tokensCss, 'utf8');
     for (const m of css.matchAll(/--unself-[a-zA-Z0-9-]+\s*:/g)) {

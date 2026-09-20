@@ -6,8 +6,10 @@
  * 不测实现，只测「给一个 tag，应该发布哪个包的哪个版本」这一可观测行为。
  */
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseReleaseTag, RELEASE_TARGETS, toGithubOutput } from '../../../scripts/release/tag-to-package.mjs';
+import { findRepoRoot } from './helpers/repo-root';
 
 describe('发布 tag → 包与版本（tag 即版本）', () => {
   it('四个包各自解析出正确的包名与版本', () => {
@@ -48,7 +50,7 @@ describe('发布 tag → 包与版本（tag 即版本）', () => {
 
   it('映射表与 workflow 的 tag 触发器一一对应（漏一个 = 触发得到但发布不了）', () => {
     // 相对被测脚本所在仓库根解析（vitest 的 cwd 是包目录）
-    const workflow = readFileSync(new URL('../../../.github/workflows/release.yml', import.meta.url), 'utf8');
+    const workflow = readFileSync(join(findRepoRoot(), '.github/workflows/release.yml'), 'utf8');
     expect(workflow).toContain('id-token: write');
     for (const name of Object.keys(RELEASE_TARGETS)) {
       expect(workflow).toContain(`'${name}-v*'`);

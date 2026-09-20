@@ -77,7 +77,7 @@
 ### 验签接线（core → chat）
 
 - `worker/src/core-auth.js`（新增，unself 集成层）：`verifyAccessToken(env, token)` → `{ok, claims}|{ok:false,status,message}`。复用 `@unself/sdk` 的 `verifyModuleToken`（jose createLocalJWKSet + jwtVerify(audience) + contracts 解析，**不手搓**）；aud 常量 `AUDIENCE='chat'`（红灯验证点）；`CORE_JWKS_JSON` 空 → 503 `'jwks not provisioned'`（与 hello 口径一致）；任何验签失败 → 401 人话 `'请先登录'`（不回显 jose 细节）；`CORE_ISSUER` 非空时额外校验 iss（可选）
-- token 形状（签发侧源码已核，基线 2ab19ef）：`services/core-api/src/token.ts` issueModuleToken——ES256 + kid（RFC7638 指纹），claims `iss='unself-core'` / `sub=<core users.id>` / `aud=<模块id>` / `iat` / `exp=iat+600`，JWKS 经 `GET /.well-known/jwks.json`。部署装配期由 deploy steps 注入 vars `CORE_JWKS_JSON`（wrangler.jsonc 已声明空默认值）
+- token 形状（签发侧源码已核，基线 2ab19ef）：`app/workbench/src/token.ts` issueModuleToken——ES256 + kid（RFC7638 指纹），claims `iss='unself-core'` / `sub=<core users.id>` / `aud=<模块id>` / `iat` / `exp=iat+600`，JWKS 经 `GET /.well-known/jwks.json`。部署装配期由 deploy steps 注入 vars `CORE_JWKS_JSON`（wrangler.jsonc 已声明空默认值）
 
 ### JIT 建档
 

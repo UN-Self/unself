@@ -5,7 +5,7 @@
  *
  * 背景（AGENTS.md 已知坑 + docs/testing.md「跨版本升级要测」）：
  *   wrangler d1 migrations 按**文件名**记账（d1_migrations 表）——已应用过的旧文件
- *   不会重跑。「同一内存库重放全部迁移」的守卫（services/core-api/test/migrations.test.ts）
+ *   不会重跑。「同一内存库重放全部迁移」的守卫（app/workbench/test/migrations.test.ts）
  *   只覆盖**全新库**路径，会把两类问题全遮掉：
  *     a) 新迁移对**老库 schema** 不兼容（引用老库还没有的表/列——0004 踩过的坑：
  *        依赖被改的 0001 建的表，在老库上 `no such table`）；
@@ -33,7 +33,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url)); // scripts/ 的上�
 
 /** 老库既有数据（代表性行）：升级必须能在这些行上跑通。 */
 const LEGACY_SEEDS = {
-  'services/core-api/migrations/core': {
+  'app/workbench/migrations/core': {
     // users（0001）：老数据含大写 email——0007 若加 lower(email) 唯一索引，重复大小写变体必须先归一
     users: [
       "INSERT INTO users (id, issuer, sub, display_name, email, role, status) VALUES ('u_old', 'builtin', 'u_old', '老用户', 'Old.User@Example.com', 'user', 'active')",
@@ -68,7 +68,7 @@ const LEGACY_SEEDS = {
     // 0006
     login_attempts: ["INSERT INTO login_attempts (key, failures, window_start) VALUES ('u:old.name', 3, 0)"],
   },
-  'services/core-api/migrations/modules': {
+  'app/workbench/migrations/modules': {
     // 平台基建表（#248）：老库里已有模块键值行，升级必须能在这些行上继续跑
     module_kv: ["INSERT INTO module_kv (module_id, key, value) VALUES ('hello', 'old-key', 'old-value')"],
   },
@@ -103,7 +103,7 @@ function discoverMigrationDirs() {
         }
         continue;
       }
-      scan(relChild); // 继续下钻找 migrations/（两层足够：services/core-api、modules/<id>）
+      scan(relChild); // 继续下钻找 migrations/（两层足够：app/workbench、modules/<id>）
     }
   };
   scan('.');

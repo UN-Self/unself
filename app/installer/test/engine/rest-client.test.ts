@@ -154,7 +154,7 @@ describe('Workers REST（上传形状实测对齐 wrangler 4.129.0）', () => {
     };
     const client = new RestClient({ token: 't', fetchImpl: impl });
     await putWorker(client, 'ACC', {
-      name: 'unself-core-api',
+      name: 'unself-workbench',
       mainModule: 'worker.js',
       modules: [{ name: 'worker.js', content: 'export default {};' }],
       bindings: [{ type: 'd1', name: 'CORE_DB', id: 'u1' }],

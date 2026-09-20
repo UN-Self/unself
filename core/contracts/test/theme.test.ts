@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -11,6 +12,7 @@ import {
   resolveThemePackage,
   tokenCssName,
 } from '../src/theme';
+import { findRepoRoot } from './helpers/repo-root';
 
 /** SPEC §6.5.2 语义令牌清单（锁死「只增不改」；真值在 docs/PRODUCT_SPEC.md，此处为契约镜像）。 */
 const SPEC_COLORS = [
@@ -111,7 +113,7 @@ describe('默认主题包 = SPEC §6.5.2 清单逐项一致（只增不改铁律
 describe('tokens.css ↔ 默认主题包同值（唯一一次改名窗口后不再漂移）', () => {
   it('tokens.css 的 :root 令牌全部 --unself- 前缀，且契约令牌值与默认包逐项一致', async () => {
     const css = await readFile(
-      new URL('../../../apps/shell/src/tokens.css', import.meta.url),
+      new URL(join(findRepoRoot(), 'app/workbench/web/src/tokens.css'), import.meta.url),
       'utf8',
     );
     // 只取 :root 块（@theme inline 块是 Tailwind 命名空间映射：--color-x: var(--unself-*) 允许存在）

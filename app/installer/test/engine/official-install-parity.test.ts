@@ -5,7 +5,7 @@
  * 卸载走同一条路径（注册表快照驱动），官方与第三方口径一致、零残留。
  * 断言边界与 steps.test.ts 相同：cf-rest-fake 账户态 + runNineSteps 真实代码路径。
  */
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,9 +14,11 @@ import { runNineSteps } from '../../src/engine/steps';
 import { removeModule } from '../../src/engine/uninstall';
 import { sriFromBuffer } from '../../src/engine/sources';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
+import { makeFakeRepoRoot } from './helpers/fake-repo';
 import { RestClient } from '../../src/engine/rest/client';
+import { findRepoRoot } from '../helpers/repo-root';
 
-const REPO_ROOT = new URL('../../../..', import.meta.url).pathname;
+const REPO_ROOT = findRepoRoot();
 const HELLO_SOURCE = 'npm:@unself/hello@0.1.0';
 
 const FIXED_JWKS = JSON.stringify({
@@ -45,19 +47,16 @@ afterEach(async () => {
   for (const dir of tempDirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
-/** 造实例目录：symlink 仓库 packages/services/adapters（core 迁移 SQL / core worker 入口依赖）；apps 不 symlink，壳产物由注入的 buildShell 写进本目录。 */
+/** 造实例目录：读的部分（core、app/workbench/{src,migrations}）软链进来，写的部分（app/workbench/dist）真建——见 helpers/fake-repo。 */
 async function makeRootDir(tag: string): Promise<string> {
-  const rootDir = await mkdtemp(join(tmpdir(), `unself-284-e2e-${tag}-`));
+  const rootDir = await makeFakeRepoRoot(`unself-284-e2e-${tag}-`);
   tempDirs.push(rootDir);
-  for (const rel of ['core', 'app', 'services']) {
-    await symlink(join(REPO_ROOT, rel), join(rootDir, rel), 'dir');
-  }
   return rootDir;
 }
 
-/** 注入的壳构建：写最小壳产物到 <rootDir>/apps/shell/dist（不跑真 vite build）。 */
+/** 注入的壳构建：写最小壳产物到 <rootDir>/app/workbench/dist（不跑真 vite build）。 */
 async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'apps/shell/dist');
+  const dist = join(rootDir, 'app/workbench/dist');
   await mkdir(join(dist, 'assets'), { recursive: true });
   await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
 }

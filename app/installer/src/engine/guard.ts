@@ -59,7 +59,7 @@ export function targetResources(input: {
   const out: TargetResource[] = [
     { kind: 'd1', name: base('core') },
     { kind: 'd1', name: base('modules') },
-    { kind: 'worker', name: base('core-api') },
+    { kind: 'worker', name: base('workbench') },
   ];
   for (const id of input.moduleIds) out.push({ kind: 'worker', name: base(`module-${id}`) });
   for (const id of input.dedicatedModuleIds ?? []) out.push({ kind: 'd1', name: base(id) });

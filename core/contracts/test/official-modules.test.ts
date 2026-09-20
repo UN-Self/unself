@@ -7,9 +7,10 @@ import { describe, expect, it } from 'vitest';
 import { ModuleManifestSchema } from '../src/manifest';
 import { manifestFromYamlText } from '../src/validate';
 import { tableNamesFromSql, validateModulePackage } from '../src/validate';
+import { findRepoRoot } from './helpers/repo-root';
 
 /** 仓库根（core/contracts → 上两级）。 */
-const REPO_ROOT = join(import.meta.dirname, '..', '..', '..');
+const REPO_ROOT = findRepoRoot();
 
 /** 官方模块包输入（worker 入口 = 模块源入口；LICENSE 取仓库根，官方同源分发）。 */
 function officialInput(moduleId: 'hello' | 'chat'): Parameters<typeof validateModulePackage>[0] {

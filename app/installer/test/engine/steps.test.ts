@@ -11,10 +11,11 @@ import { prefixStripWrapperSource } from '../../src/engine/assemble';
 import { coreWorkerEntrySource, needsTotalTls, runNineSteps } from '../../src/engine/steps';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { RestClient } from '../../src/engine/rest/client';
+import { findRepoRoot } from '../helpers/repo-root';
 
 /** 测试注入口：拦截 shell 构建（真实 vite build 约 4.4s/次，#73 每次部署都重建 → 套件必超时；写最小产物即可）。 */
 async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'apps/shell/dist');
+  const dist = join(rootDir, 'app/workbench/dist');
   await mkdir(join(dist, 'assets'), { recursive: true });
   await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
 }
@@ -24,8 +25,8 @@ function runSteps(input: Parameters<typeof runNineSteps>[0]) {
   return runNineSteps({ buildShell: fakeBuildShell, ...input });
 }
 
-/** 仓库根（真实文件布局：app/modules/hello、app/modules/chat、services/core-api、apps/shell）。 */
-const ROOT = new URL('../../../..', import.meta.url).pathname;
+/** 仓库根（真实文件布局：app/modules/hello、app/modules/chat、app/workbench、app/workbench）。 */
+const ROOT = findRepoRoot();
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -84,11 +85,11 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
       http: SMOKE_OK,
     });
     // workers.dev 模式：resolveBaseUrl 真实路径 = 子域查询 + core 启用
-    expect(summary1.baseUrl).toBe('https://unself-core-api.test-subdomain.workers.dev');
+    expect(summary1.baseUrl).toBe('https://unself-workbench.test-subdomain.workers.dev');
     // 首跑：两 D1 create + secret put 一次 + registry upsert hello
     const d1Creates = first.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/d1/database'));
     expect(d1Creates.map((c) => (c.body as { name: string }).name).sort()).toEqual(['unself-core', 'unself-modules']);
-    expect(first.state.secretPuts).toEqual([{ worker: 'unself-core-api', name: 'JWT_PRIVATE_KEY' }]);
+    expect(first.state.secretPuts).toEqual([{ worker: 'unself-workbench', name: 'JWT_PRIVATE_KEY' }]);
     expect(first.state.registry.get('hello')).toBeDefined();
     expect(first.state.registry.get('hello')?.enabled).toBe(1);
     // assets 契约（真机 2026-09-18）：manifest key 以 / 开头（否则 CF 10304）+ hash 为 32 位 hex（wrangler hash.ts 同款）
@@ -139,7 +140,7 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     const second = makeCfRestFake({
       existingD1: ['unself-core', 'unself-modules'],
       existingBuckets: ['unself-storage'],
-      existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] },
+      existingSecrets: { 'unself-workbench': ['JWT_PRIVATE_KEY'] },
       existingSetupToken: issued,
     });
     const summary2 = await runSteps({
@@ -213,7 +214,7 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     });
     expect(order).toEqual(['__cleanupCustomDomains', '__ensureTotalTls']);
     // 顺序：Custom Domain 清理 → Total TLS → core 上传 → DNS 自建 → registry（真实 A 记录 POST）
-    const coreUpload = fake.calls.findIndex((c) => c.method === 'PUT' && c.url.includes('/workers/scripts/unself-core-api'));
+    const coreUpload = fake.calls.findIndex((c) => c.method === 'PUT' && c.url.includes('/workers/scripts/unself-workbench'));
     const dnsIdx = fake.calls.findIndex((c) => c.url === '/zones/zone-1/dns_records' && c.method === 'POST');
     expect(coreUpload).toBeGreaterThan(-1);
     expect(dnsIdx).toBeGreaterThan(coreUpload);
@@ -328,7 +329,7 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
   it('分支 B：已有 secret → 公网抓取 JWKS 注入 vars.CORE_JWKS_JSON（fetchJwks 收到 baseUrl）', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake({
       existingD1: ['unself-core', 'unself-modules'],
-      existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] },
+      existingSecrets: { 'unself-workbench': ['JWT_PRIVATE_KEY'] },
     });
     const received: string[] = [];
     await runSteps({
@@ -342,7 +343,7 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
         return FIXED_JWKS;
       },
     });
-    expect(received).toEqual([`${'https://unself-core-api'}.test-subdomain.workers.dev`]);
+    expect(received).toEqual([`${'https://unself-workbench'}.test-subdomain.workers.dev`]);
     const cfg = JSON.parse(
       await readFile(join(ROOT, '.deploy/cloudflare/modules/hello.wrangler.jsonc'), 'utf8'),
     ) as { vars: { CORE_JWKS_JSON: string } };
@@ -352,7 +353,7 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
   it('分支 C：公网抓取失败 → 硬报错（含「无法获取 Core 公钥」与重跑提示）', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake({
       existingD1: ['unself-core', 'unself-modules'],
-      existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] },
+      existingSecrets: { 'unself-workbench': ['JWT_PRIVATE_KEY'] },
     });
     await expect(
       runSteps({
@@ -449,13 +450,13 @@ describe('#273 workers.dev 模块可达 / 自有域回归', () => {
       },
     });
     // 模块自有子域已启用（core 与模块各自一个）
-    expect([...fake.state.workersDevEnabled].sort()).toEqual(['unself-core-api', 'unself-module-hello']);
+    expect([...fake.state.workersDevEnabled].sort()).toEqual(['unself-module-hello', 'unself-workbench']);
     // 注册表 entry = 模块真实 URL（模块自有 workers.dev 子域）
     const manifest = JSON.parse(fake.state.registry.get('hello')!.manifest_json) as { entry: string };
     expect(manifest.entry).toBe('https://unself-module-hello.test-subdomain.workers.dev/');
     // ⑨ 冒烟拿到就是模块自有子域 target（不是 core 的 /m/hello）
     expect(seen).toEqual([{ id: 'hello', baseUrl: 'https://unself-module-hello.test-subdomain.workers.dev' }]);
-    expect(summary.baseUrl).toBe('https://unself-core-api.test-subdomain.workers.dev');
+    expect(summary.baseUrl).toBe('https://unself-workbench.test-subdomain.workers.dev');
   });
 
   it('自有域形态回归：zone 路由 + entry=/m/<id>/ + 冒烟走 zone 路径，不启 workers.dev', { timeout: 120_000 }, async () => {
@@ -489,7 +490,7 @@ describe('#273 workers.dev 模块可达 / 自有域回归', () => {
   it('workers.dev：模块自有子域不可达 → ⑨ 冒烟真红，不静默跳过', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake({
       existingD1: ['unself-core', 'unself-modules'],
-      existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] },
+      existingSecrets: { 'unself-workbench': ['JWT_PRIVATE_KEY'] },
     });
     const calls: string[] = [];
     vi.stubGlobal('fetch', async (input: string | URL) => {
@@ -519,7 +520,7 @@ describe('D1（#162/#194）：入口产物「存在即跳过」陷阱', () => {
     const entryPath = join(outDir, 'core-worker.js');
     // 预置上一版生成物：旧入口模板（import default——即 #162 实锤的 No matching export 形态）
     const stale = `// SPDX-License-Identifier: AGPL-3.0-only
-import app from '../../services/core-api/src/index.ts';
+import app from '../../app/workbench/src/index.ts';
 export default { fetch: (r, e, c) => app.fetch(r, e, c) };
 `;
     await mkdir(outDir, { recursive: true });
@@ -567,7 +568,7 @@ export default { fetch: (r, e, c) => worker.fetch(r, e, c) };
       expect(after).toBe(
         prefixStripWrapperSource('hello', {
           mount: '',
-          shellOrigin: 'https://unself-core-api.test-subdomain.workers.dev',
+          shellOrigin: 'https://unself-workbench.test-subdomain.workers.dev',
         }),
       );
       expect(after).not.toContain('旧版 wrapper 生成物');

@@ -29,7 +29,7 @@ describe('resourceName（空前缀 = 现状；有前缀 = 同账户第二套）'
     expect(resourceName('core')).toBe('unself-core');
     expect(coreDbName()).toBe('unself-core');
     expect(modulesDbName()).toBe('unself-modules');
-    expect(coreWorkerName()).toBe('unself-core-api');
+    expect(coreWorkerName()).toBe('unself-workbench');
     expect(moduleWorkerName('hello')).toBe('unself-module-hello');
   });
 
@@ -37,7 +37,7 @@ describe('resourceName（空前缀 = 现状；有前缀 = 同账户第二套）'
     process.env[ENV_KEY] = 'unself-probe-257-';
     expect(coreDbName()).toBe('unself-probe-257-core');
     expect(modulesDbName()).toBe('unself-probe-257-modules');
-    expect(coreWorkerName()).toBe('unself-probe-257-core-api');
+    expect(coreWorkerName()).toBe('unself-probe-257-workbench');
     expect(moduleWorkerName('chat')).toBe('unself-probe-257-module-chat');
   });
 
@@ -72,17 +72,17 @@ describe('带前缀的九步（隔离探针口径）', () => {
             ),
         },
       });
-      // 资源名全部带前缀：线上 unself-core / unself-core-api 一个都不会被撞
+      // 资源名全部带前缀：线上 unself-core / unself-workbench 一个都不会被撞
       expect([...fake.state.d1.keys()].sort()).toEqual(['unself-probe-257-core', 'unself-probe-257-modules']);
-      expect(fake.state.uploads.some((u) => u.worker === 'unself-probe-257-core-api')).toBe(true);
+      expect(fake.state.uploads.some((u) => u.worker === 'unself-probe-257-workbench')).toBe(true);
       expect(fake.state.uploads.some((u) => u.worker === 'unself-probe-257-module-hello')).toBe(true);
       expect(fake.state.uploads.some((u) => u.worker.startsWith('unself-module-'))).toBe(false);
       // core 级模块的 CORE_API service binding 指向同前缀 core worker（否则绑定悬空）
-      const coreUpload = fake.state.uploads.find((u) => u.worker === 'unself-probe-257-core-api');
+      const coreUpload = fake.state.uploads.find((u) => u.worker === 'unself-probe-257-workbench');
       expect(coreUpload).toBeDefined();
       const modUpload = fake.state.uploads.find((u) => u.worker === 'unself-probe-257-module-hello');
       const bindings = (modUpload!.metadata.bindings ?? []) as Array<{ type: string; service?: string }>;
-      expect(bindings.find((b) => b.type === 'service')?.service).toBe('unself-probe-257-core-api');
+      expect(bindings.find((b) => b.type === 'service')?.service).toBe('unself-probe-257-workbench');
     } finally {
       await rm(rootDir, { recursive: true, force: true });
       await rm(artifacts, { recursive: true, force: true });

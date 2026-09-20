@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * 装配产物生成（③④）：
- * - core：apps/shell 构建副本作 assets（SPA fallback + run_worker_first API）+ 两 D1 真实 id + route；
+ * - core：app/workbench 构建副本作 assets（SPA fallback + run_worker_first API）+ 两 D1 真实 id + route；
  * - module：<id>.worker.js（esbuild ESM 打包）+ sdk/module-sdk.esm.js（浏览器 ESM 具名导出）
  *   + sdk/module-sdk.js（浏览器 IIFE，历史兼容）+ D1/vars/zone 路径 route。
  * 一切文件写进 <root>/.deploy/cloudflare/（gitignore），重跑整体重建 → 幂等。
- * shell 每次部署都重建（vite build），不复用 apps/shell/dist 旧产物（#73）：部署器职责=始终搬运当前源码树。
+ * shell 每次部署都重建（vite build），不复用 app/workbench/dist 旧产物（#73）：部署器职责=始终搬运当前源码树。
  */
 import { spawn } from 'node:child_process';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -88,8 +88,8 @@ export async function provisionAll(options: {
   dbIds: { core: string; modules: string };
   log?: (msg: string) => void;
   /**
-   * 测试注入口：拦截 shell 构建（默认真实跑 pnpm --filter @unself/shell build）。
-   * 签名只吃 rootDir：构建产物约定落 apps/shell/dist，由随后 cp 搬运。
+   * 测试注入口：拦截 shell 构建（默认真实跑 pnpm --filter @unself/workbench build）。
+   * 签名只吃 rootDir：构建产物约定落 app/workbench/dist，由随后 cp 搬运。
    */
   buildShell?: (rootDir: string) => Promise<void>;
   /**
@@ -102,7 +102,7 @@ export async function provisionAll(options: {
   const artifacts = options.artifacts ?? null;
   const log = options.log ?? console.log;
   const buildShell =
-    options.buildShell ?? ((dir) => runTool('pnpm', ['--filter', '@unself/shell', 'build'], dir));
+    options.buildShell ?? ((dir) => runTool('pnpm', ['--filter', '@unself/workbench', 'build'], dir));
   const outDir = join(rootDir, DEPLOY_DIR);
   await mkdir(outDir, { recursive: true });
 
@@ -115,7 +115,7 @@ export async function provisionAll(options: {
     await cp(artifacts.shellDir, shellAssets, { recursive: true });
   } else {
     // 仓库形态：每次部署无条件重建（vite build，杜绝 dist 陈旧复用，#73）
-    const shellDist = join(rootDir, 'apps/shell/dist');
+    const shellDist = join(rootDir, 'app/workbench/dist');
     log('构建 shell（vite build）…');
     await buildShell(rootDir);
     await ensureEmptyDir(shellAssets);

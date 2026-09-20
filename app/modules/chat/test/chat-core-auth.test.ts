@@ -14,7 +14,7 @@ import {
 
 /**
  * #217 认证面（真库集成，路由级 app.request）：
- * core 签发形状的模块 JWT（ES256 + RFC7638 kid，签发侧 services/core-api/src/token.ts）经
+ * core 签发形状的模块 JWT（ES256 + RFC7638 kid，签发侧 app/workbench/src/token.ts）经
  * CORE_JWKS_JSON 本地验签（零运行时网络）→ JIT 建档（users + core_identities）→ API 可用。
  * 负例族：无 token/乱串/错签/错 aud/过期 → 401；缺 CORE_JWKS_JSON → 503。
  */

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // #217 dev 自测签发脚本（dev-only，不进 worker bundle）：
 // 生成/复用 ES256 keypair → 打印 CORE_JWKS_JSON（贴进 .dev.vars）与指定 sub/name 的 10 分钟模块 token（aud=chat）。
-// 形状对齐 core 签发侧 services/core-api/src/token.ts issueModuleToken（ES256 + RFC7638 kid；10 分钟时效）。
+// 形状对齐 core 签发侧 app/workbench/src/token.ts issueModuleToken（ES256 + RFC7638 kid；10 分钟时效）。
 // 用法：node scripts/mint-token.mjs [--sub <core用户id>] [--name <展示名>] [--iss <issuer>]
 //   （不带参数时 sub=1；keypair 缓存在 scripts/.mint-token-keys.json，删除即重新生成）
 import { calculateJwkThumbprint, exportJWK, generateKeyPair, importJWK, SignJWT } from 'jose';

@@ -9,9 +9,10 @@ import { copySdkAssets, coreWranglerConfig, moduleWranglerConfig, prefixStripWra
 import { migrationWranglerConfig } from '../../src/engine/assemble';
 import { coreWorkerEntrySource } from '../../src/engine/steps';
 import type { UnselfConfig } from '../../src/engine/config';
+import { findRepoRoot } from '../helpers/repo-root';
 
 /** 仓库根（测试进程从 app/installer/test/engine 起算）。 */
-const REPO_ROOT = new URL('../../../..', import.meta.url).pathname;
+const REPO_ROOT = findRepoRoot();
 
 describe('coreWranglerConfig（③生成的部署配置）', () => {
   const base = {
@@ -21,7 +22,7 @@ describe('coreWranglerConfig（③生成的部署配置）', () => {
       storage: { provider: 'r2', bucket: 'unself-storage' },
     } as UnselfConfig,
     dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
-    coreName: 'unself-core-api',
+    coreName: 'unself-workbench',
     zoneName: 'example.com',
   };
 
@@ -122,14 +123,14 @@ describe('prefixStripWrapperSource（④挂载前缀剥除）', () => {
   });
 
   it('workers.dev 形态模板（#273）：根挂载不剥前缀，带 frame-ancestors = 壳 origin', () => {
-    const src = prefixStripWrapperSource('hello', { mount: '', shellOrigin: 'https://unself-core-api.test-subdomain.workers.dev' });
+    const src = prefixStripWrapperSource('hello', { mount: '', shellOrigin: 'https://unself-workbench.test-subdomain.workers.dev' });
     expect(src).toContain("const PREFIX = ''");
-    expect(src).toContain("const SHELL_ORIGIN = 'https://unself-core-api.test-subdomain.workers.dev'");
+    expect(src).toContain("const SHELL_ORIGIN = 'https://unself-workbench.test-subdomain.workers.dev'");
     expect(src).toContain('frame-ancestors');
   });
 
   it('workers.dev 形态模板（#277）：注入 `unself-shell-origin` meta（Firefox 无 ancestorOrigins 的 token 通道）', () => {
-    const src = prefixStripWrapperSource('hello', { mount: '', shellOrigin: 'https://unself-core-api.test-subdomain.workers.dev' });
+    const src = prefixStripWrapperSource('hello', { mount: '', shellOrigin: 'https://unself-workbench.test-subdomain.workers.dev' });
     expect(src).toContain("const META_NAME = 'unself-shell-origin'");
   });
 });
@@ -140,13 +141,13 @@ describe('migrationWranglerConfig（②迁移专用最小配置）', () => {
       binding: 'CORE_DB',
       databaseName: 'unself-core',
       databaseId: 'cfe45429-f564-46c5-87bb-2b3dc5e95a1e',
-      migrationsDir: '../../../services/core-api/migrations/core',
+      migrationsDir: '../../../app/workbench/migrations/core',
     })) as { d1_databases: Array<{ binding: string; database_name: string; database_id: string; migrations_dir: string }> };
     expect(cfg.d1_databases[0]).toMatchObject({
       binding: 'CORE_DB',
       database_name: 'unself-core',
       database_id: 'cfe45429-f564-46c5-87bb-2b3dc5e95a1e',
-      migrations_dir: '../../../services/core-api/migrations/core',
+      migrations_dir: '../../../app/workbench/migrations/core',
     });
   });
 });
@@ -154,13 +155,13 @@ describe('migrationWranglerConfig（②迁移专用最小配置）', () => {
 describe('coreWorkerEntrySource', () => {
   it('入口 re-export core-api app（相对路径到 services）', () => {
     const src = coreWorkerEntrySource('/repo/.deploy/cloudflare', '/repo');
-    expect(src).toContain("from '../../services/core-api/src/index.ts'");
+    expect(src).toContain("from '../../app/workbench/src/index.ts'");
     expect(src).toContain('SPDX-License-Identifier');
   });
 
   it('#141 生产组合根：生成入口注入真 Stalwart 适配器，不落无参 createApp', () => {
     const src = coreWorkerEntrySource('/repo/.deploy/cloudflare', '/repo');
-    expect(src).toContain("import { createApp } from '../../services/core-api/src/index.ts'");
+    expect(src).toContain("import { createApp } from '../../app/workbench/src/index.ts'");
     expect(src).toContain("from '../../core/adapters/provisioning/stalwart/src/index.ts'");
     expect(src).toContain('createStalwartMailProvisioner');
     expect(src).toContain('createMailProvisioner:');
@@ -211,7 +212,7 @@ describe('provisionAll（③ shell 每次部署重建，#73）', () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'unself-provision-'));
     try {
       // 预置陈旧 dist（模拟上次部署残留：过期产物 + 陈旧标记）
-      const staleDist = join(rootDir, 'apps/shell/dist');
+      const staleDist = join(rootDir, 'app/workbench/dist');
       await mkdir(join(staleDist, 'assets'), { recursive: true });
       await writeFile(join(staleDist, 'stale.marker'), 'stale');
       await writeFile(join(staleDist, 'index.html'), '<html><body>OLD BUILD</body></html>');

@@ -203,7 +203,7 @@ export interface RunNineStepsOptions {
   configOverride?: UnselfConfig;
   /** 测试注入口：拦截 secret put（secretName 区分 core JWT 与 chat 密钥环）。 */
   putSecret?: (workerName: string, value: string, secretName: string) => Promise<void>;
-  /** 测试注入口：拦截 shell 构建（默认真实 pnpm --filter @unself/shell build；#73 每次部署重建）。 */
+  /** 测试注入口：拦截 shell 构建（默认真实 pnpm --filter @unself/workbench build；#73 每次部署重建）。 */
   buildShell?: (rootDir: string) => Promise<void>;
   /** 测试注入口：拦截 chat 前端构建（默认真实 vite build；返回产物相对 outDir/modules/ 路径）。 */
   buildChatFrontend?: (input: { rootDir: string; outDir: string; log: (msg: string) => void }) => Promise<string>;
@@ -255,7 +255,7 @@ export async function runNineSteps(input: RunNineStepsOptions): Promise<Summary>
 async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   const { rootDir } = input;
   const rep = input.reporter ?? consoleReporter();
-  // 产物根解析（#257）：安装器产物形态 = 不读 rootDir 下 modules/ services/ apps/ packages/（只写 .deploy/）。
+  // 产物根解析（#257）：安装器产物形态 = 不读 rootDir 下的源码树（app/modules、app/workbench；只写 .deploy/）。
   const artifacts = resolveArtifactRoots({ artifactRoot: input.artifactRoot, rootDir });
   setActiveArtifactRoots(artifacts);
   if (artifacts) {
@@ -378,7 +378,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   //    失败处理（#61）：停住并指出「模块 / 文件 / 第几条语句」，不自动重试、不自动回滚。
   rep.step(2, '跑核心迁移与选中模块迁移（按模块独立记账，REST import）');
   const coreCp = createCoreControlPlane(client, accountId, dbIds.core);
-  const coreMigrationDir = artifacts ? artifacts.coreMigrationsDir : join(rootDir, 'services/core-api/migrations/core');
+  const coreMigrationDir = artifacts ? artifacts.coreMigrationsDir : join(rootDir, 'app/workbench/migrations/core');
   await coreCp.applyMigrations('core', await readSqlFiles(coreMigrationDir));
   rep.log(`core 迁移已应用（${coreDbName()}，记账 unself_migrations_core）`);
   /** dedicated 模块的独立 D1 id（步骤①补建；摘要与绑定共用）。 */
@@ -392,7 +392,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   // （docs/modules.md §4「core 的 schema 归 core」）——与模块无关，必须在任何 core 级模块跑之前就位。
   // 记账独立（unself_migrations_platform，落在 modules 库）：与各模块记账互不覆盖（#55 护栏①同规）。
   const modulesCp = createCoreControlPlane(client, accountId, dbIds.modules);
-  const platformMigrationDir = artifacts ? artifacts.platformMigrationsDir : join(rootDir, 'services/core-api/migrations/modules');
+  const platformMigrationDir = artifacts ? artifacts.platformMigrationsDir : join(rootDir, 'app/workbench/migrations/modules');
   const platformFiles = await readSqlFiles(platformMigrationDir);
   if (platformFiles.length > 0) {
     try {
@@ -1127,10 +1127,10 @@ export function coreWorkerEntrySource(outDir: string, rootDir: string): string {
   const rel = (p: string): string => relative(outDir, join(rootDir, p)).replaceAll('\\', '/');
   return `// SPDX-License-Identifier: AGPL-3.0-only
 // 由装配器生成（生产组合根）：core-api app（注入 Stalwart 适配器）+ 未命中路径回退 SPA 资产。
-import { createApp } from '${rel('services/core-api/src/index.ts')}';
+import { createApp } from '${rel('app/workbench/src/index.ts')}';
 import { createStalwartMailProvisioner } from '${rel('core/adapters/provisioning/stalwart/src/index.ts')}';
-import { withHtmlSecurityHeaders } from '${rel('services/core-api/src/security-headers.ts')}';
-import { registryFrameOrigins } from '${rel('services/core-api/src/registry.ts')}';
+import { withHtmlSecurityHeaders } from '${rel('app/workbench/src/security-headers.ts')}';
+import { registryFrameOrigins } from '${rel('app/workbench/src/registry.ts')}';
 
 const app = createApp({ createMailProvisioner: (cfg) => createStalwartMailProvisioner(cfg) });
 

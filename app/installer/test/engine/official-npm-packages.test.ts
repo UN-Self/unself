@@ -27,9 +27,10 @@ import { parseSource, resolveLocalNpmPackage, satisfiesVersionRange, sriFromBuff
 import { buildManifestSnapshot } from '../../src/engine/registry';
 import { writeTarball } from '../../src/engine/tar-write';
 import { platformUninstallPlan } from '@unself/contracts';
+import { findRepoRoot } from '../helpers/repo-root';
 
 /** 仓库根（真实文件布局：app/modules/hello、app/modules/chat、模块 workspace 符号链接）。 */
-const ROOT = new URL('../../../..', import.meta.url).pathname;
+const ROOT = findRepoRoot();
 
 const tempDirs: string[] = [];
 afterEach(async () => {

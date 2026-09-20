@@ -5,18 +5,18 @@
  * 不自动重试、不自动回滚。这里跑真 `runNineSteps`（真步骤②代码路径）：
  * D1 import 在服务端报 error（注入的真错误明细）→ 装配中止 → 错误消息含三要素。
  */
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { runNineSteps } from '../../src/engine/steps';
 import { RestClient } from '../../src/engine/rest/client';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
+import { makeFakeRepoRoot } from './helpers/fake-repo';
 
 /** 最小 shell 产物（真 vite build 4.4s/次，测试不必跑）。 */
 async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'apps/shell/dist');
+  const dist = join(rootDir, 'app/workbench/dist');
   await mkdir(join(dist, 'assets'), { recursive: true });
   await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
 }
@@ -33,15 +33,8 @@ const FIXED_JWKS = JSON.stringify({
   }],
 });
 
-/** 仓库根（真实 packages/ services/ apps/ 用软链进临时根：装配器要真打包 SDK 资产与 shell）。 */
-const REPO_ROOT = new URL('../../../..', import.meta.url).pathname;
-
 /** 造一个 shared 落点的坏迁移模块：第 2 条语句就是服务端会拒的那条。 */
 async function makeBrokenModule(rootDir: string): Promise<void> {
-  // app 不整目录 symlink：夹具写在 rootDir/app/modules/<id>，软链会穿透进真仓库（#303）
-  for (const rel of ['core', 'services', 'apps']) {
-    await symlink(join(REPO_ROOT, rel), join(rootDir, rel), 'dir');
-  }
   const dir = join(rootDir, 'app', 'modules', 'broken');
   await mkdir(join(dir, 'migrations', 'broken'), { recursive: true });
   await writeFile(
@@ -90,7 +83,7 @@ async function makeBrokenModule(rootDir: string): Promise<void> {
 
 describe('迁移失败：停住 + 模块/文件/第几条语句（#248 ⑥）', () => {
   it('服务端报错 → 装配中止，错误指出模块 broken / 文件 0001_broken.sql / 第 2 条语句', { timeout: 60_000 }, async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), 'unself-migfail-'));
+    const rootDir = await makeFakeRepoRoot('unself-migfail-');
     try {
       await makeBrokenModule(rootDir);
       const fake = makeCfRestFake({

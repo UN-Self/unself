@@ -31,7 +31,7 @@ beforeEach(async () => {
       deploy: async ({ onEvent }) => {
         onEvent('九步进度（替身）：步骤 1/9');
         await new Promise((r) => setTimeout(r, 20));
-        return { baseUrl: 'https://unself-core-api.test.workers.dev', setupToken: 'tok-123' };
+        return { baseUrl: 'https://unself-workbench.test.workers.dev', setupToken: 'tok-123' };
       },
     },
   });
@@ -118,7 +118,7 @@ describe('六段流全链（替身部署）', () => {
       const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
       if (st.step === 'done') {
         const result = st.result as Record<string, unknown>;
-        expect(result.baseUrl).toBe('https://unself-core-api.test.workers.dev');
+        expect(result.baseUrl).toBe('https://unself-workbench.test.workers.dev');
         expect(result.setupUrl).toContain('/setup?token=');
         expect(st.idempotent).toBe(true);
         expect(String(st.idempotentNote)).toContain('重跑');
@@ -219,7 +219,7 @@ describe('幂等标语与重跑（⑥）', () => {
     }
     expect(holder.state.error).toBeNull();
     expect(final?.step).toBe('done');
-    expect((final?.result as Record<string, unknown>).baseUrl).toBe('https://unself-core-api.test.workers.dev');
+    expect((final?.result as Record<string, unknown>).baseUrl).toBe('https://unself-workbench.test.workers.dev');
   });
 });
 

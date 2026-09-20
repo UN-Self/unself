@@ -24,6 +24,7 @@ import {
   parseSource,
   sriFromBuffer,
 } from '../../src/engine/sources';
+import { findRepoRoot } from '../helpers/repo-root';
 
 let work: string;
 
@@ -90,7 +91,7 @@ describe('parseSource（四协议，#77 删 official）', () => {
 });
 
 describe('#284 npm 本地优先解析（零网络）', () => {
-  const REPO_ROOT = new URL('../../../..', import.meta.url).pathname;
+  const REPO_ROOT = findRepoRoot();
 
   it('本地命中：仓库 workspace 符号链接（@unself/hello → app/modules/hello，源码形态）', () => {
     const hit = resolveLocalNpmPackage({ pkg: '@unself/hello', version: '0.1.0', rootDir: REPO_ROOT });

@@ -6,11 +6,13 @@
  * 消费者会得到 Unsupported URL Type "workspace:" —— 官方模块预装直接失效。
  */
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   pinWorkspaceDeps,
   rewriteWorkspaceSpec,
 } from '../../../scripts/release/pin-workspace-deps.mjs';
+import { findRepoRoot } from './helpers/repo-root';
 
 const versions: Record<string, string> = { '@unself/sdk': '0.1.0', '@unself/hello': '0.1.0' };
 const resolve = (name: string) => versions[name];
@@ -49,7 +51,7 @@ describe('发布前改写 workspace: 协议', () => {
   });
 
   it('CI 接线不变量：release.yml 必须在 npm publish 之前跑 pin 脚本', () => {
-    const wf = readFileSync(new URL('../../../.github/workflows/release.yml', import.meta.url), 'utf8');
+    const wf = readFileSync(join(findRepoRoot(), '.github/workflows/release.yml'), 'utf8');
     const pin = wf.indexOf('pin-workspace-deps.mjs');
     const pub = wf.indexOf('npm publish --access public');
     expect(pin).toBeGreaterThan(-1);

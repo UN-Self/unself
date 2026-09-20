@@ -14,12 +14,13 @@ import { discoverModules, runNineSteps } from '../../src/engine/steps';
 import { chatDbName, chatKvName, chatR2Name } from '../../src/engine/chat-provision';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { RestClient } from '../../src/engine/rest/client';
+import { findRepoRoot } from '../helpers/repo-root';
 
-/** 仓库根（真实文件布局：app/modules/hello、app/modules/chat、services/core-api、apps/shell）。 */
-const ROOT = new URL('../../../..', import.meta.url).pathname;
+/** 仓库根（真实文件布局：app/modules/hello、app/modules/chat、app/workbench、app/workbench）。 */
+const ROOT = findRepoRoot();
 
 async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'apps/shell/dist');
+  const dist = join(rootDir, 'app/workbench/dist');
   await mkdir(join(dist, 'assets'), { recursive: true });
   await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
 }
@@ -89,7 +90,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
   });
 
   it('上传 metadata：/m/chat/* 路由 + 专属绑定 + DO 绑定/migrations + MODULE_ID/CORE_JWKS_JSON', { timeout: 120_000 }, async () => {
-    const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] }, zones: { 'handywote.top': 'zone-1' } });
+    const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: { 'unself-workbench': ['JWT_PRIVATE_KEY'] }, zones: { 'handywote.top': 'zone-1' } });
     await runNineSteps({
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
@@ -126,7 +127,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
   });
 
   it('注册表三态之一（启用）：chat upsert enabled=1 且 entry=模块自有子域（#273）；hello 未选 disable', { timeout: 120_000 }, async () => {
-    const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] } });
+    const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: { 'unself-workbench': ['JWT_PRIVATE_KEY'] } });
     // #284：未选 = config 删了但 lock 里还记着（目录扫描已废）
     const preLock = JSON.stringify({
       lockVersion: 1,
@@ -170,7 +171,7 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
     });
     expect(summary1.chat).toEqual({ db: chatDbName(), kv: chatKvName(), r2: chatR2Name(), keyringAction: 'created' });
     expect(first.state.secretPuts).toEqual([
-      { worker: 'unself-core-api', name: 'JWT_PRIVATE_KEY' },
+      { worker: 'unself-workbench', name: 'JWT_PRIVATE_KEY' },
       { worker: 'unself-module-chat', name: 'EDGECHAT_ENCRYPTION_KEYRING' },
     ]);
 
@@ -295,7 +296,7 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
     const fake = makeCfRestFake({
       existingD1: ['unself-core', 'unself-modules'],
       existingWorkers: ['unself-module-chat'],
-      existingSecrets: { 'unself-core-api': ['JWT_PRIVATE_KEY'] },
+      existingSecrets: { 'unself-workbench': ['JWT_PRIVATE_KEY'] },
     });
     await runNineSteps({
       rootDir: ROOT,

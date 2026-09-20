@@ -8,7 +8,7 @@
  * 平台产物（core worker bundle / 壳 / 迁移 SQL / vendor）保持内嵌。
  *
  * 为什么需要它：`npx` / tarball 装出来的安装器所在的机器**没有本仓库**——九步引擎若仍从
- * `rootDir/modules`、`rootDir/services`、`rootDir/apps/shell/dist` 读源码树，干净机器必然部署不出来。
+ * `rootDir/modules`、`rootDir/services`、`rootDir/app/workbench/dist` 读源码树，干净机器必然部署不出来。
  *
  * 两种运行形态（同一条代码路径，只换「产物根」这一处输入）：
  * - **安装器产物形态**：引擎被打进 `<installer>/dist/unself.mjs`，同目录 `dist/artifacts/` 随 tarball 分发
@@ -41,11 +41,11 @@ export interface ArtifactRoots {
   manifestPath: string;
   /** 预打包 core Worker bundle（ESM，含 core-api + Stalwart 适配器 + 安全头）。 */
   coreWorker: string;
-  /** core 迁移目录（services/core-api/migrations/core 的产物副本）。 */
+  /** core 迁移目录（app/workbench/migrations/core 的产物副本）。 */
   coreMigrationsDir: string;
-  /** 平台基建迁移目录（services/core-api/migrations/modules 的产物副本）。 */
+  /** 平台基建迁移目录（app/workbench/migrations/modules 的产物副本）。 */
   platformMigrationsDir: string;
-  /** shell 静态资产（apps/shell/dist 的产物副本）。 */
+  /** shell 静态资产（app/workbench/dist 的产物副本）。 */
   shellDir: string;
   /** 随包第三方依赖（blake3-wasm：createRequire 加载，需真实文件树，无法进 bundle）。 */
   vendorDir: string;

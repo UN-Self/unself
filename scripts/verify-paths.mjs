@@ -106,6 +106,27 @@ for (const top of new Set(declaredRoots)) {
   }
 }
 
+// ---- 断言 3：代码里不得再引用已删除的顶层目录（#303 重排后的旧路径） ----
+// 只认「像路径的写法」（引号包起来 / 作为 join 的段），避免把散文里的包内子目录（src/services/x.ts）误判。
+const RETIRED = ['apps', 'services', 'packages', 'adapters'];
+// 要求「引号 + 名字 + 斜杠」（真路径写法）；wrangler 的 `"services"` 配置键这类不带斜杠的不算。
+const RETIRED_RE = new RegExp(`(['"\`])(${RETIRED.join('|')})\\/`);
+const CODE_EXT = new Set(['.ts', '.tsx', '.vue', '.js', '.jsx', '.mjs', '.cjs', '.json', '.jsonc', '.yml', '.yaml', '.sh', '.sql']);
+for (const file of walk(ROOT, (n) => CODE_EXT.has(n.slice(n.lastIndexOf('.'))))) {
+  const rel = relative(ROOT, file);
+  if (rel.startsWith('docs' + sep) || rel.startsWith('third_party' + sep)) continue; // 历史快照/合规台账不动
+  readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+    const m = RETIRED_RE.exec(line);
+    if (m) {
+      // 已是新布局（app/xxx、core/xxx）不算残留
+      const idx = m.index;
+      const before = line.slice(Math.max(0, idx - 6), idx);
+      if (before.endsWith('app/') || before.endsWith('core/')) return;
+      problems.push(`${rel}:${i + 1} 引用了已删除的顶层目录 "${m[2]}/"（#303 重排后应为 core/ 或 app/）：${line.trim().slice(0, 80)}`);
+    }
+  });
+}
+
 // ---- 输出 ----
 if (problems.length > 0) {
   console.error(`✗ 结构闸门不通过（${problems.length} 项）：`);

@@ -11,8 +11,11 @@
  * 3. 都没有 → 空前缀 = 既有历史形态 `unself-<base>`（老实例零影响）。
  *
  * 语义：
- * - 命名空间 `mysite`：`mysite-core` / `mysite-modules` / `mysite-core-api` / `mysite-module-hello` / `mysite-storage`；
- * - 无命名空间/空前缀：`unself-core` / `unself-core-api` / `unself-module-hello`（#272 之前的既有实例，逐字不变）；
+ * - 命名空间 `mysite`：`mysite-core` / `mysite-modules` / `mysite-workbench` / `mysite-module-hello` / `mysite-storage`；
+ * - 无命名空间/空前缀：`unself-core` / `unself-workbench` / `unself-module-hello`；
+ *   注意（#303）：**D1 / R2 名保持历史形态不动**（改了就是全新空库 = 丢数据），
+ *   而 core Worker 名由历史 `unself-core-api` 改为 `unself-workbench`——这是**刻意的破坏性更新**：
+ *   重跑部署会建新 Worker，旧 `unself-core-api` 需手工删掉（清场口径见 docs/deploy.md）。
  * - 前缀 `unself-probe-272-`：`unself-probe-272-core` / …（显式覆盖，探针隔离用）。
  *
  * 非法值直接抛错——名字写歪会造成「资源建一半、绑定指错 worker」的半套实例，宁停不住。
@@ -66,7 +69,7 @@ export function resourcePrefix(env: Record<string, string | undefined> = process
 
 /**
  * 资源名：空前缀 → `unself-<base>`（历史形态）；有前缀 → `<prefix><base>`。
- * base 用「去掉 unself- 的部分」：core / modules / core-api / module-<id> / chat / chat-sessions / chat-files。
+ * base 用「去掉 unself- 的部分」：core / modules / workbench / module-<id> / chat / chat-sessions / chat-files。
  */
 export function resourceName(base: string, env: Record<string, string | undefined> = process.env): string {
   const prefix = resourcePrefix(env);
@@ -87,9 +90,9 @@ export function coreDbName(env?: Record<string, string | undefined>): string {
 export function modulesDbName(env?: Record<string, string | undefined>): string {
   return resourceName('modules', env);
 }
-/** 便捷：core Worker 名（同时是模块的 CORE_API service binding 目标）。 */
+/** 便捷：core Worker 名（同时是模块的 CORE_API service binding 目标；#303 起 base = workbench）。 */
 export function coreWorkerName(env?: Record<string, string | undefined>): string {
-  return resourceName('core-api', env);
+  return resourceName('workbench', env);
 }
 /** 便捷：模块 Worker 名。 */
 export function moduleWorkerName(moduleId: string, env?: Record<string, string | undefined>): string {
@@ -126,7 +129,7 @@ export function previewResourceNames(input: {
   const out: ResourceNamePreview[] = [
     { kind: 'D1（core 库）', name: base('core') },
     { kind: 'D1（modules 库）', name: base('modules') },
-    { kind: 'Worker（core API）', name: base('core-api') },
+    { kind: 'Worker（workbench）', name: base('workbench') },
   ];
   for (const id of input.moduleIds) {
     out.push({ kind: `Worker（模块 ${id}）`, name: base(`module-${id}`) });

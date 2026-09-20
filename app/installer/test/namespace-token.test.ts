@@ -111,7 +111,7 @@ describe('#272 init 输出资源名 + deploy 进度/撞车开关', () => {
     const text = o.out.join('\n');
     expect(o.errs).toEqual([]);
     expect(text).toContain('mysite-core');
-    expect(text).toContain('mysite-core-api');
+    expect(text).toContain('mysite-workbench');
     expect(text).toContain('mysite-storage');
   });
 
@@ -122,7 +122,7 @@ describe('#272 init 输出资源名 + deploy 进度/撞车开关', () => {
       deployNineSteps: async (input: Record<string, unknown>) => {
         captured.push(input);
         (input.onEvent as (t: string) => void)?.('步骤 3/9 构建上传 Shell Worker');
-        return { baseUrl: 'https://mysite-core-api.workers.dev', setupToken: 'tok' };
+        return { baseUrl: 'https://mysite-workbench.workers.dev', setupToken: 'tok' };
       },
     });
     await run(o);
@@ -130,7 +130,7 @@ describe('#272 init 输出资源名 + deploy 进度/撞车开关', () => {
     expect(captured).toHaveLength(1);
     expect(captured[0]!.allowAdopt).toBe(true);
     expect(o.out.join('\n')).toContain('步骤 3/9 构建上传 Shell Worker');
-    expect(o.out.join('\n')).toContain('装配完成：https://mysite-core-api.workers.dev');
+    expect(o.out.join('\n')).toContain('装配完成：https://mysite-workbench.workers.dev');
   });
 
   it('parseArgs 识别 --allow-adopt / --allow-shared-account 且不污染位置参数', () => {

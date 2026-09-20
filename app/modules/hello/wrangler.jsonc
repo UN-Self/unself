@@ -9,7 +9,7 @@
   "services": [
     {
       "binding": "CORE_API",
-      "service": "unself-core-api"
+      "service": "unself-workbench"
     }
   ]
 }

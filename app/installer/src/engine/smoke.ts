@@ -26,7 +26,7 @@ export interface ModuleTarget {
   baseUrl: string;
 }
 
-/** setup token 随机长度（字节）；形状与 services/core-api/src/setup.ts 对齐（24B → base64url 无填充）。 */
+/** setup token 随机长度（字节）；形状与 app/workbench/src/setup.ts 对齐（24B → base64url 无填充）。 */
 const SETUP_TOKEN_BYTES = 24;
 
 /** 本地生成一次性 setup token（#165 方案 B：签发在装配器，不再有公开签发端点）。 */
