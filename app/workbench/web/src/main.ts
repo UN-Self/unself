@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { createApp } from 'vue'
+import { createApp, h, type Component } from 'vue'
 import { RouterView } from 'vue-router'
+import { Transition } from 'vue'
 import { router } from './router'
 import { installFramePolicy } from './lib/csp-frame'
 import './styles.css'
@@ -15,7 +16,17 @@ import './tokens.css'
  */
 async function boot(): Promise<void> {
   await installFramePolicy(document)
-  createApp(RouterView).use(router).mount('#app')
+  // #307 ③导航层：整页路由切换 fade+slide(8px)（transitions.dev page transition），
+  // mode="out-in" 防两页交叠；类名落在根组件最外层元素上（各视图均为单根）。
+  createApp({
+    render: () =>
+      h(RouterView, null, {
+        default: ({ Component }: { Component: Component | null }) =>
+          h(Transition, { name: 'page', mode: 'out-in' }, { default: () => Component }),
+      }),
+  })
+    .use(router)
+    .mount('#app')
 }
 
 void boot()

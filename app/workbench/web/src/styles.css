@@ -1,3 +1,31 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 
 @import "tailwindcss";
+
+/* ---------- #307 ③导航层：整页路由切换（transitions.dev page transition） ----------
+   挂载点：main.ts 根 <Transition name="page" mode="out-in">。
+   位移 8px = --unself-space-2；时长 duration-normal、缓动 ease-out。 */
+.page-enter-active,
+.page-leave-active {
+  transition:
+    opacity var(--unself-duration-normal) var(--unself-ease-out),
+    transform var(--unself-duration-normal) var(--unself-ease-out);
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(var(--unself-space-2));
+}
+.page-leave-to {
+  opacity: 0;
+}
+
+/* 降低动效偏好：整页切换退化为纯 fade（无位移）；再压一档 = 瞬切（无过渡） */
+@media (prefers-reduced-motion: reduce) {
+  .page-enter-active,
+  .page-leave-active {
+    transition: opacity var(--unself-duration-normal) var(--unself-ease-out);
+  }
+  .page-enter-from {
+    transform: none;
+  }
+}
