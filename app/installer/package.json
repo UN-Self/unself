@@ -24,8 +24,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "pnpm run build:artifacts && bash scripts/build-bin.sh",
-    "build:artifacts": "tsx scripts/build-artifacts.ts",
+    "build": "bash scripts/build-bin.sh",
     "build:bin": "bash scripts/build-bin.sh",
     "prepack": "pnpm run build"
   },
@@ -33,15 +32,16 @@
     "note": "#257/#284：引擎（@unself/deploy-cloudflare）与其运行期依赖全部 bundle 进 dist/unself.mjs；平台产物（core Worker/shell/迁移 SQL/vendor）预构建内嵌进 dist/artifacts/**。官方模块包 @unself/hello、@unself/chat 连同 @unself/sdk 是安装器的**运行期依赖**（仓库内 workspace:*，发布时由 pnpm 改写为版本号）：干净机器装 Node + 本 tarball，npm 一并拉取三个官方包即可部署。"
   },
   "dependencies": {
-    "@unself/hello": "workspace:*",
     "@unself/chat": "workspace:*",
-    "@unself/sdk": "workspace:*"
+    "@unself/hello": "workspace:*",
+    "@unself/sdk": "workspace:*",
+    "@unself/workbench": "workspace:*",
+    "blake3-wasm": "2.1.5"
   },
   "devDependencies": {
     "@types/node": "^24",
     "@unself/contracts": "workspace:*",
     "@unself/control-plane": "workspace:*",
-    "blake3-wasm": "2.1.5",
     "esbuild": "^0.28.0",
     "jose": "^6.1.0",
     "tsx": "^4.19.0",

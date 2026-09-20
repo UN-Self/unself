@@ -201,8 +201,9 @@ describe('#269 unself deploy --yes', () => {
 
 describe('#269 布局不变式：module add 写的 lock 就是 runDeploy 读的 lock', () => {
   it('init + module add + runDeploy（替身 CF / 产物形态）→ 不漂移、装配成功、台账写回实例目录', async () => {
-    const artifactsRoot = fileURLToPath(new URL('../dist/artifacts', import.meta.url));
-    if (!existsSync(join(artifactsRoot, 'manifest.json'))) return; // 未构建产物时跳过（与 module-pack 测试 7 同款）
+    // 平台产物现在随 @unself/workbench 包发布（#303）；仓库内需先 build，未构建则跳过（与 module-pack 测试 7 同款）
+    const workbenchPkg = fileURLToPath(new URL('../../workbench', import.meta.url));
+    if (!existsSync(join(workbenchPkg, 'dist', 'worker.js'))) return;
 
     await run(opts(['init', 'demo']));
     const layout = instanceLayout(join(cwd, 'demo'));
@@ -235,7 +236,7 @@ describe('#269 布局不变式：module add 写的 lock 就是 runDeploy 读的 
     const result = await runDeploy({
       instancePath: layout.instanceDir,
       engineOverrides: {
-        artifactRoot: artifactsRoot,
+        workbenchDir: workbenchPkg,
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
         http: {
           smoke: async (_b: string, mods: Array<{ id: string; baseUrl: string }>) => [

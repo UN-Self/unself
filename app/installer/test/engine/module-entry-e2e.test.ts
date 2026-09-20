@@ -11,7 +11,7 @@
  * CF 侧为替身（`makeCfRestFake`）；取包/解包/SRI 校验走真实代码。真机探针另见 /tmp/report-269.md。
  */
 import { createServer, type Server } from 'node:http';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { modulePackageFiles, packModuleDir } from '../../src/engine/module-pack';
@@ -22,17 +22,17 @@ import { sriFromBuffer } from '../../src/engine/sources';
 import { RestClient } from '../../src/engine/rest/client';
 import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { findRepoRoot } from '../helpers/repo-root';
+import { cleanupTempWorkbenches, tempWorkbenchDir } from './helpers/fake-repo';
 
 const ROOT = findRepoRoot();
+
+// 平台产物夹具（临时合成，测试不依赖仓库 app/workbench 已构建）
+const WB = await tempWorkbenchDir();
+afterAll(cleanupTempWorkbenches);
 const HELLO_DIR = join(ROOT, 'app/modules/hello');
 const LOCK_PATH = join(ROOT, 'unself.lock');
 const DEPLOY_DIR = join(ROOT, '.deploy');
 
-async function fakeBuildShell(rootDir: string): Promise<void> {
-  const dist = join(rootDir, 'app/workbench/dist');
-  await mkdir(join(dist, 'assets'), { recursive: true });
-  await writeFile(join(dist, 'index.html'), '<html><body>TEST SHELL</body></html>');
-}
 
 const SMOKE_OK = {
   smoke: async (b: string, mods: Array<{ id: string; baseUrl: string }>) =>
@@ -84,7 +84,7 @@ async function runDeploy(modules: Array<{ id: string; source: string }>, opts: {
       storage: { provider: 'r2', bucket: 'unself-storage' },
     },
     http: SMOKE_OK,
-    buildShell: fakeBuildShell,
+    workbenchDir: WB,
     ...(opts.yes ? { yes: true } : {}),
   });
   return { fake, summary };
