@@ -10,15 +10,20 @@ import {
   chooseDomain,
   completeDeploy,
   chooseStorage,
+  collectConfigValues,
   confirmModules,
   failDeploy,
+  finishModuleConfig,
   initialWizardState,
   needsTotalTls,
   pushEvent,
   resetWizard,
+  saveConfigValues,
   submitToken,
   tokenProblem,
   domainProblem,
+  type WizardConfigField,
+  type WizardStep,
   type WizardStorageOption,
 } from '../src/web/state';
 
@@ -216,5 +221,108 @@ describe('chooseStorage（③½ 存储选择，#55）', () => {
     expect(yes.problem).toBeNull();
     expect(yes.state.storageChoices.demo).toBe('shared');
     expect(yes.state.sharedConsent).toBe(true);
+  });
+});
+
+// ---- #307 ③★ 模块配置（module-config 步 + configValues）----
+
+describe('③★ module-config 步（#307：词表新增，纯函数语义）', () => {
+  const FIELDS: WizardConfigField[] = [
+    { key: 'API_URL', label: '接口地址', type: 'url', required: true },
+    { key: 'RETRIES', label: '重试次数', type: 'number', default: '3' },
+    { key: 'DEBUG', label: '调试模式', type: 'boolean', default: 'false' },
+    { key: 'MODE', label: '模式', type: 'enum', options: ['a', 'b'], default: 'a' },
+    { key: 'SCHEMA', label: '扩展配置', type: 'json', default: '{}' },
+    { key: 'SECRET_KEY', label: '密钥', type: 'secret', required: true },
+  ];
+
+  function stateWith(): ReturnType<typeof initialWizardState> {
+    const s = initialWizardState(instancePath, { modules: ['demo'] });
+    return { ...s, hasToken: true, moduleConfigs: [{ id: 'demo', fields: FIELDS.map((f) => ({ ...f })) }] };
+  }
+
+  /** 去掉 secret 字段的声明态（secret 必填校验在服务层；纯函数测试聚焦非 secret 通路）。 */
+  function noSecretState(): ReturnType<typeof initialWizardState> {
+    const s = stateWith();
+    return { ...s, moduleConfigs: [{ id: 'demo', fields: FIELDS.filter((f) => f.type !== 'secret').map((f) => ({ ...f })) }] };
+  }
+
+  it('WizardStep 词表含 module-config（类型级；编译期守护）', () => {
+    const steps: WizardStep[] = ['auth', 'domain', 'modules', 'module-config', 'storage', 'ready', 'deploying', 'done', 'failed'];
+    expect(steps).toContain('module-config');
+  });
+
+  it('saveConfigValues：合法值进 configValues；缺省键不填不报错（非必填）；secret 字段整体跳过（服务层收值）', () => {
+    const s = noSecretState();
+    const r = saveConfigValues(s, 'demo', { API_URL: 'https://api.example.com', RETRIES: '5' });
+    expect(r.problem).toBeNull();
+    expect(r.state.configValues.demo?.API_URL).toBe('https://api.example.com');
+    expect(r.state.configValues.demo?.RETRIES).toBe('5');
+    // 未填且非必填的键不虚构（缺省值在部署收集时兑底，不提前落状态）
+    expect(r.state.configValues.demo?.DEBUG).toBeUndefined();
+  });
+
+  it('saveConfigValues：required 缺失不给过（人话点名 label）；secret 键传了也不进状态', () => {
+    const r = saveConfigValues(noSecretState(), 'demo', {});
+    expect(r.problem).toMatch(/接口地址.*必填/);
+    expect(r.state.step).toBe('auth');
+    // secret 必填的校验在服务层（进程内存）；这里验证 secret 键即使传进来也不落 configValues
+    const r2 = saveConfigValues(stateWith(), 'demo', { API_URL: 'https://x.example.com', SECRET_KEY: 'leak' });
+    expect(r2.problem).toBeNull();
+    expect(JSON.stringify(r2.state.configValues)).not.toContain('leak');
+    expect(r2.state.configValues.demo?.SECRET_KEY).toBeUndefined();
+  });
+
+  it('saveConfigValues：secret 键不进 configValues（非 secret 通路上永不出现）', () => {
+    const r = saveConfigValues(stateWith(), 'demo', { API_URL: 'https://x.example.com', SECRET_KEY: 'leak-value' });
+    expect(r.problem).toBeNull();
+    expect(JSON.stringify(r.state.configValues)).not.toContain('leak-value');
+    expect(r.state.configValues.demo?.SECRET_KEY).toBeUndefined();
+  });
+
+  it('saveConfigValues：声明之外的键一律丢弃（防注入面）', () => {
+    const r = saveConfigValues(noSecretState(), 'demo', { API_URL: 'https://x.example.com', EVIL: 'inject' });
+    expect(r.problem).toBeNull();
+    expect(r.state.configValues.demo?.EVIL).toBeUndefined();
+  });
+
+  it('saveConfigValues：无声明的模块 → 拒绝（③★ 无 config 自动跳过，不给存）', () => {
+    const r = saveConfigValues(stateWith(), 'ghost', { A: 'b' });
+    expect(r.problem).toMatch(/ghost.*没有 config 声明/);
+  });
+
+  it('finishModuleConfig：全模块值齐 → storage；未收齐 → 人话点名', () => {
+    const s = noSecretState();
+    const bad = finishModuleConfig(s);
+    expect(bad.problem).toMatch(/demo.*配置还没填/);
+    const saved = saveConfigValues(s, 'demo', { API_URL: 'https://x.example.com' });
+    const ok = finishModuleConfig(saved.state);
+    expect(ok.problem).toBeNull();
+    expect(ok.state.step).toBe('storage');
+  });
+
+  it('collectConfigValues：default 兜底 + 已存值覆盖 default（secret 键占位，值由服务层合并）', () => {
+    const s = noSecretState();
+    const saved = saveConfigValues(s, 'demo', { API_URL: 'https://x.example.com', DEBUG: 'true' }).state;
+    const got = collectConfigValues(saved);
+    expect(got.demo).toMatchObject({
+      API_URL: 'https://x.example.com',
+      RETRIES: '3',
+      DEBUG: 'true',
+      MODE: 'a',
+      SCHEMA: '{}',
+    });
+    // 带 secret 声明的完整态：secret 键占位（值由服务层部署时从内存注入）
+    const gotFull = collectConfigValues(stateWith());
+    expect(gotFull.demo?.SECRET_KEY).toBe('');
+  });
+
+  it('⑥ reset：configValues/moduleConfigs 保留（重跑不重填非 secret 配置）', () => {
+    let s = noSecretState();
+    s = saveConfigValues(s, 'demo', { API_URL: 'https://x.example.com' }).state;
+    const r = resetWizard({ ...s, step: 'failed' });
+    expect(r.step).toBe('auth');
+    expect(r.configValues.demo?.API_URL).toBe('https://x.example.com');
+    expect(r.moduleConfigs).toHaveLength(1);
   });
 });
