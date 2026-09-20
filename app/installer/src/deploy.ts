@@ -12,6 +12,8 @@ import { readFileSync } from 'node:fs';
 import { cp, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { instanceLayout } from './lib/dir';
+import { defaultModuleEntries } from './lib/official-modules';
+import type { WizardConfigField } from './web/state';
 
 /**
  * 模块条目输入（#269/#77）：**一律对象形态** `{id, source}`（官方模块也写 npm 串）。
@@ -40,6 +42,12 @@ export interface RunDeployOptions {
    * CLI 走 `--yes`。false/缺省 = 有漂移即抛 SourceDriftError 列 diff（#245 安全闸门不变）。
    */
   yes?: boolean;
+  /**
+   * ③★ 模块配置值（#307）：模块 id → { key: 值 }（secret 与非 secret 已合并；只进本次调用内存）。
+   * TODO(#307 后续)：引擎侧消费——写进模块 wrangler vars / wrangler secret（RunNineStepsOptions
+   * 扩展 configValues + secret/vars 分流）。当前透传到此处为止，不落盘、不进日志。
+   */
+  configValues?: Record<string, Record<string, string>>;
   /**
    * @internal 测试注入口（#269）：透传给引擎 `runNineSteps` 的额外选项（client / http /
    * artifactRoot / fetchers 等）。`rootDir` 与 `configOverride` 仍由本桥确定，不被透传覆盖。
@@ -78,6 +86,83 @@ export async function previewInstanceResources(
 
 /** 四级词表（与 @unself/contracts StorageLevelSchema 同源语义；向导壳零引擎依赖故内联）。 */
 const STORAGE_LEVELS = ['core', 'shared', 'dedicated', 'external'] as const;
+
+/**
+ * ② zone 自动发现（#307）：用给定凭证列账户 active zone（安装器不持有长期凭证；
+ * token 传 '' = 引擎默认凭证优先级（本机 wrangler OAuth））。
+ * 返回人话错误（不抛）：调用方向导直接展示；空凭证且 OAuth 不可用 → 拿不到清单走手填回退。
+ */
+export async function wizardListZones(token: string): Promise<{ ok: boolean; zones: Array<{ id: string; name: string }>; message: string }> {
+  const engine = await loadEngine();
+  const client = token
+    ? new engine.RestClient({ token, retries: 0, timeoutMs: 15_000 })
+    : await (async () => {
+        const cred = await engine.resolveAuth({});
+        if (!cred) {
+          return null;
+        }
+        return new engine.RestClient({ token: cred.token, retries: 0, timeoutMs: 15_000 });
+      })();
+  if (!client) {
+    return { ok: false, zones: [], message: '没有可用的 Cloudflare 凭证：本机无 wrangler OAuth，也未粘 API Token——请在①粘贴 API Token，或改手填完整域名' };
+  }
+  try {
+    const zones = await engine.listZones(client);
+    return { ok: true, zones, message: '' };
+  } catch (err) {
+    const e = err as { message?: string; status?: number };
+    return {
+      ok: false,
+      zones: [],
+      message:
+        `zone 自动发现失败（${e.message?.slice(0, 120) ?? '未知错误'}）：请改手填完整域名` +
+        '（API Token 需 Zone · Zone · Read 权限）',
+    };
+  }
+}
+
+/**
+ * ③★ 模块配置声明投影（#307）：读 config 条目来源的 manifest.config（本地解析同 wizardStorageOptions），
+ * 只返回「有 config 声明」的模块（无声明的自动跳过不出现）。
+ * 缺省挂接值 = 向导默认清单（DEFAULT_MODULE_IDS）——config.modules 未含 hello/chat 时仍能看到官方模块的配置页。
+ */
+export async function wizardModuleConfigs(
+  instancePath: string,
+  moduleIds?: string[],
+): Promise<Array<{ id: string; fields: WizardConfigField[] }>> {
+  const engine = await loadEngine();
+  const cfg = await effectiveConfig(instancePath);
+  const ids = moduleIds ?? cfg.modules.map((m) => m.id);
+  const entries = new Map(cfg.modules.map((m) => [m.id, m.source]));
+  const defaults = new Map(defaultModuleEntries().map((e) => [e.id, e.source]));
+  const out: Array<{ id: string; fields: WizardConfigField[] }> = [];
+  for (const id of ids) {
+    const source = entries.get(id) ?? defaults.get(id);
+    if (!source) continue;
+    try {
+      const local = await engine.localModuleManifest({ source, rootDir: instancePath });
+      const config = local?.manifest.config;
+      if (!config || config.length === 0) continue;
+      out.push({
+        id,
+        fields: config.map((f) => ({
+          key: f.key,
+          label: f.label,
+          type: f.type,
+          ...(f.required ? { required: true } : {}),
+          ...(f.default !== undefined ? { default: String(f.default) } : {}),
+          ...(f.options ? { options: [...f.options] } : {}),
+          ...(f.test ? { test: f.test } : {}),
+        })),
+      });
+    } catch {
+      // 解析失败（包不存在/manifest 非法）：无配置页（宁缺勿错；装配期真解析会人话报）
+    }
+  }
+  return out;
+}
+
+
 
 /**
  * 读实例所选模块的 storage 声明（#55）：返回向导③½ 的单选数据（id + accepts + preferred）。

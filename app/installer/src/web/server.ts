@@ -15,22 +15,47 @@ import {
   beginDeploy,
   chooseDomain,
   chooseStorage,
+  collectConfigValues,
   completeDeploy,
   confirmModules,
   deployModules,
   failDeploy,
+  finishModuleConfig,
   needsTotalTls,
   pushEvent,
   resetWizard,
+  saveConfigValues,
   SHARED_CONSENT_NOTE,
   submitOAuthSkip,
   submitToken,
   type WizardEnvHint,
   type WizardModuleAdd,
+  type WizardModuleConfig,
   type WizardResourceName,
   type WizardState,
   type WizardStorageOption,
 } from './state';
+
+/** deps.moduleConfigs 未接线时的缺省（全部模块无配置页 → ③★ 自动跳过）。 */
+const EMPTY_CONFIGS: WizardModuleConfig[] = [];
+
+/**
+ * ③★ 部署时合并配置值（#307）：非 secret 从 state.configValues（default 兑底），
+ * secret 从进程内存 configSecrets 注入。合并结果只进本次 deps.deploy 调用参数
+ * （TODO(#307 后续)：引擎消费写进模块 vars/secrets），不落盘不回显。
+ */
+function mergeConfigValues(
+  st: WizardState,
+  configSecrets: Record<string, Record<string, string>>,
+): Record<string, Record<string, string>> {
+  const merged = collectConfigValues(st);
+  for (const [modId, values] of Object.entries(merged)) {
+    for (const [k, v] of Object.entries(configSecrets[modId] ?? {})) {
+      if (v) values[k] = v;
+    }
+  }
+  return merged;
+}
 
 /** envHint 缺省（向后兼容 #258）：只给 hasEnvToken 时其余字段的安全默认值。 */
 const DEFAULT_ENV_HINT: WizardEnvHint = { hasEnvToken: false, oauthUsable: true, needsTotalTls: false, ci: false };
@@ -54,6 +79,11 @@ export interface WizardDeps {
     domain: string;
     /** 模块条目（#269/#77）：一律对象形态（官方模块写 npm 串；已无 builtin 裸字符串）。 */
     modules: Array<{ id: string; source: string }>;
+    /**
+     * ③★ 模块配置值（#307）：模块 id → { key: 值 }（含 secret，值只进本次调用内存）。
+     * TODO(#307 后续)：引擎侧消费（写进模块 wrangler vars / wrangler secret），另开任务。
+     */
+    configValues?: Record<string, Record<string, string>>;
     /** ③½ 用户存储选择（#55）：模块 id → 四级之一；缺省模块 = preferred ?? core。 */
     storageChoices?: Record<string, string>;
     storage: { provider: 'r2'; bucket: string };
@@ -76,8 +106,29 @@ export interface WizardDeps {
    * 返回 ok=false 时壳把 message 展示在①（区分「token 无效」与网络/权限问题）。
    */
   verifyToken?: (token: string) => Promise<{ ok: boolean; message: string }>;
+  /**
+   * ③★ 模块配置声明（#307）：选中且声明了 config 的模块清单（每模块一页的依据）。
+   * 由启动方注入（CLI 从模块包 manifest 读；测试直给）；缺省 = 全部模块无配置页（③★ 自动跳过）。
+   */
+  moduleConfigs?: WizardModuleConfig[];
   /** ③ 改模块后重算资源名预览（#269；缺省 = 沿用启动时快照）。 */
   previewResources?: (moduleIds: string[]) => Promise<WizardResourceName[]>;
+  /**
+   * ③★ 改模块后重算配置声明（#307；缺省 = 沿用 deps.moduleConfigs 注入值）。
+   * CLI 从模块包 manifest 读（本地解析，不联网）；测试直给。
+   */
+  refreshModuleConfigs?: (moduleIds: string[]) => Promise<WizardModuleConfig[]>;
+  /**
+   * ② zone 自动发现（#307）：用 ① 的凭证列账户 active zone。
+   * token 传 '' = 引擎默认凭证优先级（本机 wrangler OAuth）；拿不到返回 ok:false（UI 走手填回退）。
+   * CLI 缺省注入 wizardListZones（deploy.ts）；测试直给替身。
+   */
+  listZones?: (token: string) => Promise<{ ok: boolean; zones: Array<{ id: string; name: string }>; message: string }>;
+  /**
+   * ③★ 测试连接（#307）：服务端代理验证字段值可达（test:'http' 才有真测试；其他标识前端渲染禁用按钮）。
+   * CLI 缺省注入 testHttpEndpoint；测试直给替身。返回 ok + 人话 message（不透传内部细节）。
+   */
+  testConnection?: (url: string) => Promise<{ ok: boolean; message: string }>;
   /**
    * 模块存储声明投影（#55）：③½ 渲染单选 + accepts 校验的依据。
    * 由启动方注入（CLI 从模块包 manifest 读；测试直给）；缺省 = 无可选模块（全按 preferred ?? core）。
@@ -395,6 +446,12 @@ export function createWizardServer(opts: ServeOptions): Server {
   // 向导①粘贴的 token（#272）：只活在本次服务进程内存（不写 state、不进 /api/state、不落盘不回显）。
   // ⑥ 重跑（reset）时清空，与状态机「token 明文不留存」语义一致。
   let sessionToken: string | null = null;
+  // ③★ secret 配置值（#307）：模块 id → key → 值。同 #272 token 纪律：只进本进程内存，
+  // 不写 state（publicState 自然不投影）、不落盘、不回显；⑥ reset 与 step4 重开时清空。
+  let configSecrets: Record<string, Record<string, string>> = {};
+  const clearConfigSecrets = (): void => {
+    configSecrets = {};
+  };
   const sseClients = new Set<ServerResponse>();
   const broadcast = (text: string): void => {
     for (const res of sseClients) {
@@ -417,7 +474,8 @@ export function createWizardServer(opts: ServeOptions): Server {
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/state') {
-          // ⑥ 幂等重跑标语随状态查询返回；状态投影永不含 token 明文（envHint 只有布尔字段）。
+          // ⑥ 幂等重跑标语随状态查询返回；状态投影永不含 token 明文与 ③★ secret 值
+          //（secret 只在服务进程内存 configSecrets；configValues 只收非 secret——双层不泄漏）。
           json(res, 200, {
             ...state,
             hasEnv: envHint.hasEnvToken,
@@ -425,6 +483,21 @@ export function createWizardServer(opts: ServeOptions): Server {
             idempotent: true,
             idempotentNote: '任何时候重跑收敛同一终态',
           });
+          return;
+        }
+        // ② zone 自动发现（#307）：用 ① 的凭证列账户 active zone（无凭证/失败 → ok:false 走手填回退）。
+        if (req.method === 'GET' && url.pathname === '/api/zones') {
+          if (!deps.listZones) {
+            json(res, 200, { ok: false, zones: [], message: '本次向导启动未接线 zone 发现：请手填完整域名' });
+            return;
+          }
+          const r = await deps.listZones(sessionToken ?? '');
+          json(res, 200, r);
+          return;
+        }
+        // ③★ 模块配置声明（#307）：渲染每模块配置页的依据（只声明元数据，无值）。
+        if (req.method === 'GET' && url.pathname === '/api/module-configs') {
+          json(res, 200, { configs: state.moduleConfigs ?? EMPTY_CONFIGS });
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/events') {
@@ -511,9 +584,16 @@ export function createWizardServer(opts: ServeOptions): Server {
             return;
           }
           // #269：③ 改了模块清单 → 资源名预览重算（不再沿用启动时快照）。
-          const next = deps.previewResources
-            ? { ...r.state, resourceNames: await deps.previewResources(r.state.modules) }
-            : r.state;
+          // #307：③★ 配置声明同步重算（模块清单变化 → 每模块一页清单变化）。
+          const next = {
+            ...r.state,
+            moduleConfigs: deps.refreshModuleConfigs
+              ? await deps.refreshModuleConfigs(r.state.modules)
+              : (deps.moduleConfigs ?? EMPTY_CONFIGS).filter((c) => r.state.modules.includes(c.id)),
+            ...(deps.previewResources
+              ? { resourceNames: await deps.previewResources(r.state.modules) }
+              : {}),
+          };
           deps.setState(next);
           json(res, 200, { step: next.step });
           return;
@@ -548,11 +628,101 @@ export function createWizardServer(opts: ServeOptions): Server {
             json(res, 400, { problem: r.problem });
             return;
           }
-          const next = deps.previewResources
-            ? { ...r.state, resourceNames: await deps.previewResources(r.state.modules) }
-            : r.state;
+          // #307：③★ 配置声明同步重算（新模块可能带 config 声明——resolveModule 投影或 refresh 注入）。
+          const next = {
+            ...r.state,
+            moduleConfigs: deps.refreshModuleConfigs
+              ? await deps.refreshModuleConfigs(r.state.modules)
+              : [
+                  ...(deps.moduleConfigs ?? EMPTY_CONFIGS).filter((c) => r.state.modules.includes(c.id)),
+                  ...(preview.configFields ? [{ id: preview.id, fields: preview.configFields }] : []),
+                ],
+            ...(deps.previewResources
+              ? { resourceNames: await deps.previewResources(r.state.modules) }
+              : {}),
+          };
           deps.setState(next);
           json(res, 200, { step: next.step, id: preview.id });
+          return;
+        }
+        // ③★ 模块配置（#307）：逐模块保存非 secret 值；secret 值进进程内存（同 #272 token 纪律）。
+        // 逐模块一页：每模块提交一次（modId + 全字段值）；全部声明模块都保存过后前端再发 finish。
+        if (req.method === 'POST' && url.pathname === '/api/step3c') {
+          if (!state.hasToken) {
+            json(res, 400, { problem: '请先完成①凭证' });
+            return;
+          }
+          const body = await readJsonBody(req);
+          const modId = String(body.modId ?? '');
+          const raw = (body.values ?? {}) as Record<string, unknown>;
+          const values: Record<string, string> = {};
+          for (const [k, v] of Object.entries(raw)) values[k] = String(v);
+          // secret 字段从值里抽出进进程内存（不进 state）；非 secret 走纯函数落 state。
+          const cfg = state.moduleConfigs.find((m) => m.id === modId);
+          if (!cfg) {
+            json(res, 400, { problem: `模块 ${modId} 没有 config 声明：无配置页（③★ 只收声明过的模块）` });
+            return;
+          }
+          for (const f of cfg.fields) {
+            if (f.type !== 'secret') continue;
+            const v = (values[f.key] ?? '').trim();
+            if (f.required && !v) {
+              json(res, 400, { problem: `「${f.label}」为必填项` });
+              return;
+            }
+            if (v) {
+              configSecrets[modId] = { ...(configSecrets[modId] ?? {}), [f.key]: v };
+            }
+            delete values[f.key]; // 从非 secret 通路剥离
+          }
+          const r = saveConfigValues(state, modId, values);
+          if (r.problem) {
+            json(res, 400, { problem: r.problem });
+            return;
+          }
+          deps.setState(r.state);
+          json(res, 200, { step: r.state.step, saved: modId });
+          return;
+        }
+        // ③★ 完成（#307）：全部声明模块已收齐 → 进 ③½。secret 必填在此总检（进程内存值在才算收齐）。
+        if (req.method === 'POST' && url.pathname === '/api/step3c/finish') {
+          if (!state.hasToken) {
+            json(res, 400, { problem: '请先完成①凭证' });
+            return;
+          }
+          for (const cfg of state.moduleConfigs) {
+            for (const f of cfg.fields) {
+              if (f.type !== 'secret' || !f.required) continue;
+              if (!(configSecrets[cfg.id]?.[f.key] ?? '').trim()) {
+                json(res, 400, { problem: `模块 ${cfg.id} 的「${f.label}」还没填（必填）` });
+                return;
+              }
+            }
+          }
+          const r = finishModuleConfig(state);
+          if (r.problem) {
+            json(res, 400, { problem: r.problem });
+            return;
+          }
+          deps.setState(r.state);
+          json(res, 200, { step: r.state.step });
+          return;
+        }
+        // ③★ 测试连接（#307）：服务端代理验证字段值可达（同 /api/oidc/test-connection 模式）。
+        // 只收 URL（test:'http' 字段）；不透传内部错误细节，成功/失败都给人话。
+        if (req.method === 'POST' && url.pathname === '/api/config-test') {
+          if (!deps.testConnection) {
+            json(res, 200, { ok: false, message: '本次向导启动未接线连接测试：装配时会验证' });
+            return;
+          }
+          const body = await readJsonBody(req);
+          const urlRaw = String(body.url ?? '').trim();
+          if (!/^https?:\/\//.test(urlRaw)) {
+            json(res, 200, { ok: false, message: '请先填一个 http(s) 地址再测试' });
+            return;
+          }
+          const r = await deps.testConnection(urlRaw);
+          json(res, 200, r);
           return;
         }
         // ③½ 存储选择（#55）：逐模块从 accepts 里选，选外即拒绝；shared 需知情同意。
@@ -581,7 +751,10 @@ export function createWizardServer(opts: ServeOptions): Server {
           }
           // ⑥ 幂等重跑：failed/done 重开前先 reset 回干净状态（token 明文本就不留存，重填）。
           const base = state.step === 'ready' ? state : resetWizard(state);
-          if (state.step !== 'ready') sessionToken = null; // reset 连带丢弃上一轮粘贴的 token
+          if (state.step !== 'ready') {
+            sessionToken = null; // reset 连带丢弃上一轮粘贴的 token
+            clearConfigSecrets(); // ③★ secret 值同样只服务一轮（重跑重填，同 token 语义）
+          }
           const body = await readJsonBody(req);
           const allowAdopt = body.allowAdopt === true;
           const st = beginDeploy({ ...base, hasToken: true, domainChoice: base.domainChoice ?? (base.domain ? 'custom' : 'workers') });
@@ -595,6 +768,10 @@ export function createWizardServer(opts: ServeOptions): Server {
               storage: { provider: 'r2', bucket: 'unself-storage' },
               // #269：③ 已在装配前展示「将要装什么」且用户点确认 → 来源漂移视为已确认（#245 闸门不⭕）。
               yes: true,
+              // #307 ③★：模块配置值进部署调用（secret 从进程内存合并，非 secret 从 state）。
+              // TODO(#307 后续)：引擎侧消费——把值写进模块 wrangler vars / wrangler secret
+              //（引擎 RunNineStepsOptions 扩展 configValues + secret 分流，另开任务）。
+              configValues: mergeConfigValues(st, configSecrets),
               ...(sessionToken ? { token: sessionToken } : {}),
               ...(allowAdopt ? { allowAdopt: true } : {}),
               onEvent: (text) => {
