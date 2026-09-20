@@ -3,7 +3,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { KeyRound, LogIn, MailCheck, RefreshCw, Send, UserPlus } from 'lucide-vue-next'
-import { UButton, UCard, UErrorCard, UInput } from '@unself/ui'
+import { UButton, UCard, UDrawCheck, UErrorCard, UInput } from '@unself/ui'
 import {
   claimInviteActivation,
   fetchInvite,
@@ -305,7 +305,8 @@ async function onSubmit() {
       </div>
 
       <div v-else-if="phase === 'approved' || phase === 'activated'" class="invite-done" role="status">
-        <MailCheck class="invite-done-icon" :size="28" aria-hidden="true" />
+        <!-- #307 ②状态叙事：成功勾描画（core/ui UDrawCheck，与 ActivateView 共用一份实现） -->
+        <UDrawCheck class="invite-done-icon" :size="34" />
         <h1 class="invite-title">全部就绪</h1>
         <p class="invite-desc">{{ readyDesc }}</p>
         <UButton size="lg" class="invite-submit" data-test="go-login" @click="onGoLogin">
