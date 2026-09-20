@@ -11,6 +11,12 @@ export interface Zone {
   name: string;
 }
 
+/** 账户 active zone 清单（#307 ② zone 自动发现）：GET /zones?status=active 纯透传（不排序不过滤业务层）。 */
+export async function listZones(client: RestClient): Promise<Zone[]> {
+  const res = await client.get<Zone[]>('/zones?status=active&per_page=50');
+  return (res.result ?? []).map((z) => ({ id: z.id, name: z.name }));
+}
+
 /** 逐级上溯找 domain 归属的 zone（unself.demo.handywote.top → demo → apex）。 */
 export async function findZone(client: RestClient, domain: string): Promise<Zone | null> {
   const labels = domain.split('.');

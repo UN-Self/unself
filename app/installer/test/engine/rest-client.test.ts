@@ -12,7 +12,7 @@ import { d1Import, d1Query, ensureD1 } from '../../src/engine/rest/d1';
 import { parseWranglerTokenOutput, resolveToken } from '../../src/engine/rest/token';
 import { putWorker } from '../../src/engine/rest/workers';
 import { ensureKvNamespace, ensureR2Bucket } from '../../src/engine/rest/storage';
-import { ensureRoute, findZone, removeRoutesForPatterns } from '../../src/engine/rest/zones';
+import { ensureRoute, findZone, listZones, removeRoutesForPatterns } from '../../src/engine/rest/zones';
 
 /** 按请求序列回放的 fetch 替身；记录全部请求。 */
 function fakeFetch(responses: Array<{ status: number; body: unknown; headers?: Record<string, string>; expect?: (req: { url: string; method: string; body?: unknown; headers: Headers }) => void }>) {
@@ -194,6 +194,28 @@ describe('storage / zones', () => {
     expect(zone).toEqual({ id: 'z1', name: 'handywote.top' });
     await ensureRoute(client, 'z1', 'probe.handywote.top/*', 'w', () => {});
     expect(f.calls).toHaveLength(2); // 命中同 script → 不发 PUT/POST
+  });
+
+  it('listZones 纯透传（#307 ② zone 自动发现）：GET /zones?status=active，result 原样投影 id/name', async () => {
+    const f = fakeFetch([
+      { status: 200, body: { success: true, result: [
+        { id: 'z1', name: 'example.com', status: 'active' },
+        { id: 'z2', name: 'test.org', status: 'active' },
+      ], errors: [] } },
+    ]);
+    const client = new RestClient({ token: 't', fetchImpl: f.impl });
+    const zones = await listZones(client);
+    expect(zones).toEqual([
+      { id: 'z1', name: 'example.com' },
+      { id: 'z2', name: 'test.org' },
+    ]);
+    expect(f.calls[0]!.url).toContain('/zones?status=active');
+  });
+
+  it('listZones result 为 null → 空数组（不抛）', async () => {
+    const f = fakeFetch([{ status: 200, body: { success: true, result: null, errors: [] } }]);
+    const client = new RestClient({ token: 't', fetchImpl: f.impl });
+    await expect(listZones(client)).resolves.toEqual([]);
   });
 
   it('removeRoutesForPatterns 只删命中 pattern（红灯点：误删他人路由必红）', async () => {
