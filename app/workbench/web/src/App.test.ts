@@ -414,6 +414,26 @@ describe('App.vue 管理台入口（#166）', () => {
  * 契约 = 用户可见结果：入口在/不在 + 点击后的真实路由变化。
  * （describe 名不带 #168——issue 号写在测试名里会被 verify-tokens 当裸颜色值误报，见 #169。）
  */
+describe('整页路由切换过渡（#307 ③导航层）', () => {
+  /** 与下方管理台入口 describe 同款装配（函数作用域限本 describe，不跨共享）。 */
+  async function mountAdminRole(): Promise<ReturnType<typeof mount>> {
+    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '黄一', role: 'admin' }))
+    vi.mocked(fetchEnabledModules).mockResolvedValue([])
+    const wrapper = await mountApp()
+    await settle()
+    return wrapper
+  }
+
+  it('路由切换：点管理台入口 → 整页换视图（out-in 过渡挂载点工作，新视图呈现）', async () => {
+    const wrapper = await mountAdminRole()
+    await wrapper.find('aside [data-test="admin-entry"]').trigger('click')
+    await flushPromises()
+    // 行为断言：导航真的发生了（过渡承载切换，不改变导航语义本身）
+    expect(currentPath()).toBe('/admin/members')
+    wrapper.unmount()
+  })
+})
+
 describe('App.vue 应用密码入口（成员可见）', () => {
   /** 说明页入口 = 指向 /app-password 的可导航元素。 */
   const MAIL_ENTRY = 'a[href="/app-password"]'
