@@ -166,10 +166,13 @@ export function initialWizardState(
     storageOptions?: WizardStorageOption[];
     resourceNames?: WizardResourceName[];
     moduleAdds?: WizardModuleAdd[];
+    /** ③★ 配置声明初始投影（#307：启动方注入；缺省 = 无配置页）。 */
+    moduleConfigs?: WizardModuleConfig[];
   },
 ): WizardState {
   const storageOptions = options?.storageOptions ?? [];
   const moduleAdds = options?.moduleAdds ?? [];
+  const moduleConfigs = options?.moduleConfigs ?? [];
   return {
     step: 'auth',
     instancePath,
@@ -179,7 +182,7 @@ export function initialWizardState(
     modules: options?.modules ?? [...DEFAULT_MODULE_IDS],
     storageOptions,
     moduleAdds,
-    moduleConfigs: [],
+    moduleConfigs,
     configValues: {},
     resourceNames: options?.resourceNames ?? [],
     storageChoices: {},
@@ -295,7 +298,9 @@ export function confirmModules(s: WizardState, modules: string[]): { state: Wiza
       };
     }
   }
-  return { state: { ...s, modules: ids, step: 'storage' }, problem: null };
+  // #307：确认后有 config 声明的选中模块 → 进 ③★（每模块一页）；全部无声明 → 直接 ③½（自动跳过）。
+  const hasConfigPages = s.moduleConfigs.some((c) => ids.includes(c.id));
+  return { state: { ...s, modules: ids, step: hasConfigPages ? 'module-config' : 'storage' }, problem: null };
 }
 
 /**

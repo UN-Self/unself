@@ -41,7 +41,7 @@ export interface RunOptions {
     /** 本实例资源名预览（#272）：向导页展示「会占用哪些 CF 资源名」。 */
     resourceNames?: Array<{ kind: string; name: string }>;
     /** 模块配置声明投影（#307 ③★）：CLI 从模块包 manifest 读（每模块一页的依据）。 */
-    moduleConfigs?: Array<{ id: string; fields: Array<{ key: string; label: string; type: string; required?: boolean; default?: string; options?: string[]; test?: string }> }>;
+    moduleConfigs?: Array<{ id: string; fields: Array<{ key: string; label: string; type: 'string' | 'secret' | 'number' | 'boolean' | 'enum' | 'url' | 'json' | 'oauth'; required?: boolean; default?: string; options?: string[]; test?: string }> }>;
   }) => Promise<number>;
   deployNineSteps?: (input: {
     instancePath: string;

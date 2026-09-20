@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWizardServer, renderPage, startWizardServer } from '../src/web/server';
-import { initialWizardState, type WizardEnvHint, type WizardState } from '../src/web/state';
+import { initialWizardState, type StorageLevel, type WizardEnvHint, type WizardModuleConfig, type WizardState } from '../src/web/state';
 
 let holder: { state: WizardState };
 let base: string;
@@ -459,3 +459,296 @@ describe('envHint 缺省向后兼容（不传 envHint 只传 hasEnvToken）', ()
     }
   });
 });
+
+// ---- #307 六步向导：新端点与分步推进 ----
+
+describe('#307 GET /api/zones（zone 自动发现）', () => {
+  it('deps.listZones 注入 → sessionToken 透传（① 粘的 token）；无注入 → 人话「未接线」', async () => {
+    // 未接线：ok=false 且给手填指引
+    const r0 = await fetch(`${base}/api/zones`);
+    const j0 = (await r0.json()) as Record<string, unknown>;
+    expect(j0.ok).toBe(false);
+    expect(String(j0.message)).toContain('手填');
+
+    // 接线：① 粘 token → listZones 收到同一 token；① 留空（OAuth 直跑）→ 收到 ''
+    const seen: string[] = [];
+    const { server: s2, port: p2 } = await startWizardServer({
+      deps: {
+        getState: () => initialWizardState('/tmp/x/zones/unself'),
+        setState: () => {},
+        hasEnvToken: false,
+        envHint: { ...HINT },
+        deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+        listZones: async (token) => {
+          seen.push(token);
+          return { ok: true, zones: [{ id: 'z1', name: 'example.com' }], message: '' };
+        },
+      },
+    });
+    try {
+      const b2 = `http://127.0.0.1:${p2}`;
+      await post2(b2, '/api/step1', { token: 'A'.repeat(40) });
+      await (await fetch(`${b2}/api/zones`)).json();
+      expect(seen).toEqual(['A'.repeat(40)]);
+
+      const { server: s3, port: p3 } = await startWizardServer({
+        deps: {
+          getState: () => initialWizardState('/tmp/x/zones2/unself'),
+          setState: () => {},
+          hasEnvToken: false,
+          envHint: { ...HINT },
+          deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+          listZones: async (token) => {
+            seen.push(token);
+            return { ok: true, zones: [], message: '' };
+          },
+        },
+      });
+      try {
+        const b3 = `http://127.0.0.1:${p3}`;
+        await post2(b3, '/api/step1', { token: '' }); // OAuth 直跑 → sessionToken = ''
+        await (await fetch(`${b3}/api/zones`)).json();
+        expect(seen.at(-1)).toBe('');
+      } finally {
+        await new Promise<void>((resolve) => s3.close(() => resolve()));
+      }
+    } finally {
+      await new Promise<void>((resolve) => s2.close(() => resolve()));
+    }
+  });
+});
+
+describe('#307 GET /api/module-configs + POST /api/step3c（③★ 每模块一页）', () => {
+  function serveWithConfigs(configs: WizardModuleConfig[], stateHolder: { state: WizardState }) {
+    return startWizardServer({
+      deps: {
+        getState: () => stateHolder.state,
+        setState: (s) => {
+          stateHolder.state = s;
+        },
+        hasEnvToken: false,
+        envHint: { ...HINT },
+        deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+        moduleConfigs: configs,
+      },
+    });
+  }
+
+  it('③★ 无 config 声明 → ③ 直接进 ③½（module-config 步自动跳过）；有声明 → 出配置步', async () => {
+    // 无声明：③ → storage（跳过 module-config）
+    await post('/api/step1', { token: 'A'.repeat(40) });
+    await post('/api/step2', { choice: 'workers' });
+    const s3 = await post('/api/step3', { modules: 'hello' });
+    expect(s3.json.step).toBe('storage');
+
+    // 有声明：③ → module-config（demo 有配置页）——独立服务注入 moduleConfigs；
+    // demo 是带来源的模块（#269 addModule 数据形态，confirmModules 只放行官方或已加来源的 id）
+    const h2: { state: WizardState } = {
+      state: initialWizardState('/tmp/x/cfg2/unself', {
+        modules: ['demo'],
+        moduleAdds: [
+          {
+            id: 'demo',
+            source: 'npm:@acme/demo@1.0.0',
+            kind: 'npm',
+            version: '1.0.0',
+            permissions: [],
+            storageAccepts: ['core'],
+            manifestHash: 'h',
+          },
+        ],
+      }),
+    };
+    const { server: s2, port: p2 } = await serveWithConfigs(
+      [{ id: 'demo', fields: [{ key: 'API_URL', label: '接口地址', type: 'url', required: true }] }],
+      h2,
+    );
+    try {
+      const b2 = `http://127.0.0.1:${p2}`;
+      const post3 = async (path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> => {
+        const res = await fetch(`${b2}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+      };
+      await post3('/api/step1', { token: 'A'.repeat(40) });
+      await post3('/api/step2', { choice: 'workers' });
+      const s3b = await post3('/api/step3', { modules: 'demo' });
+      expect(s3b.json.step).toBe('module-config');
+      const cfgs = (await (await fetch(`${b2}/api/module-configs`)).json()) as { configs: WizardModuleConfig[] };
+      expect(cfgs.configs.map((c) => c.id)).toEqual(['demo']);
+    } finally {
+      await new Promise<void>((resolve) => s2.close(() => resolve()));
+    }
+  });
+
+  it('③★ 非必填可空提交 → finish 进 ③½；必填缺失 → 400 人话；声明外模块 → 400', async () => {
+    holder.state = {
+      ...initialWizardState('/tmp/x/cfg/unself', { modules: ['demo'] }),
+      hasToken: true,
+      step: 'module-config',
+      moduleConfigs: [{ id: 'demo', fields: [{ key: 'API_URL', label: '接口地址', type: 'url', required: true }] }],
+    };
+    const bad = await post('/api/step3c', { modId: 'demo', values: {} });
+    expect(bad.status).toBe(400);
+    expect(String(bad.json.problem)).toMatch(/必填/);
+    expect(holder.state.step).toBe('module-config');
+
+    const ghost = await post('/api/step3c', { modId: 'nope', values: { API_URL: 'https://x' } });
+    expect(ghost.status).toBe(400);
+
+    const ok = await post('/api/step3c', { modId: 'demo', values: { API_URL: 'https://api.example.com' } });
+    expect(ok.status).toBe(200);
+    const fin = await post('/api/step3c/finish', {});
+    expect(fin.json.step).toBe('storage');
+    expect(holder.state.configValues.demo?.API_URL).toBe('https://api.example.com');
+  });
+
+  it('③★ secret 值只进程内存：POST /api/state 永不回显 secret 键值；secret 必填未填 → finish 拒绝', async () => {
+    holder.state = {
+      ...initialWizardState('/tmp/x/sec/unself', { modules: ['demo'] }),
+      hasToken: true,
+      step: 'module-config',
+      moduleConfigs: [{ id: 'demo', fields: [{ key: 'SECRET_KEY', label: '密钥', type: 'secret', required: true }] }],
+    };
+    // secret 未填 → finish 400
+    const fin0 = await post('/api/step3c/finish', {});
+    expect(fin0.status).toBe(400);
+    expect(String(fin0.json.problem)).toMatch(/密钥.*必填/);
+    expect(holder.state.step).toBe('module-config');
+
+    // 保存 secret（非 secret 通路剥离）→ state 投影无 secret 值
+    const SECRET = 'super-secret-value-42';
+    const ok = await post('/api/step3c', { modId: 'demo', values: { SECRET_KEY: SECRET } });
+    expect(ok.status).toBe(200);
+    const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    expect(JSON.stringify(st)).not.toContain(SECRET);
+    expect((st.configValues as Record<string, Record<string, string>>).demo?.SECRET_KEY).toBeUndefined();
+
+    // finish 通过（secret 已在内存）→ storage
+    const fin = await post('/api/step3c/finish', {});
+    expect(fin.json.step).toBe('storage');
+    // ⑥ failed 后重跑：step4 reset 连带清 secret（重填语义）
+  });
+
+  it('③★ test:http 测试连接：deps.testConnection 成功/失败两态人话回显；非 http(s) → 提示先填', async () => {
+    const calls: string[] = [];
+    const { server: s2, port: p2 } = await startWizardServer({
+      deps: {
+        getState: () => initialWizardState('/tmp/x/tc/unself'),
+        setState: () => {},
+        hasEnvToken: false,
+        envHint: { ...HINT },
+        deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+        testConnection: async (url) => {
+          calls.push(url);
+          return url.includes('good')
+            ? { ok: true, message: '可达：HTTP 200' }
+            : { ok: false, message: '连不上：超时' };
+        },
+      },
+    });
+    try {
+      const b2 = `http://127.0.0.1:${p2}`;
+      const post2 = async (path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> => {
+        const res = await fetch(`${b2}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+      };
+      const ok = await post2('/api/config-test', { url: 'https://good.example.com' });
+      expect(ok.json).toEqual({ ok: true, message: '可达：HTTP 200' });
+      const fail = await post2('/api/config-test', { url: 'https://bad.example.com' });
+      expect(fail.json).toEqual({ ok: false, message: '连不上：超时' });
+      const bad = await post2('/api/config-test', { url: 'ftp://x' });
+      expect(String(bad.json.message)).toContain('http(s)');
+      expect(calls).toEqual(['https://good.example.com', 'https://bad.example.com']);
+    } finally {
+      await new Promise<void>((resolve) => s2.close(() => resolve()));
+    }
+  });
+
+  it('④ deps.deploy 收到 configValues（secret 键在、值来自进程内存；非 secret 来自 state/default 兜底）', async () => {
+    let seenConfigValues: Record<string, Record<string, string>> | undefined;
+    const demoAdds = [
+      {
+        id: 'demo',
+        source: 'npm:@acme/demo@1.0.0',
+        kind: 'npm',
+        version: '1.0.0',
+        permissions: [],
+        storageAccepts: ['core' as StorageLevel],
+        manifestHash: 'h',
+      },
+    ];
+    const h4: { state: WizardState } = {
+      state: initialWizardState('/tmp/x/cv/unself', { modules: ['demo'], moduleAdds: demoAdds }),
+    };
+    const { server: s2, port: p2 } = await startWizardServer({
+      deps: {
+        getState: () => h4.state,
+        setState: (s) => {
+          h4.state = s;
+        },
+        hasEnvToken: false,
+        envHint: { ...HINT },
+        deploy: async (input) => {
+          seenConfigValues = input.configValues;
+          return { baseUrl: 'https://unself.test', setupToken: null };
+        },
+        moduleConfigs: [
+          {
+            id: 'demo',
+            fields: [
+              { key: 'API_URL', label: '接口地址', type: 'url', required: true, default: 'https://default.example.com' },
+              { key: 'SECRET_KEY', label: '密钥', type: 'secret', required: true },
+            ],
+          },
+        ],
+      },
+    });
+    try {
+      const b2 = `http://127.0.0.1:${p2}`;
+      const post3 = async (path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> => {
+        const res = await fetch(`${b2}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+      };
+      await post3('/api/step1', { token: 'A'.repeat(40) });
+      await post3('/api/step2', { choice: 'workers' });
+      await post3('/api/step3', { modules: 'demo' });
+      await post3('/api/step3c', { modId: 'demo', values: { API_URL: 'https://api.example.com', SECRET_KEY: 'sk-live-123' } });
+      await post3('/api/step3c/finish', {});
+      await post3('/api/step3b', { choices: {}, sharedConsent: false }); // ③½ 默认 → ready
+      const r4 = await post3('/api/step4', {});
+      expect(r4.status).toBe(202);
+      for (let i = 0; i < 40 && h4.state.step === 'deploying'; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(h4.state.step).toBe('done');
+      expect(seenConfigValues?.demo).toMatchObject({
+        API_URL: 'https://api.example.com', // 非 secret：state 值
+        SECRET_KEY: 'sk-live-123', // secret：服务进程内存注入
+      });
+    } finally {
+      await new Promise<void>((resolve) => s2.close(() => resolve()));
+    }
+  });
+});
+
+/** 独立 base 的 POST helper（多服务并测用）。 */
+async function post2(base: string, path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+}
