@@ -438,6 +438,18 @@ function applicantLine(invite: AdminInvite): string {
 }
 .invite-modal {
   width: min(480px, 100%);
+  /* #307 ②状态叙事：弹层入场 scale 0.96→1 + fade（rareui dialog） */
+  animation: invite-modal-in var(--unself-duration-normal) var(--unself-ease-out);
+}
+@keyframes invite-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 .invite-modal-title {
   margin: 0 0 var(--unself-space-4);
