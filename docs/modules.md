@@ -132,6 +132,13 @@ unself-todo-1.2.0.tgz
 
 **secret 与非 secret 分流**：`type: secret` 的值写进 `wrangler secret` / docker secret，**不落** `unself.config.jsonc` 与 `unself.lock`；其余落配置文件。装配开始前一次收齐，不插在九步中间。
 
+**向导渲染形态（#307 定稿，决策 #93）**：
+- **每模块独立一页**：选中模块逐个声明了 `config` 的各占一步（③★），无 `config` 的模块自动跳过不出现页；步进器显示「配置 <模块id>」
+- 控件按 `type` 映射：`secret`→掩码输入（不回显、提交后不可回看，只进程内存，同部署 token 语义）；`enum`→单选；`boolean`→开关；`url`→带格式校验；`json`→多行文本（提交时 parse 预检）；`oauth`→M1 按文本框处理（语义待定，见下）
+- **连接测试**：`test: http` 向导内真测试（服务端代理，同 OIDC 测试连接模式）；`pg`/`s3` 等其余标识 M1 只渲染禁用态按钮 + 「装配时验证」文案，逐步补
+- `oauth` 类型字段语义未定稿（当初 #53 未给渲染口径）：M1 按普通凭据字段收值，渲染口径待首个真实需要 oauth 的模块出现时再定
+- 配置值收齐后才进 ③½/④；装配失败回退时表单值保留（浏览器历史回退或 state 回带）
+
 ## 6. 迁移契约（硬）
 
 只对 `shared` 与 `dedicated` 有意义（`core` 的 schema 归 core；`external` 由模块自己管）。

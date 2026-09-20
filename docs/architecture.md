@@ -378,10 +378,12 @@ component 层  组件接口令牌（button-bg、card-radius…）→ core/ui 内
 | 字号 | font-size-xs / sm / base / lg / xl / 2xl |
 | 阴影 | shadow-card / shadow-pop |
 | 其他 | focus-ring |
+| 动效（#307 起进契约） | duration-fast / normal / slow / shake / spin / shimmer；ease-out / ease-spring；motion-press-scale / motion-lift-y |
 
 规则：**清单发布后只增不改名、不删项**。模块引用它，永远不碎。
 
-> **动效不在契约内（拍板 2026-09-09）**：动效归模块作者自治，平台不评审、不统一、不体检。平台组件自带 Vue `<Transition>` 默认过渡即可；动效令牌（duration/ease）仅为平台内部默认值，不构成对外契约。**平台只保证静态视觉一致——圆角、颜色、字体、间距。**
+> **动效数值骨架进契约（#307，修订 2026-09-09 拍板）**：修订 #43 的口径——时长 / 缓动曲线 / 按压缩放 / 浮起位移等**数值骨架**入语义令牌清单（集中取值防漂移，安装器无构建也同源）；**组合用法仍归模块作者自治**（什么按钮配什么动效、平台不评审）。平台仍只保证静态视觉一致；全部动效带 `prefers-reduced-motion` 降级不变。
+> 历史口径存档：2026-09-09 拍板「动效不在契约内」——#307 起以本条为准，原文不改。
 
 ### 命名空间
 
