@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * verify-tokens：主题令牌轻量 lint（任务第七条「选最轻方案」——node 单文件，零依赖）。
- * 扫描 apps/ packages/ modules/ services/ deploy/（排除 node_modules/ dist/ .deploy/ coverage/、
+ * 扫描 apps/ core/ app/ services/（排除 node_modules/ dist/ .deploy/ coverage/、
  * 任意层级 test/ 与 __tests__/ 目录、*.test.* 与 *.spec.* 测试文件——用例里的 issue 引用
  * 与颜色夹具不是生产样式，此前 `#139` 之类的引用被误判为裸颜色值），
  * 只处理 *.vue *.ts *.css *.html。
  *
  * 规则一（裸值）：生产源码不得有裸 hex（#[0-9a-fA-F]{3,8}）与裸 rgb(/rgba( 颜色值；
  *   豁免：apps/shell/src/tokens.css（:root 令牌定义与 @theme 映射允许值）、
- *         packages/contracts/src/theme-tokens.json（默认主题包数据）。
+ *         core/contracts/src/theme-tokens.json（默认主题包数据）。
  * 规则二（var 白名单）：所有 var(--xxx) 引用必须在白名单 = 契约白名单
- *   （从 packages/contracts/src/theme-tokens.json 派生：'--' + 键.replaceAll('.', '-')）
+ *   （从 core/contracts/src/theme-tokens.json 派生：'--' + 键.replaceAll('.', '-')）
  *   ∪ tokens.css 已声明的内部令牌（动效 duration/ease 等：平台自己的 CSS 声明了值，
  *   壳/组件内引用可解析；但模块页引它们仍会被部署期体检红——通道注入只投契约令牌）；
  *   豁免文件同样检查（tokens.css 内 --unself-focus-ring: 2px solid var(--unself-color-primary) 必须通过）。
@@ -30,19 +30,19 @@ import { extname, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url)); // scripts/ 的上一级 = 仓库根
-const SCAN_DIRS = ['apps', 'packages', 'modules', 'services', 'deploy'];
+const SCAN_DIRS = ['apps', 'core', 'app', 'services'];
 const EXCLUDE_DIR_NAMES = new Set(['node_modules', 'dist', '.deploy', 'coverage', 'test', '__tests__']);
 /**
- * 生成物目录（不进 lint）：模块前端产物随模块包发布后落在 `modules/<id>/assets/frontend/`
+ * 生成物目录（不进 lint）：模块前端产物随模块包发布后落在 `app/modules/<id>/assets/frontend/`
  * （vite 构建输出，.gitignore 已忽略）——它带压缩 CSS，不是人写的样式源，扫它只会报噪音。
  */
-const EXCLUDE_PATH_SUBSTRINGS = ['modules/chat/assets/frontend/'];
+const EXCLUDE_PATH_SUBSTRINGS = ['app/modules/chat/assets/frontend/'];
 const FILE_EXTS = new Set(['.vue', '.ts', '.css', '.html']);
 const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
-const RULE1_EXEMPT = new Set(['apps/shell/src/tokens.css', 'packages/contracts/src/theme-tokens.json']);
+const RULE1_EXEMPT = new Set(['apps/shell/src/tokens.css', 'core/contracts/src/theme-tokens.json']);
 /** 规则三豁免：tokens.css 是时长取值的定义处（其余文件只准引用令牌）。 */
 const RULE3_EXEMPT = new Set(['apps/shell/src/tokens.css']);
-const CONTRACT_PACKAGE = 'packages/contracts/src/theme-tokens.json';
+const CONTRACT_PACKAGE = 'core/contracts/src/theme-tokens.json';
 
 const HEX_RE = /#[0-9a-fA-F]{3,8}\b/g;
 const RGB_RE = /rgba?\(/g;
@@ -64,7 +64,7 @@ const TIME_RE = /\b\d+(?:\.\d+)?m?s\b/g;
 function loadVarWhitelist() {
   const pkg = join(ROOT, CONTRACT_PACKAGE);
   if (!existsSync(pkg)) {
-    throw new Error(`verify-tokens：契约主题包缺失 ${CONTRACT_PACKAGE}（应随 packages/contracts 提供）`);
+    throw new Error(`verify-tokens：契约主题包缺失 ${CONTRACT_PACKAGE}（应随 core/contracts 提供）`);
   }
   const map = JSON.parse(readFileSync(pkg, 'utf8'));
   const whitelist = new Set(Object.keys(map).map((k) => `--${k.replaceAll('.', '-')}`));

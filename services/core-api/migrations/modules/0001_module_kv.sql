@@ -4,7 +4,7 @@
 -- 归属：core 级（`storage.declaration = core`）模块的数据经 Core API 代理
 -- （services/core-api/src/routes/module-api.ts）落在本表——schema 归 core，不归任何模块
 -- （docs/modules.md §4「core 的 schema 归 core」）。
--- 历史：本表原由 modules/hello/migrations/hello/0001_module_kv.sql 创建（hello 自带迁移），
+-- 历史：本表原由 app/modules/hello/migrations/hello/0001_module_kv.sql 创建（hello 自带迁移），
 -- #248 四级落点落地后升格为平台基建：任何 core 级模块（含无迁移的新模块）都必须开箱可用。
 --
 -- 键模型：业务键为模块子域内的裸键；模块身份表达在 module_id 列上（= 模块 token 的 aud），

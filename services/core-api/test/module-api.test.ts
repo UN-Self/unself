@@ -13,7 +13,7 @@ import { applyMigrations, createCoreDb, createD1Adapter, type CoreTestDb } from 
  * /api/module-api/* 权限门禁（#243 验收③，决策 #56）：
  * 「permissions 未声明即调用对应 Core API → 403」必须在真路由上可复现——
  * 门禁真值 = 注册表 manifest 快照（服务端），token 不携带能力清单（caps 已删）。
- * MODULES_DB 用真 SQLite 加载 modules/hello 真迁移（module_kv），不是替身。
+ * MODULES_DB 用真 SQLite 加载 app/modules/hello 真迁移（module_kv），不是替身。
  */
 
 const app = createApp();

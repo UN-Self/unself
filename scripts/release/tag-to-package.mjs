@@ -8,17 +8,17 @@
  * - 版本 = tag 去掉 `<name>-v` 后的部分，必须是严格 semver `x.y.z`（可带 -prerelease）
  * - 前缀不认识 / 版本不合法 → **直接失败**（人话错误，绝不静默跳过）
  *
- * 纯函数，可单测（见 packages/installer/test/release-tag.test.ts）。
+ * 纯函数，可单测（见 app/installer/test/release-tag.test.ts）。
  * 用法（CI）：node scripts/release/tag-to-package.mjs "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
  */
 import { pathToFileURL } from 'node:url';
 
 /** tag 前缀 → 发布目标。`packDir` 指「构建后可用于打包/发布的目录」。 */
 export const RELEASE_TARGETS = {
-  sdk: { package: '@unself/sdk', kind: 'workspace', dir: 'packages/sdk' },
-  installer: { package: '@unself/installer', kind: 'workspace', dir: 'packages/installer' },
-  hello: { package: '@unself/hello', kind: 'module', id: 'hello', dir: 'modules/hello' },
-  chat: { package: '@unself/chat', kind: 'module', id: 'chat', dir: 'modules/chat' },
+  sdk: { package: '@unself/sdk', kind: 'workspace', dir: 'core/sdk' },
+  installer: { package: '@unself/installer', kind: 'workspace', dir: 'app/installer' },
+  hello: { package: '@unself/hello', kind: 'module', id: 'hello', dir: 'app/modules/hello' },
+  chat: { package: '@unself/chat', kind: 'module', id: 'chat', dir: 'app/modules/chat' },
 };
 
 /** 严格 semver（允许预发布段与构建元数据）。 */

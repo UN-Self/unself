@@ -221,7 +221,7 @@ function onConfirm(): void {
   gap: var(--unself-space-2);
   margin-top: var(--unself-space-2);
 }
-/* 危险确认：danger 色文字（UButton 无 danger 变体，叠 tokens 一层，不改 packages/ui） */
+/* 危险确认：danger 色文字（UButton 无 danger 变体，叠 tokens 一层，不改 core/ui） */
 .u-confirm-danger {
   color: var(--unself-color-danger);
   border-color: var(--unself-color-danger);

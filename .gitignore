@@ -12,7 +12,7 @@ coverage/
 .deploy/
 
 # 安装器 tarball（#257：npm pack 产物，可重建——交付走 PR 附件/发布流水线，不入库）
-packages/installer/*.tgz
+app/installer/*.tgz
 
 # 环境变量与密钥（pnpm-lock.yaml 必须入库，勿忽略）
 .dev.vars
@@ -31,7 +31,7 @@ packages/installer/*.tgz
 /unself.lock
 
 # chat 模块前端产物（#284：vite 构建产物随模块包打包，不入库）
-modules/chat/assets/
+app/modules/chat/assets/
 
 # SDK tarball（可重建，不入库）
-packages/sdk/*.tgz
+core/sdk/*.tgz

@@ -85,7 +85,7 @@ jobs:
       - name: 打包（模块）
         if: steps.rel.outputs.kind == 'module'
         run: |
-          node packages/installer/dist/unself.mjs module pack "${{ steps.rel.outputs.dir }}" \
+          node app/installer/dist/unself.mjs module pack "${{ steps.rel.outputs.dir }}" \
             --out .release \
             --version "${{ steps.rel.outputs.version }}" \
             --name "${{ steps.rel.outputs.package }}"

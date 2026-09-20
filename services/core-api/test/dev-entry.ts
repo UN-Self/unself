@@ -17,7 +17,7 @@
  *   #    邀请页 claim → 设置邮箱密码（假改密，同一单例账户）→ 登录
  *   # 4) 走查完还原 wrangler.jsonc 的 main（git checkout）
  *
- * 生产装配点零变化：装配引擎（packages/installer/src/engine）生成入口仍注入 Stalwart 适配器（#141 组合根）。
+ * 生产装配点零变化：装配引擎（app/installer/src/engine）生成入口仍注入 Stalwart 适配器（#141 组合根）。
  */
 import type { ExportedHandler } from '@cloudflare/workers-types';
 import type { ExecutionContext } from 'hono';

@@ -10,90 +10,56 @@ importers:
     devDependencies:
       '@unself/contracts':
         specifier: workspace:*
-        version: link:packages/contracts
+        version: link:core/contracts
 
-  adapters/mail-smtp:
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^4.0.0
-        version: 4.20260702.1
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.0
-        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
-      wrangler:
-        specifier: ^4.0.0
-        version: 4.129.0(@cloudflare/workers-types@4.20260702.1)
-
-  adapters/provisioning/stalwart:
+  app/installer:
     dependencies:
-      '@unself/contracts':
+      '@unself/chat':
         specifier: workspace:*
-        version: link:../../../packages/contracts
+        version: link:../modules/chat
+      '@unself/hello':
+        specifier: workspace:*
+        version: link:../modules/hello
+      '@unself/sdk':
+        specifier: workspace:*
+        version: link:../../core/sdk
     devDependencies:
       '@types/node':
-        specifier: ^24.0.0
+        specifier: ^24
         version: 24.13.3
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.0
-        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
-
-  apps/shell:
-    dependencies:
       '@unself/contracts':
         specifier: workspace:*
-        version: link:../../packages/contracts
-      '@unself/ui':
+        version: link:../../core/contracts
+      '@unself/control-plane':
         specifier: workspace:*
-        version: link:../../packages/ui
-      lucide-vue-next:
-        specifier: ^0.544.0
-        version: 0.544.0(vue@3.5.42(typescript@5.9.3))
-      vue:
-        specifier: ^3.5.0
-        version: 3.5.42(typescript@5.9.3)
-      vue-router:
-        specifier: ^4.5.0
-        version: 4.6.4(vue@3.5.42(typescript@5.9.3))
-    devDependencies:
-      '@tailwindcss/vite':
-        specifier: ^4.0.0
-        version: 4.3.3(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.13))
-      '@vitejs/plugin-vue':
-        specifier: ^6.0.0
-        version: 6.0.8(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.13))(vue@3.5.42(typescript@5.9.3))
-      '@vue/test-utils':
-        specifier: ^2.5.0
-        version: 2.5.0(@vue/compiler-dom@3.5.42)(@vue/server-renderer@3.5.42)(vue@3.5.42(typescript@5.9.3))
-      jsdom:
-        specifier: ^27.4.0
-        version: 27.4.0(supports-color@10.2.2)
-      tailwindcss:
-        specifier: ^4.0.0
-        version: 4.3.3
+        version: link:../../core/control-plane
+      blake3-wasm:
+        specifier: 2.1.5
+        version: 2.1.5
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.2
+      jose:
+        specifier: ^6.1.0
+        version: 6.2.12
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.13
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
-      vite:
-        specifier: ^7.0.0
-        version: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.13)
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
-      vue-tsc:
-        specifier: ^3.0.0
-        version: 3.3.11(typescript@5.9.3)
+      zod:
+        specifier: ^4.1.0
+        version: 4.5.4
 
-  modules/chat:
+  app/modules/chat:
     dependencies:
       '@unself/sdk':
         specifier: workspace:*
-        version: link:../../packages/sdk
+        version: link:../../../core/sdk
       hono:
         specifier: ^4.10.0
         version: 4.13.7
@@ -117,17 +83,17 @@ importers:
         specifier: ^4.0.0
         version: 4.129.0(@cloudflare/workers-types@4.20260702.1)
 
-  modules/chat/frontend:
+  app/modules/chat/frontend:
     dependencies:
       '@unself/contracts':
         specifier: workspace:*
-        version: link:../../../packages/contracts
+        version: link:../../../../core/contracts
       '@unself/sdk':
         specifier: workspace:*
-        version: link:../../../packages/sdk
+        version: link:../../../../core/sdk
       '@unself/ui':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../../core/ui
       dompurify:
         specifier: ^3.2.0
         version: 3.4.15
@@ -172,14 +138,14 @@ importers:
         specifier: ^3.0.0
         version: 3.3.11(typescript@5.9.3)
 
-  modules/hello:
+  app/modules/hello:
     dependencies:
       '@unself/contracts':
         specifier: workspace:*
-        version: link:../../packages/contracts
+        version: link:../../../core/contracts
       '@unself/sdk':
         specifier: workspace:*
-        version: link:../../packages/sdk
+        version: link:../../../core/sdk
       hono:
         specifier: ^4.10.0
         version: 4.13.7
@@ -203,7 +169,84 @@ importers:
         specifier: ^4.0.0
         version: 4.129.0(@cloudflare/workers-types@4.20260702.1)
 
-  packages/contracts:
+  apps/shell:
+    dependencies:
+      '@unself/contracts':
+        specifier: workspace:*
+        version: link:../../core/contracts
+      '@unself/ui':
+        specifier: workspace:*
+        version: link:../../core/ui
+      lucide-vue-next:
+        specifier: ^0.544.0
+        version: 0.544.0(vue@3.5.42(typescript@5.9.3))
+      vue:
+        specifier: ^3.5.0
+        version: 3.5.42(typescript@5.9.3)
+      vue-router:
+        specifier: ^4.5.0
+        version: 4.6.4(vue@3.5.42(typescript@5.9.3))
+    devDependencies:
+      '@tailwindcss/vite':
+        specifier: ^4.0.0
+        version: 4.3.3(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.13))
+      '@vitejs/plugin-vue':
+        specifier: ^6.0.0
+        version: 6.0.8(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.13))(vue@3.5.42(typescript@5.9.3))
+      '@vue/test-utils':
+        specifier: ^2.5.0
+        version: 2.5.0(@vue/compiler-dom@3.5.42)(@vue/server-renderer@3.5.42)(vue@3.5.42(typescript@5.9.3))
+      jsdom:
+        specifier: ^27.4.0
+        version: 27.4.0(supports-color@10.2.2)
+      tailwindcss:
+        specifier: ^4.0.0
+        version: 4.3.3
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vite:
+        specifier: ^7.0.0
+        version: 7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.13)
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
+      vue-tsc:
+        specifier: ^3.0.0
+        version: 3.3.11(typescript@5.9.3)
+
+  core/adapters/mail-smtp:
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.0.0
+        version: 4.20260702.1
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
+      wrangler:
+        specifier: ^4.0.0
+        version: 4.129.0(@cloudflare/workers-types@4.20260702.1)
+
+  core/adapters/provisioning/stalwart:
+    dependencies:
+      '@unself/contracts':
+        specifier: workspace:*
+        version: link:../../../contracts
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
+
+  core/contracts:
     dependencies:
       zod:
         specifier: ^4.1.0
@@ -216,7 +259,7 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
 
-  packages/control-plane:
+  core/control-plane:
     dependencies:
       '@unself/contracts':
         specifier: workspace:*
@@ -232,50 +275,7 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
 
-  packages/installer:
-    dependencies:
-      '@unself/chat':
-        specifier: workspace:*
-        version: link:../../modules/chat
-      '@unself/hello':
-        specifier: workspace:*
-        version: link:../../modules/hello
-      '@unself/sdk':
-        specifier: workspace:*
-        version: link:../sdk
-    devDependencies:
-      '@types/node':
-        specifier: ^24
-        version: 24.13.3
-      '@unself/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      '@unself/control-plane':
-        specifier: workspace:*
-        version: link:../control-plane
-      blake3-wasm:
-        specifier: 2.1.5
-        version: 2.1.5
-      esbuild:
-        specifier: ^0.28.0
-        version: 0.28.2
-      jose:
-        specifier: ^6.1.0
-        version: 6.2.12
-      tsx:
-        specifier: ^4.19.0
-        version: 4.23.13
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.0
-        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
-      zod:
-        specifier: ^4.1.0
-        version: 4.5.4
-
-  packages/sdk:
+  core/sdk:
     dependencies:
       jose:
         specifier: ^6.1.0
@@ -294,7 +294,7 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
 
-  packages/ui:
+  core/ui:
     dependencies:
       lucide-vue-next:
         specifier: ^0.544.0
@@ -329,10 +329,10 @@ importers:
     dependencies:
       '@unself/contracts':
         specifier: workspace:*
-        version: link:../../packages/contracts
+        version: link:../../core/contracts
       '@unself/mail-smtp':
         specifier: workspace:*
-        version: link:../../adapters/mail-smtp
+        version: link:../../core/adapters/mail-smtp
       hono:
         specifier: ^4.10.0
         version: 4.13.7
@@ -348,7 +348,7 @@ importers:
         version: 4.20260702.1
       '@unself/sdk':
         specifier: workspace:*
-        version: link:../../packages/sdk
+        version: link:../../core/sdk
       typescript:
         specifier: ^5.9.0
         version: 5.9.3

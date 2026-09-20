@@ -27,7 +27,7 @@ export type CreateMailProvisioner = (mailConfig: unknown) => MailProvisioner;
 /**
  * 生产组合根装配点（#141 分层归位后）：core-api 服务域只认 contracts 契约。
  * 默认装配 = contracts 内存假实现（无网络副作用，测试/本地便利）；【生产入口必须注入真实现】：
- * 装配引擎（packages/installer/src/engine）生成 Worker 入口经 createApp({ createMailProvisioner }) 注入 Stalwart 适配器，
+ * 装配引擎（app/installer/src/engine）生成 Worker 入口经 createApp({ createMailProvisioner }) 注入 Stalwart 适配器，
  * 未注入的生产部署开户/改密只入内存不生效——这是显式回退，不是弱化实例口径。
  */
 const defaultCreateMailProvisioner: CreateMailProvisioner = () => createFakeMailProvisioner();
