@@ -9,5 +9,5 @@
     搬运: worker/ 核心（频道/私聊/消息/DO×3/实时/未读/文件/语音/服务端加密）
     裁剪: Telegram 桥、Capacitor、注册/登录/管理路由
     前端: 自研不搬
-  local_path: modules/chat/worker
+  local_path: app/modules/chat/worker
   upstream_policy: 默认不跟，按 commit 记录再评估

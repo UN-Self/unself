@@ -22,7 +22,7 @@
 ## 2. 邮件（可选适配器）
 
 - [x] 本团队 Stalwart 参考部署具备 SMTP、IMAP、DNS 与外发基础设施。
-- [x] 平台邮件能力=运行时邮件配置（/admin/settings mail 段）+ SMTP 发信与 Stalwart 开户适配器；支撑入职激活（开户 + 激活链接）与通知邮件；邮件模板仅三个 render——`account_ready` / `invite_result` / `module_toggled`（`adapters/mail-smtp/src/templates.ts`），站内通知另有 `invite_pending`，**无独立欢迎信**；Git 事件投递在 M3。（2026-09-15 对齐）
+- [x] 平台邮件能力=运行时邮件配置（/admin/settings mail 段）+ SMTP 发信与 Stalwart 开户适配器；支撑入职激活（开户 + 激活链接）与通知邮件；邮件模板仅三个 render——`account_ready` / `invite_result` / `module_toggled`（`core/adapters/mail-smtp/src/templates.ts`），站内通知另有 `invite_pending`，**无独立欢迎信**；Git 事件投递在 M3。（2026-09-15 对齐）
 - [ ] Stalwart 适配器支持可选的开户、禁用、应用密码和限速管理。
 - [ ] 未配置邮件时，平台仍可运行，通知默认使用站内通知。
 - [ ] 邮局与 OIDC Provider 可以是同一个服务，也可以完全分离。

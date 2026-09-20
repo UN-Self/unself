@@ -309,44 +309,34 @@ Stalwart ≥ 0.16.10（JMAP 全合规）为集成前提。
 
 monorepo 保留，目的是让核心协议、模块清单、适配器和部署配置可以在一个 PR 中协作。但第三方完整应用不通过 subtree 混入核心代码；它们保持独立构建边界，并以模块、服务或适配器接入。
 
+两桶判据（决策 #83）：**`core/` = 开发用的代码依赖（库）；`app/` = 开发好的 app，可被装配**（全部发 npm）。
+未就位的模块（docs / board / calendar / git / meeting-p2p 等）按里程碑逐步进 `app/modules/`。
+
 ```text
-（目标形态：M1 实际交付为 apps/shell 单壳 + admin 路由；站内通知在 core-api 内；
-模块生态按里程碑逐步就位，目录以仓库现状为准）
 unself/
-├── apps/
-│   ├── shell/                # 统一壳，Cloudflare Pages / Docker
-│   ├── admin/                # 预留：独立管理台（M1 管理界面 = shell 内 admin 路由，见 docs/decisions.md M1 产品化决策记录）
-│   └── portal/               # 可选注册、邀请和 Webhook 前端
-├── modules/
-│   ├── docs/                 # 自研 Markdown 文档模块
-│   ├── board/                # 自研轻量看板模块
-│   ├── calendar/             # CalDAV/iCalendar 前端模块
-│   ├── chat-edgechat/        # EdgeChat 集成和必要补丁
-│   ├── meeting-p2p/          # CF Worker + DO 信令模块
-│   └── git/                  # Git Webhook 模块
-├── services/
-│   ├── core-api/             # 实例级 API、权限和审计
-│   └── notification/         # 站内通知和可选邮件通知
-├── adapters/
-│   ├── oidc/                 # 通用 OIDC
-│   ├── provisioning/         # Stalwart API、SCIM、Webhook 等
-│   ├── mail-smtp/            # SMTP 邮件
-│   ├── calendar-caldav/      # CalDAV
-│   └── storage-s3/            # R2/MinIO/其他 S3
-├── packages/
-│   ├── contracts/            # 模块、身份、权限、通知协议
-│   ├── module-sdk/            # 第三方模块开发 SDK
-│   ├── ui/                    # 自研 UI 组件
-│   ├── config/                # 模块清单和实例配置
-│   └── mcp-tools/             # MCP/WebMCP 工具定义
-├── deploy/
-│   ├── cloudflare/            # 首选：Wrangler、绑定、迁移、装配器 CLI（一键为路线图）
-│   ├── docker/                # 替代部署和扩展组件 compose
-│   └── examples/              # OIDC、SMTP、CalDAV、S3 示例
+├── core/                       # 依赖库
+│   ├── contracts/              # 模块、身份、权限、通知协议（内部；对外可见部分由 SDK 具名导出）
+│   ├── sdk/                    # 第三方模块开发 SDK（发 npm：@unself/sdk）
+│   ├── ui/                     # 自研 UI 基元（tokens 与组件）
+│   ├── control-plane/          # 可复用控制面库（CF REST 客户端 + 资源编排）
+│   └── adapters/
+│       ├── mail-smtp/          # SMTP 邮件
+│       └── provisioning/
+│           └── stalwart/       # Stalwart 开户适配器（发 npm：@unself/stalwart-provisioner）
+├── app/                        # 可装配的成品
+│   ├── workbench/              # 平台运行体（一个包两半边）：src＝core Worker、web＝工作台 SPA、migrations＝SQL
+│   ├── installer/              # 部署工具：Web 向导 + CLI + 九步装配引擎（src/engine）
+│   └── modules/
+│       ├── hello/              # 参考模块（发 npm：@unself/hello）
+│       └── chat/               # 聊天模块（worker + frontend）
+├── docs/                       # 设计真相（产品/需求/架构/链路/决策/路线图/部署/测试）
+├── scripts/                    # 仓库级门禁与发布脚本（verify-*.mjs、release/）
 ├── third_party/
-│   └── components.yaml        # 外部组件版本、来源和许可证清单
-└── .github/workflows/         # 按模块和部署目标构建
+│   └── components.yaml         # 外部组件版本、来源和许可证清单
+└── .github/workflows/          # CI 门禁（ci.yml）+ 发布（release.yml）
 ```
+
+**平台运行体与发行方式**（决策 #84/#85）：`app/workbench` 两半边合成**一个** Worker（脚本＝后端，静态资产＝前端构建产物）；产物（`dist/worker.js` + `dist/web` + `migrations`）**随该包发布**，安装器只读 `node_modules/@unself/workbench`，不内嵌、也不从源码树现构建。M1 的独立管理台/门户未定型：现状是 `app/workbench/web` 内的 admin 路由。
 
 **第三方代码引入规则**：
 1. 可复用库使用 package 依赖；
@@ -358,13 +348,13 @@ unself/
 **许可证边界**（已拍板，2026-09-06）：
 
 1. **核心选 AGPL-3.0**：自托管产品防“拿代码开托管服务不回馈”的标准答案（Grafana/MinIO/Mastodon 同路）；威胁模型是云厂商白嫖，GPL 看不住托管路径，MIT/Apache 方向就不对。接受代价：AGPL 只强制开源、不阻止竞争性 fork；个别公司贡献政策会劝退贡献者，9 人社区可忽略。用户是唯一初始版权人，接受外部贡献前可随时改许可证或卖商业授权，这扇门目前开着。
-2. **边界标注**：根 `LICENSE` = AGPL-3.0 全文（核心/SDK/自研模块/文档）；`modules/chat-edgechat/` 下 GPL-3.0 模块级 LICENSE（上游继承，注明含本仓库修改）；MiroTalk 相关件 AGPL-3.0；根 `NOTICE` 记录上游归属；`third_party/components.yaml` 登记每个外部件的版本/来源/SPDX/接入方式；新代码文件头 `// SPDX-License-Identifier: AGPL-3.0-only`（脚手架自动带上）。
+2. **边界标注**：根 `LICENSE` = AGPL-3.0 全文（核心/SDK/自研模块/文档）；`app/modules/chat-edgechat/` 下 GPL-3.0 模块级 LICENSE（上游继承，注明含本仓库修改）；MiroTalk 相关件 AGPL-3.0；根 `NOTICE` 记录上游归属；`third_party/components.yaml` 登记每个外部件的版本/来源/SPDX/接入方式；新代码文件头 `// SPDX-License-Identifier: AGPL-3.0-only`（脚手架自动带上）。
 3. **合并判定铁律**：代码进同一构建产物才是“合并”；独立 Worker + HTTP 边界 + 标准协议 ≠ 合并；从 GPL 上游搬运进衍生件时必须固定 commit + 按件登记（third_party/components.yaml）+ 最小适配，不把上游代码复制进核心构建产物（2026-09-15 修订，决策 #50）；fork 过的件必须登记。魔改 EdgeChat 后端自用不分发二进制则无公开义务，但源码照常在仓库中。
 
 
 ## 前端约定：主题系统（用户拍板，2026-09-09，替换 2026-09-07 版）
 
-适用于 apps/shell、apps/admin、apps/portal 及一切模块前端（含第三方）。
+适用于 `app/workbench/web`（工作台壳）及一切模块前端（含第三方）。
 
 **总纲：统一「名字」和「默认值」，开放「值」。管契约，不管设计。**
 
@@ -373,7 +363,7 @@ unself/
 ```
 primitive 层   品牌自己的值（brand-600、space-4、#2563eb…）→ 主题包里的实物
 semantic 层   平台定义的契约名（color-primary、radius-md、space-6…）→ 模块只引这层
-component 层  组件接口令牌（button-bg、card-radius…）→ packages/ui 内部用
+component 层  组件接口令牌（button-bg、card-radius…）→ core/ui 内部用
 ```
 
 模块永远只写 `var(--unself-color-primary)`，手里没有值。
@@ -472,7 +462,7 @@ component 层  组件接口令牌（button-bg、card-radius…）→ packages/ui
 ③ 都没有 → 手写，样式只取自 tokens
 ```
 
-**2. 基元内聚**：共享基元（Button/Input/Card/ErrorCard/Skeleton/Icon…）住 `packages/ui`，自包含、无外部样式依赖；页面不写一次性样式碎片。
+**2. 基元内聚**：共享基元（Button/Input/Card/ErrorCard/Skeleton/Icon…）住 `core/ui`，自包含、无外部样式依赖；页面不写一次性样式碎片。
 
 **3. 图标规范**：只用 Lucide（lucide-vue-next，ISC 许可）。manifest `icon` 存图标名，壳白名单映射渲染；界面内禁止 emoji 作图标（用户明确拒绝）。
 
