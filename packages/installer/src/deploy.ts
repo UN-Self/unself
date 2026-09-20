@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * 部署执行桥（薄）：向导④与 `unself deploy` 都经由 runDeploy。
- * 引擎（@unself/deploy-cloudflare）经动态 import 调用：#257 起它**随安装器 bundle 进 dist/unself.mjs**
+ * 引擎（`./engine`，与壳同包同树——#303 把 deploy/cloudflare 并了进来）经动态 import 调用：
+ * 它**随安装器 bundle 进 dist/unself.mjs**（#257）
  * （安装器 tarball 零运行期依赖），仓库开发形态下则由 workspace 链接提供——两种形态同一份代码。
  * 引擎运行期消费的装配产物（core/shell/SDK/builtin 模块包）随包分发在 `<安装器>/dist/artifacts`，
  * `rootDir`（实例目录的父目录）只当**输出目录**（.deploy/、unself.lock）。
@@ -116,25 +117,19 @@ export interface DeployResult {
 }
 
 /** 九步引擎模块形状（动态加载目标；workspace 内可直接 import 供类型检查）。 */
-type Engine = typeof import('@unself/deploy-cloudflare');
-type EngineUnselfConfig = import('@unself/deploy-cloudflare').UnselfConfig;
+type Engine = typeof import('./engine/index');
+type EngineUnselfConfig = import('./engine/index').UnselfConfig;
 
 async function loadEngine(): Promise<Engine> {
-  try {
-    return await import('@unself/deploy-cloudflare');
-  } catch {
-    throw new Error(
-      '部署引擎不可用（@unself/deploy-cloudflare 未安装）：实例目录与配置都已就绪；'
-        + '在仓库 workspace 内运行，或使用发布后含引擎依赖的安装包。',
-    );
-  }
+  // #303：引擎与壳同包同树，不再有「引擎未安装」这种失败态（兜底文案随包边界一起删掉）。
+  return await import('./engine/index');
 }
 
 /** 读实例配置并应用向导覆盖（只改内存副本，不回写文件——交互结果不落盘同 CLI 语义）。 */
 export async function effectiveConfig(
   instancePath: string,
   override?: { domain?: string; modules?: ModuleEntryInput[] },
-): Promise<import('@unself/deploy-cloudflare').UnselfConfig> {
+): Promise<import('./engine/index').UnselfConfig> {
   const engine = await loadEngine();
   const { configPath } = instanceLayout(instancePath.replace(/[/\\]unself$/, ''));
   const text = readFileSync(configPath, 'utf8');
@@ -336,7 +331,7 @@ export async function addModuleSource(input: {
 
   // lock：记来源/版本/SRI/manifestHash/契约版本（引擎 LockFileSchema 形状）。
   const lockText = readFileSync(lockPath, 'utf8');
-  type EngineLockFile = import('@unself/deploy-cloudflare').LockFile;
+  type EngineLockFile = import('./engine/index').LockFile;
   let lock: EngineLockFile;
   try {
     lock = engine.parseLockText(lockText);

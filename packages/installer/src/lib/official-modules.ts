@@ -12,7 +12,7 @@
  * （猜错会静默拉错版本或偷偷联网）。
  *
  * 零引擎依赖（#53：init/逃生门命令不 import 装配引擎），故 node_modules 查找在本文件内实现；
- * 引擎侧同语义实现见 `deploy/cloudflare/src/sources.ts` 的 `findLocalPackageDir`。
+ * 引擎侧同语义实现见 `src/engine/sources.ts` 的 `findLocalPackageDir`。
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

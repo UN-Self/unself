@@ -21,7 +21,7 @@ import {
 import { migrationsTableFor } from './types';
 import type { ApplyReport, ControlPlane, ModuleRegistration, RegistryEntry, SetupTokenIssue } from './types';
 
-/** REST 侧 D1 执行器（deploy/cloudflare 的 d1Query / d1Import 绑进来）。 */
+/** REST 侧 D1 执行器（装配引擎 src/engine 的 d1Query / d1Import 绑进来）。 */
 export interface RestD1Executor {
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ results: T[]; meta: { changes: number } }>;
   importSql(sqlText: string): Promise<{ numQueries: number }>;

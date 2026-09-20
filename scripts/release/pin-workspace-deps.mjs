@@ -60,7 +60,7 @@ export function pinWorkspaceDeps(pkg, resolveVersion) {
 /**
  * 扫 workspace 目录，建立 包名 → { version, dir }。
  * 目录来源 = `pnpm-workspace.yaml` 的 patterns（**不硬编码**：漏一个目录会让发布前置直接失败，
- * 例如 `deploy/cloudflare` 只出现在 yaml 里）。`*` 按「一层目录」展开。
+ * 例如 `deploy/*` 那种只出现在 yaml 里的目录）。`*` 按「一层目录」展开。
  */
 export async function collectWorkspaceVersions(root) {
   const yamlPath = join(root, 'pnpm-workspace.yaml');

@@ -89,49 +89,6 @@ importers:
         specifier: ^3.0.0
         version: 3.3.11(typescript@5.9.3)
 
-  deploy/cloudflare:
-    dependencies:
-      '@unself/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
-      '@unself/control-plane':
-        specifier: workspace:*
-        version: link:../../packages/control-plane
-      blake3-wasm:
-        specifier: 2.1.5
-        version: 2.1.5
-      esbuild:
-        specifier: ^0.28.0
-        version: 0.28.2
-      jose:
-        specifier: ^6.1.0
-        version: 6.2.12
-      tsx:
-        specifier: ^4.19.0
-        version: 4.23.13
-      zod:
-        specifier: ^4.1.0
-        version: 4.5.4
-    devDependencies:
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
-      '@unself/chat':
-        specifier: workspace:*
-        version: link:../../modules/chat
-      '@unself/hello':
-        specifier: workspace:*
-        version: link:../../modules/hello
-      '@unself/sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.0
-        version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
-
   modules/chat:
     dependencies:
       '@unself/sdk':
@@ -293,12 +250,18 @@ importers:
       '@unself/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@unself/deploy-cloudflare':
+      '@unself/control-plane':
         specifier: workspace:*
-        version: link:../../deploy/cloudflare
+        version: link:../control-plane
+      blake3-wasm:
+        specifier: 2.1.5
+        version: 2.1.5
       esbuild:
         specifier: ^0.28.0
         version: 0.28.2
+      jose:
+        specifier: ^6.1.0
+        version: 6.2.12
       tsx:
         specifier: ^4.19.0
         version: 4.23.13
@@ -308,6 +271,9 @@ importers:
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(jsdom@27.4.0(supports-color@10.2.2))(lightningcss@1.32.0)(supports-color@10.2.2)(tsx@4.23.13)
+      zod:
+        specifier: ^4.1.0
+        version: 4.5.4
 
   packages/sdk:
     dependencies:

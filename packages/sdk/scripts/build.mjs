@@ -9,7 +9,7 @@
  *   dist/module-sdk.js     —— 浏览器侧 IIFE 资产（历史兼容，全局名 __unselfSDK）
  *
  * **单一真源**：浏览器侧资产只在**本脚本**构建一次；安装器装配（packages/installer 与
- * deploy/cloudflare 的 assemble）只从 `dist/` 复制，绝不再从源码构建（A5 同字节）。
+ * 装配引擎 packages/installer/src/engine 的 assemble）只从 `dist/` 复制，绝不再从源码构建（A5 同字节）。
  */
 import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';

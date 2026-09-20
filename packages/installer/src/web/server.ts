@@ -115,7 +115,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   }
 }
 
-/** 失败三要素（与 deploy/cloudflare errors.advise 同款映射，已知的才归类，其余归 code 给幂等重跑）。 */
+/** 失败三要素（与引擎 errors.advise（src/engine）同款映射，已知的才归类，其余归 code 给幂等重跑）。 */
 function advise(err: unknown): { cause: string; owner: 'token' | 'dns' | 'network' | 'code'; fix: string } {
   const msg = err instanceof Error ? err.message : String(err);
   if (/10405/.test(msg)) return { cause: msg.slice(0, 300), owner: 'token', fix: 'token 缺 Zone 级权限：按向导①的深链接重建 token 后重跑' };
