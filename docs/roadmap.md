@@ -27,6 +27,8 @@
 | **M0** | 垂直切片：contracts、module-sdk、core-api、shell、hello 模块、幂等部署脚本 | 七步剧本全绿：部署出 setup 链接 → 首个管理员登录 → hello iframe 全链路（握手/token/JWKS/SDK 存储）→ 启停秒级生效 → 移除模块重部署后路由消失 |
 
 M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tailwind + zod + jose + pnpm workspaces + Vitest。
+
+> **命名对照（2026-09-20，#303）**：里程碑表里的历史名对应今天的包/目录——`core-api` → `app/workbench/src`；`shell` → `app/workbench/web`；`module-sdk` → `core/sdk`（发 npm：`@unself/sdk`）；`deploy/cloudflare` → `app/installer/src/engine`；模块 → `app/modules/<id>`。两桶判据见决策 #83。
 | **M1** | 入职闭环与可用性：管理界面（成员/模块/审计/设置）、邀请→审批→邀请页三态自助激活全链、通知类型表+运行时邮件配置、Stalwart 瘦适配（MailProvisioner 接口 + JMAP 实现） | 完整版：真实邀请一人，从填表到登录全程不碰 Stalwart 后台；最小版：内置账号+无邮件实例邀请审批闭环可用，且邀请页三态自助激活可达（#134）；手机同页可审批 |
 | **M2** | 聊天（EdgeChat 模块化）：token 化认证、manifest 包装、前端自研（mobile-first）+ 后端搬运适配、逐条已读回执 | 仅启用聊天的实例可完整使用消息与已读回执，手机端消息流可用 |
 | **M3** | Git 联动 + Docker 等价：Gitea webhook 通知内部化、Git 开户入链路 1、workerd 路径 Docker 部署 | Git 事件进通知中心；同一份配置 Docker 跑通核心链路 |

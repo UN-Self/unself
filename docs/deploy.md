@@ -14,7 +14,7 @@ npx @unself/installer
 # ④ 浏览器打开 setup 链接 → 设管理员用户名密码 → 登录工作台
 ```
 
-> **仓库内运行（贡献者 / 装机前）：** `git clone https://github.com/UN-Self/unself.git && cd unself && pnpm install && node deploy/cloudflare/bin.ts` —— 与 `npx` 是同一条装配路径（同一个引擎）。
+> **仓库内运行（贡献者 / 装机前）：** `git clone https://github.com/UN-Self/unself.git && cd unself && pnpm install && pnpm -r build && node app/installer/dist/unself.mjs` —— 与 `npx` 是同一条装配路径（同一个引擎）。
 
 **完成。** 拉人：管理台 → 邀请 → 生成链接发给新人 → 新人填表 → 你批准（秒回，开户+签激活令牌；发信后台尽力，失败不阻塞）→ 新人凭原邀请链接回邀请页自助激活（设邮箱密码）→ 登录。
 想要团队邮箱：管理台 → 设置 → 邮件服务（运行时配置，随时改即生效免重部署；填了之后批准邀请会后台尽力开邮箱并发信；发信受 CF Workers 出站限制只是尽力增强，激活必经通道=邀请页三态自助）。
@@ -28,7 +28,7 @@ npx @unself/installer
 | DNS 报错 | 等 60 秒，重跑同一条命令 |
 | 其他任何失败 | 直接重跑 ①——幂等，不会重复建资源 |
 
-看实时日志：`cd deploy/cloudflare && npx wrangler tail unself-core-api`。
+看实时日志：`npx wrangler tail <实例名>-workbench`（0.1.x 时代叫 `<实例名>-core-api`，见下节）。
 仍卡住 → [开 issue](https://github.com/UN-Self/unself/issues)，附上终端里的三要素报错原文。
 
 ## 升级已有实例
@@ -37,9 +37,13 @@ npx @unself/installer
 npx @unself/installer@latest deploy    # 用新版安装器重跑一次部署（幂等）
 ```
 
-数据原地保留（迁移只增不改）、资源名不变（命名空间来自实例配置）。收尾屏会打印本次部署的引擎版本与 commit。
-
 数据原地保留（迁移只增不改）。升级纪律：
+
+- **0.2.0 起 Worker 名变了**：`<实例名>-workbench`（旧名 `<实例名>-core-api`）。**D1 / R2 / KV 名与数据一律不动**（改名就会丢数据，所以我们不改名），只有 Worker 是删旧建新：重跑一次部署 → 确认新 Worker 正常 → 再手工删旧的：
+  ```sh
+  npx wrangler delete <实例名>-core-api
+  ```
+  顺序反了会出现打不开的窗口（路由已经指向新 Worker 而旧的还在、或反过来）。
 
 - **迁移只加新文件，不改旧文件**：已应用过的迁移不会重跑——`wrangler d1 migrations apply` 按**文件名**记账（`d1_migrations` 表）。要改 schema 就新增 `000N_*.sql`，原地改旧文件对已升级的库不生效（2026-09-15 本地实测：原地改 0001 后重跑报「No migrations to apply!」，旧库仍缺列缺表；补一个新文件即正常应用）。
 - **升级前先备份**：core 库 + modules 库（按表导出）+ R2 桶。
@@ -59,7 +63,7 @@ Cloudflare 免费套餐足够 10 人左右的团队：Workers 10 万请求/天�
 
 - **① 凭证**：优先 `wrangler login` 的 OAuth（浏览器授权，零复制粘贴）。**2026-09-17 用 wrangler 4.129.0 实测**（[原始记录](audit/241-oauth覆盖实测-2026-09-17.md)）：OAuth 覆盖 D1 建库/读写/迁移、R2 建桶/列举、KV 建命名空间、Workers 部署、secret 写入、zone 路由增/改/删；**唯一覆盖不到的是 Total TLS（ACM）**，只有多级子域（比 zone 深两级以上）才需要它。需要 Total TLS、偏好 token、或跑 CI 时，用 CF 深链接建 API Token（权限已预填全部 **6** 项：Account 3 + Zone 3），粘回终端即可。token 只在本次进程内存里用，不落盘。
 - **② 域名**：workers.dev 免费域名即刻可用；自有域名需 DNS 已托管在 Cloudflare，装配器会自动补代理记录和证书。
-- **③ 九步**：建两个数据库（core/modules）→ 跑迁移 → 构建 Shell → 部署 core-api → 部署各模块 → 写模块注册表 → 建 R2 桶 → 生成一次性 setup token → 冒烟检查。幂等：任何时候重跑，只补没完成的部分。
+- **③ 九步**：建两个数据库（core/modules）→ 跑迁移 → 搬壳产物与 core Worker bundle → 部署 core Worker → 部署各模块 → 写模块注册表 → 建 R2 桶 → 生成一次性 setup token → 冒烟检查。幂等：任何时候重跑，只补没完成的部分。**壳与 core Worker 的产物由 `@unself/workbench` 包提供**（安装器的依赖，预构建，干净机器不需要 pnpm/vite/esbuild）。
 - **④ setup 链接**：一次性，设的第一个账号即管理员。默认内置账号（用户名+密码）；团队有 SSO 可在向导里展开接 OIDC。
 - **模块启停**：已部署模块在管理台秒级开关，免重部署；新增/移除模块改 `unself.config.jsonc` 后重跑装配器。
-- **装配器源码**：[deploy/cloudflare/README.md](../deploy/cloudflare/README.md)（九步明细、换钥流程、Docker 注记）。
+- **装配器源码**：[app/installer/src/engine/README.md](../app/installer/src/engine/README.md)（九步明细、换钥流程、Docker 注记）。

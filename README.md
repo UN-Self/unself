@@ -21,7 +21,7 @@ npx @unself/installer
 
 浏览器里会打开本地向导：粘 CF API Token → 选域名（没有就用免费的 workers.dev）→ 确认模块（默认 hello）→ 等九步跑完 → 浏览器打开末尾打印的一次性链接设管理员。约 5–10 分钟。
 
-> 贡献者 / 仓库内运行：`git clone` → `pnpm install` → `node deploy/cloudflare/bin.ts`（同一条装配路径）。
+> 贡献者 / 仓库内运行：`git clone` → `pnpm install` → `pnpm -r build` → `node app/installer/dist/unself.mjs`（同一条装配路径）。
 
 失败自救、升级已有实例、备份：[docs/deploy.md](docs/deploy.md)。
 
@@ -44,7 +44,7 @@ unself module add npm:@acme/unself-todo@1.2.0
 unself deploy
 ```
 
-安装串的四种写法（决策 #58 / #77）：`npm:@acme/unself-todo@1.2.0`、`github:acme/unself-todo#v1.2.0`、`https://…/todo-1.2.0.tgz`、`file:./modules/my-todo`。
+安装串的四种写法（决策 #58 / #77）：`npm:@acme/unself-todo@1.2.0`、`github:acme/unself-todo#v1.2.0`、`https://…/todo-1.2.0.tgz`、`file:./my-todo`。
 
 **官方模块与第三方同一个东西**：`@unself/hello` 就是普通 npm 包（`npm:@unself/hello@0.1.0`），没有 `official:` 特权来源，安装与卸载路径完全一致。
 
@@ -58,10 +58,20 @@ unself deploy
 - 常见问题（凭证权限、DNS、幂等重跑）见 [docs/deploy.md](docs/deploy.md)「失败了怎么办」；
 - 仍然卡住 → [开 issue](https://github.com/UN-Self/unself/issues)，附上终端里的三要素报错原文。
 
+## 仓库长什么样
+
+两个桶，判据是**谁看得见**：
+
+- **`core/` —— 开发用的依赖库**：`contracts`（协议，内部）、`sdk`（模块作者唯一要装的包，发 npm：`@unself/sdk`）、`ui`（UI 基元与 tokens）、`control-plane`（可复用控制面）、`adapters/{mail-smtp,provisioning/stalwart}`。
+- **`app/` —— 开发好的 app，可被装配**（全部发 npm）：
+  - **`app/workbench`** = **平台运行体**，一个包两半边：`src/` 后端（core Worker）、`web/` 前端（工作台 SPA）、`migrations/` 数据库迁移。它的产物（`dist/worker.js` + `dist/web` + `migrations`）**随该包发布**。
+  - **`app/installer`** = **部署工具**：本地 Web 向导 + `unself` CLI + 九步装配引擎（`src/engine`）。它从 `node_modules/@unself/workbench` 拿产物，不内嵌、也不从源码现构建。
+  - **`app/modules/hello`、`app/modules/chat`** = 官方模块，与第三方模块**同一种包**。
+
 ## 开发
 
-Node ≥ 22、pnpm ≥ 11。PR 前门禁必须全绿（= CI 同一套 5 步，见 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)）。
-测试标准（测行为不测实现）见 [docs/testing.md](docs/testing.md)；贡献流程与 DCO 见 [CONTRIBUTING.md](CONTRIBUTING.md)（设计变更必须先改设计文档）。
+Node ≥ 22、pnpm ≥ 11。PR 前门禁必须全绿（= CI 同一套 **8 段**，清单在 [docs/testing.md](docs/testing.md)「门禁」）。
+测试标准（测行为不测实现；测试不得依赖目录与包名）见 [docs/testing.md](docs/testing.md)；贡献流程与 DCO 见 [CONTRIBUTING.md](CONTRIBUTING.md)（设计变更必须先改设计文档）。
 
 ## 文档
 
@@ -69,4 +79,4 @@ Node ≥ 22、pnpm ≥ 11。PR 前门禁必须全绿（= CI 同一套 5 步，�
 
 ## 许可证
 
-核心（Shell、Core API、module-sdk、自研模块）为 **AGPL-3.0**（根 [LICENSE](LICENSE)）；EdgeChat 衍生件为 **GPL-3.0**（独立 Worker，见 [NOTICE](NOTICE)）。第三方归属见 NOTICE 与 `third_party/components.yaml`。
+核心（`app/workbench`、`core/*`、自研模块）为 **AGPL-3.0**（根 [LICENSE](LICENSE)）；EdgeChat 衍生件为 **GPL-3.0**（独立 Worker，见 [NOTICE](NOTICE)）。第三方归属见 NOTICE 与 `third_party/components.yaml`。

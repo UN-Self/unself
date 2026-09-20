@@ -16,7 +16,7 @@
 ## 怎么写
 
 - **后端**：路由级集成（`app.fetch` / `app.request`）为主；纯函数单测只给真正的纯逻辑（签名、解析、校验）。
-- **替身只出现在外部边界**：D1 → 真 SQLite 加载真 migrations（范本 `services/core-api/test/test-factory.ts`，node:sqlite 零依赖）；IdP/时间/随机 → fake。业务代码内部不打桩。
+- **替身只出现在外部边界**：D1 → 真 SQLite 加载真 migrations（范本 `app/workbench/test/test-factory.ts`，node:sqlite 零依赖）；IdP/时间/随机 → fake。业务代码内部不打桩。
 - **前端**：断言用户可见行为（点击后路由变化、请求发出、状态切换），不断言 DOM 结构、类名、文案存在。
 - **边界行为必须测**：并发、TOCTOU、格式变体、空态、失败态。每个 bug 修复配一正一负。
 - **跨版本升级要测**：迁移改动必须用「**老库（旧迁移已应用）+ 新迁移**」跑一遍，不能只测「全新库重放全部迁移」——后者会把「按文件名记账、旧文件原地改不重跑」的问题全遮掉（实例见 AGENTS.md 已知坑）。
@@ -27,6 +27,27 @@
 - 断言「页面有这段文字」：模板子串、快照测试。边界：**状态切换后的可见结果**（如操作成功/失败的提示文案）允许断言；恒定静态文案与源码子串禁止。（2026-09-13 对 #138 评审 T1 补口径）
 - 恒真 / 自证循环：测试断言自己的 fixture
 - 手搓假 D1（无 schema 概念，SQL 错了照样绿——#56 幻影列即此溜过）
+
+## 测试不得依赖目录与包名（2026-09-20 拍板，决策 #87）
+
+测试测的是**行为**，行为不因目录改名而变——所以测试也不得因目录改名而变。
+
+- 断言里别写仓库相对路径、包名、目录层级；需要定位仓库内资源时按**包名/结构**解析（例：向上找 `pnpm-workspace.yaml`；范本 `app/installer/test/helpers/repo-root.ts`）。
+- **验收方式**：改名 / 搬目录后，行为类断言**零变化**。会因目录改动而红的测试，是把命令当契约了。
+- 反例（#303 实测）：把 `modules/` 搬到 `app/modules/` 后，原先那些 `new URL('../../../..')` 的硬算**不报错只算歪**，报出「模块目录不存在」这种假病因。这类错误改由**结构闸门**拓住（见下），不靠行为测试。
+
+## 门禁（= CI 同一套，PR 前必须全绿）
+
+```sh
+pnpm install --frozen-lockfile
+node scripts/verify-workflows.mjs          # Actions YAML 解析护栏（解析失败是静默的）
+node scripts/verify-paths.mjs              # 结构闸门：tsconfig extends / workspace globs / 已删目录零引用
+pnpm -r build                              # 必须在 typecheck/test 之前（@unself/sdk 是 dist 型包）
+pnpm -r typecheck
+pnpm -r test
+pnpm verify:tokens                        # 纪律 lint（样式只走 tokens）
+node scripts/check-migrations-upgrade.mjs  # 跨版本迁移闸门
+```
 
 ## 职责边界
 
