@@ -7,25 +7,25 @@
  * 机器可读真值在 core/contracts/src/theme-tokens.json（默认主题包），
  * 本文件与同值由 core/contracts/test/theme.test.ts 守卫（单一份值防漂移）。
  * 亮色单主题（M0）；暗色主题 = 未来换一份值，零组件改动。
- * 动效令牌（duration/ease）为平台内部默认值，不属契约（§6.5.2 拍板
- * 2026-09-09：动效归模块作者自治，平台不评审、不统一、不体检），勿加进任何契约文件。
+ * 动效数值骨架（duration/ease/press-scale/lift-y）自 #307 起进契约（修订 #43/#95 口径：
+ * 数值集中取值、组合用法仍归各模块）；无障碍降级纪律不变（每个动效带 reduced-motion）。
  * #95：@theme inline Tailwind 工具类映射已删——shell 全部走语义类 + var(--unself-*)，
  * 无人使用该映射（tailwindcss() 插件仍在 vite 流程，扫描不受影响）。
  */
 
 :root {
-  /* 色彩：白灰底 + 单一主色 */
-  --unself-color-bg: #ffffff;
-  --unself-color-surface: #f5f5f4;
-  --unself-color-surface-hover: #ebebe9;
-  --unself-color-surface-active: #e0e0dd;
+  /* 色彩：暖纸底 + 卡面白 + 靠蓝主色（#307） */
+  --unself-color-bg: #faf9f7;
+  --unself-color-surface: #ffffff;
+  --unself-color-surface-hover: #fafaf9;
+  --unself-color-surface-active: #f5f5f4;
   --unself-color-border: #e4e4e1;
   --unself-color-text: #1c1917;
   --unself-color-text-secondary: #78716c;
   --unself-color-text-tertiary: #a8a29e;
-  --unself-color-primary: #2563eb;
-  --unself-color-primary-hover: #1d4ed8;
-  --unself-color-primary-soft: #dbeafe;
+  --unself-color-primary: #4338ca;
+  --unself-color-primary-hover: #3730a3;
+  --unself-color-primary-soft: #e0e7ff;
   --unself-color-danger: #dc2626;
   --unself-color-danger-soft: #fee2e2;
   --unself-color-success: #16a34a;
@@ -64,13 +64,17 @@
   /* 焦点环 */
   --unself-focus-ring: 2px solid var(--unself-color-primary);
 
-  /* 动效（平台内部默认值，非契约——模块作者可自定，平台不体检） */
+  /* 动效数值骨架（#307 起进契约：集中取值防漂移；组合用法归各模块） */
   --unself-duration-fast: 150ms;
   --unself-duration-normal: 250ms;
+  --unself-duration-slow: 400ms;
   --unself-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --unself-ease-spring: linear(0, 0.035 4%, 0.117 8%, 0.221 12%, 0.331 16%, 0.438 20%, 0.536 24%, 0.622 28%, 0.696 32%, 0.759 36%, 0.811 40%, 0.853 44%, 0.886 48%, 0.913 52%, 0.934 56%, 0.951 60%, 0.964 64%, 0.973 68%, 0.981 72%, 0.986 76%, 0.99 80%, 0.993 84%, 0.995 88%, 0.997 92%, 0.998 96%, 1);
+  --unself-motion-press-scale: 0.93;
+  --unself-motion-lift-y: 2px;
   /* 触屏目标下限（#192 #181）：窄屏可点元素的最小高度——iOS HIG/Material 共同口径 44px */
   --unself-touch-target: 44px;
-  /* #191：基元动画时长（u-shake/u-spin/u-shimmer）——同属内部默认值，不进契约 JSON */
+  /* #191 基元动画时长（#307 起一并收编进契约） */
   --unself-duration-shake: 450ms;
   --unself-duration-spin: 800ms;
   --unself-duration-shimmer: 1400ms;
@@ -82,6 +86,10 @@
  * @custom-media 也试过：本仓构建链只在入口 chunk 展开它，组件独立 chunk 原样保留
  * （实测 dist 里 7 处未解析 → 浏览器当无效查询 → 响应式样式静默失效），故不采用。
  * 一致性由 `scripts/verify-tokens.mjs` 规则四机器执行：@media 里的像素断点必须 ∈ 本清单。
+ * #307：从裸属性收进 ：root 块（原写法不是合法 CSS 规则，浏览器静默忽略；
+ * 仍不可在 @media 条件里 var() 引用，原因同上）。
  */
---unself-bp-sm: 480px;
---unself-bp-md: 768px;
+:root {
+  --unself-bp-sm: 480px;
+  --unself-bp-md: 768px;
+}

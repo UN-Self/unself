@@ -26,6 +26,11 @@ const SPEC_FONT_SIZES = ['xs', 'sm', 'base', 'lg', 'xl', '2xl'] as const;
 const SPEC_SHADOWS = ['card', 'pop'] as const;
 const SPEC_OTHER = ['focus-ring'] as const;
 
+/** SPEC §6.5.2 动效数值骨架清单（#307 起进契约，修订 #43/#95 口径：数值集中、用法归模块）。 */
+const SPEC_MOTION = ['fast', 'normal', 'slow', 'shake', 'spin', 'shimmer'] as const;
+const SPEC_EASES = ['out', 'spring'] as const;
+const SPEC_MOTION_PARAMS = ['press-scale', 'lift-y'] as const;
+
 function specKeys(): string[] {
   return [
     ...SPEC_COLORS.map((n) => `unself.color.${n}`),
@@ -34,6 +39,9 @@ function specKeys(): string[] {
     ...SPEC_FONT_SIZES.map((n) => `unself.font-size.${n}`),
     ...SPEC_SHADOWS.map((n) => `unself.shadow.${n}`),
     ...SPEC_OTHER.map((n) => `unself.${n}`),
+    ...SPEC_MOTION.map((n) => `unself.duration.${n}`),
+    ...SPEC_EASES.map((n) => `unself.ease.${n}`),
+    ...SPEC_MOTION_PARAMS.map((n) => `unself.motion.${n}`),
   ];
 }
 
