@@ -8,8 +8,10 @@
  */
 import { DEFAULT_MODULE_IDS, isOfficialModule, officialModuleEntry } from '../lib/official-modules';
 
-/** 向导步骤（①→⑥ 对应 auth→…→done/failed，reset 回 auth）。 */
-export type WizardStep = 'auth' | 'domain' | 'modules' | 'storage' | 'ready' | 'deploying' | 'done' | 'failed';
+/** 向导步骤（①→⑥ 对应 auth→…→done/failed，reset 回 auth）。
+ * #307：'module-config' = ③★ 模块配置（有 config 声明的选中模块逐模块一页，步序 modules 之后/storage 之前；
+ * 无 config 声明的模块自动跳过——跳过表现为不落在该步，而非词表缺席）。 */
+export type WizardStep = 'auth' | 'domain' | 'modules' | 'module-config' | 'storage' | 'ready' | 'deploying' | 'done' | 'failed';
 
 /** 失败三要素（语义同引擎 src/engine/errors.advise）。 */
 export interface WizardError {
@@ -62,6 +64,27 @@ export interface WizardModuleAdd {
   manifestHash: string;
 }
 
+/**
+ * 模块配置字段声明（#307 ③★）：manifest.config 的向导投影（契约 ModuleConfigField 的最小投影面）。
+ * 渲染与校验只看这些字段；default 存字符串形态（boolean/json 序列化后进页面 data-*）。
+ */
+export interface WizardConfigField {
+  key: string;
+  label: string;
+  type: 'string' | 'secret' | 'number' | 'boolean' | 'enum' | 'url' | 'json' | 'oauth';
+  required?: boolean;
+  /** 缺省值（统一字符串形态；boolean = 'true'/'false'，json = 原文串）。 */
+  default?: string;
+  options?: string[];
+  test?: string;
+}
+
+/** 单个选中模块的 config 声明投影（#307）：无 config 的模块不出现。 */
+export interface WizardModuleConfig {
+  id: string;
+  fields: WizardConfigField[];
+}
+
 /** 数据四级中需要知情同意的级别（#55：shared = 共享库完整访问权 + 零隔离）。 */
 export const SHARED_CONSENT_NOTE =
   '该模块将在共享数据库中自建表：它将获得共享数据库的完整访问权（与其他模块零隔离）；' +
@@ -102,8 +125,20 @@ export interface WizardState {
   modules: string[];
   /** 模块存储声明投影（③ 步渲染单选；空 = 全部按 preferred ?? core）。 */
   storageOptions: WizardStorageOption[];
-  /** ③ 添加的第三方模块（#269）：来源 + 解析后的版本/SRI/permissions/落点。 */
+  /** 添加的第三方模块（#269）：来源 + 解析后的版本/SRI/permissions/落点。 */
   moduleAdds: WizardModuleAdd[];
+  /**
+   * ③★ 模块配置声明投影（#307）：只含「有 config 声明且已选中」的模块；
+   * 由向导服务在 modules/step3/add 后重算（deps.moduleConfigs），渲染与提交校验的依据。
+   * secret 字段声明可进投影（只声明元数据，不含值）；**值**分两路：secret 进服务内存 configSecrets，
+   * 非 secret 进 state.configValues（可投影）。
+   */
+  moduleConfigs: WizardModuleConfig[];
+  /**
+   * ③★ 非 secret 配置值（#307）：模块 id → key → 值（统一字符串形态）。
+   * secret 值永不进这里（进程内存 configSecrets 同 #272 token 纪律）。
+   */
+  configValues: Record<string, Record<string, string>>;
   /** 本实例会占用的 CF 资源名（#272 预览；来自实例配置的命名空间派生）。 */
   resourceNames: WizardResourceName[];
   /** 用户对每模块的存储选择（#55）；缺省模块 = preferred ?? core。 */
@@ -136,6 +171,8 @@ export function initialWizardState(
     modules: options?.modules ?? [...DEFAULT_MODULE_IDS],
     storageOptions,
     moduleAdds,
+    moduleConfigs: [],
+    configValues: {},
     resourceNames: options?.resourceNames ?? [],
     storageChoices: {},
     sharedConsent: false,
@@ -254,6 +291,75 @@ export function confirmModules(s: WizardState, modules: string[]): { state: Wiza
 }
 
 /**
+ * ③★ 模块配置（#307）：保存一个选中模块的**非 secret** 配置值。
+ * secret 字段整体跳过——值由服务层收进进程内存（不进 state，同 #272 token 语义），
+ * 必填校验也在服务层（纯函数看不见 secret，不假装校验）。
+ * 校验两道：模块在 moduleConfigs 里（没声明的模块不给存）；非 secret 必填缺失/空串即拒。
+ * 声明之外的键一律丢弃（防注入面：页面多传的键不进状态）。返回新状态，原状态不动。
+ */
+export function saveConfigValues(
+  s: WizardState,
+  moduleId: string,
+  values: Record<string, string>,
+): { state: WizardState; problem: string | null } {
+  const cfg = s.moduleConfigs.find((m) => m.id === moduleId);
+  if (!cfg) return { state: s, problem: `模块 ${moduleId} 没有 config 声明：无配置页（③★ 只收声明过的模块）` };
+  // 每次提交对该模块非 secret 值全量生效（页面一次收齐全部字段）；空串不落——
+  // 缺省值在部署收集时（collectConfigValues）由 manifest default 兑底，不被空串覆盖。
+  const next: Record<string, string> = {};
+  for (const f of cfg.fields) {
+    if (f.type === 'secret') continue;
+    const raw = (values[f.key] ?? '').trim();
+    if (f.required && !raw) return { state: s, problem: `「${f.label}」为必填项` };
+    if (raw) next[f.key] = raw;
+  }
+  // 声明之外的键一律丢弃（防注入面：页面多传的键不进状态）。
+  for (const k of Object.keys(next)) {
+    if (!cfg.fields.some((f) => f.key === k)) delete next[k];
+  }
+  return { state: { ...s, configValues: { ...s.configValues, [moduleId]: next } }, problem: null };
+}
+
+/**
+ * ③★ 步进：全部已声明模块都保存过（有必填且全齐）→ 进 ③½（storage）；
+ * 有模块还没收值 → problem（指出第一个未完成模块）。
+ * 空 moduleConfigs（全部模块无 config 声明）= ③ 直接跳到 ③½，本函数不该被调。
+ */
+export function finishModuleConfig(s: WizardState): { state: WizardState; problem: string | null } {
+  for (const cfg of s.moduleConfigs) {
+    const got = s.configValues[cfg.id];
+    if (!got) return { state: s, problem: `模块 ${cfg.id} 的配置还没填` };
+    for (const f of cfg.fields) {
+      if (f.type === 'secret') continue; // secret 由服务层校验（进程内存，状态机看不见）
+      if (f.required && !(got[f.key] ?? '').trim()) {
+        return { state: s, problem: `模块 ${cfg.id} 的「${f.label}」为必填项` };
+      }
+    }
+  }
+  // 已声明模块数 ≥ 0：全跳过（无声明）时语义上不会进入本步；有声明但全部值齐 → 进 ③½。
+  return { state: { ...s, step: 'storage' }, problem: null };
+}
+
+/**
+ * ③★ 部署时收齐全部配置值（secret 由服务层合并进来）：
+ * 模块 id → { key: 值 }；缺省键填 manifest default（字符串形态）。
+ * 由服务层在 deps.deploy 调用时组装（secret 值从内存注入），非 secret 从 state 取。
+ */
+export function collectConfigValues(s: WizardState): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  for (const cfg of s.moduleConfigs) {
+    const got = s.configValues[cfg.id] ?? {};
+    const merged: Record<string, string> = {};
+    for (const f of cfg.fields) {
+      const raw = got[f.key] ?? f.default ?? '';
+      merged[f.key] = raw;
+    }
+    out[cfg.id] = merged;
+  }
+  return out;
+}
+
+/**
  * ③½ 存储选择（#55）：逐模块从 accepts 里选；选了 accepts 之外 → 拒绝（不进 ④）。
  * 有模块选 shared → 必须勾知情同意；未声明 storage 的模块固定 core。
  */
@@ -312,18 +418,17 @@ export function failDeploy(s: WizardState, err: WizardError): WizardState {
 
 /**
  * ⑥ 幂等重跑：清错误/结果/事件回 ①（token 需重填——明文本就不留存）。
- * ③ 添加的第三方模块（#269）随 storageOptions/resourceNames 一起保留。
+ * ③ 添加的第三方模块（#269）与 ③★ 配置声明/非 secret 值（#307）随 storageOptions/resourceNames
+ * 一起保留（重跑收敛同一终态：重填的只有 token 与 secret 值——两者都只在进程内存）。
  */
 export function resetWizard(s: WizardState): WizardState {
-  return {
-    ...initialWizardState(s.instancePath, {
-      modules: s.modules,
-      storageOptions: s.storageOptions,
-      resourceNames: s.resourceNames,
-      moduleAdds: s.moduleAdds,
-    }),
-    step: 'auth',
-  };
+  const fresh = initialWizardState(s.instancePath, {
+    modules: s.modules,
+    storageOptions: s.storageOptions,
+    resourceNames: s.resourceNames,
+    moduleAdds: s.moduleAdds,
+  });
+  return { ...fresh, moduleConfigs: s.moduleConfigs, configValues: s.configValues, step: 'auth' };
 }
 
 /**
