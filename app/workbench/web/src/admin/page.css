@@ -39,6 +39,10 @@
   border-radius: var(--unself-radius-full);
   font-size: var(--unself-font-size-xs);
   white-space: nowrap;
+  /* #307 ②状态叙事：状态翻转（待审批→已批准/已拒绝）色相平滑过渡（rareui badge） */
+  transition:
+    background-color var(--unself-duration-fast) var(--unself-ease-out),
+    color var(--unself-duration-fast) var(--unself-ease-out);
 }
 .badge-ok {
   background: var(--unself-color-primary-soft);
@@ -62,4 +66,11 @@
   margin: var(--unself-space-6) 0 var(--unself-space-3);
   font-size: var(--unself-font-size-lg);
   font-weight: 600;
+}
+
+/* 降低动效偏好：徽章色相过渡归零（状态色即时切换，语义不受影响） */
+@media (prefers-reduced-motion: reduce) {
+  .badge {
+    transition: none;
+  }
 }
