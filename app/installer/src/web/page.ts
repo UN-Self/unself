@@ -167,10 +167,20 @@ function moduleAddsSection(state: WizardState): string {
   </ul>`;
 }
 
-/** ③½ 存储选择段（#55）：逐模块卡片单选 + shared 知情同意。无可选模块（全 core）时整段省略。 */
+/** ③½ 存储选择段（#55）：逐模块卡片单选 + shared 知情同意。无可选模块（全 core）时给空态确认卡（不空白屏）。 */
 function storageScreen(state: WizardState, back?: string): string {
   const options: WizardStorageOption[] = state.storageOptions;
-  if (options.length === 0) return '';
+  if (options.length === 0) {
+    return `<section class="screen" data-screen="storage">
+  <h2>③½ 数据存放</h2>
+  <p class="sub">本次选中的模块都走默认落点（core，经 Core API 代理），无需选择。</p>
+  <p class="err" id="err-storage"></p>
+  <div class="actions">
+    ${back ?? '<button type="button" class="btn-back">← 上一步</button>'}
+    <button type="button" class="btn-primary" id="btn-storage">确认并继续</button>
+  </div>
+</section>`;
+  }
   const levelNote: Record<string, string> = {
     core: '经 Core API 代理（默认，推荐）',
     shared: '共享库自建表（需知情同意）',
