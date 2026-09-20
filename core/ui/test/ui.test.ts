@@ -131,6 +131,18 @@ describe('USkeleton / UCard 输出契约（props → 渲染结果）', () => {
   })
 })
 
+describe('UCard 交互态输出契约（#307 基础反馈层）', () => {
+  it('默认静态卡：不带 interactive 类（表单大卡不参与悬浮动效）', () => {
+    const wrapper = mount(UCard, { slots: { default: '内容' } })
+    expect(wrapper.find('.u-card').classes()).not.toContain('u-card-interactive')
+  })
+
+  it('interactive 卡：带 interactive 类（样式表据此启用悬浮浮起；类名 = 基元公开接口）', () => {
+    const wrapper = mount(UCard, { props: { interactive: true }, slots: { default: '内容' } })
+    expect(wrapper.find('.u-card').classes()).toContain('u-card-interactive')
+  })
+})
+
 describe('USwitch 开关交互（行为层：事件 = 唯一切换通道）', () => {
   it('click → emit [true]；再次 click → 回 [false]', async () => {
     const wrapper = mount(USwitch, { props: { modelValue: false } })
