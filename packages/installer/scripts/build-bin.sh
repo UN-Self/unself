@@ -3,7 +3,7 @@
 # 打包单文件 CLI（#242 零克隆；#257 引擎进 bundle）：esbuild bundle 成 dist/unself.mjs（bin 入口）。
 # - 平台 node、ESM、target node22；
 # - banner 注入 createRequire：bundle 内第三方依赖的 CJS require 在 ESM 输出里可用；
-# - @unself/deploy-cloudflare **不再 external**（#257）：九步引擎必须随 tarball 分发，
+# - 九步引擎（src/engine，与壳同包同树 #303）**不 external**（#257）：必须随 tarball 分发，
 #   干净机器没有 node_modules 可解析；引擎随包后安装器运行期零依赖；
 # - esbuild 保持 external 且惰性导入：只有「仓库形态 + 源码模块」的开发路径用得到它，
 #   安装器产物形态（worker.js 已预打包）永不触发 → 干净机器不必装 esbuild；

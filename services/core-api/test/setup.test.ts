@@ -53,7 +53,7 @@ function markSetupDone(db: CoreTestDb): void {
 }
 
 /** 模拟装配器第⑧步（#165 方案 B）：本地生成一次性 token 直插 core 库（公开签发端点已删）。
- *  与 deploy/cloudflare/src/smoke.ts 的 generateSetupToken 同形状（24B → base64url 无填充）。 */
+ *  与 packages/installer/src/engine/smoke.ts 的 generateSetupToken 同形状（24B → base64url 无填充）。 */
 function issueSetupToken(db: CoreTestDb): string {
   const bytes = new Uint8Array(24);
   crypto.getRandomValues(bytes);

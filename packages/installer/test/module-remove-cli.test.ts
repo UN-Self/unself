@@ -62,16 +62,16 @@ describe('#270 module remove（真引擎 + REST 替身）', () => {
     await run(opts(['init', 'demo']));
     const layout = instanceLayout(join(cwd, 'demo'));
 
-    const { makeCfRestFake } = await import('../../../deploy/cloudflare/test/helpers/cf-rest-fake');
-    const { RestClient } = await import('@unself/deploy-cloudflare');
-    const { createCoreControlPlane } = await import('@unself/deploy-cloudflare');
+    const { makeCfRestFake } = await import('./engine/helpers/cf-rest-fake');
+    const { RestClient } = await import('../src/engine/index');
+    const { createCoreControlPlane } = await import('../src/engine/index');
     const fake = makeCfRestFake({
       existingD1: ['unself-core', 'unself-modules'],
       existingWorkers: ['unself-module-hello'],
       existingLedger: { unself_migrations_hello: ['0001_init.sql'] },
     });
     const client = new RestClient({ token: 't', fetchImpl: fake.fetchImpl });
-    const coreUuid = (await (await import('@unself/deploy-cloudflare')).d1List(client, 'f7351bdd-acc0-0000-0000-000000000001')).find(
+    const coreUuid = (await (await import('../src/engine/index')).d1List(client, 'f7351bdd-acc0-0000-0000-000000000001')).find(
       (d) => d.name === 'unself-core',
     )!.uuid;
     await createCoreControlPlane(client, 'f7351bdd-acc0-0000-0000-000000000001', coreUuid).upsertModule({

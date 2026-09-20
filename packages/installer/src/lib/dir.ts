@@ -38,7 +38,7 @@ export function instanceLayout(chosenDir: string): InstanceLayout {
 const CONFIG_TEMPLATE = `// SPDX-License-Identifier: AGPL-3.0-only
 //
 // Unself 实例装配配置（唯一配置文件）：
-// 装配器（CLI init / Web 向导）与 deploy/cloudflare 幂等脚本读同一份。
+// 装配器（CLI init / Web 向导）与引擎幂等脚本读同一份。
 // OIDC 凭证不进本文件——部署后在 setup 向导填写并存 core 库。
 {
   // 实例对外域名；留空/省略 → 用 <worker>.workers.dev 临时域（#15 验收路径）

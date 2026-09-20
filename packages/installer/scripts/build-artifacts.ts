@@ -36,7 +36,7 @@ import {
   ARTIFACTS_FORMAT_VERSION,
   bundleCoreWorker,
   coreWorkerEntrySource,
-} from '@unself/deploy-cloudflare';
+} from '../src/engine/index';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INSTALLER_DIR = join(HERE, '..');
@@ -102,7 +102,7 @@ async function main(): Promise<void> {
   console.log('  ✓ shell/**（apps/shell 的 vite 产物）');
 
   // ---- 4. vendor：blake3-wasm（createRequire 加载，wasm 必须真实文件树）----
-  const engineRequire = createRequire(join(REPO_ROOT, 'deploy', 'cloudflare', 'package.json'));
+  const engineRequire = createRequire(join(INSTALLER_DIR, 'package.json'));
   const blake3PkgDir = dirname(engineRequire.resolve('blake3-wasm/package.json'));
   await cp(blake3PkgDir, join(ARTS_DIR, 'vendor', 'blake3-wasm'), { recursive: true });
   console.log('  ✓ vendor/blake3-wasm/（资产哈希依赖）');
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // ---- 6. 产物 manifest（引擎据此判定「产物模式」+ 版本；格式见 deploy/cloudflare/src/artifacts.ts）----
+  // ---- 6. 产物 manifest（引擎据此判定「产物模式」+ 版本；格式见 src/engine/artifacts.ts）----
   const installerPkg = JSON.parse(await readFile(join(INSTALLER_DIR, 'package.json'), 'utf8')) as { version?: string };
   await writeFile(
     join(ARTS_DIR, 'manifest.json'),

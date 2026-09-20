@@ -11,7 +11,7 @@ import { DEFAULT_MODULE_IDS, isOfficialModule, officialModuleEntry } from '../li
 /** 向导步骤（①→⑥ 对应 auth→…→done/failed，reset 回 auth）。 */
 export type WizardStep = 'auth' | 'domain' | 'modules' | 'storage' | 'ready' | 'deploying' | 'done' | 'failed';
 
-/** 失败三要素（语义同 deploy/cloudflare errors.advise）。 */
+/** 失败三要素（语义同引擎 src/engine/errors.advise）。 */
 export interface WizardError {
   cause: string;
   owner: 'token' | 'dns' | 'network' | 'code';
@@ -215,7 +215,7 @@ export function chooseDomain(
 
 /**
  * 多级子域判定（#246 决策 #66：Universal SSL 只盖 apex + 一级通配（*.zone），更深的要 Total TLS）。
- * 判定式与语义同 deploy/cloudflare steps.needsTotalTls（向导壳零引擎依赖，故此处按同源语义内联）。
+ * 判定式与语义同引擎 src/engine/steps.needsTotalTls——#303 后壳与引擎同包，此处的内联副本应改为直接引用（待「打磨部署动线」时一并收）。
  */
 export function needsTotalTls(domain: string, zone: string): boolean {
   return domain.split('.').length > zone.split('.').length + 1;

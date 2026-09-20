@@ -129,7 +129,7 @@ describe('#269 unself module add', () => {
     expect(errs.join('\n')).toContain('已在 unself.config.jsonc');
 
     // 紧接的 `unself deploy` 不会因「来源漂移未确认」报错：lock 已命中 → 动作 reuse（#245 安全闸门不变）
-    const engine = await import('@unself/deploy-cloudflare');
+    const engine = await import('../src/engine/index');
     const cfg = engine.parseUnselfConfigText(config);
     const plan = engine.buildLockPlan({
       entries: engine.normalizeModuleEntries(cfg.modules),
@@ -214,8 +214,8 @@ describe('#269 布局不变式：module add 写的 lock 就是 runDeploy 读的 
     expect(add.exitCode()).toBe(0);
     expect(existsSync(layout.lockPath)).toBe(true);
 
-    const { makeCfRestFake } = await import('../../../deploy/cloudflare/test/helpers/cf-rest-fake');
-    const { RestClient } = await import('@unself/deploy-cloudflare');
+    const { makeCfRestFake } = await import('./engine/helpers/cf-rest-fake');
+    const { RestClient } = await import('../src/engine/index');
     const { runDeploy } = await import('../src/deploy');
     const fake = makeCfRestFake();
     const JWKS = JSON.stringify({

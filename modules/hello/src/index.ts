@@ -12,7 +12,7 @@ import { createCoreApiStorage, verifyModuleToken, type ModuleStorage } from '@un
  *
  * 数据落点 = `core`（#248 收敛（a)）：模块不直连任何数据库，计数经 **Core API 代理**
  * （`/api/module-api/storage/*` 四形状）读写。跨 worker 走 **Service Binding CORE_API**
- * （同 zone 明文 fetch 被 CF 平台禁，见 deploy/cloudflare assemble 注释 #71 根因）；模块把自己的
+ * （同 zone 明文 fetch 被 CF 平台禁，见装配引擎 assemble 注释 #71 根因）；模块把自己的
  * 模块 token 原样转交 core-api，权限裁决只发生在服务端注册表快照（前端只是视图）。
  */
 

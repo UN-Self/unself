@@ -18,7 +18,7 @@ export async function verifyAccessToken(env, token) {
     return { ok: false, status: 401, message: '请先登录' };
   }
 
-  // CORE_JWKS_JSON 由部署装配期注入（deploy/cloudflare steps；wrangler dev 用 .dev.vars）。
+  // CORE_JWKS_JSON 由部署装配期注入（装配引擎 steps；wrangler dev 用 .dev.vars）。
   // 空 = 未配，验证面整体不可用：503 明示，与 modules/hello 口径一致。
   if (!env.CORE_JWKS_JSON) {
     return { ok: false, status: 503, message: 'jwks not provisioned' };

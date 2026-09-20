@@ -2,7 +2,7 @@
 
 /**
  * setup token 域（setup_tokens 表）：一次性 token 的消费/校验/归还。
- * 签发不在本服务：#165 删公开签发口后由装配器（deploy/cloudflare/src/smoke.ts）本地生成 + d1 直插。
+ * 签发不在本服务：#165 删公开签发口后由装配器（packages/installer/src/engine/smoke.ts）本地生成 + d1 直插。
  * setup_done 标记在 services/instance-config.ts；首任管理员在 services/users.ts。
  */
 
