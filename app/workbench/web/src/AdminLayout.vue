@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink, RouterView, useRouter } from 'vue-router'
 import { ArrowLeft, Blocks, LayoutDashboard, MailPlus, ScrollText, Settings, Users } from 'lucide-vue-next'
 
@@ -17,6 +17,20 @@ const router = useRouter()
 
 /** admin 守卫通过后才渲染内容（redirect 决策在 onMounted 一次性完成）。 */
 const allowed = ref(false)
+
+/** 导航行几何（AdminLayout 实际行高 36px + 行距 2px，非动效参数）：38px 步进。 */
+const NAV_ITEM_STEP_PX = 38
+
+/**
+ * #307 ③导航层：侧栏 active 指示条的几何驱动（shadcn sidebar 指示条模式）。
+ * 指示条 absolute 定位，top 由活跃项索引 × 行步进算出（行几何常量见上），
+ * CSS transition + ease-spring 让它在项间滑动。0 = 守卫未过/无匹配时不渲染。
+ */
+const INDICATOR_TOP_PX = computed(() => {
+  const path = router.currentRoute.value.path
+  const i = NAV.findIndex((item) => path.startsWith(item.to))
+  return i >= 0 ? i * NAV_ITEM_STEP_PX : 0
+})
 
 const NAV = [
   { to: '/admin/members', label: '成员', icon: Users },
@@ -72,6 +86,13 @@ onMounted(async () => {
           返回工作台
         </RouterLink>
         <nav class="admin-nav" aria-label="管理导航">
+          <!-- #307 ③导航层：滑动指示条（shadcn sidebar 模式，纯 CSS transition） -->
+          <span
+            v-if="NAV.some((item) => router.currentRoute.value.path.startsWith(item.to))"
+            class="admin-nav-indicator"
+            :style="{ top: `${INDICATOR_TOP_PX}px` }"
+            aria-hidden="true"
+          />
           <RouterLink v-for="item in NAV" :key="item.to" :to="item.to" class="admin-nav-item">
             <component :is="item.icon" :size="18" aria-hidden="true" />
             {{ item.label }}
@@ -134,10 +155,24 @@ onMounted(async () => {
   margin-bottom: var(--unself-space-2);
 }
 .admin-nav {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
   flex: 1;
+}
+/* #307 ③导航层：滑动指示条——2px 主色竖条，top 由脚本按行几何给出（38px 步进），
+   CSS 只负责过渡（ease-spring 弹性滑动）。行高/间距是 nav 行几何常量，非动效参数。 */
+.admin-nav-indicator {
+  position: absolute;
+  left: 0;
+  width: 2px;
+  height: 36px;
+  border-radius: var(--unself-radius-full);
+  background: var(--unself-color-primary);
+  transition:
+    top var(--unself-duration-normal) var(--unself-ease-spring),
+    height var(--unself-duration-normal) var(--unself-ease-out);
 }
 .admin-nav-item {
   display: flex;
@@ -173,6 +208,12 @@ onMounted(async () => {
 }
 .admin-nav-workspace:hover {
   background: var(--unself-color-surface-hover);
+}
+/* 降低动效偏好：指示条瞬移（位置语义保留，不滑） */
+@media (prefers-reduced-motion: reduce) {
+  .admin-nav-indicator {
+    transition: none;
+  }
 }
 
 /* ---------- 内容区 ---------- */
