@@ -73,11 +73,12 @@ function authDetails(hint: WizardEnvHint): string {
   const open = !hint.oauthUsable || hint.ci || hint.needsTotalTls ? ' open' : '';
   const title = hint.needsTotalTls
     ? '多级子域需要 Total TLS：OAuth 不覆盖，需 API Token'
-    : '手动创建 API Token（深链接入口，权限已预选）';
+    : '使用 API Token';
   return `<details class="auth-fold"${open}>
   <summary>${title}</summary>
   <p><a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer noopener">打开 Cloudflare 创建 API Token</a></p>
-  <p>权限清单与向导失败提示一致（Account：Workers Scripts/D1/R2 Edit；Zone：Workers Routes/DNS/SSL Edit），创建后整段复制粘贴到下面密码框（掩码输入，不落盘）。</p>
+  <p class="hint">权限清单与向导失败提示一致（Account：Workers Scripts/D1/R2 Edit；Zone：Workers Routes/DNS/SSL Edit），创建后整段复制粘贴到下面密码框（掩码输入，不落盘）。</p>
+  <label>API Token <input type="password" name="token" autocomplete="off" placeholder="粘贴 API Token"></label>
 </details>`;
 }
 
@@ -308,15 +309,14 @@ function screen(state: WizardState, hint: WizardEnvHint, _back: string): string 
   }
 }
 
-/** ① 凭证屏：OAuth 主路径大卡（直跳）∥ 环境凭证提示 ∥ API Token 折叠（真验三要素人话在 400 problem 里）。 */
+/** ① 凭证屏：OAuth 信息卡（无按钮）∥ 环境凭证提示 ∥ API Token 折叠页（说明+输入框）——全屏唯一按钮在底部 actions。 */
 function authScreen(state: WizardState, hint: WizardEnvHint): string {
   void state;
   const oauthCard =
     hint.oauthUsable && !hint.ci
       ? `<div class="card oauth-card">
     <p class="ok-line">✓ 已检测到本机 Cloudflare 授权</p>
-    <p class="sub">检测到本机 wrangler OAuth，可零输入直跑（跳过本步）——官方支持「for use with other tools and scripts」。</p>
-    <button type="button" class="btn-primary btn-big" id="btn-oauth-skip">直接下一步</button>
+    <p class="sub">检测到本机 wrangler OAuth：什么都不用填，直接点下面「下一步」即可（官方支持「for use with other tools and scripts」）。想改用 API Token 就展开下方折叠页粘贴，按钮会变成「使用 token 下一步」。</p>
   </div>`
       : '';
   const envNote = hint.hasEnvToken
@@ -326,11 +326,10 @@ function authScreen(state: WizardState, hint: WizardEnvHint): string {
   <h2>① Cloudflare 凭证</h2>
   ${envNote}
   ${oauthCard}
-  ${authDetails(hint)}
   <form id="form-auth">
-    <label>API Token <input type="password" name="token" autocomplete="off" placeholder="${oauthCard ? '留空 = 使用上面的 OAuth 直跑' : '粘贴 API Token'}"></label>
+    ${authDetails(hint)}
     <p class="err" id="err-auth"></p>
-    <div class="actions">${oauthCard ? '' : '<button class="btn-primary" type="submit">下一步</button>'}</div>
+    <div class="actions"><button class="btn-primary" type="submit">下一步</button></div>
   </form>
 </section>`;
 }
@@ -473,7 +472,9 @@ async function post(url, body) {
   return { ok: res.ok, data: await res.json() };
 }
 function showErr(id, problem) { const el = $(id); if (el) el.textContent = problem ?? ''; }
-function reload() { location.reload(); }
+// 推进成功后回根路径：URL 里的 ?step= 回退参数在推进后已失效（渲染守卫只认「已完成步」），
+// 带着它 reload 会被守卫拉回旧视图，看似「提交没生效」——统一回 / 取最新状态机视图。
+function reload() { location.assign('/'); }
 
 // 屏内「上一步」与步进器统一走 ?step= 渲染回退（#309 ②修复：推进是 POST+reload 同 URL，
 // 历史里没有上一步条目，旧的浏览器回退方式无操作；服务端 GET / 读 ?step= 守卫渲染已完成步）
@@ -484,17 +485,18 @@ document.querySelectorAll('.stp[data-goto], .btn-back[data-backto]').forEach((el
   });
 });
 
-// ① OAuth 主路径直跳（POST /api/step1 空值 = submitOAuthSkip；#246 接线）
-const oauthBtn = $('btn-oauth-skip');
-if (oauthBtn) oauthBtn.addEventListener('click', async () => {
-  oauthBtn.disabled = true;
-  const r = await post('/api/step1', { token: '' });
-  r.ok ? reload() : showErr('err-auth', r.data.problem);
-});
+// ① 唯一按钮：空值提交 = OAuth 直跑（服务端按 envHint 分流；OAuth 不可用时报「token 为空」），
+// 输入后文案「下一步」→「使用 token 下一步」，清空回退。
 $('form-auth')?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const r = await post('/api/step1', { token: e.target.token.value });
+  const input = e.target.token;
+  const r = await post('/api/step1', { token: input.value });
   r.ok ? reload() : showErr('err-auth', r.data.problem);
+});
+const tokenInput = document.querySelector('#form-auth input[name=token]');
+const tokenBtn = document.querySelector('#form-auth button[type=submit]');
+if (tokenInput && tokenBtn) tokenInput.addEventListener('input', () => {
+  tokenBtn.textContent = tokenInput.value ? '使用 token 下一步' : '下一步';
 });
 
 // ② zone 自动发现（custom 选中时拉取；不可用回退手填完整域名）
@@ -779,7 +781,7 @@ export function renderPage(state: WizardState, envHint: WizardEnvHint): string {
   .btn-primary { background: var(--unself-color-primary); border-color: var(--unself-color-primary); color: var(--unself-color-surface); }
   .btn-primary:hover:not(:disabled) { background: var(--unself-color-primary-hover); }
   .btn-big { font-size: var(--unself-font-size-lg); padding: var(--unself-space-3) var(--unself-space-6); }
-  .actions { display: flex; gap: var(--unself-space-3); margin-top: var(--unself-space-4); align-items: center; }
+  .actions { display: flex; gap: var(--unself-space-3); margin-top: var(--unself-space-4); align-items: center; justify-content: center; }
   .err { color: var(--unself-color-danger); font-size: var(--unself-font-size-sm); white-space: pre-wrap; min-height: 1em; }
   .ok { color: var(--unself-color-success); }
   .hint { color: var(--unself-color-text-tertiary); font-size: var(--unself-font-size-sm); }

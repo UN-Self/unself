@@ -291,10 +291,8 @@ export function createWizardServer(opts: ServeOptions): Server {
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/step1') {
-          if (state.hasToken) {
-            json(res, 200, { step: state.step });
-            return;
-          }
+          // 已过①再提交 = 换凭证重验（同 #309② 回退①场景）：不再静默吞掉返回假成功——
+          // 走完整 submitToken + 真验 + sessionToken 覆盖，验证失败 400 原地不动。
           const body = await readJsonBody(req);
           const raw = String(body.token ?? '');
           // 「可零输入直跑」的接线（让 #246 的文案与行为一致）：宿主探测到可用 wrangler OAuth
