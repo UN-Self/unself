@@ -171,6 +171,13 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 function advise(err: unknown): { cause: string; owner: 'token' | 'dns' | 'network' | 'code'; fix: string } {
   const msg = err instanceof Error ? err.message : String(err);
   if (/10405/.test(msg)) return { cause: msg.slice(0, 300), owner: 'token', fix: 'token 缺 Zone 级权限：按向导①的深链接重建 token 后重跑' };
+  // #309 ④：wrangler OAuth 无 dns_records 读写权限（#241 实测）——权限缺口重跑不会好，给人工步骤。
+  if (/\b10000\b/.test(msg))
+    return {
+      cause: msg.slice(0, 300),
+      owner: 'token' as const,
+      fix: 'wrangler OAuth 无 DNS 记录权限：在 CF 控制台为该域名手动添加 A 记录 192.0.2.1（开启代理），或在①改粘 API Token（含 Zone · DNS · Edit）后重跑',
+    };
   if (/ENOTFOUND|无法获取/.test(msg)) return { cause: msg.slice(0, 300), owner: 'dns', fix: 'DNS 未生效：等 60 秒重跑（幂等，只补没完成的部分）' };
   if (/fetch failed|ECONNRESET|ETIMEDOUT/.test(msg)) return { cause: msg.slice(0, 300), owner: 'network', fix: '网络中断或临时故障：检查网络后重跑' };
   return { cause: msg.slice(0, 300), owner: 'code', fix: '直接重跑即可：装配器幂等收敛，不会重复创建资源' };

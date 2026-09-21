@@ -212,7 +212,7 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
       ensureTotalTls: async () => {
         order.push('__ensureTotalTls');
       },
-      // ensureDns 不注入 → 真实 ensureZoneARecord（fake 支持 dns_records）
+      // ensureDns 不注入、credentialSource 缺省 env-api-token → 真实 ensureZoneARecord（fake 支持 dns_records，#309 ④）
     });
     expect(order).toEqual(['__cleanupCustomDomains', '__ensureTotalTls']);
     // 顺序：Custom Domain 清理 → Total TLS → core 上传 → DNS 自建 → registry（真实 A 记录 POST）
@@ -222,6 +222,45 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     expect(dnsIdx).toBeGreaterThan(coreUpload);
     const registryUpsert = fake.calls.findIndex((c) => (c.body as { sql?: string } | undefined)?.sql?.startsWith('INSERT INTO module_registry'));
     expect(registryUpsert).toBeGreaterThan(dnsIdx);
+  });
+
+  it('wrangler OAuth + 自有域：跳过 DNS 自建，不发 dns_records 请求（#309 ④）', { timeout: 120_000 }, async () => {
+    const fake = makeCfRestFake({
+      existingD1: ['unself-core', 'unself-modules'],
+      zones: { 'handywote.top': 'zone-1' },
+    });
+    const logs: string[] = [];
+    await runSteps({
+      rootDir: ROOT,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+      credentialSource: 'wrangler-oauth',
+      yes: true,
+      configOverride: { domain: 'demo.handywote.top', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      http: SMOKE_OK,
+      cleanupCustomDomains: async () => {},
+      ensureTotalTls: async () => {},
+      reporter: { step: () => {}, log: (m) => logs.push(m), complete: () => {} },
+    });
+    expect(fake.calls.some((c) => c.url.includes('/dns_records'))).toBe(false);
+    expect(logs.some((m) => m.includes('跳过 DNS 自建') && m.includes('192.0.2.1'))).toBe(true);
+  });
+
+  it('API Token + 自有域：照建 DNS A 记录（#309 ④ 分流的另一侧不回归）', { timeout: 120_000 }, async () => {
+    const fake = makeCfRestFake({
+      existingD1: ['unself-core', 'unself-modules'],
+      zones: { 'handywote.top': 'zone-1' },
+    });
+    await runSteps({
+      rootDir: ROOT,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+      credentialSource: 'env-api-token',
+      yes: true,
+      configOverride: { domain: 'demo.handywote.top', modules: [], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      http: SMOKE_OK,
+      cleanupCustomDomains: async () => {},
+      ensureTotalTls: async () => {},
+    });
+    expect(fake.calls.some((c) => c.url === '/zones/zone-1/dns_records' && c.method === 'POST')).toBe(true);
   });
 
   it('未选模块（modules: []）→ 删除其 zone 路由，注册表 disable 照旧（#77）', { timeout: 120_000 }, async () => {

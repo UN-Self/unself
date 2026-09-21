@@ -10,6 +10,13 @@ describe('advise（已知失败 → 三要素）', () => {
     expect(a.fix).toContain('深链接');
     expect(a.fix).toContain('重建');
   });
+  it('10000（OAuth 无 dns_records 权限，#309 ④）→ token + 人工步骤指引（非重跑）', () => {
+    const a = advise(new Error('GET /zones/zone-1/dns_records 失败：[10000] Authentication error'));
+    expect(a.owner).toBe('token');
+    expect(a.cause).toContain('10000');
+    expect(a.fix).toContain('192.0.2.1');
+    expect(a.fix).not.toContain('重跑本命令');
+  });
   it('DNS 解析失败（ENOTFOUND）→ dns + 等 60 秒重跑', () => {
     const a = advise(new Error('getaddrinfo ENOTFOUND demo.example.com'));
     expect(a.owner).toBe('dns');
