@@ -429,9 +429,11 @@ export function createWizardServer(opts: ServeOptions): Server {
                   ...(deps.moduleConfigs ?? EMPTY_CONFIGS).filter((c) => r.state.modules.includes(c.id)),
                   ...(preview.configFields ? [{ id: preview.id, fields: preview.configFields }] : []),
                 ],
+            // refresh 未注入时保留 addModule 已并入的 state.storageOptions（resolveModule
+            // 投影已含新模块 accepts；注入快照是启动期数据，反而没有新模块）。
             storageOptions: deps.refreshStorageOptions
               ? await deps.refreshStorageOptions(r.state.modules)
-              : (deps.storageOptions ?? []).filter((o) => r.state.modules.includes(o.id)),
+              : r.state.storageOptions,
             ...(deps.previewResources
               ? { resourceNames: await deps.previewResources(r.state.modules) }
               : {}),
