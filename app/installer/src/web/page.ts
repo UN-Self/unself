@@ -187,16 +187,30 @@ function storageScreen(state: WizardState, back?: string): string {
     dedicated: '独立库（占账户配额）',
     external: '自备外部库（配置页填连接串）',
   };
+  /** 作者声明理由（#309 ③½）：accepts 单项时模块为什么不提供选择——manifest 无理由字段，按落点给通用人话。 */
+  const onlyNote: Record<string, string> = {
+    core: '此模块的数据量小且无自建表需求，作者声明只支持经 Core API 代理存取。',
+    shared: '此模块的表设计依赖共享库（跨表关联），作者声明只支持共享库自建表。',
+    dedicated: '此模块的表未按共享库护栏设计（表名/外键），作者声明只能用独立库。',
+    external: '此模块需要连接你自备的外部数据库，作者声明只支持外部库。',
+  };
   const rows = options
     .map((opt) => {
       const current = state.storageChoices[opt.id] ?? opt.preferred ?? 'core';
-      const radios = opt.accepts
-        .map(
-          (level) =>
-            `<label class="radio"><input type="radio" name="sto-${opt.id}" value="${level}" ${current === level ? 'checked' : ''}> ${level}（${levelNote[level] ?? level}）</label>`,
-        )
-        .join('');
-      return `<fieldset class="card sto-mod" data-mod="${opt.id}"><legend>${opt.id}</legend>${radios}</fieldset>`;
+      let body: string;
+      if (opt.accepts.length === 1) {
+        // #309 ③½：单项 = 作者声明说明卡，不渲染假单选（用户困惑实锤：chat 只支持 dedicated 却看到孤零零一个选项）
+        const only = opt.accepts[0]!;
+        body = `<p class="only-note">作者声明：只支持 <strong>${only}</strong>（${levelNote[only] ?? only}）。${onlyNote[only] ?? ''}</p>`;
+      } else {
+        body = opt.accepts
+          .map(
+            (level) =>
+              `<label class="radio"><input type="radio" name="sto-${opt.id}" value="${level}" ${current === level ? 'checked' : ''}> ${level}（${levelNote[level] ?? level}）</label>`,
+          )
+          .join('');
+      }
+      return `<fieldset class="card sto-mod" data-mod="${opt.id}" data-accepts="${opt.accepts.join(',')}"><legend>${opt.id}</legend>${body}</fieldset>`;
     })
     .join('\n');
   const consent = `<label class="radio consent"><input type="checkbox" id="shared-consent"> ${SHARED_CONSENT_NOTE}</label>`;
@@ -635,7 +649,13 @@ $('btn-storage')?.addEventListener('click', async () => {
   for (const opt of document.querySelectorAll('fieldset.sto-mod')) {
     const id = opt.dataset.mod;
     const checked = opt.querySelector('input[type=radio]:checked');
-    if (checked) choices[id] = checked.value;
+    if (checked) {
+      choices[id] = checked.value;
+    } else {
+      // #309 ③½：作者声明单项（说明卡，无 radio）→ 取唯一 accepts 提交（服务端 accepts 校验同过）
+      const only = (opt.dataset.accepts || '').split(',').filter(Boolean);
+      if (only.length === 1) choices[id] = only[0];
+    }
   }
   const consent = document.getElementById('shared-consent')?.checked ?? false;
   const r = await post('/api/step3b', { choices, sharedConsent: consent });
@@ -740,6 +760,9 @@ export function renderPage(state: WizardState, envHint: WizardEnvHint): string {
   /* 表单 */
   label { display: block; margin: var(--unself-space-2) 0; }
   label.radio { display: flex; align-items: center; gap: var(--unself-space-2); font-size: var(--unself-font-size-base); }
+  /* #309 ③½：作者声明说明卡（accepts 单项，非假单选） */
+  .only-note { color: var(--unself-color-text-secondary); font-size: var(--unself-font-size-sm); margin: var(--unself-space-1) 0; }
+  .only-note strong { color: var(--unself-color-text); }
   input[type=password], input[type=text], input[type=number], input[type=url], textarea { width: 100%; padding: var(--unself-space-2) var(--unself-space-3); margin-top: var(--unself-space-1); border: 1px solid var(--unself-color-border); border-radius: var(--unself-radius-md); font: inherit; color: var(--unself-color-text); background: var(--unself-color-bg); transition: border-color var(--unself-duration-fast) var(--unself-ease-out); }
   input:focus, textarea:focus { outline: var(--unself-focus-ring); border-color: var(--unself-color-primary); }
   .opt-row { display: flex; gap: var(--unself-space-4); flex-wrap: wrap; }
