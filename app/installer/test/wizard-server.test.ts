@@ -752,3 +752,83 @@ async function post2(base: string, path: string, body: unknown): Promise<{ statu
   });
   return { status: res.status, json: (await res.json()) as Record<string, unknown> };
 }
+
+describe('#309 ③ storageOptions 快照重算（③½ 卡片集合 == 选中集合）', () => {
+  function serveWithRefresh(stateHolder: { state: WizardState }) {
+    return startWizardServer({
+      deps: {
+        getState: () => stateHolder.state,
+        setState: (s) => {
+          stateHolder.state = s;
+        },
+        hasEnvToken: false,
+        envHint: { ...HINT },
+        deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+        // 缺省注入 storageOptions 快照（启动时 hello+chat 可选）——refresh 才能体现「改选后重算」
+        storageOptions: [
+          { id: 'hello', accepts: ['core'] },
+          { id: 'chat', accepts: ['dedicated'] },
+        ],
+        refreshStorageOptions: async (moduleIds) =>
+          [{ id: 'hello', accepts: ['core'] }, { id: 'chat', accepts: ['dedicated'] }].filter((o) =>
+            moduleIds.includes(o.id),
+          ),
+      },
+    });
+  }
+
+  it('③ 改选（取消 chat）→ ③½ 卡片集合 == 选中集合，无幽灵 chat 卡', async () => {
+    const h: { state: WizardState } = {
+      state: initialWizardState('/tmp/x/ghost/unself', { modules: ['hello', 'chat'] }),
+    };
+    const { server: s2, port: p2 } = await serveWithRefresh(h);
+    try {
+      const b2 = `http://127.0.0.1:${p2}`;
+      const post3 = async (path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> => {
+        const res = await fetch(`${b2}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+      };
+      await post3('/api/step1', { token: 'A'.repeat(40) });
+      await post3('/api/step2', { choice: 'workers' });
+      // 首次：hello+chat 都勾
+      await post3('/api/step3', { modules: 'hello, chat' });
+      expect(h.state.storageOptions.map((o) => o.id).sort()).toEqual(['chat', 'hello']);
+      // 回③改选：只留 hello
+      const r = await post3('/api/step3', { modules: 'hello' });
+      expect(r.status).toBe(200);
+      expect(h.state.storageOptions.map((o) => o.id)).toEqual(['hello']);
+    } finally {
+      await new Promise<void>((resolve) => s2.close(() => resolve()));
+    }
+  });
+
+  it('refresh 未注入：缺省按注入快照过滤选中清单（不出现清单外卡片）', async () => {
+    const h: { state: WizardState } = {
+      state: initialWizardState('/tmp/x/ghost2/unself', { modules: ['hello', 'chat'] }),
+    };
+    const { server: s2, port: p2 } = await startWizardServer({
+      deps: {
+        getState: () => h.state,
+        setState: (s) => {
+          h.state = s;
+        },
+        hasEnvToken: false,
+        envHint: { ...HINT },
+        deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+        storageOptions: [{ id: 'chat', accepts: ['dedicated'] }],
+      },
+    });
+    try {
+      const b2 = `http://127.0.0.1:${p2}`;
+      const post3 = async (path: string, body: unknown): Promise<void> => {
+        await fetch(`${b2}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      };
+      await post3('/api/step1', { token: 'A'.repeat(40) });
+      await post3('/api/step2', { choice: 'workers' });
+      await post3('/api/step3', { modules: 'hello' });
+      expect(h.state.storageOptions.map((o) => o.id)).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => s2.close(() => resolve()));
+    }
+  });
+});
