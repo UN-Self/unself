@@ -30,6 +30,7 @@ import { moduleWorkerName, coreWorkerName, coreDbName, modulesDbName, resourceNa
 import { decideGuard, probeExisting, targetResources } from './guard';
 import { createCoreControlPlane } from './control-plane';
 import { CredentialsMissingError, credentialsMissingMessage, resolveAuth } from './auth';
+import type { TokenSourceKind } from './auth';
 import { domainProblem } from './domain';
 import { createKeypair, JWT_SECRET_NAME, publicJwksJson } from './keypair';
 import { ensureRoute, ensureTotalTls, ensureZoneARecord, findZone, removeLegacyCustomDomains, removeRoutesForPatterns } from './rest/zones';
@@ -171,6 +172,12 @@ export interface RunNineStepsOptions {
   rootDir: string;
   /** REST 客户端（测试注入替身；缺省由凭证解析新建）。 */
   client?: RestClient;
+  /**
+   * 凭证来源（#309 ④）：`client` 注入时缺省按 `env-api-token`（幂等行为不变）；
+   * 缺省凭证解析路径自动携带真实来源。`wrangler-oauth` 时 DNS 自建跳过（#241 实测
+   * OAuth scope 集合不含 dns_records 读写），给人话指引而非让部署必然撞 10000。
+   */
+  credentialSource?: 'env-api-token' | 'env-api-key' | 'wrangler-oauth';
   reporter?: StepReporter;
   /**
    * @internal 仅供测试注入（steps.test.ts）：跳过真实 HTTP（冒烟/主题体检）。
@@ -282,7 +289,11 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     lock = parseLockText(await readFile(lockPath, 'utf8'));
   }
 
-  const client = input.client ?? await defaultClient(rep.log);
+  const resolved = input.client
+    ? { client: input.client, source: input.credentialSource ?? ('env-api-token' as const) }
+    : await defaultClient(rep.log);
+  const client = resolved.client;
+  const credentialSource = resolved.source;
 
   // ②½ 来源解析（#245/#284）——**必须在步骤①之前**：
   // ① 要读 chat 包配置（dir）与各模块存储落点（dedicated 目标名），那些都得先取到包。
@@ -587,8 +598,20 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     await uploadWorkerSpec(input, client, accountId, rep, coreSpec);
   }
   if (config.domain) {
-    const ensureDns = input.ensureDns ?? ((domain: string) => ensureZoneARecord(client, resolvedZone!, domain, rep.log));
-    await ensureDns(config.domain);
+    // #309 ④：DNS 自建按凭证来源分流。wrangler OAuth 的 scope 集合不含 dns_records 读写
+    // （2026-09-21 实测，wrangler 4.129.1，docs/audit/241-*），必挂 10000——跳过并给人话指引，
+    // 部署不因此失败（资源/路由/产物全部就绪，仅 DNS 记录一个人工步骤；冒烟⑨会明报域名不通）。
+    // ensureDns 显式注入（测试）时按注入走，不参与分流。
+    if (input.ensureDns) {
+      await input.ensureDns(config.domain);
+    } else if (credentialSource === 'wrangler-oauth') {
+      rep.log(
+        `跳过 DNS 自建（wrangler OAuth 无 dns_records 权限，#241 实测）：请在 CF 控制台为 ${config.domain} ` +
+          '手动添加 A 记录 192.0.2.1（开启代理），或改用 API Token（含 Zone · DNS · Edit）重跑自动创建',
+      );
+    } else {
+      await ensureZoneARecord(client, resolvedZone!, config.domain, rep.log);
+    }
   }
   const baseUrl = await resolveBaseUrl(
     input,
@@ -996,13 +1019,13 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
 }
 
 /** 默认 REST 客户端：env token → 借 wrangler OAuth（决策 #65/#66，#246 起 resolveAuth 统一收口）。 */
-async function defaultClient(log: (m: string) => void): Promise<RestClient> {
+async function defaultClient(log: (m: string) => void): Promise<{ client: RestClient; source: TokenSourceKind }> {
   const cred = await resolveAuth({ log });
   if (!cred) {
     throw new CredentialsMissingError(credentialsMissingMessage());
   }
   if (cred.warning) log(`⚠ ${cred.warning}`);
-  return new RestClient({ token: cred.token });
+  return { client: new RestClient({ token: cred.token }), source: cred.source };
 }
 
 /** worker 上传（真实路径）：assets 直传 + putWorker。测试可注入 uploadWorker 替身。 */

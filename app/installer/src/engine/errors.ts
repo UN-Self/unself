@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * 失败三要素映射（PRODUCT_SPEC §5.5 ④：原因 / 归属 / 修复）。
- * 铁律：只映射已知失败（10405 / DNS 未就绪 / 网络中断 / 缺 token），其余一律归
+ * 铁律：只映射已知失败（10405 / 10000 / DNS 未就绪 / 网络中断 / 缺 token），其余一律归
  * 「代码」并给幂等重跑——不枚举 CF 全部错误码（禁过度防御）。
  */
 
@@ -25,12 +25,21 @@ export function advise(err: unknown): FailureAdvice {
   // WranglerError 把 stderr 细节附在第二行起：三要素的「原因」要携带原始错误摘要（含错误码），
   // 故取含已知特征（10405 等）的首个非空行，取不到时退回首行。
   const lines = msg.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
-  const cause = (lines.find((l) => /10405|ENOTFOUND|无法获取|fetch failed|ECONNRESET|ETIMEDOUT|不可达|CLOUDFLARE_API_TOKEN/.test(l)) ?? lines[0] ?? msg).slice(0, 300);
+  const cause = (lines.find((l) => /10405|10000|ENOTFOUND|无法获取|fetch failed|ECONNRESET|ETIMEDOUT|不可达|CLOUDFLARE_API_TOKEN/.test(l)) ?? lines[0] ?? msg).slice(0, 300);
   if (msg.includes('10405')) {
     return {
       cause,
       owner: 'token',
       fix: '你的 token 缺 Zone 级权限：用第一屏的深链接重建 token（勾选 Workers Routes / DNS / SSL and Certificates），然后重跑本命令',
+    };
+  }
+  // #309 ④：wrangler OAuth scope 集合不含 DNS 记录读写（2026-09-21 实测 GET/POST 都 10000，
+  // docs/audit/241-*），自有域 + OAuth 在 dns_records 上必挂——幂等重跑解决不了权限缺口。
+  if (/\b10000\b/.test(msg)) {
+    return {
+      cause,
+      owner: 'token',
+      fix: '当前凭证（wrangler OAuth）无 DNS 记录权限：在 CF 控制台为该域名手动添加 A 记录 192.0.2.1（开启代理），或改用 API Token（含 Zone · DNS · Edit）重跑自动创建',
     };
   }
   if (msg.includes('ENOTFOUND') || msg.includes('无法获取 Core 公钥') || /DNS/i.test(msg)) {
