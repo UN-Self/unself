@@ -239,7 +239,7 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
       http: SMOKE_OK,
       cleanupCustomDomains: async () => {},
       ensureTotalTls: async () => {},
-      reporter: { step: () => {}, log: (m) => logs.push(m), complete: () => {} },
+      reporter: { step: () => {}, log: (m) => logs.push(m) },
     });
     expect(fake.calls.some((c) => c.url.includes('/dns_records'))).toBe(false);
     expect(logs.some((m) => m.includes('跳过 DNS 自建') && m.includes('192.0.2.1'))).toBe(true);
