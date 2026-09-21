@@ -21,6 +21,7 @@ on:
       - 'sdk-v*'
       - 'hello-v*'
       - 'chat-v*'
+      - 'workbench-v*'
       - 'installer-v*'
 
 permissions:
