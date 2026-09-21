@@ -13,6 +13,23 @@ import { DEFAULT_MODULE_IDS, isOfficialModule, officialModuleEntry } from '../li
  * 无 config 声明的模块自动跳过——跳过表现为不落在该步，而非词表缺席）。 */
 export type WizardStep = 'auth' | 'domain' | 'modules' | 'module-config' | 'storage' | 'ready' | 'deploying' | 'done' | 'failed';
 
+/** 渲染步序（#309 ② ?step= 回退守卫用；deploying/failed 归 ready，module-config 恒在序中）。 */
+export const WIZARD_STEP_ORDER: readonly WizardStep[] = [
+  'auth',
+  'domain',
+  'modules',
+  'module-config',
+  'storage',
+  'ready',
+  'done',
+];
+
+/** 当前步在渲染步序中的位置（deploying/failed 归 ready）。 */
+export function wizardStepIndexOf(step: WizardStep): number {
+  const norm: WizardStep = step === 'deploying' || step === 'failed' ? 'ready' : step;
+  return WIZARD_STEP_ORDER.indexOf(norm);
+}
+
 /** 失败三要素（语义同引擎 src/engine/errors.advise）。 */
 export interface WizardError {
   cause: string;

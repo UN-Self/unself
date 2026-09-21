@@ -251,24 +251,38 @@ function deployProgress(): string {
 
 /**
  * 当前步一屏（渲染分步：state.step 决定渲染哪屏；推进 = POST + location.reload）。
- * 未来步不渲染（防跳步——推进权限全在 POST 端点的状态机守卫里）；已完成步回退 = 步进器点击。
- * 「上一步」取舍：用 history.back()（浏览器历史回退）而非 ?step= 重渲染——reload 推进已把每步
- * 表单值收进服务端 state，回退屏的服务端渲染值即用户输入；免一套「读 ?step 渲染旧值」的分支。
+ * 未来步不渲染（防跳步——推进权限全在 POST 端点的状态机守卫里）。
+ * 「上一步」取舍（#309 ②修复）：?step= 渲染回退——reload 推进同 URL 无历史条目，
+ * history.back() 永远无操作（旧实现）；服务端 GET / 读 ?step 守卫渲染已完成步，表单值来自 state。
  */
-function screen(state: WizardState, hint: WizardEnvHint, back: string): string {
-  const backBtn = back ? '<button type="button" class="btn-back">← 上一步</button>' : '';
-  void backBtn;
+/** 上一步目标（#309 ②修复）：上一已完成步的 id（用于 ?step= 渲染回退）；第一步 null。 */
+function backTo(state: WizardState): string | null {
+  const cur = stepIndex(state.step);
+  if (cur <= 0) return null;
+  return STEPS[cur - 1]!.id;
+}
+
+/** 统一「上一步」按钮（#309 ②：?step= 渲染回退——旧实现 history 无效）。 */
+function backHtml(state: WizardState): string {
+  const to = backTo(state);
+  if (!to) return '';
+  return `<button type="button" class="btn-back" data-backto="${to}">← 上一步（${backLabel(state)}）</button>`;
+}
+
+function screen(state: WizardState, hint: WizardEnvHint, _back: string): string {
+  void _back;
+  const back = backHtml(state);
   switch (state.step) {
     case 'auth':
       return authScreen(state, hint);
     case 'domain':
       return domainScreen(back);
     case 'modules':
-      return modulesScreen(state);
+      return modulesScreen(state, back);
     case 'module-config':
       return configPages(state) || storageScreen(state, back);
     case 'storage':
-      return storageScreen(state);
+      return storageScreen(state, back);
     case 'ready':
     case 'deploying':
     case 'failed':
@@ -346,7 +360,7 @@ function domainScreen(back: string): string {
 }
 
 /** ③ 模块屏：官方模块勾选卡（默认勾 hello）+「添加模块」收进高级折叠。 */
-function modulesScreen(state: WizardState): string {
+function modulesScreen(state: WizardState, back?: string): string {
   return `<section class="screen" data-screen="modules">
   <h2>③ 启用模块</h2>
   <p class="sub">勾选要装的模块；官方模块已随安装器预装（部署零网络）。</p>
@@ -365,7 +379,7 @@ function modulesScreen(state: WizardState): string {
   </details>
   <p class="err" id="err-modules"></p>
   <div class="actions">
-    <button type="button" class="btn-back">← 上一步</button>
+    ${back ?? '<button type="button" class="btn-back">← 上一步</button>'}
     <button class="btn-primary" id="btn-modules" type="button">下一步</button>
   </div>
 </section>`;
@@ -447,13 +461,13 @@ async function post(url, body) {
 function showErr(id, problem) { const el = $(id); if (el) el.textContent = problem ?? ''; }
 function reload() { location.reload(); }
 
-// 步进器回退：?step=<id> 只换渲染视图（推进权限在服务端状态机守卫）
-document.querySelectorAll('.stp[data-goto]').forEach((el) => {
-  el.addEventListener('click', () => { location.assign('/?step=' + el.dataset.goto); });
-});
-// 屏内「上一步」= 浏览器历史回退（服务端已存每步值，回退屏渲染的就是已存输入）
-document.querySelectorAll('.btn-back').forEach((el) => {
-  el.addEventListener('click', () => { history.back(); });
+// 屏内「上一步」与步进器统一走 ?step= 渲染回退（#309 ②修复：推进是 POST+reload 同 URL，
+// 历史里没有上一步条目，旧的浏览器回退方式无操作；服务端 GET / 读 ?step= 守卫渲染已完成步）
+document.querySelectorAll('.stp[data-goto], .btn-back[data-backto]').forEach((el) => {
+  el.addEventListener('click', () => {
+    const to = el.dataset.goto || el.dataset.backto;
+    if (to) location.assign('/?step=' + to);
+  });
 });
 
 // ① OAuth 主路径直跳（POST /api/step1 空值 = submitOAuthSkip；#246 接线）
