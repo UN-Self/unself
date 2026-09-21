@@ -266,11 +266,12 @@ describe('① 折叠入口默认态（#246 决策 #66：默认不露，露出条
     expect(html).toContain('OAuth 不覆盖，需 API Token');
   });
 
-  it('oauthUsable=true → 顶部显式「检测到本机 wrangler OAuth，可零输入直跑」；false 则无', () => {
+  it('oauthUsable=true → OAuth 信息卡提示「什么都不用填，直接点下面下一步」；false 则无此卡', () => {
     const yes = renderPage(initialWizardState('/tmp/x/unself'), HINT);
-    expect(yes).toContain('检测到本机 wrangler OAuth，可零输入直跑');
+    expect(yes).toContain('检测到本机 wrangler OAuth');
+    expect(yes).toContain('什么都不用填，直接点下面「下一步」');
     const no = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, oauthUsable: false });
-    expect(no).not.toContain('可零输入直跑');
+    expect(no).not.toContain('已检测到本机 Cloudflare 授权');
   });
 
   it('hasEnvToken=true → 「已检测」态照旧（envHint.hasEnvToken 向后兼容 hasEnvToken 语义）', () => {
@@ -376,6 +377,82 @@ describe('① OAuth 直跑（页面文案「可零输入直跑（跳过本步）
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe('① 回退重提换 token（#309② 后续）：hasToken 后重提不再被吞', () => {
+  const seen = { verify: [] as string[], zoneToken: '' };
+  beforeEach(async () => {
+    seen.verify = [];
+    seen.zoneToken = '';
+    const root = mkdtempSync(join(tmpdir(), 'unself-wizresub-'));
+    holder = { state: initialWizardState(join(root, 'demo', 'unself'), { modules: ['hello'] }) };
+    const { server, port } = await startWizardServer({
+      deps: {
+        getState: () => holder.state,
+        setState: (s) => {
+          holder.state = s;
+        },
+        hasEnvToken: false,
+        envHint: { ...HINT },
+        verifyToken: async (t) => {
+          seen.verify.push(t);
+          return { ok: true, message: '' };
+        },
+        listZones: async (t) => {
+          seen.zoneToken = t;
+          return { ok: true, zones: [], message: '' };
+        },
+        deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+      },
+    });
+    base = `http://127.0.0.1:${port}`;
+    close = async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(root, { recursive: true, force: true });
+    };
+  });
+
+  it('已过①再 POST step1 → 重新真验并覆盖 sessionToken（④/② 用的是新 token）', async () => {
+    expect((await post('/api/step1', { token: 'A'.repeat(40) })).status).toBe(200);
+    // 回退①后粘新 token 重新提交：不再 200 假成功，而是真验 + 覆盖
+    const s2 = await post('/api/step1', { token: 'B'.repeat(40) });
+    expect(s2.status).toBe(200);
+    expect(s2.json.step).toBe('domain');
+    expect(seen.verify).toEqual(['A'.repeat(40), 'B'.repeat(40)]);
+    await fetch(`${base}/api/zones`);
+    expect(seen.zoneToken).toBe('B'.repeat(40));
+  });
+
+  it('已过①重提无效 token → 400 真验失败原地不动，旧 sessionToken 不被破坏', async () => {
+    expect((await post('/api/step1', { token: 'A'.repeat(40) })).status).toBe(200);
+    const bad = await post('/api/step1', { token: 'bad!token' });
+    expect(bad.status).toBe(400);
+    expect(String(bad.json.problem)).toContain('以外的字符');
+    expect(holder.state.step).toBe('domain');
+    await fetch(`${base}/api/zones`);
+    expect(seen.zoneToken).toBe('A'.repeat(40));
+  });
+});
+
+describe('① 凭证屏改版：折叠页内嵌输入框，全屏唯一按钮在底部', () => {
+  const html = renderPage(initialWizardState('/tmp/x/authfold/unself'), HINT);
+
+  it('折叠页（含密码框）在 form-auth 内部；不再有 OAuth 独立按钮（双按钮回归防）', () => {
+    // details 在 form 开标签之后、form 收标签之前（输入框属于表单提交域）
+    expect(html).toMatch(/<form id="form-auth">(?:(?!<\/form>)[\s\S])*<details class="auth-fold"/);
+    expect(html).toContain('type="password" name="token"');
+    expect(html).not.toContain('btn-oauth-skip');
+    expect(html).not.toContain('直接下一步');
+  });
+
+  it('提交按钮初始文案「下一步」；「使用 token 下一步」由脚本在输入后切换', () => {
+    expect(html).toMatch(/<button class="btn-primary" type="submit">下一步<\/button>/);
+    expect(html).toContain("'使用 token 下一步'");
+  });
+
+  it('.actions 统一居中（justify-content: center）', () => {
+    expect(html).toMatch(/\.actions \{[^}]*justify-content: center/);
   });
 });
 
