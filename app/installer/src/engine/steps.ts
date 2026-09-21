@@ -606,7 +606,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       await input.ensureDns(config.domain);
     } else if (credentialSource === 'wrangler-oauth') {
       rep.log(
-        `跳过 DNS 自建（wrangler OAuth 无 dns_records 权限，#241 实测）：请在 CF 控制台为 ${config.domain} ` +
+        `跳过 DNS 自建（wrangler OAuth 无 dns_records 权限，审计 241 实测）：请在 CF 控制台为 ${config.domain} ` +
           '手动添加 A 记录 192.0.2.1（开启代理），或改用 API Token（含 Zone · DNS · Edit）重跑自动创建',
       );
     } else {
