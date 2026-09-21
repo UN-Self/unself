@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWizardServer, renderPage, startWizardServer } from '../src/web/server';
-import { initialWizardState, type StorageLevel, type WizardEnvHint, type WizardModuleConfig, type WizardState } from '../src/web/state';
+import { initialWizardState, type StorageLevel, type WizardEnvHint, type WizardModuleConfig, type WizardState, type WizardStorageOption } from '../src/web/state';
 
 let holder: { state: WizardState };
 let base: string;
@@ -769,10 +769,13 @@ describe('#309 ③ storageOptions 快照重算（③½ 卡片集合 == 选中集
           { id: 'hello', accepts: ['core'] },
           { id: 'chat', accepts: ['dedicated'] },
         ],
-        refreshStorageOptions: async (moduleIds) =>
-          [{ id: 'hello', accepts: ['core'] }, { id: 'chat', accepts: ['dedicated'] }].filter((o) =>
-            moduleIds.includes(o.id),
-          ),
+        refreshStorageOptions: async (moduleIds): Promise<WizardStorageOption[]> =>
+          (
+            [
+              { id: 'hello', accepts: ['core'] as StorageLevel[] },
+              { id: 'chat', accepts: ['dedicated'] as StorageLevel[] },
+            ] as WizardStorageOption[]
+          ).filter((o) => moduleIds.includes(o.id)),
       },
     });
   }
@@ -830,5 +833,27 @@ describe('#309 ③ storageOptions 快照重算（③½ 卡片集合 == 选中集
     } finally {
       await new Promise<void>((resolve) => s2.close(() => resolve()));
     }
+  });
+});
+
+describe('#309 ①② zone 发现加载态与跳过入口（② 屏渲染面）', () => {
+  const domainState = { ...initialWizardState('/tmp/x/zones/unself'), hasToken: true, step: 'domain' as const };
+  const html = renderPage(domainState, HINT);
+
+  it('② 屏带加载态：spinner + 「正在读取账户 zone…」初始隐藏（选中 custom 才显）', () => {
+    expect(html).toContain('class="spinner"');
+    expect(html).toContain('正在读取账户 zone');
+    // 加载提示行初始隐藏：选 custom 后由脚本置可见
+    expect(html).toMatch(/class="hint zone-loading" hidden/);
+  });
+
+  it('② 屏带「跳过发现，直接手填完整域名」主动入口', () => {
+    expect(html).toContain('id="zone-skip"');
+    expect(html).toContain('跳过发现，直接手填完整域名');
+  });
+
+  it('加载提示与卡片容器分离（成功后 loading 隐藏、卡片显；结构可切换）', () => {
+    expect(html).toContain('id="zone-cards"');
+    expect(html).toMatch(/class="hint zone-loaded" hidden/);
   });
 });

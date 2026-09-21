@@ -323,7 +323,12 @@ function domainScreen(back: string): string {
     </label>
   </div>
   <div id="custom-area" hidden>
-    <div id="zone-pick" class="zone-list" hidden><p class="hint">正在读取账户 zone…</p></div>
+    <div id="zone-pick" class="zone-list" hidden>
+      <p class="hint zone-loading" hidden><span class="spinner" aria-hidden="true"></span>正在读取账户 zone…</p>
+      <p class="hint zone-loaded" hidden>选择你的 zone：</p>
+      <div id="zone-cards"></div>
+      <p class="hint"><a href="#" id="zone-skip">跳过发现，直接手填完整域名</a></p>
+    </div>
     <div id="zone-fallback" hidden>
       <p class="warn">zone 自动发现不可用（OAuth 未登录或无 Zone·Read 权限）：请直接输入完整域名（如 team.example.com）。</p>
     </div>
@@ -485,22 +490,30 @@ function updatePreview() {
   $('total-tls-warn').hidden = !zoneDepthOk(domain);
 }
 async function loadZones() {
+  const pick = $('zone-pick'), fallback = $('zone-fallback');
+  const loading = document.querySelector('.zone-loading'), loaded = document.querySelector('.zone-loaded');
+  // ①② 加载态立即可见（#309：真实要 1-3s，零反馈像卡死）；结果出来后按态切换
+  pick.hidden = false;
+  if (loading) loading.hidden = false;
+  const toManual = () => {
+    if (loading) loading.hidden = true;
+    pick.hidden = true; fallback.hidden = false; $('fulldom-wrap').hidden = false;
+    $('full-domain').addEventListener('input', updatePreview);
+    updatePreview();
+  };
   try {
     const res = await (await fetch('/api/zones')).json();
-    if (!res.ok || !res.zones.length) {
-      $('zone-pick').hidden = true; $('zone-fallback').hidden = false; $('fulldom-wrap').hidden = false;
-      $('full-domain').addEventListener('input', updatePreview);
-      return;
-    }
-    $('zone-pick').innerHTML = res.zones.map((z) =>
+    if (loading) loading.hidden = true;
+    if (!res.ok || !res.zones.length) { toManual(); return; }
+    $('zone-cards').innerHTML = res.zones.map((z) =>
       '<label class="card zone-card"><span class="radio"><input type="radio" name="zone" value="' + z.id + '" data-zone="' + z.name + '"></span><span><strong>' + z.name + '</strong></span></label>'
     ).join('');
-    $('zone-pick').hidden = false;
+    if (loaded) loaded.hidden = false;
     $('prefix-wrap').hidden = false;
-    $('zone-pick').querySelectorAll('input[name=zone]').forEach((el) => {
+    $('zone-cards').querySelectorAll('input[name=zone]').forEach((el) => {
       el.addEventListener('change', () => {
         zonePick = { id: el.value, name: el.dataset.zone };
-        $('zone-pick').querySelectorAll('.zone-card').forEach((c) => c.classList.remove('selected'));
+        $('zone-cards').querySelectorAll('.zone-card').forEach((c) => c.classList.remove('selected'));
         el.closest('.zone-card').classList.add('selected');
         updatePreview();
       });
@@ -508,9 +521,20 @@ async function loadZones() {
     $('sub-prefix').addEventListener('input', updatePreview);
     updatePreview();
   } catch {
-    $('zone-pick').hidden = true; $('zone-fallback').hidden = false; $('fulldom-wrap').hidden = false;
+    toManual();
   }
 }
+// ①② 「跳过发现」主动入口：失败被动回退之外，用户可随时跳过直接手填完整域名
+$('zone-skip')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  zonePick = null;
+  $('zone-pick').hidden = true;
+  $('zone-fallback').hidden = true; // 主动跳过：不显「发现不可用」警告（那是失败语义）
+  $('fulldom-wrap').hidden = false;
+  $('full-domain').addEventListener('input', updatePreview);
+  $('full-domain').focus();
+  updatePreview();
+});
 document.querySelectorAll('input[name=dchoice]').forEach((el) => {
   el.addEventListener('change', () => {
     document.querySelectorAll('.zone-card').forEach((c) => c.classList.remove('selected'));
@@ -523,8 +547,11 @@ document.querySelectorAll('input[name=dchoice]').forEach((el) => {
   });
 });
 $('btn-domain')?.addEventListener('click', async () => {
+  const btn = $('btn-domain');
+  if (btn.disabled) return; // ①② 请求期间不可重复提交
+  btn.disabled = true;
   const r = await post('/api/step2', currentDomainInput());
-  r.ok ? reload() : showErr('err-domain', r.data.problem);
+  r.ok ? reload() : (showErr('err-domain', r.data.problem), (btn.disabled = false));
 });
 
 // ③ 模块勾选 + 高级添加
@@ -735,6 +762,11 @@ export function renderPage(state: WizardState, envHint: WizardEnvHint): string {
   .zone-card.selected { border-color: var(--unself-color-primary); background: var(--unself-color-primary-soft); }
   .preview-line { font-size: var(--unself-font-size-lg); padding: var(--unself-space-3); border: 1px dashed var(--unself-color-border); border-radius: var(--unself-radius-md); background: var(--unself-color-bg); word-break: break-all; }
   .warn { color: var(--unself-color-warning); font-size: var(--unself-font-size-sm); }
+  /* ①② zone 发现加载态（#309）：spinner 旋转（duration-spin token）；reduced-motion 已全局关动画 */
+  .zone-loading { display: flex; align-items: center; gap: var(--unself-space-2); color: var(--unself-color-text-secondary); }
+  .spinner { width: var(--unself-space-4); height: var(--unself-space-4); box-sizing: border-box; border: 2px solid var(--unself-color-border); border-top-color: var(--unself-color-primary); border-radius: var(--unself-radius-full); animation: spin var(--unself-duration-spin) linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #zone-skip { color: var(--unself-color-info); font-size: var(--unself-font-size-sm); }
 
   /* ③ 模块勾选卡 */
   .mod-card { display: flex; align-items: flex-start; gap: var(--unself-space-2); cursor: pointer; }
