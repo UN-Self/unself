@@ -764,15 +764,17 @@ describe('#309 ③ storageOptions 快照重算（③½ 卡片集合 == 选中集
         hasEnvToken: false,
         envHint: { ...HINT },
         deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
-        // 缺省注入 storageOptions 快照（启动时 hello+chat 可选）——refresh 才能体现「改选后重算」
+        // 启动快照含「曾加过又取消的 legacy」——refresh 重算后必须消失（幽灵卡回归）
         storageOptions: [
           { id: 'hello', accepts: ['core'] },
           { id: 'chat', accepts: ['dedicated'] },
+          { id: 'legacy', accepts: ['core'] },
         ],
         refreshStorageOptions: async (moduleIds): Promise<WizardStorageOption[]> =>
           (
             [
-              { id: 'hello', accepts: ['core'] as StorageLevel[] },
+              // 模拟「真重算」与启动快照的漂移：hello 的声明在重算后变了（快照过期）
+              { id: 'hello', accepts: ['dedicated'] as StorageLevel[] },
               { id: 'chat', accepts: ['dedicated'] as StorageLevel[] },
             ] as WizardStorageOption[]
           ).filter((o) => moduleIds.includes(o.id)),
@@ -793,9 +795,10 @@ describe('#309 ③ storageOptions 快照重算（③½ 卡片集合 == 选中集
       };
       await post3('/api/step1', { token: 'A'.repeat(40) });
       await post3('/api/step2', { choice: 'workers' });
-      // 首次：hello+chat 都勾
+      // 首次：hello+chat 都勾（refresh 重算生效：hello.accepts 来自重算而非过期快照）
       await post3('/api/step3', { modules: 'hello, chat' });
       expect(h.state.storageOptions.map((o) => o.id).sort()).toEqual(['chat', 'hello']);
+      expect(h.state.storageOptions.find((o) => o.id === 'hello')?.accepts).toEqual(['dedicated']);
       // 回③改选：只留 hello
       const r = await post3('/api/step3', { modules: 'hello' });
       expect(r.status).toBe(200);
