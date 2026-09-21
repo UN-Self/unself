@@ -457,6 +457,9 @@ async function exec(opts: RunOptions): Promise<number> {
           // #307 ③★ 改模块后重算配置声明（本地解析模块包 manifest，不联网）。
           refreshModuleConfigs: async (moduleIds) =>
             (await import('./deploy')).wizardModuleConfigs(o.instancePath, moduleIds),
+          // #309 ③ 改模块后重算存储声明投影（③½ 卡片集合 == 选中集合，不留幽灵卡）。
+          refreshStorageOptions: async (moduleIds) =>
+            (await import('./deploy')).wizardStorageOptions(o.instancePath, moduleIds),
           // #307 ② zone 自动发现（sessionToken 透传；'' = 本机 wrangler OAuth）。
           listZones: async (token) => (await import('./deploy')).wizardListZones(token),
           // #307 ③★ 测试连接（test:'http'）：服务端代理 HEAD/GET 验证可达，成功/失败人话。

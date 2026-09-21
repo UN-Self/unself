@@ -120,6 +120,11 @@ export interface WizardDeps {
    */
   refreshModuleConfigs?: (moduleIds: string[]) => Promise<WizardModuleConfig[]>;
   /**
+   * ③ 改模块后重算存储声明投影（#309 ③：③½ 卡片集合 == 选中集合；缺省 = 沿用启动快照）。
+   * CLI 从模块包 manifest 读（同 wizardStorageOptions 本地解析）；测试直给。
+   */
+  refreshStorageOptions?: (moduleIds: string[]) => Promise<WizardStorageOption[]>;
+  /**
    * ② zone 自动发现（#307）：用 ① 的凭证列账户 active zone。
    * token 传 '' = 引擎默认凭证优先级（本机 wrangler OAuth）；拿不到返回 ok:false（UI 走手填回退）。
    * CLI 缺省注入 wizardListZones（deploy.ts）；测试直给替身。
@@ -332,13 +337,19 @@ export function createWizardServer(opts: ServeOptions): Server {
             return;
           }
           const body = await readJsonBody(req);
-          const mods = Array.isArray(body.modules)
+          const mods = (Array.isArray(body.modules)
             ? (body.modules as unknown[]).map(String)
-            : String(body.modules ?? '').split(',');
+            : String(body.modules ?? '').split(',')
+          ).map((m) => m.trim());
           // #307：③★ 步进门禁按「注入声明 ∩ 本次提交清单」——先合成带声明的判定态再确认。
           const declared = deps.refreshModuleConfigs
             ? await deps.refreshModuleConfigs(mods)
             : (deps.moduleConfigs ?? EMPTY_CONFIGS).filter((c) => mods.includes(c.id));
+          // #309 ③：存储声明投影同步重算（启动快照只对首次进入 ③½ 正确；改选后必须重算，
+          // 否则出现幽灵模块卡——走查实锤：先勾 hello 再取消，③½ 仍渲染 hello 卡）。
+          const storageOptions = deps.refreshStorageOptions
+            ? await deps.refreshStorageOptions(mods)
+            : (deps.storageOptions ?? []).filter((o) => mods.includes(o.id));
           const r = confirmModules({ ...state, moduleConfigs: declared }, mods);
           if (r.problem) {
             json(res, 400, { problem: r.problem });
@@ -350,6 +361,7 @@ export function createWizardServer(opts: ServeOptions): Server {
           const next = {
             ...r.state,
             moduleConfigs: declared,
+            storageOptions,
             ...(deps.previewResources
               ? { resourceNames: await deps.previewResources(r.state.modules) }
               : {}),
@@ -389,6 +401,7 @@ export function createWizardServer(opts: ServeOptions): Server {
             return;
           }
           // #307：③★ 配置声明同步重算（新模块可能带 config 声明——resolveModule 投影或 refresh 注入）。
+          // #309 ③：存储声明投影同步重算（新增模块也可能带 storage.accepts）。
           const next = {
             ...r.state,
             moduleConfigs: deps.refreshModuleConfigs
@@ -397,6 +410,9 @@ export function createWizardServer(opts: ServeOptions): Server {
                   ...(deps.moduleConfigs ?? EMPTY_CONFIGS).filter((c) => r.state.modules.includes(c.id)),
                   ...(preview.configFields ? [{ id: preview.id, fields: preview.configFields }] : []),
                 ],
+            storageOptions: deps.refreshStorageOptions
+              ? await deps.refreshStorageOptions(r.state.modules)
+              : (deps.storageOptions ?? []).filter((o) => r.state.modules.includes(o.id)),
             ...(deps.previewResources
               ? { resourceNames: await deps.previewResources(r.state.modules) }
               : {}),

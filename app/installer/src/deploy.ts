@@ -13,7 +13,7 @@ import { cp, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { instanceLayout } from './lib/dir';
 import { defaultModuleEntries } from './lib/official-modules';
-import type { WizardConfigField } from './web/state';
+import type { WizardConfigField, WizardStorageOption } from './web/state';
 
 /**
  * 模块条目输入（#269/#77）：**一律对象形态** `{id, source}`（官方模块也写 npm 串）。
@@ -166,17 +166,22 @@ export async function wizardModuleConfigs(
 
 /**
  * 读实例所选模块的 storage 声明（#55）：返回向导③½ 的单选数据（id + accepts + preferred）。
+ * `moduleIds` 给定时只返回清单内模块（#309 ③：③ 改选后 ③½ 卡片集合同步重算，不留幽灵卡）。
  *
  * #284：源不再扫「模块目录」（builtin 目录已废），而是按 config 条目的 `source` 做**本地解析**
  * （npm 本地命中 / file: 目录 → 引擎 `localModuleManifest`；不联网、不下载）；
  * 解析不到（远端来源 / 本地未命中）→ 降级为 core 单选（与旧行为同口径：读不到就按 core）。
  * 与九步引擎同源（engine.localModuleManifest 与装配期同一套解析原语）。
  */
-export async function wizardStorageOptions(instancePath: string): Promise<Array<{ id: string; accepts: string[]; preferred?: string }>> {
+export async function wizardStorageOptions(
+  instancePath: string,
+  moduleIds?: string[],
+): Promise<WizardStorageOption[]> {
   const engine = await loadEngine();
   const cfg = await effectiveConfig(instancePath);
-  const out: Array<{ id: string; accepts: string[]; preferred?: string }> = [];
-  for (const entry of cfg.modules) {
+  const entries = moduleIds ? cfg.modules.filter((m) => moduleIds.includes(m.id)) : cfg.modules;
+  const out: WizardStorageOption[] = [];
+  for (const entry of entries) {
     let candidate: { storage?: { accepts?: string[]; preferred?: string } } | null = null;
     try {
       const local = await engine.localModuleManifest({ source: entry.source, rootDir: instancePath });
@@ -187,10 +192,13 @@ export async function wizardStorageOptions(instancePath: string): Promise<Array<
     const accepts = (candidate?.storage?.accepts ?? ['core']).filter((l): l is (typeof STORAGE_LEVELS)[number] =>
       (STORAGE_LEVELS as readonly string[]).includes(l),
     );
+    const preferred = candidate?.storage?.preferred;
     out.push({
       id: entry.id,
       accepts: accepts.length > 0 ? accepts : ['core'],
-      ...(candidate?.storage?.preferred ? { preferred: candidate.storage.preferred } : {}),
+      ...(preferred && (STORAGE_LEVELS as readonly string[]).includes(preferred)
+        ? { preferred: preferred as (typeof STORAGE_LEVELS)[number] }
+        : {}),
     });
   }
   return out;
