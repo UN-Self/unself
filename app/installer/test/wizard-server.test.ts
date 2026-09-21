@@ -896,3 +896,43 @@ describe('#309 ② ?step= 渲染回退（上一步/步进器统一）', () => {
     expect(html).not.toContain('history.back()');
   });
 });
+
+describe('#309 ③½ accepts 单项 = 作者声明说明卡（非假单选）', () => {
+  const base = (): WizardState => ({
+    ...initialWizardState('/tmp/x/only/unself', {
+      modules: ['hello', 'chat'],
+      storageOptions: [
+        { id: 'hello', accepts: ['core'], preferred: 'core' },
+        { id: 'chat', accepts: ['dedicated'], preferred: 'dedicated' },
+      ],
+    }),
+    hasToken: true,
+    step: 'storage',
+  });
+
+  it('单项模块渲染说明卡（作者声明），无 radio', () => {
+    const html = renderPage(base(), HINT);
+    expect(html).toContain('作者声明：只支持 <strong>dedicated</strong>');
+    expect(html).toContain('作者声明：只支持 <strong>core</strong>');
+    expect(html).not.toMatch(/name="sto-chat"/);
+    expect(html).not.toMatch(/name="sto-hello"/);
+  });
+
+  it('混合：hello 两项、chat 单项 → hello 真单选 + chat 说明卡', () => {
+    const s = base();
+    s.storageOptions = [
+      { id: 'hello', accepts: ['core', 'dedicated'], preferred: 'core' },
+      { id: 'chat', accepts: ['dedicated'], preferred: 'dedicated' },
+    ];
+    const html = renderPage(s, HINT);
+    expect(html).toMatch(/name="sto-hello"[\s\S]*?value="core"/);
+    expect(html).toMatch(/name="sto-hello"[\s\S]*?value="dedicated"/);
+    expect(html).toContain('作者声明：只支持 <strong>dedicated</strong>');
+    expect(html).not.toMatch(/name="sto-chat"/);
+  });
+
+  it('说明卡 fieldset 带 data-accepts=dedicated（前端提交取唯一 accepts 兜底）', () => {
+    const html = renderPage(base(), HINT);
+    expect(html).toMatch(/data-mod="chat" data-accepts="dedicated"/);
+  });
+});
