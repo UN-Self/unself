@@ -27,11 +27,14 @@ import {
   saveConfigValues,
   submitOAuthSkip,
   submitToken,
+  wizardStepIndexOf,
+  WIZARD_STEP_ORDER,
   type WizardEnvHint,
   type WizardModuleAdd,
   type WizardModuleConfig,
   type WizardResourceName,
   type WizardState,
+  type WizardStep,
   type WizardStorageOption,
 } from './state';
 import { renderPage } from './page';
@@ -172,6 +175,18 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   }
 }
 
+/**
+ * ?step= 渲染回退守卫（#309 ②）：只允许「已完成的步」（步序 index < 当前）；
+ * 未知值/未完成步/无参数 → 当前步。只换渲染视图不换状态——推进权限全在 POST 端点状态机。
+ */
+export function viewStepOf(state: WizardState, reqStep: string | null): WizardState {
+  if (!reqStep) return state;
+  const target = reqStep as WizardStep;
+  if (!WIZARD_STEP_ORDER.includes(target)) return state;
+  if (wizardStepIndexOf(target) >= wizardStepIndexOf(state.step)) return state;
+  return { ...state, step: target };
+}
+
 /** 失败三要素（与引擎 errors.advise（src/engine）同款映射，已知的才归类，其余归 code 给幂等重跑）。 */
 function advise(err: unknown): { cause: string; owner: 'token' | 'dns' | 'network' | 'code'; fix: string } {
   const msg = err instanceof Error ? err.message : String(err);
@@ -231,8 +246,12 @@ export function createWizardServer(opts: ServeOptions): Server {
       const state = deps.getState();
       try {
         if (req.method === 'GET' && url.pathname === '/') {
+          // #309 ②：?step=<id> 渲染回退（只换视图不换状态）：目标步必须是步进器意义上
+          // 「已完成的步」（index < 当前），未完成步/未知值一律落回当前步——推进权限仍在 POST 端点。
+          const reqStep = url.searchParams.get('step');
+          const view = viewStepOf(state, reqStep);
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-          res.end(renderPage(state, envHint));
+          res.end(renderPage(view, envHint));
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/state') {

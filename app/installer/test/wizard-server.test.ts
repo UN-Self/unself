@@ -857,3 +857,42 @@ describe('#309 ①② zone 发现加载态与跳过入口（② 屏渲染面）'
     expect(html).toMatch(/class="hint zone-loaded" hidden/);
   });
 });
+
+describe('#309 ② ?step= 渲染回退（上一步/步进器统一）', () => {
+  const at = (step: WizardState['step']): WizardState => ({
+    ...initialWizardState('/tmp/x/back/unself', { modules: ['hello'] }),
+    hasToken: true,
+    step,
+  });
+
+  it('已完成步（storage → domain/modules）可达；viewStep 只换渲染不换状态', async () => {
+    holder.state = at('storage');
+    const html = await (await fetch(`${base}/?step=domain`)).text();
+    expect(html).toContain('data-screen="domain"');
+    // 状态未被 ?step= 改写：/api/state 仍是 storage
+    const st = (await (await fetch(`${base}/api/state`)).json()) as { step: string };
+    expect(st.step).toBe('storage');
+  });
+
+  it('未完成步不可达（auth 下 ?step=done → 仍渲染 auth）；未知值落回当前步', async () => {
+    holder.state = at('auth');
+    const html = await (await fetch(`${base}/?step=done`)).text();
+    expect(html).toContain('data-screen="auth"');
+    const html2 = await (await fetch(`${base}/?step=nonsense`)).text();
+    expect(html2).toContain('data-screen="auth"');
+  });
+
+  it('未完成中间步不可达：storage 步不能跳到未经历的 module-config（若它被自动跳过）', async () => {
+    // state.step=storage 且 moduleConfigs 为空 → module-config 不算「已完成」（自动跳过不可达）
+    holder.state = at('storage');
+    const html = await (await fetch(`${base}/?step=module-config`)).text();
+    expect(html).toContain('data-screen="storage"');
+  });
+
+  it('② 屏「上一步」按钮带 data-backto=auth（不再是无效 history.back()）', async () => {
+    holder.state = at('domain');
+    const html = await (await fetch(`${base}/`)).text();
+    expect(html).toContain('data-backto="auth"');
+    expect(html).not.toContain('history.back()');
+  });
+});
