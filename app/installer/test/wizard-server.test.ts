@@ -136,10 +136,23 @@ describe('六段流全链（替身部署）', () => {
     expect(s4.status).toBe(202);
     expect(s4.json.step).toBe('deploying');
 
+    // 等装配收敛到 done（替身睡 20ms；收尾身份在置 done 前写完，此处快照必含——#287）
+    for (let i = 0; i < 40; i++) {
+      const stPoll = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+      if (stPoll.step === 'done' || stPoll.step === 'failed') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
     // 事件流回读（SSE）
     const es = await fetch(`${base}/api/events`);
     const text = await es.text();
     expect(text).toContain('步骤 1/9');
+
+    // 收尾身份三项（#287）：SSE 里跟随「装配完成」出现；installer 版本可能未熔印（dev 树）→ 不硬编码，
+    // 断言行为形状：unself 版本行 + commit（40 位 SHA 或 dev 占位）+ workbench 版本行。
+    expect(text).toMatch(/unself 版本：v/);
+    expect(text).toMatch(/commit [0-9a-f]{40}|commit dev\b/);
+    expect(text).toMatch(/平台产物：@unself\/workbench v\d+\.\d+\.\d+|平台产物不可用/);
 
     // ⑤ 收尾：done + baseUrl + setup 深链
     for (let i = 0; i < 40; i++) {

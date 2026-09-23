@@ -99,7 +99,8 @@ export async function provisionAll(options: {
   const shellAssets = join(outDir, 'assets/shell');
   // 壳产物由 @unself/workbench 自己构建（vite build → dist/web）；引擎只搬运（#303）。
   // 过去这里按形态分岔（仓库内现跑 vite / 搬运安装器内嵌产物）——同源后只剩一条路径。
-  log('搬运壳产物（@unself/workbench 的 dist/web）…');
+  // #287（决策 #80）：搬运行顺带报平台产物版本——「线上跑的哪一版」从装配日志就开始留痕。
+  log(`搬运壳产物（@unself/workbench v${platform.version} 的 dist/web）…`);
   await ensureEmptyDir(shellAssets);
   await cp(platform.shellDir, shellAssets, { recursive: true });
 

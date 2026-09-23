@@ -21,6 +21,7 @@ import {
   type InstancesRegistry,
 } from './lib/registry';
 import { echoPathline, pathline } from './lib/pathline';
+import { reportIdentity } from './lib/identity';
 
 export interface RunOptions {
   argv: string[];
@@ -80,6 +81,7 @@ const USAGE: string[] = [
   '  list [--json]        列出全部实例（名字 + 实例目录；--json 供编排）',
   '  use <名字>           切换当前实例（写注册表 current）',
   '  current              显示当前实例（名字 + 实例目录）',
+  '  --version            打印版本身份（安装器版本 + commit + 平台产物 @unself/workbench 版本）',
   '  destroy <名字>       注销实例（--purge 连目录一起删；数据不可恢复，谨慎）',
   '  module pack [目录]   把模块目录打成 .tgz（--out <目录>；可直接 npm publish，与官方模块同一套包形态）',
   '                    --version <x.y.z> 覆盖版本（同时写进 manifest.json 与生成的 package.json；tag 即版本）',
@@ -154,7 +156,7 @@ export function resolveCurrentInstance(
 }
 
 /** 已知命令表（未知命令先拦，不落到需要当前实例的分支给误导性错误）。 */
-const KNOWN_COMMANDS = ['wizard', 'init', 'list', 'use', 'current', 'destroy', 'module', 'deploy', 'help', '--help', '-h'];
+const KNOWN_COMMANDS = ['wizard', 'init', 'list', 'use', 'current', 'destroy', 'module', 'deploy', 'help', '--help', '-h', '--version', '-v'];
 
 /** 位置参数/取值开关解析（`--out <dir>` / `--as <id>` 消费后一个 token）。 */
 function splitPositional(args: string[], valueFlags: string[]): { positionals: string[]; values: Record<string, string> } {
@@ -189,6 +191,13 @@ async function exec(opts: RunOptions): Promise<number> {
 
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     for (const line of USAGE) log(line);
+    return 0;
+  }
+
+  // ---- --version（#287，决策 #80）：不需要实例、不读注册表、零副作用，紧跟 help 短路 ----
+  if (cmd === '--version' || cmd === '-v') {
+    // 三项身份一个出口（reportIdentity）：失败不静默留空、不 crash（理由见 src/lib/identity.ts）。
+    await reportIdentity({ rootDir: cwd, log });
     return 0;
   }
 
@@ -509,6 +518,8 @@ async function exec(opts: RunOptions): Promise<number> {
     const result = await fn({ instancePath: inst.path, allowAdopt, yes, onEvent: (line) => log(line) });
     log(`装配完成：${result.baseUrl}`);
     log(result.setupToken ? `setup 深链：/setup?token=${result.setupToken}` : '已有管理员：setup 已封箱。');
+    // 收尾屏身份三项（#287，决策 #80）：报障可整段粘贴；与 --version、向导⑤共用同一出口。
+    await reportIdentity({ rootDir: process.cwd(), log });
     echoPathline(inst.path, log);
     return 0;
   }
