@@ -8,8 +8,8 @@
 # ① 启动本地 Web 向导（安装器的默认命令）
 npx @unself/installer
 
-# ② 向导六步：①凭证（wrangler OAuth 可直跳，API Token 折叠）→ ②域名（workers.dev 默认 / 自有域自动列账户 zone，只填子域前缀）→ ③模块 → ③★模块配置（按模块 manifest 声明逐模块出页，无配置自动跳过）→ ③½数据存放 → ④装配（九步进度）→ ⑤完成页给激活链接
-# ③ 等九步跑完，完成页直接给 setup 链接与复制按钮（终端同步打印引擎版本与 commit，报障时用它）
+# ② 向导七屏：①凭证（wrangler OAuth 可直跳，API Token 折叠）→ ②域名（workers.dev 默认 / 自有域自动列账户 zone，只填子域前缀）→ ③模块 → ④模块配置（按模块 manifest 声明逐模块出页，无配置自动跳过）→ ⑤数据存放 → ⑥装配（九步折叠日志）→ ⑦完成页按钮打开激活入口
+# ③ 等九步跑完，在完成页点击一次性 setup 链接或复制按钮
 
 # ④ 浏览器打开 setup 链接 → 设管理员用户名密码 → 登录工作台
 ```
@@ -34,7 +34,7 @@ npx @unself/installer
 ## 升级已有实例
 
 ```sh
-npx @unself/installer@latest deploy    # 用新版安装器重跑一次部署（幂等）
+npx @unself/installer@latest           # 用新版安装器重跑一次部署（幂等）
 ```
 
 数据原地保留（迁移只增不改）。升级纪律：

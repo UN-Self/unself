@@ -1,6 +1,6 @@
 {
   "name": "@unself/installer",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Unself 零克隆安装器：本地 Web 向导 → 九步装配到你自己的 Cloudflare 账户（不需要 clone 仓库）",
   "license": "AGPL-3.0-only",
   "repository": {
@@ -29,7 +29,7 @@
     "prepack": "pnpm run build"
   },
   "unself": {
-    "note": "#257/#284：引擎（@unself/deploy-cloudflare）与其运行期依赖全部 bundle 进 dist/unself.mjs；平台产物（core Worker/shell/迁移 SQL/vendor）预构建内嵌进 dist/artifacts/**。官方模块包 @unself/hello、@unself/chat 连同 @unself/sdk 是安装器的**运行期依赖**（仓库内 workspace:*，发布时由 pnpm 改写为版本号）：干净机器装 Node + 本 tarball，npm 一并拉取三个官方包即可部署。"
+    "note": "安装器发布 CLI 与本地 Vue 向导；平台 Worker、工作台前端和迁移由 @unself/workbench 提供，官方模块由各自 npm 包提供。发布流水线会把 workspace:* 依赖固定为实际版本。"
   },
   "dependencies": {
     "@unself/chat": "workspace:*",

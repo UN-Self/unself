@@ -16,10 +16,10 @@ Unself 是**跑在你自己 Cloudflare 账户上的团队工作台**：不是 Sa
 > 一条命令 `npx @unself/installer`（[issue #242](https://github.com/UN-Self/unself/issues/242)）——**不需要 git、不需要 pnpm**：
 
 ```sh
-npx @unself/installer
+npx @unself/installer@latest
 ```
 
-浏览器里会打开本地向导：粘 CF API Token → 选域名（没有就用免费的 workers.dev）→ 确认模块（默认 hello）→ 等九步跑完 → 浏览器打开末尾打印的一次性链接设管理员。约 5–10 分钟。
+浏览器里会打开本地七屏向导：粘 CF API Token → 选域名（没有就用免费的 workers.dev）→ 确认模块与配置 → 等九步装配日志跑完 → 在完成页点击一次性激活入口设管理员。约 5–10 分钟。
 
 > 贡献者 / 仓库内运行：`git clone` → `pnpm install` → `pnpm -r build` → `node app/installer/dist/unself.mjs`（同一条装配路径）。
 
@@ -65,7 +65,7 @@ unself deploy
 - **`core/` —— 开发用的依赖库**：`contracts`（协议，内部）、`sdk`（模块作者唯一要装的包，发 npm：`@unself/sdk`）、`ui`（UI 基元与 tokens）、`control-plane`（可复用控制面）、`adapters/{mail-smtp,provisioning/stalwart}`。
 - **`app/` —— 开发好的 app，可被装配**（全部发 npm）：
   - **`app/workbench`** = **平台运行体**，一个包两半边：`src/` 后端（core Worker）、`web/` 前端（工作台 SPA）、`migrations/` 数据库迁移。它的产物（`dist/worker.js` + `dist/web` + `migrations`）**随该包发布**。
-  - **`app/installer`** = **部署工具**：本地 Web 向导 + `unself` CLI + 九步装配引擎（`src/engine`）。它从 `node_modules/@unself/workbench` 拿产物，不内嵌、也不从源码现构建。
+  - **`app/installer`** = **部署工具**：本地 Vue Web 向导 + `unself` CLI + 九步装配引擎（`src/engine`）。它从 `node_modules/@unself/workbench` 拿产物，不内嵌、也不从源码现构建。
   - **`app/modules/hello`、`app/modules/chat`** = 官方模块，与第三方模块**同一种包**。
 
 ## 开发
