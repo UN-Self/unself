@@ -77,6 +77,29 @@ describe('needsTotalTls（Universal SSL 覆盖边界）', () => {
 });
 
 describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
+  it.each([undefined, 'old-shell'])('Shell 路由首建或旧目标 %s 在冒烟前收敛且二跑不重复写', async (oldScript) => {
+    const pattern = 'team.example.com/*';
+    const fake = makeCfRestFake({ zones: { 'example.com': 'zone-1' }, routes: oldScript ? [[pattern, oldScript]] : [] });
+    const options = {
+      rootDir: ROOT,
+      client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+      yes: true,
+      allowAdopt: true,
+      configOverride: { domain: 'team.example.com', modules: [], storage: { provider: 'r2' as const, bucket: 'unself-storage' } },
+      fetchJwks: async () => FIXED_JWKS,
+      cleanupCustomDomains: async () => {},
+      http: { smoke: async () => {
+        expect(fake.state.routes.get(pattern)).toBe('unself-workbench');
+        return [];
+      } },
+    };
+    await runSteps(options);
+    const writes = () => fake.calls.filter(c => c.url.includes('/workers/routes') && ['POST', 'PUT'].includes(c.method));
+    expect(writes()).toHaveLength(1);
+    await runSteps(options);
+    expect(fake.state.routes.get(pattern)).toBe('unself-workbench');
+    expect(writes()).toHaveLength(1);
+  });
   it('空账号首跑：请求序覆盖九步；二跑零 create/put（收敛）', { timeout: 120_000 }, async () => {
     const first = makeCfRestFake();
     const summary1 = await runSteps({
@@ -538,7 +561,8 @@ describe('#273 workers.dev 模块可达 / 自有域回归', () => {
       const url = String(input);
       calls.push(url);
       if (url.includes('unself-module-hello')) throw new TypeError('fetch failed');
-      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (/\/(login|setup)$/.test(url)) return new Response('<!doctype html><html></html>', { headers: { 'content-type': 'text/html' } });
+      return new Response(JSON.stringify({ ok: true, service: 'workbench' }), { status: 200, headers: { 'content-type': 'application/json' } });
     });
     await expect(
       runSteps({

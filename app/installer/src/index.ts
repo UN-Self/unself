@@ -5,4 +5,4 @@ export * from './lib/pathline';
 export * from './web/state';
 export { run, parseArgs, resolveCurrentInstance, type RunOptions } from './cli';
 export { effectiveConfig, runDeploy, type DeployResult, type RunDeployOptions } from './deploy';
-export { createWizardServer, startWizardServer, renderPage, type WizardDeps, type ServeOptions } from './web/server';
+export { createWizardServer, startWizardServer, viewStepOf, type WizardDeps, type ServeOptions } from './web/server';

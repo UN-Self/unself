@@ -35,7 +35,7 @@ describe('coreWranglerConfig（③生成的部署配置）', () => {
     expect(d1.find((d) => d.binding === 'MODULES_DB')?.database_id).toBe('modules-uuid');
     const assets = (cfg as unknown as { assets: { not_found_handling: string; run_worker_first: string[] } }).assets;
     expect(assets.not_found_handling).toBe('single-page-application');
-    expect(assets.run_worker_first).toContain('/api/*');
+    expect(assets.run_worker_first).toBe(true);
     expect(cfg.routes).toEqual([{ pattern: 'team.example.com/*', zone_name: 'example.com' }]);
   });
 

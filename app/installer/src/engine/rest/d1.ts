@@ -166,7 +166,8 @@ async function rawPut(url: string, body: Uint8Array, client: RestClient): Promis
   const res = await client.fetchImpl(url, {
     method: 'PUT',
     headers: { 'Content-length': String(body.length) },
-    body,
+    // Uint8Array<ArrayBufferLike> → BufferSource 收窄（DOM lib 下 ArrayBufferLike 泛型不自动匹配）
+    body: body as Uint8Array<ArrayBuffer>,
   });
   const text = await res.text();
   if (!res.ok) {

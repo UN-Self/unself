@@ -20,7 +20,7 @@ function fakeRun() {
   return { calls, fn };
 }
 
-/** 最小「构建产物」：assets/frontend/index.html + assets/index-<hash>.js（#284：vite outDir = 模块包内 assets/frontend）。 */
+/** 最小「构建产物」（默认分支，rootDir=仓库根形态）：<root>/app/modules/chat/assets/frontend。 */
 async function seedDist(root: string, hash: string): Promise<string> {
   const dist = join(root, 'app/modules/chat/assets/frontend');
   await mkdir(join(dist, 'assets'), { recursive: true });
@@ -44,6 +44,30 @@ describe('buildChatFrontendAssets（#219）', () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it('vite 构建的 cwd：buildCwd 优先，缺省回 rootDir（实例目录不在 pnpm workspace 内必炸——2026-09-22 走查实锤）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'chatfe-'));
+    const outDir = join(root, '.deploy/cloudflare');
+    const cwds: Array<string | undefined> = [];
+    const run = async (_cmd: string, _args: string[], cwd: string) => {
+      cwds.push(cwd);
+      throw new Error('STOP');
+    };
+    await expect(
+      buildChatFrontendAssets({ rootDir: root, outDir, log: () => {}, run }),
+    ).rejects.toThrow('STOP');
+    await expect(
+      buildChatFrontendAssets({
+        rootDir: root,
+        outDir,
+        log: () => {},
+        run,
+        buildCwd: '/repo/app/modules/chat',
+      }),
+    ).rejects.toThrow('STOP');
+    expect(cwds).toEqual([root, '/repo/app/modules/chat']);
+    await rm(root, { recursive: true, force: true });
+  });
+
   it('产物搬运：dist → outDir/modules/chat/assets/frontend（含 index.html 与资产）', async () => {
     const root = await mkdtemp(join(tmpdir(), 'chatfe-'));
     await seedDist(root, 'AAAA');
@@ -57,6 +81,31 @@ describe('buildChatFrontendAssets（#219）', () => {
     expect(await (await import('node:fs/promises')).readFile(join(dest, 'assets/index-AAAA.js'), 'utf8')).toBe('// AAAA');
     expect(calls).toHaveLength(1); // 注入的 run 未被绕过
     await rm(root, { recursive: true, force: true });
+  });
+
+  it('产物恒在 <chat 包根>/assets/frontend：buildCwd 明示时按 buildCwd 取（mod.dir 形态），缺省时按 rootDir 仓库布局取——两分支都不会「报成功但无产物」（codex-walk 2026-09-22 实锤）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'chatfe-'));
+    const outDir = join(root, '.deploy/cloudflare');
+    const buildCwd = await mkdtemp(join(tmpdir(), 'chatfe-src-'));
+    // 产物落 <buildCwd>/assets/frontend（vite 在前端包目录跑，outDir 相对 vite root 解析）
+    const dist = join(buildCwd, 'assets/frontend');
+    await mkdir(join(dist, 'assets'), { recursive: true });
+    await writeFile(join(dist, 'index.html'), '<script src="./assets/index-DDDD.js"></script>');
+    await writeFile(join(dist, 'assets/index-DDDD.js'), '// DDDD');
+    const { calls, fn } = fakeRun();
+    const assetsDir = await buildChatFrontendAssets({
+      rootDir: root,
+      outDir,
+      log: () => {},
+      run: fn,
+      buildCwd,
+    });
+    expect(assetsDir).toBe('chat/assets/frontend');
+    const html = await (await import('node:fs/promises')).readFile(join(outDir, 'modules/chat/assets/frontend/index.html'), 'utf8');
+    expect(html).toContain('index-DDDD.js');
+    expect(calls).toHaveLength(1);
+    await rm(root, { recursive: true, force: true });
+    await rm(buildCwd, { recursive: true, force: true });
   });
 
   it('升级路径：旧哈希残留 → 装配后清除（无条件重写，#162 同款纪律）', async () => {

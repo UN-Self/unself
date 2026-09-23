@@ -33,7 +33,7 @@ import { CredentialsMissingError, credentialsMissingMessage, resolveAuth } from 
 import type { TokenSourceKind } from './auth';
 import { domainProblem } from './domain';
 import { createKeypair, JWT_SECRET_NAME, publicJwksJson } from './keypair';
-import { ensureRoute, ensureTotalTls, ensureZoneARecord, findZone, removeLegacyCustomDomains, removeRoutesForPatterns } from './rest/zones';
+import { ensureRoute, ensureTotalTls, ensureZoneARecord, findZone, listRoutes, removeLegacyCustomDomains, removeRoutesForPatterns } from './rest/zones';
 import { ensureDatabases, validateS3Storage } from './provision';
 import { ensureD1 } from './rest';
 import {
@@ -612,6 +612,13 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     } else {
       await ensureZoneARecord(client, resolvedZone!, config.domain, rep.log);
     }
+    // REST 上传不执行生成的 wrangler 配置；Shell 路由必须单独收敛到本次上传目标。
+    const pattern = `${config.domain}/*`;
+    await ensureRoute(client, resolvedZone!.id, pattern, provisioned.coreName, rep.log);
+    const route = (await listRoutes(client, resolvedZone!.id)).find(r => r.pattern === pattern);
+    if (route?.script !== provisioned.coreName) {
+      throw new Error(`Shell 路由未生效：${pattern} → ${route?.script ?? '(未绑定)'}，预期 ${provisioned.coreName}`);
+    }
   }
   const baseUrl = await resolveBaseUrl(
     input,
@@ -677,15 +684,21 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     const isChat = mod.id === CHAT_MODULE_ID;
     // chat 前端资产（#284）：包内 `assets/frontend/**` 就是预构建产物（发布形态）；
     // 源码形态（仓库 workspace 符号链接 / file:）走 vite 重建（#73：不吞旧产物）。
+    // packed 判定与 resolveManifest 同款双轨（manifest.json = packed / manifest.yaml = source）：
+    // 只认 .json 的话源码形态（yaml）恒走 vite——而实例目录不在 pnpm workspace 内，
+    // `pnpm --filter` 必炸 ERR_PNPM_RECURSIVE_EXEC_NO_PACKAGE（2026-09-22 走查实锤）。
     const chatPrebuiltDir = isChat && mod.dir && existsSync(join(mod.dir, 'assets', 'frontend'))
       ? join(mod.dir, 'assets', 'frontend')
       : undefined;
+    const chatPackedForm = isChat && mod.dir && existsSync(join(mod.dir, 'manifest.json'));
     const chatAssetsDir = isChat
       ? await (input.buildChatFrontend ??
           ((i: { rootDir: string; outDir: string; log: (msg: string) => void }) =>
             buildChatFrontendAssets({
               ...i,
-              ...(existsSync(join(mod.dir, 'manifest.json')) && chatPrebuiltDir ? { prebuiltDir: chatPrebuiltDir } : {}),
+              // vite 构建的 cwd：chat 包根（pnpm --filter 需 workspace 内；实例目录必炸，见 chat-frontend.ts）
+              buildCwd: mod.dir,
+              ...(chatPackedForm && chatPrebuiltDir ? { prebuiltDir: chatPrebuiltDir } : {}),
             })))({
           rootDir,
           outDir: provisioned.outDir,
@@ -725,6 +738,11 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
         mount: config.domain ? `/m/${mod.id}` : '',
         // 决策 #63/#73：模块页自带 frame-ancestors，值 = 壳 origin（跨子域 iframe 才不被裁）
         shellOrigin: originOf(baseUrl),
+        // Cloudflare 只从 main_module 读取 DO 类；wrapper 必须把 app.js 的具名导出继续导出。
+        // bindings 与 migrations 均为类声明来源，取并集以覆盖本次 new_sqlite_classes。
+        namedExports: isChat && chatPkg
+          ? [...chatPkg.doBindings.map((binding) => binding.class_name), ...chatPkg.migrations.flatMap((migration) => migration.new_sqlite_classes)]
+          : [],
       }),
     );
     // 模块上传：wrapper(main) + app.js(bundle) + SDK 资产目录
@@ -801,6 +819,9 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
         assets: {
           dir: moduleAssetsDir,
           binding: 'ASSETS',
+          // 模块 wrapper 明确请求 /index.html。保留该 URL，避免 CF Assets 的
+          // auto-trailing-slash 将它改写成 / 并把 /m/<id>/ 变成 307。
+          htmlHandling: 'none',
           notFoundHandling: 'none',
           runWorkerFirst: true,
         },
@@ -846,10 +867,16 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     }
   }
 
-  // ④′ 未选模块（config 未列出但 lock 里有 = 上次装过）：删除其 zone 路由 /m/<id>/*。
-  if (removedIds.length > 0) {
+  // ④′ 未选模块：lock 是来源层的历史记录，但注册表才是实例线上状态的真值。
+  // 两者取并集，覆盖「向导临时覆盖 config、lock 没记录」的重跑场景。
+  const selectedIds = new Set(selected.map((mod) => mod.id));
+  const registryBefore = await coreCp.readRegistry();
+  const staleRegistryIds = registryBefore.filter((entry) => entry.enabled && !selectedIds.has(entry.id)).map((entry) => entry.id);
+  const disabledIds = [...new Set([...removedIds, ...staleRegistryIds])];
+  // 删除未选模块的 zone 路由 /m/<id>/*。
+  if (disabledIds.length > 0) {
     if (!config.domain || !resolvedZone) {
-      rep.log(`跳过未选模块路由删除（未配置 domain，无 zone 路由）：${removedIds.join('、')}`);
+      rep.log(`跳过未选模块路由删除（未配置 domain，无 zone 路由）：${disabledIds.join('、')}`);
     } else {
       const cleanupRoutes = input.cleanupModuleRoutes ?? (async (info) => {
         await removeRoutesForPatterns(
@@ -862,7 +889,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       await cleanupRoutes({
         zoneId: resolvedZone.id,
         domain: config.domain,
-        moduleIds: removedIds,
+        moduleIds: disabledIds,
         log: rep.log,
       });
     }
@@ -901,7 +928,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     await coreCp.upsertModule({ id: mod.id, enabled: true, manifest: snapshot });
     rep.log(`upsert ${mod.id}（enabled=1，快照刷新${declaration ? `，落点 ${declaration}` : ''}）`);
   }
-  for (const mod of removedIds.map((id) => ({ id }))) {
+  for (const mod of disabledIds.map((id) => ({ id }))) {
     await coreCp.toggleModule(mod.id, false);
     rep.log(`disable ${mod.id}（not_deployed）`);
   }
@@ -967,6 +994,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     : await smokeCheck({
         coreUrl: baseUrl,
         modules: moduleTargets,
+        verifyWorkbench: true,
       });
   for (const r of smoke) {
     rep.log(`${r.ok ? '✓' : '✗'} ${r.name} → ${r.url}${r.detail ? `（${r.detail}）` : ''}`);

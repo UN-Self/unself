@@ -267,11 +267,9 @@ export function resolveSdkAssetsDir(rootDir: string): string {
   return join(pkgDir, 'dist');
 }
 
-/** core 资产的 run_worker_first（#273）：domain 形态保持原精确前缀数组（生产路径零变更）；
- * workers.dev 形态 = true——壳 HTML 必须经 worker 才能下发按注册表生成的 frame-src 白名单
- * （跨子域模块 iframe 需 shell 响应头含模块 origin；静态资产路径的 `_headers` 是静态值改不了）。 */
-export function coreRunWorkerFirst(config: UnselfConfig): boolean | string[] {
-  return config.domain ? ['/api/*', '/.well-known/*', '/setup*'] : true;
+/** 两种域名形态都经生产入口：统一修复旧资产 MIME，并给 HTML 下发动态 frame-src。 */
+export function coreRunWorkerFirst(_config: UnselfConfig): boolean | string[] {
+  return true;
 }
 
 /** 生成 core 部署配置（含 SPA fallback + run_worker_first + 真实 D1 id + route）。 */
@@ -431,6 +429,24 @@ export interface ModuleWrapperOptions {
   mount?: string;
   /** 壳 origin（壳上下文注入值：frame-ancestors + `unself-shell-origin` meta）；null/缺省 = 不注入任何壳上下文。 */
   shellOrigin?: string | null;
+  /**
+   * 必须由 Cloudflare 主入口具名导出的 Durable Object 类。
+   * wrapper 只代理 default fetch；ESM 具名导出不会自动穿透 import，故在此显式转导。
+   */
+  namedExports?: string[];
+}
+
+const JS_BINDING_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/** 将包配置的 DO 类名转为可安全嵌入 ESM import/export 的列表。 */
+function wrapperNamedExports(names: readonly string[]): string[] {
+  const unique = [...new Set(names)];
+  for (const name of unique) {
+    if (!JS_BINDING_NAME.test(name)) {
+      throw new Error(`模块 Durable Object 类名不是合法 JavaScript 标识符：${name}`);
+    }
+  }
+  return unique;
 }
 
 /**
@@ -446,9 +462,12 @@ export interface ModuleWrapperOptions {
 export function prefixStripWrapperSource(moduleId: string, options: ModuleWrapperOptions = {}): string {
   const mount = options.mount ?? `/m/${moduleId}`;
   const shellOrigin = options.shellOrigin ?? null;
+  const namedExports = wrapperNamedExports(options.namedExports ?? []);
+  const namedImport = namedExports.length > 0 ? `, { ${namedExports.join(', ')} }` : '';
+  const namedExport = namedExports.length > 0 ? `\nexport { ${namedExports.join(', ')} };\n` : '';
   return `// SPDX-License-Identifier: AGPL-3.0-only
 // 由装配器生成：前缀剥除（mount=${mount || '(根挂载)'}）+ ASSETS 回退 + 壳上下文（frame-ancestors + shell-origin meta）。
-import worker from './app.js';
+import worker${namedImport} from './app.js';${namedExport}
 
 const PREFIX = '${mount}';
 const SHELL_ORIGIN = ${shellOrigin ? `'${shellOrigin}'` : 'null'};

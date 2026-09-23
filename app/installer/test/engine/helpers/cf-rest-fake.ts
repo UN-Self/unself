@@ -303,6 +303,11 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
         return env({ id: `rt-${state.routes.size}` });
       }
       const routeUpd = rest.match(/^\/workers\/routes\/(.+)$/);
+      if (routeUpd && method === 'PUT') {
+        const { pattern, script } = body as { pattern: string; script: string };
+        state.routes.set(pattern, script);
+        return env({ id: routeUpd[1] });
+      }
       if (routeUpd && method === 'DELETE') {
         const id = routeUpd[1]!;
         // id 形如 rt-<index>；同时支持 pattern 直接删除（测试便利）

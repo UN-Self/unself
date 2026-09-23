@@ -10,8 +10,11 @@
 # - blake3-wasm 是 createRequire 的运行时路径（wasm 用 fs 加载，进不了 bundle）→ 列为直接依赖，由 npm 随包装上。
 # - 平台产物（core worker bundle / 壳 / 迁移 SQL）**不再随安装器内嵌**（#303 修订 #257）：
 #   它们是 @unself/workbench 的预构建产物、随该包发布，引擎从 node_modules 读——installer 只出 CLI。
+# - 向导 SPA（web/，Vue + @unself/ui）先经 vite build 产出 dist/web（2026-09-22 Vue 迁移）：
+#   server.ts 运行时按 import.meta.url 定位 dist/web，故它必须与 unself.mjs 一起随包发布。
 set -e
 cd "$(dirname "$0")/.."
+./node_modules/.bin/vite build
 ./node_modules/.bin/esbuild scripts/bundle-entry.ts \
   --bundle --platform=node --format=esm --target=node22 \
   "--banner:js=import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" \

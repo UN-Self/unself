@@ -7,12 +7,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createWizardServer, renderPage, startWizardServer } from '../src/web/server';
+import { createWizardServer, setCredentialSource, startWizardServer, viewStepOf } from '../src/web/server';
 import { initialWizardState, type StorageLevel, type WizardEnvHint, type WizardModuleConfig, type WizardState, type WizardStorageOption } from '../src/web/state';
 
 let holder: { state: WizardState };
 let base: string;
 let close: () => Promise<void>;
+/** deploy 替身收到的调用参数（重跑保留凭证等行为断言用）。 */
+let deployCalls: Array<Record<string, unknown>>;
 
 /** ①步环境提示基线：OAuth 可用、非 CI、非多级子域（#246 envHint 缺省语义）。 */
 const HINT: WizardEnvHint = { hasEnvToken: false, oauthUsable: true, needsTotalTls: false, ci: false };
@@ -20,6 +22,7 @@ const HINT: WizardEnvHint = { hasEnvToken: false, oauthUsable: true, needsTotalT
 beforeEach(async () => {
   const root = mkdtempSync(join(tmpdir(), 'unself-wizsrv-'));
   holder = { state: initialWizardState(join(root, 'demo', 'unself'), { modules: ['hello'] }) };
+  deployCalls = [];
   const { server, port } = await startWizardServer({
     deps: {
       getState: () => holder.state,
@@ -28,8 +31,9 @@ beforeEach(async () => {
       },
       hasEnvToken: false,
       envHint: { ...HINT },
-      deploy: async ({ onEvent }) => {
-        onEvent('九步进度（替身）：步骤 1/9');
+      deploy: async (input) => {
+        deployCalls.push(input as unknown as Record<string, unknown>);
+        input.onEvent('九步进度（替身）：步骤 1/9');
         await new Promise((r) => setTimeout(r, 20));
         return { baseUrl: 'https://unself-workbench.test.workers.dev', setupToken: 'tok-123' };
       },
@@ -55,14 +59,38 @@ async function post(path: string, body: unknown): Promise<{ status: number; json
   return { status: res.status, json: (await res.json()) as Record<string, unknown> };
 }
 
-describe('GET /（页面）', () => {
-  it('页头常驻显示实例目录（可复制：code#instance-path + 复制按钮）', async () => {
+describe('GET /（页面：SPA 静态产物）', () => {
+  it('返回构建出的 SPA HTML（text/html + no-store），入口挂载点在页', async () => {
     const res = await fetch(`${base}/`);
     expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(res.headers.get('cache-control')).toBe('no-store');
     const html = await res.text();
-    expect(html).toContain(`id="instance-path"`);
-    expect(html).toContain(holder.state.instancePath);
-    expect(html).toContain('复制');
+    expect(html).toContain('id="app"');
+  });
+
+  it('构建资产（JS/CSS）按正确 MIME 服务；未知路径 404 JSON', async () => {
+    const html = await (await fetch(`${base}/`)).text();
+    const m = /src="(.+\.js)"/.exec(html);
+    expect(m).not.toBeNull();
+    const js = await fetch(`${base}${m![1]}`);
+    expect(js.status).toBe(200);
+    expect(js.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+    const missing = await fetch(`${base}/assets/nope-${Date.now()}.js`);
+    expect(missing.status).toBe(404);
+    expect((await missing.json() as Record<string, unknown>).problem).toContain('未知路径');
+  });
+
+  it('/api/meta 下发 token 深链接（权限预选真源）+ 主题变量（值唯一真源 = 契约默认主题）', async () => {
+    const meta = (await (await fetch(`${base}/api/meta`)).json()) as Record<string, unknown>;
+    const link = String(meta.tokenDeepLink);
+    expect(link).toContain('permissionGroupKeys=');
+    expect(link).toContain(encodeURIComponent('workers_kv_storage'));
+    expect(link).not.toContain(encodeURIComponent('"key":"workers_kv"'));
+    const vars = String(meta.themeVars);
+    expect(vars).toContain('--unself-color-primary:');
+    expect(vars).toContain('--unself-duration-fast:');
+    expect(vars).toContain('--unself-motion-press-scale:');
   });
 });
 
@@ -195,6 +223,58 @@ describe('失败路径（三要素）', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+  it('deploy 抱 10000（KV 端点，token 路径）→ failed + 点名 KV 权限组 + 深链接重建（非 OAuth 文案）', async () => {
+    const { server, port } = await startWizardServer({
+      deps: {
+        getState: () => holder.state,
+        setState: (s) => {
+          holder.state = s;
+        },
+        hasEnvToken: false,
+        envHint: { ...HINT },
+        deploy: async () => {
+          throw new Error('CF API GET /accounts/acc123/storage/kv/namespaces 失败：10000 Authentication error');
+        },
+      },
+    });
+    const b3 = `http://127.0.0.1:${port}`;
+    const post3 = async (path: string, body: unknown): Promise<void> => {
+      const r = await fetch(`${b3}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(r.status).toBeLessThan(400);
+    };
+    try {
+      // 同一实例内走完①②③（credentialSource 记 'token'——凭证来源是实例级闭包状态）
+      await post3('/api/step1', { token: 'A'.repeat(40) });
+      await post3('/api/step2', { choice: 'workers' });
+      await post3('/api/step3', { modules: 'hello' });
+      holder.state.step = 'ready';
+      const r4 = await fetch(`${b3}/api/step4`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(r4.status).toBe(202);
+      for (let i = 0; i < 40; i++) {
+        const st = (await (await fetch(`${b3}/api/state`)).json()) as Record<string, unknown>;
+        if (st.step === 'failed') {
+          const err = st.error as Record<string, unknown>;
+          expect(err.owner).toBe('token');
+          expect(String(err.cause)).toContain('10000');
+          expect(String(err.fix)).toContain('Workers KV Storage');
+          expect(String(err.fix)).not.toContain('wrangler OAuth');
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(holder.state.step).toBe('failed');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });
 
 describe('幂等标语与重跑（⑥）', () => {
@@ -221,6 +301,33 @@ describe('幂等标语与重跑（⑥）', () => {
     expect(final?.step).toBe('done');
     expect((final?.result as Record<string, unknown>).baseUrl).toBe('https://unself-workbench.test.workers.dev');
   });
+
+  it('重跑不清凭证：failed → step4 → 收敛全程不再回①（2026-09-22 走查实锤：重填 token 违背幂等收敛）', async () => {
+    // 与上一测同一条链：①②③ ready → 人为 failed → step4 重跑；部署替身睡 20ms。
+    // 重跑后 state 回 auth（reset 语义不变），但凭证保留：done 前不需要任何 POST /api/step1。
+    await post('/api/step1', { token: 'A'.repeat(40) });
+    await post('/api/step2', { choice: 'workers' });
+    await post('/api/step3', { modules: 'hello' });
+    holder.state.step = 'failed';
+    holder.state.error = { cause: 'x', owner: 'code', fix: 'y' };
+
+    const r = await post('/api/step4', {});
+    expect(r.status).toBe(202);
+    // 铁证：deploy 替身收到与①粘贴一致的 token（保留而非丢弃）。
+    expect(deployCalls).toHaveLength(1);
+    expect((deployCalls[0] as { token?: string }).token).toBe('A'.repeat(40));
+    // 收敛回 done（未插入任何 step1 重验）。
+    let final: Record<string, unknown> | null = null;
+    for (let i = 0; i < 40; i++) {
+      const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+      if (st.step === 'done' || st.step === 'failed') {
+        final = st;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(final?.step).toBe('done');
+  });
 });
 
 describe('createWizardServer 裸构造（不 listen 也可导出）', () => {
@@ -239,48 +346,23 @@ describe('createWizardServer 裸构造（不 listen 也可导出）', () => {
   });
 });
 
-describe('① 折叠入口默认态（#246 决策 #66：默认不露，露出条件任一）', () => {
-  it('oauthUsable=true 且非多级子域非 CI → details 无 open（默认收起）', () => {
-    const html = renderPage(initialWizardState('/tmp/x/unself'), HINT);
-    expect(html).toContain('<details class="auth-fold">');
-    expect(html).not.toMatch(/<details class="auth-fold"\s+open/);
+describe('① 折叠入口与凭证面（SPA 行为：/api/meta + /api/state 投影）', () => {
+  it('/api/state 投影 envHint（四布尔）且不含 token 明文；credentialSource 未过①为 null', async () => {
+    const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    const hint = st.envHint as Record<string, unknown>;
+    expect(hint).toMatchObject({ hasEnvToken: false, oauthUsable: true, needsTotalTls: false, ci: false });
+    expect(st.credentialSource).toBeNull();
+    expect(JSON.stringify(st)).not.toContain('token');
   });
 
-  it('oauthUsable=false → 折叠块默认展开 + 人话「没有可借用的 wrangler OAuth」', () => {
-    const html = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, oauthUsable: false });
-    expect(html).toContain('<details class="auth-fold" open>');
-    expect(html).toContain('没有可借用的 wrangler OAuth');
-  });
-
-  it('ci=true → 折叠块默认展开 + 顶部横幅引导 CLOUDFLARE_API_TOKEN', () => {
-    const html = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, ci: true });
-    expect(html).toContain('<details class="auth-fold" open>');
-    expect(html).toContain('CI/无浏览器环境');
-    expect(html).toContain('CLOUDFLARE_API_TOKEN');
-  });
-
-  it('needsTotalTls=true → 折叠块默认展开 + Total TLS 提示行', () => {
-    const html = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, needsTotalTls: true });
-    expect(html).toContain('<details class="auth-fold" open>');
-    expect(html).toContain('多级子域需要 Total TLS');
-    expect(html).toContain('OAuth 不覆盖，需 API Token');
-  });
-
-  it('oauthUsable=true → OAuth 信息卡提示「什么都不用填，直接点下面下一步」；false 则无此卡', () => {
-    const yes = renderPage(initialWizardState('/tmp/x/unself'), HINT);
-    expect(yes).toContain('检测到本机 wrangler OAuth');
-    expect(yes).toContain('什么都不用填，直接点下面「下一步」');
-    const no = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, oauthUsable: false });
-    expect(no).not.toContain('已检测到本机 Cloudflare 授权');
-  });
-
-  it('hasEnvToken=true → 「已检测」态照旧（envHint.hasEnvToken 向后兼容 hasEnvToken 语义）', () => {
-    const html = renderPage(initialWizardState('/tmp/x/unself'), { ...HINT, hasEnvToken: true });
-    expect(html).toContain('已检测到环境变量 CLOUDFLARE_API_TOKEN');
-    // 已带凭证时不再出现「没有可借用」式否定引导
-    expect(html).not.toContain('没有可借用的 wrangler OAuth');
+  it('过了①（token 真验路径）→ credentialSource=token（SPA 据此分流②屏 zone 下拉）', async () => {
+    setCredentialSource(null);
+    await post('/api/step1', { token: 'A'.repeat(40) });
+    const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    expect(st.credentialSource).toBe('token');
   });
 });
+
 
 describe('envHint 投影与多级子域更新（#246）', () => {
   it('/api/state 带 envHint（四布尔，不含 token 明文）', async () => {
@@ -292,29 +374,22 @@ describe('envHint 投影与多级子域更新（#246）', () => {
     expect(JSON.stringify(st)).not.toContain('A'.repeat(40));
   });
 
-  it('② 选 custom 多级子域 → 之后 envHint.needsTotalTls=true，页面出现 Total TLS 提示', async () => {
+  it('② 选 custom 多级子域 → 之后 envHint.needsTotalTls=true（SPA 横幅/折叠展开依据）', async () => {
     await post('/api/step1', { token: 'A'.repeat(40) });
     const r2 = await post('/api/step2', { choice: 'custom', domain: 'a.team.example.com' });
     expect(r2.status).toBe(200);
 
     const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
     expect((st.envHint as Record<string, unknown>).needsTotalTls).toBe(true);
-
-    const html = await (await fetch(`${base}/`)).text();
-    expect(html).toContain('多级子域需要 Total TLS');
-    // #307 六步分屏：auth 折叠只在①屏渲染（banner 常驻提示 Total TLS；①屏 details 默认展开）
-    expect(html).toContain('data-step="modules"');
   });
 
-  it('② 选 custom 单级子域（zone 下一级）→ needsTotalTls 保持 false，折叠收起', async () => {
+  it('② 选 custom 单级子域（zone 下一级）→ needsTotalTls 保持 false', async () => {
     await post('/api/step1', { token: 'A'.repeat(40) });
     const r2 = await post('/api/step2', { choice: 'custom', domain: 'team.example.com' });
     expect(r2.status).toBe(200);
 
     const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
     expect((st.envHint as Record<string, unknown>).needsTotalTls).toBe(false);
-    const html = await (await fetch(`${base}/`)).text();
-    expect(html).not.toMatch(/<details class="auth-fold"\s+open/);
   });
 
   it('② 选 workers.dev → 不触发多级子域（免费域永远不需要 Total TLS）', async () => {
@@ -433,86 +508,85 @@ describe('① 回退重提换 token（#309② 后续）：hasToken 后重提不�
     await fetch(`${base}/api/zones`);
     expect(seen.zoneToken).toBe('A'.repeat(40));
   });
-});
 
-describe('① 凭证屏改版：折叠页内嵌输入框，全屏唯一按钮在底部', () => {
-  const html = renderPage(initialWizardState('/tmp/x/authfold/unself'), HINT);
-
-  it('折叠页（含密码框）在 form-auth 内部；不再有 OAuth 独立按钮（双按钮回归防）', () => {
-    // details 在 form 开标签之后、form 收标签之前（输入框属于表单提交域）
-    expect(html).toMatch(/<form id="form-auth">(?:(?!<\/form>)[\s\S])*<details class="auth-fold"/);
-    expect(html).toContain('type="password" name="token"');
-    expect(html).not.toContain('btn-oauth-skip');
-    expect(html).not.toContain('直接下一步');
-  });
-
-  it('提交按钮初始文案「下一步」；「使用 token 下一步」由脚本在输入后切换', () => {
-    expect(html).toMatch(/<button class="btn-primary" type="submit">下一步<\/button>/);
-    expect(html).toContain("'使用 token 下一步'");
-  });
-
-  it('.actions 统一居中（justify-content: center）', () => {
-    expect(html).toMatch(/\.actions \{[^}]*justify-content: center/);
+  it('② 屏布局跟随凭证来源（数据面）：OAuth→oauth 投影；换粘 token→token 投影（SPA 据此分流）', async () => {
+    const src = async (): Promise<unknown> => {
+      const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+      return st.credentialSource;
+    };
+    // OAuth 直跳（此 holder 的 envHint oauthUsable=true，非 CI）
+    expect((await post('/api/step1', { token: '' })).status).toBe(200);
+    expect(await src()).toBe('oauth');
+    // 回①换粘 token → 投影切 token（② 屏渲染出 zone 下拉的数据前提）
+    expect((await post('/api/step1', { token: 'A'.repeat(40) })).status).toBe(200);
+    expect(await src()).toBe('token');
+    // 再换回 OAuth 直跳 → 手填布局前提
+    expect((await post('/api/step1', { token: '' })).status).toBe(200);
+    expect(await src()).toBe('oauth');
   });
 });
 
-describe('页面脚本必须可解析（防「HTTP 200 但所有按钮都点不动」）', () => {
-  /** 从渲染页里取出全部内联 <script> 源码。 */
-  function inlineScripts(html: string): string[] {
-    return [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map((m) => m[1] as string);
-  }
-
-  it('渲染页的内联脚本能被 JS 引擎解析（语法错 = 整页按钮全挂）', () => {
-    const html = renderPage(initialWizardState('/tmp/x/unself'), HINT);
-    const scripts = inlineScripts(html);
-    expect(scripts.length).toBeGreaterThan(0);
-    for (const src of scripts) {
-      // `new Function` 只做语法解析（不执行）；失败会抛 SyntaxError。
-      expect(() => new Function(src)).not.toThrow();
-    }
+describe('① 凭证屏改版（SPA 组件行为在组件测试覆盖；服务端契约在此）', () => {
+  it('唯一提交端点 /api/step1：空值 + OAuth 可用 → 直跑进②（无独立 OAuth 按钮 API）', async () => {
+    const r = await post('/api/step1', { token: '' });
+    expect(r.status).toBe(200);
+    expect(r.json.step).toBe('domain');
+    expect(holder.state.hasToken).toBe(true);
   });
 
-  it('脚本里引用的元素 id 都在六屏渲染（#307 分屏：脚本按步共用，跨屏引用必须在任一屏存在）', () => {
-    const steps: WizardState['step'][] = ['auth', 'domain', 'modules', 'module-config', 'storage', 'ready', 'deploying', 'failed', 'done'];
-    const htmls: string[] = [];
-    for (const step of steps) {
-      const base0 = initialWizardState('/tmp/x/unself');
-      if (step === 'failed') {
-        htmls.push(renderPage({ ...base0, step, error: { cause: 'c', owner: 'code', fix: 'f' } }, HINT));
-        continue;
-      }
-      if (step === 'done') {
-        htmls.push(renderPage({ ...base0, step, result: { baseUrl: 'https://x', setupUrl: '/setup?token=t' } }, HINT));
-        htmls.push(renderPage({ ...base0, step, result: { baseUrl: 'https://x', setupUrl: null } }, HINT));
-        continue;
-      }
-      if (step === 'storage') {
-        htmls.push(renderPage({ ...base0, step, storageOptions: [{ id: 'demo', accepts: ['core'] }] }, HINT));
-        continue;
-      }
-      if (step === 'module-config') {
-        htmls.push(
-          renderPage(
-            { ...base0, step, moduleConfigs: [{ id: 'demo', fields: [{ key: 'K', label: 'k', type: 'string' as const }] }] },
-            HINT,
-          ),
-        );
-        continue;
-      }
-      htmls.push(renderPage({ ...base0, step }, HINT));
-    }
-    for (const hint of [HINT, { ...HINT, oauthUsable: false }, { ...HINT, ci: true }, { ...HINT, needsTotalTls: true }, { ...HINT, hasEnvToken: true }]) {
-      htmls.push(renderPage(initialWizardState('/tmp/x/unself'), hint));
-    }
-    const allHtml = htmls.join('\n');
-    const src = htmls.map((h) => inlineScripts(h).join('\n')).join('\n');
-    const ids = [...new Set([...src.matchAll(/\$\('([^']+)'\)/g)].map((m) => m[1] as string))];
-    expect(ids.length).toBeGreaterThan(0);
-    for (const id of ids) {
-      expect(allHtml).toContain(`id="${id}"`);
+  it('OAuth 不可用 + 空值 → 400「token 为空」（唯一按钮路径的唯一空态拒绝）', async () => {
+    const { server, port } = await startWizardServer({
+      deps: {
+        getState: () => holder.state,
+        setState: (st) => {
+          holder.state = st;
+        },
+        hasEnvToken: false,
+        envHint: { ...HINT, oauthUsable: false },
+        deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
+      },
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/step1`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: '' }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(String(body.problem)).toContain('token 为空');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 });
+
+
+describe('SPA 产物服务契约（防「HTTP 200 但页面不可用」）', () => {
+  it('GET / 的 HTML 引用的 CSS/JS 资产全部 200 且 MIME 正确（SPA 白屏防线）', async () => {
+    const html = await (await fetch(`${base}/`)).text();
+    const refs = [...html.matchAll(/(?:src|href)="(\.?\/[^"]+\.(?:js|css))"/g)].map((m) => m[1] as string);
+    expect(refs.length).toBeGreaterThan(0);
+    for (const ref of refs) {
+      const res = await fetch(`${base}${ref.startsWith('/') ? ref : `/${ref}`}`);
+      expect(res.status).toBe(200);
+      const type = res.headers.get('content-type') ?? '';
+      expect(type === 'text/javascript; charset=utf-8' || type === 'text/css; charset=utf-8').toBe(true);
+    }
+  });
+
+  it('构建产物里的应用模块不残留 HTML 字符串模板（pageScript 已死的回归防）', async () => {
+    const html = await (await fetch(`${base}/`)).text();
+    const refs = [...html.matchAll(/src="([^"]+\.js)"/g)].map((m) => m[1] as string);
+    expect(refs.length).toBeGreaterThan(0);
+    const bodies = await Promise.all(refs.map((r) => fetch(`${base}${r}`).then((res) => res.text())));
+    const all = bodies.join('\n');
+    expect(all).not.toContain('form-auth');
+    // 应用模块（非 polyfill）必须接 /api/state（状态链真源）
+    expect(all).toContain('api/state');
+  });
+});
+
 
 describe('envHint 缺省向后兼容（不传 envHint 只传 hasEnvToken）', () => {
   it('缺省语义 = oauthUsable/非 CI/非多级子域，hasEnvToken 映射进 envHint', async () => {
@@ -528,9 +602,6 @@ describe('envHint 缺省向后兼容（不传 envHint 只传 hasEnvToken）', ()
       const st = (await (await fetch(`http://127.0.0.1:${port}/api/state`)).json()) as Record<string, unknown>;
       expect(st.envHint).toEqual({ hasEnvToken: true, oauthUsable: true, needsTotalTls: false, ci: false });
       expect(st.hasEnv).toBe(true);
-      const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
-      expect(html).toContain('已检测到环境变量 CLOUDFLARE_API_TOKEN');
-      expect(html).not.toMatch(/<details class="auth-fold"\s+open/);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -916,69 +987,77 @@ describe('#309 ③ storageOptions 快照重算（③½ 卡片集合 == 选中集
   });
 });
 
-describe('#309 ①② zone 发现加载态与跳过入口（② 屏渲染面）', () => {
-  const domainState = { ...initialWizardState('/tmp/x/zones/unself'), hasToken: true, step: 'domain' as const };
-  const html = renderPage(domainState, HINT);
-
-  it('② 屏带加载态：spinner + 「正在读取账户 zone…」初始隐藏（选中 custom 才显）', () => {
-    expect(html).toContain('class="spinner"');
-    expect(html).toContain('正在读取账户 zone');
-    // 加载提示行初始隐藏：选 custom 后由脚本置可见
-    expect(html).toMatch(/class="hint zone-loading" hidden/);
+describe('#309 ①② zone 发现（SPA 分流依据 = /api/state.credentialSource）', () => {
+  it('token 路径 → credentialSource=token（② 屏 zone 下拉的数据前提）；/api/zones 未接线回手填', async () => {
+    setCredentialSource('token');
+    const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    expect(st.credentialSource).toBe('token');
+    const zones = (await (await fetch(`${base}/api/zones`)).json()) as Record<string, unknown>;
+    expect(zones.ok).toBe(false);
+    expect(String(zones.message)).toContain('手填');
+    setCredentialSource(null);
   });
 
-  it('② 屏带「跳过发现，直接手填完整域名」主动入口', () => {
-    expect(html).toContain('id="zone-skip"');
-    expect(html).toContain('跳过发现，直接手填完整域名');
+  it('OAuth 路径 → credentialSource=oauth（② 屏手填完整域名的数据前提）', async () => {
+    setCredentialSource('oauth');
+    const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    expect(st.credentialSource).toBe('oauth');
+    setCredentialSource(null);
   });
 
-  it('加载提示与卡片容器分离（成功后 loading 隐藏、卡片显；结构可切换）', () => {
-    expect(html).toContain('id="zone-cards"');
-    expect(html).toMatch(/class="hint zone-loaded" hidden/);
+  it('重提另一凭证换来源 → 投影跟随（oauth→token）', async () => {
+    setCredentialSource('oauth');
+    let st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    expect(st.credentialSource).toBe('oauth');
+    setCredentialSource('token');
+    st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
+    expect(st.credentialSource).toBe('token');
+    setCredentialSource(null);
   });
 });
 
-describe('#309 ② ?step= 渲染回退（上一步/步进器统一）', () => {
+
+describe('#309 ② ?step= 渲染回退（守卫 = viewStepOf 纯函数；SPA 深链同语义）', () => {
   const at = (step: WizardState['step']): WizardState => ({
     ...initialWizardState('/tmp/x/back/unself', { modules: ['hello'] }),
     hasToken: true,
     step,
   });
 
-  it('已完成步（storage → domain/modules）可达；viewStep 只换渲染不换状态', async () => {
+  it('已完成步可达（storage → domain）；视图只换渲染不换状态', () => {
+    const state = at('storage');
+    const view = viewStepOf(state, 'domain');
+    expect(view.step).toBe('domain');
+    expect(state.step).toBe('storage');
+  });
+
+  it('未完成步不可达（auth 下 ?step=done → 仍 auth）；未知值落回当前步', () => {
+    const state = at('auth');
+    expect(viewStepOf(state, 'done').step).toBe('auth');
+    expect(viewStepOf(state, 'nonsense').step).toBe('auth');
+  });
+
+  it('未完成中间步不可达：storage 步不能跳到未经历的 module-config（自动跳过不可达）', () => {
+    expect(viewStepOf(at('storage'), 'module-config').step).toBe('storage');
+  });
+
+  it('同当前步/未来步 → 原样（推进权限只在 POST 端点）', () => {
+    expect(viewStepOf(at('domain'), 'domain').step).toBe('domain');
+    expect(viewStepOf(at('auth'), 'modules').step).toBe('auth');
+  });
+
+  it('GET /?step=… 服务端仍回 SPA 壳（视图切换在前端执行）', async () => {
     holder.state = at('storage');
-    const html = await (await fetch(`${base}/?step=domain`)).text();
-    expect(html).toContain('data-screen="domain"');
-    // 状态未被 ?step= 改写：/api/state 仍是 storage
+    const res = await fetch(`${base}/?step=domain`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('id="app"');
     const st = (await (await fetch(`${base}/api/state`)).json()) as { step: string };
     expect(st.step).toBe('storage');
   });
-
-  it('未完成步不可达（auth 下 ?step=done → 仍渲染 auth）；未知值落回当前步', async () => {
-    holder.state = at('auth');
-    const html = await (await fetch(`${base}/?step=done`)).text();
-    expect(html).toContain('data-screen="auth"');
-    const html2 = await (await fetch(`${base}/?step=nonsense`)).text();
-    expect(html2).toContain('data-screen="auth"');
-  });
-
-  it('未完成中间步不可达：storage 步不能跳到未经历的 module-config（若它被自动跳过）', async () => {
-    // state.step=storage 且 moduleConfigs 为空 → module-config 不算「已完成」（自动跳过不可达）
-    holder.state = at('storage');
-    const html = await (await fetch(`${base}/?step=module-config`)).text();
-    expect(html).toContain('data-screen="storage"');
-  });
-
-  it('② 屏「上一步」按钮带 data-backto=auth（不再是无效 history.back()）', async () => {
-    holder.state = at('domain');
-    const html = await (await fetch(`${base}/`)).text();
-    expect(html).toContain('data-backto="auth"');
-    expect(html).not.toContain('history.back()');
-  });
 });
 
-describe('#309 ③½ accepts 单项 = 作者声明说明卡（非假单选）', () => {
-  const base = (): WizardState => ({
+describe('#309 ③½ accepts 单项 = 作者声明说明卡（数据面；渲染在组件测试）', () => {
+  const baseState = (): WizardState => ({
     ...initialWizardState('/tmp/x/only/unself', {
       modules: ['hello', 'chat'],
       storageOptions: [
@@ -990,29 +1069,26 @@ describe('#309 ③½ accepts 单项 = 作者声明说明卡（非假单选）', 
     step: 'storage',
   });
 
-  it('单项模块渲染说明卡（作者声明），无 radio', () => {
-    const html = renderPage(base(), HINT);
-    expect(html).toContain('作者声明：只支持 <strong>dedicated</strong>');
-    expect(html).toContain('作者声明：只支持 <strong>core</strong>');
-    expect(html).not.toMatch(/name="sto-chat"/);
-    expect(html).not.toMatch(/name="sto-hello"/);
+  it('step3b 提交单项声明模块（无 radio 可选）：服务端 accepts 校验通过唯一 accepts', async () => {
+    holder.state = baseState();
+    const r = await post('/api/step3b', { choices: { hello: 'core', chat: 'dedicated' }, sharedConsent: false });
+    expect(r.status).toBe(200);
+    expect(r.json.step).toBe('ready');
+    expect(holder.state.storageChoices).toMatchObject({ hello: 'core', chat: 'dedicated' });
   });
 
-  it('混合：hello 两项、chat 单项 → hello 真单选 + chat 说明卡', () => {
-    const s = base();
-    s.storageOptions = [
-      { id: 'hello', accepts: ['core', 'dedicated'], preferred: 'core' },
-      { id: 'chat', accepts: ['dedicated'], preferred: 'dedicated' },
-    ];
-    const html = renderPage(s, HINT);
-    expect(html).toMatch(/name="sto-hello"[\s\S]*?value="core"/);
-    expect(html).toMatch(/name="sto-hello"[\s\S]*?value="dedicated"/);
-    expect(html).toContain('作者声明：只支持 <strong>dedicated</strong>');
-    expect(html).not.toMatch(/name="sto-chat"/);
+  it('选声明之外的落点 → 400（accepts 校验挡住）', async () => {
+    holder.state = baseState();
+    const r = await post('/api/step3b', { choices: { chat: 'shared' }, sharedConsent: false });
+    expect(r.status).toBe(400);
+    expect(holder.state.step).toBe('storage');
   });
 
-  it('说明卡 fieldset 带 data-accepts=dedicated（前端提交取唯一 accepts 兜底）', () => {
-    const html = renderPage(base(), HINT);
-    expect(html).toMatch(/data-mod="chat" data-accepts="dedicated"/);
+  it('shared 选择需知情同意（consent=false → 400）', async () => {
+    holder.state = { ...baseState(), storageOptions: [{ id: 'demo', accepts: ['core', 'shared'], preferred: 'core' }] };
+    const r = await post('/api/step3b', { choices: { demo: 'shared' }, sharedConsent: false });
+    expect(r.status).toBe(400);
+    const r2 = await post('/api/step3b', { choices: { demo: 'shared' }, sharedConsent: true });
+    expect(r2.status).toBe(200);
   });
 });

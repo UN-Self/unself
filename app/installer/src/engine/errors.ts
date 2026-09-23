@@ -19,8 +19,34 @@ function messageOf(err: unknown): string {
   return String(err);
 }
 
-/** 已知失败 → 三要素。未知失败不硬归类到外部原因，默认幂等重跑。 */
-export function advise(err: unknown): FailureAdvice {
+/** 已知失败 → 三要素。未知失败不硬归类到外部原因，默认幂等重跑。
+ * credSource（2026-09-21 走查实锤）：10000 ≠ 只在 DNS 上——任何 CF 权限缺口都报 10000
+ * （API Token 缺 KV 权限在 /storage/kv/namespaces 上同样 10000）。按凭证来源分流：
+ * - 'wrangler-oauth'/null → OAuth scope 缺口文案（含 DNS 人工步骤，兼容 #309 ④ 场景）；
+ * - 'env-api-token' → token 缺权限组文案（端点→权限组指认，深链接重建）；
+ * 端点从 CloudflareApiError 消息（`CF API GET <path> 失败：…`）提取，只映射已知端点。
+ */
+export type CredentialSourceHint = 'env-api-token' | 'env-api-key' | 'wrangler-oauth' | null;
+
+/** CF API 端点 → 人话权限组（只列九步真实触碰的；未知端点不硬拡）。 */
+const ENDPOINT_PERMS: Array<[RegExp, string]> = [
+  [/\/storage\/kv\/namespaces/, 'Workers KV Storage（Edit）'],
+  [/\/dns_records/, 'DNS（Edit）'],
+  [/\/r2\/buckets/, 'R2（Edit）'],
+  [/\/d1\/database/, 'D1（Edit）'],
+  [/\/workers\/scripts/, 'Workers Scripts（Edit）'],
+  [/\/workers\/routes/, 'Workers Routes（Edit）'],
+  [/\/ssl\/|\/certificates/, 'SSL and Certificates（Edit）'],
+  [/^\/zones/, 'Zone · Zone（Read）'],
+];
+
+function endpointPermOf(msg: string): string | null {
+  const m = /CF API [A-Z]+ (\S+) 失败/.exec(msg);
+  if (!m) return null;
+  const hit = ENDPOINT_PERMS.find(([re]) => re.test(m[1] ?? ''));
+  return hit ? hit[1] : null;
+}
+export function advise(err: unknown, credSource: CredentialSourceHint = null): FailureAdvice {
   const msg = messageOf(err);
   // WranglerError 把 stderr 细节附在第二行起：三要素的「原因」要携带原始错误摘要（含错误码），
   // 故取含已知特征（10405 等）的首个非空行，取不到时退回首行。
@@ -33,9 +59,21 @@ export function advise(err: unknown): FailureAdvice {
       fix: '你的 token 缺 Zone 级权限：用第一屏的深链接重建 token（勾选 Workers Routes / DNS / SSL and Certificates），然后重跑本命令',
     };
   }
-  // #309 ④：wrangler OAuth scope 集合不含 DNS 记录读写（2026-09-21 实测 GET/POST 都 10000，
-  // docs/audit/241-*），自有域 + OAuth 在 dns_records 上必挂——幂等重跑解决不了权限缺口。
+  // #309 ④ + 2026-09-21 走查实锤：wrangler OAuth scope 集合不含 DNS 记录读写（#241 实测
+  // docs/audit/241-*），自有域 + OAuth 在 dns_records 上必挂 10000；API Token 缺其它权限组
+  // （KV/D1/R2…）同样 10000。三分支：OAuth/未知来源 → 原人工步骤指引；API Token → 点名
+  // 缺失权限组 + 深链接重建（幂等重跑解决不了权限缺口）。
   if (/\b10000\b/.test(msg)) {
+    if (credSource === 'env-api-token') {
+      const perm = endpointPermOf(msg);
+      return {
+        cause,
+        owner: 'token',
+        fix: perm
+          ? `你的 token 缺「${perm}」权限：按第一屏深链接重建 token（勾上 ${perm}），然后重跑本命令`
+          : '你的 token 缺 API 权限：按第一屏深链接重建 token（勾齐九步所需权限组），然后重跑本命令',
+      };
+    }
     return {
       cause,
       owner: 'token',
