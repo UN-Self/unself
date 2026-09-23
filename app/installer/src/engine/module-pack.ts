@@ -64,9 +64,10 @@ const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 const NPM_NAME_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 
 /**
- * 生成 `package.json` 的 license 字段。
- * manifest 契约（docs/modules.md §3）没有 license 字段，源目录也可能没有 package.json——
- * 平台默认取自身交付许可（AGPL-3.0-only）。第三方模块如需别的 SPDX，需先有契约字段（docs 偏差已进报告）。
+ * 生成 `package.json` 的 license 字段（issue #292）。
+ * manifest.license（SPDX 表达式，契约 §3 增量字段）优先；未声明时回落平台自身交付许可
+ * （AGPL-3.0-only）——老 manifest 无该字段，行为与 #285 时期完全一致（向后兼容）。
+ * 形状已由 `ModuleManifestSchema` 在入口处验过（非法直接 parse 失败，不会走到这里）。
  */
 const DEFAULT_PACKAGE_LICENSE = 'AGPL-3.0-only';
 
@@ -201,7 +202,8 @@ export async function modulePackageFiles(
     name: npmName,
     version: manifest.version,
     files: [...rootNames, 'package.json'].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
-    license: DEFAULT_PACKAGE_LICENSE,
+    // 作者声明的 SPDX 优先；未声明回落平台默认（#292，向后兼容老 manifest）
+    license: manifest.license ?? DEFAULT_PACKAGE_LICENSE,
     ...(repository !== undefined ? { repository } : {}),
   };
   files.set('package.json', Buffer.from(`${JSON.stringify(packageJson, null, 2)}\n`, 'utf8'));
