@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
 
+import { writeBuildInfo } from './build-info';
+
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(pkgDir, 'src', 'entry.prod.ts');
 const outfile = join(pkgDir, 'dist', 'worker.js');
@@ -43,5 +45,8 @@ for (const name of ['LICENSE', 'NOTICE']) {
   const src = join(pkgDir, '..', '..', name);
   if (existsSync(src)) await copyFile(src, join(pkgDir, 'dist', name));
 }
+
+// 版本烙印（#287，决策 #80）：后端打包路径同样落 dist/build-info.json（与 vite 前端构建同落点、幂等）。
+await writeBuildInfo();
 
 console.log(`✓ workbench worker bundle → ${outfile}`);
