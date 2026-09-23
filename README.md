@@ -13,7 +13,7 @@ Unself 是**跑在你自己 Cloudflare 账户上的团队工作台**：不是 Sa
 
 ## 跑起来
 
-> 一条命令 `npx @unself/installer`（[issue #242](https://github.com/UN-Self/unself/issues/242)）——**不需要 git、不需要 pnpm**：
+> 一条命令 `npx @unself/installer@latest`——**不需要 git、不需要 pnpm**：
 
 ```sh
 npx @unself/installer@latest
@@ -31,7 +31,7 @@ npx @unself/installer@latest
 |---|---|
 | Cloudflare 账号 | 免费套餐即可（<https://dash.cloudflare.com/sign-up>） |
 | Node.js | ≥ 22（`node -v` 自查） |
-| pnpm | ≥ 11（`corepack enable` 或 `npm i -g pnpm`） |
+| pnpm | 普通安装不需要；仅仓库开发需要 ≥ 11 |
 | 域名 | 可选：没有就用 workers.dev 免费域名 |
 | 费用 | 免费额度够 10 人左右团队；触发条件见 [docs/deploy.md](docs/deploy.md) |
 
@@ -40,8 +40,8 @@ npx @unself/installer@latest
 模块可以来自 npm（含私有 registry）、git release 产物、任意 HTTPS tarball，也可以是你本地的一个目录：
 
 ```sh
-unself module add npm:@acme/unself-todo@1.2.0
-unself deploy
+npx @unself/installer@latest module add npm:@acme/unself-todo@1.2.0
+npx @unself/installer@latest deploy
 ```
 
 安装串的四种写法（决策 #58 / #77）：`npm:@acme/unself-todo@1.2.0`、`github:acme/unself-todo#v1.2.0`、`https://…/todo-1.2.0.tgz`、`file:./my-todo`。

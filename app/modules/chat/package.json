@@ -1,7 +1,12 @@
 {
   "name": "@unself/chat",
   "version": "0.1.1",
-  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UN-Self/unself.git",
+    "directory": "app/modules/chat"
+  },
+  "private": true,
   "type": "module",
   "main": "worker/src/index.js",
   "exports": {

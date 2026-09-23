@@ -6,7 +6,7 @@
 # 前置：Node.js ≥ 22（`node -v` 自查；不需要 git、不需要 pnpm）
 
 # ① 启动本地 Web 向导（安装器的默认命令）
-npx @unself/installer
+npx @unself/installer@latest
 
 # ② 向导七屏：①凭证（wrangler OAuth 可直跳，API Token 折叠）→ ②域名（workers.dev 默认 / 自有域自动列账户 zone，只填子域前缀）→ ③模块 → ④模块配置（按模块 manifest 声明逐模块出页，无配置自动跳过）→ ⑤数据存放 → ⑥装配（九步折叠日志）→ ⑦完成页按钮打开激活入口
 # ③ 等九步跑完，在完成页点击一次性 setup 链接或复制按钮
@@ -26,7 +26,7 @@ npx @unself/installer
 | `10405`（权限不足） | 凭证缺 zone 级权限：改用 CF 深链接建的 API Token（6 项勾全），再继续 |
 | 需要 Total TLS（多级子域证书） | OAuth 覆盖不到（2026-09-17 实测），改用 API Token |
 | DNS 报错 | 等 60 秒，重跑同一条命令 |
-| 其他任何失败 | 直接重跑 ①——幂等，不会重复建资源 |
+| 配置、构建或接口失败 | 展开失败步骤，按原因/归属/修复处理；修正后重跑，不要把幂等当作自动修复 |
 
 看实时日志：`npx wrangler tail <实例名>-workbench`（0.1.x 时代叫 `<实例名>-core-api`，见下节）。
 仍卡住 → [开 issue](https://github.com/UN-Self/unself/issues)，附上终端里的三要素报错原文。
@@ -38,6 +38,8 @@ npx @unself/installer@latest           # 用新版安装器重跑一次部署（
 ```
 
 数据原地保留（迁移只增不改）。升级纪律：
+
+- 更新安装器本身不会修改线上 Worker；在原实例目录重新完成部署，线上才使用新的平台和模块产物。0.3.0 安装器依赖 workbench/chat 0.1.1，包含本轮资产响应与聊天路径修复。
 
 - **0.2.0 起 Worker 名变了**：`<实例名>-workbench`（旧名 `<实例名>-core-api`）。**D1 / R2 / KV 名与数据一律不动**（改名就会丢数据，所以我们不改名），只有 Worker 是删旧建新：重跑一次部署 → 确认新 Worker 正常 → 再手工删旧的：
   ```sh

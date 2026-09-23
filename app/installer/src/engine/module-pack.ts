@@ -18,7 +18,7 @@
  * - `worker.js`（`runtimes ∋ worker`；源码形态走 esbuild bundle，已打包形态原样收录）
  * - `package.json`（**生成**，非收录作者源码目录里那份；issue #285 / 决策 #78：
  *   npm 只认「npm 布局」的 tarball——根目录 `package/package.json` 是 `npm publish` 的硬要求，
- *   字段 name/version/files/license 由打包器从 manifest 派生，`version` 恒与 manifest.json 一致）
+ *   version 恒与 manifest.json 一致；repository 从源 package.json 白名单保留，供 npm provenance 校验）
  * - `wrangler.jsonc` / `migrations/**` / `assets/**` / `config.schema` / `theme.json` / `docker/**`
  * - `LICENSE` / `NOTICE`（存在即随包；docs/modules.md §2）
  * 排除：`node_modules/`、`.env*`、`test/`、`src/`、`tsconfig.json`、作者源码目录里的 `package.json`、`.git/`（docs/modules.md §2 禁令）。
@@ -191,11 +191,18 @@ export async function modulePackageFiles(
     throw new Error(`npm 包名非法：${npmName}（须小写，可带 @scope/，如 @acme/unself-todo）`);
   }
   const rootNames = [...files.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  // 只保留公开来源；不复制 scripts/private/其他源码元数据。
+  const sourcePackagePath = join(dir, 'package.json');
+  const sourcePackage = existsSync(sourcePackagePath)
+    ? JSON.parse(await readFile(sourcePackagePath, 'utf8')) as { repository?: unknown }
+    : {};
+  const repository = sourcePackage.repository;
   const packageJson = {
     name: npmName,
     version: manifest.version,
     files: [...rootNames, 'package.json'].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     license: DEFAULT_PACKAGE_LICENSE,
+    ...(repository !== undefined ? { repository } : {}),
   };
   files.set('package.json', Buffer.from(`${JSON.stringify(packageJson, null, 2)}\n`, 'utf8'));
 
