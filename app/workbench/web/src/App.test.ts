@@ -8,6 +8,7 @@ import App from './App.vue'
 import { fetchMe, logout } from './lib/session-api'
 import { fetchEnabledModules } from './lib/registry-api'
 import { fetchModuleToken } from './lib/token-api'
+import { HANDSHAKE_TIMEOUT_MS } from './lib/use-module-frame'
 
 const { TOKEN, MODULE, REJECTED } = vi.hoisted(() => {
   const TOKEN = {
@@ -492,6 +493,131 @@ describe('App.vue 应用密码入口（成员可见）', () => {
     await meTab!.trigger('click')
     expect(wrapper.findAll(MAIL_ENTRY)).toHaveLength(0)
     expect(currentPath()).toBe('/')
+    wrapper.unmount()
+  })
+})
+
+/**
+ * #306「停用 → 启用 → 点模块」回归：
+ * probe304 现场 = 停用 hello 再启用后回工作台点 hello，iframe 永久停在「正在连接模块…」，
+ * 15s 也不转失败卡。本组用例锁两条用户可见行为：
+ * ① 模块没发 ready（或握手消息丢失）时，15s 必须落到失败卡（人话 + 请求编号），不是永久骨架；
+ * ② 用户对「已选中的同一个模块」再点一次 = 明确的再试意图，必须真的重挂一次握手，
+ *    且重挂后模块发来 ready 就能正常就位（显示身份/可交互），不能被上一轮状态粘住。
+ * 断言只取用户可见结果（骨架/失败卡/请求编号/重挂后是否就位），不判 DOM 结构与类名。
+ */
+describe('App.vue 停用→启用→点模块回归（#306）', () => {
+  /** 握手期的用户可见姿态：加载骨架 + 「正在连接模块…」。 */
+  function handshaking(wrapper: ReturnType<typeof mount>): boolean {
+    return wrapper.find('[aria-busy="true"]').exists()
+  }
+
+  /** 失败卡的用户可见姿态：人话标题 + 请求编号。 */
+  function failureCard(wrapper: ReturnType<typeof mount>) {
+    return wrapper.find('[data-test="module-error-card"]')
+  }
+
+  /** 桌面左栏里指向某模块的导航按钮（按可见标签文案定位，不判类名）。 */
+  function navButton(wrapper: ReturnType<typeof mount>, label: string) {
+    return wrapper
+      .find('nav[aria-label="模块导航"]')
+      .findAll('button')
+      .find((b) => b.text().endsWith(label))
+  }
+
+  it('ready 一直不来：15s 后从骨架转失败卡（人话 + 请求编号），骨架不再永久滞留', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(fetchModuleToken).mockResolvedValue(TOKEN)
+      vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '黄一' }))
+      vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
+
+      const wrapper = await mountApp()
+      await settle()
+
+      // 落地即选中 hello：用户看到的是「正在连接模块…」骨架
+      expect(wrapper.find('iframe').attributes('src')).toBe('/m/hello/')
+      expect(handshaking(wrapper)).toBe(true)
+      expect(failureCard(wrapper).exists()).toBe(false)
+
+      // 模块始终不发 ready（probe304 现场：模块没发 ready）——推进握手时限
+      await vi.advanceTimersByTimeAsync(HANDSHAKE_TIMEOUT_MS + 1000)
+      await settle()
+
+      // 用户可见结果：骨架退场，失败卡登场，且带人话与可报障的请求编号
+      expect(handshaking(wrapper)).toBe(false)
+      const card = failureCard(wrapper)
+      expect(card.exists()).toBe(true)
+      expect(card.text()).toContain('模块加载超时')
+      expect(card.text()).toMatch(/请求编号：\S+/)
+      // 没有 ready 就不该去取 token（壳的契约：收到 ready 才取）
+      expect(fetchModuleToken).not.toHaveBeenCalled()
+
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('停用→启用后点 hello：重挂握手，模块发 ready 即就位（身份行可交互，不是永久骨架）', async () => {
+    vi.mocked(fetchModuleToken).mockResolvedValue(TOKEN)
+    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '黄一' }))
+    vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
+
+    const wrapper = await mountApp()
+    await settle()
+
+    // 第一轮：模块被停用期间 ready 到达但 token 被服务端 403 拒（停用真值在服务端）
+    const first = wrapper.find('iframe').element as HTMLIFrameElement
+    vi.mocked(fetchModuleToken).mockRejectedValueOnce(
+      Object.assign(new Error('此模块已停用'), { status: 403 }),
+    )
+    dispatchReady(first)
+    await settle()
+    expect(failureCard(wrapper).text()).toContain('此模块已停用')
+
+    // 管理员把 hello 重新启用；用户回工作台点 hello——
+    // 此时 selectedId 本来就是 hello（落地即选它），点击不能是 no-op，必须重挂一次握手
+    const beforeReload = wrapper.find('iframe').element as HTMLIFrameElement
+    await navButton(wrapper, 'hello')!.trigger('click')
+    await settle()
+
+    const afterReload = wrapper.find('iframe').element as HTMLIFrameElement
+    expect(afterReload).not.toBe(beforeReload) // 真的重挂了，不是原帧干等
+    expect(afterReload.getAttribute('src')).toBe('/m/hello/')
+    expect(failureCard(wrapper).exists()).toBe(false)
+
+    // 重挂后的新帧发来 ready → 壳重新取 token → 就位（用户看到模块内容而非骨架）
+    dispatchReady(afterReload)
+    await settle()
+    expect(handshaking(wrapper)).toBe(false)
+    expect(failureCard(wrapper).exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('同 id 再点的重挂不会叠桥：新帧 ready 只触发一次取 token', async () => {
+    vi.mocked(fetchModuleToken).mockResolvedValue(TOKEN)
+    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '黄一' }))
+    vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
+
+    const wrapper = await mountApp()
+    await settle()
+
+    const stale = wrapper.find('iframe').element as HTMLIFrameElement
+    await navButton(wrapper, 'hello')!.trigger('click')
+    await settle()
+
+    const fresh = wrapper.find('iframe').element as HTMLIFrameElement
+    expect(fresh).not.toBe(stale)
+
+    // 重挂后的新帧发 ready → 只走一次桥：一次 ready 对应一次取 token
+    // （若旧桥未拆，同一条 ready 会被两个监听器各接一次 → 取两次）
+    dispatchReady(fresh)
+    await settle()
+    expect(fetchModuleToken).toHaveBeenCalledTimes(1)
+    expect(handshaking(wrapper)).toBe(false)
+
     wrapper.unmount()
   })
 })
