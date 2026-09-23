@@ -397,3 +397,72 @@ describe('storage.declaration（#55 增量字段：安装时用户选定）', ()
     expect(parsed.storage).toEqual({ accepts: ['dedicated'], preferred: 'dedicated', declaration: 'dedicated' });
   });
 });
+
+describe('manifest.license（SPDX 声明，issue #292）', () => {
+  /** 带 license 字段的最小包。 */
+  function withLicense(license: unknown): Parameters<typeof validateModulePackage>[0] {
+    const base = minimalInput();
+    const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
+    manifest.license = license;
+    return { ...base, manifestText: JSON.stringify(manifest) };
+  }
+
+  it('合法 SPDX（MIT）→ 通过（包内 LICENSE 仍在，两条规则各自满足）', () => {
+    const result = validateModulePackage(withLicense('MIT'));
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it('合法复合 SPDX（MIT OR Apache-2.0）→ 通过', () => {
+    const result = validateModulePackage(withLicense('MIT OR Apache-2.0'));
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('非法 SPDX 形状（MIT OR）→ error(license)，且消息里可定位 license 字段', () => {
+    const result = validateModulePackage(withLicense('MIT OR'));
+    expect(result.ok).toBe(false);
+    const licenseError = result.errors.find((e) => e.check === 'license');
+    expect(licenseError).toBeDefined();
+    expect(licenseError?.message).toContain('license');
+  });
+
+  it('空白串不是「未声明」→ error(license)（退回平台默认只发生在字段缺失时）', () => {
+    const result = validateModulePackage(withLicense('   '));
+    expect(result.ok).toBe(false);
+    expect(result.errors.map((e) => e.check)).toContain('license');
+  });
+
+  it('非 string 类型（null / 数字）→ schema error，不静默忽略', () => {
+    expect(validateModulePackage(withLicense(null)).ok).toBe(false);
+    expect(validateModulePackage(withLicense(7)).ok).toBe(false);
+  });
+
+  it('向后兼容：manifest 无 license 字段仍通过 validate（老 manifest 不拦）', () => {
+    // 未声明 license → 形状检查不适用；pack 侧回落平台默认（见 module-pack 测试）
+    const result = validateModulePackage(minimalInput());
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('manifest.license 合法但包内缺 LICENSE 文件 → 仍 error(license)（文件存在性与声明形状是两条独立规则）', () => {
+    const result = validateModulePackage({ ...withLicense('MIT'), licenseText: undefined });
+    expect(result.ok).toBe(false);
+    expect(result.errors.map((e) => e.check)).toContain('license');
+    expect(result.errors.some((e) => e.message.includes('LICENSE'))).toBe(true);
+  });
+
+  it('manifest.yaml 形态：license 解析进候选并可过 schema', () => {
+    const yaml = [
+      'id: demo',
+      'route: /m/demo',
+      'entry: https://team.example.com/m/demo/',
+      'runtimes:',
+      '  - worker',
+      'version: 1.0.0',
+      'license: MIT',
+    ].join('\n');
+    const parsed = ModuleManifestSchema.parse(manifestFromYamlText(yaml));
+    expect(parsed.license).toBe('MIT');
+  });
+});
