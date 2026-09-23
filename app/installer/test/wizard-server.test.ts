@@ -154,13 +154,20 @@ describe('六段流全链（替身部署）', () => {
     expect(text).toMatch(/commit [0-9a-f]{40}|commit dev\b/);
     expect(text).toMatch(/平台产物：@unself\/workbench v\d+\.\d+\.\d+|平台产物不可用/);
 
-    // ⑤ 收尾：done + baseUrl + setup 深链
+    // ⑤ 收尾：done + baseUrl + setup 深链 + **版本身份三项（#287）落 result**
     for (let i = 0; i < 40; i++) {
       const st = (await (await fetch(`${base}/api/state`)).json()) as Record<string, unknown>;
       if (st.step === 'done') {
         const result = st.result as Record<string, unknown>;
         expect(result.baseUrl).toBe('https://unself-workbench.test.workers.dev');
         expect(result.setupUrl).toContain('/setup?token=');
+        // #287 验收：完成屏看得到的身份必须来自 result（日志会被完成屏取代——2026-09-23 走查实锤）。
+        const identity = result.identity as string[];
+        expect(Array.isArray(identity)).toBe(true);
+        expect(identity.length).toBeGreaterThanOrEqual(2);
+        expect(identity.join('\n')).toMatch(/unself 版本：v/);
+        expect(identity.join('\n')).toMatch(/commit [0-9a-f]{40}|commit dev\b/);
+        expect(identity.join('\n')).toMatch(/平台产物：@unself\/workbench v\d+\.\d+\.\d+|平台产物不可用/);
         expect(st.idempotent).toBe(true);
         expect(String(st.idempotentNote)).toContain('重跑');
         break;

@@ -43,7 +43,7 @@ import {
 // 实际 API Token 缺 KV 权限同样 10000）。errors.ts 零依赖纯函数，不违反「壳不 import 引擎
 // 重运行时」纪律。
 import { advise as engineAdvise } from '../engine/errors';
-import { reportIdentity } from '../lib/identity';
+import { resolveIdentityLines } from '../lib/identity';
 import { themeVarBlock } from './theme';
 import { resolveWebDistDir } from './web-path';
 
@@ -663,27 +663,34 @@ export function createWizardServer(opts: ServeOptions): Server {
             })
             .then(async (r) => {
               broadcast(`✓ 装配完成：${r.baseUrl}`);
-              // 收尾身份三项（#287，决策 #80）：与 `unself --version`、`unself deploy` 共用 reportIdentity——
-              // 报障可整段粘贴。进事件日志（SSE 快照重放可见）+ 广播；解析失败占位不抛
-              //（收尾屏不能因身份解析挂掉）。
+              // 收尾身份三项（#287，决策 #80）：与 `unself --version`、`unself deploy` 共用同一出口。
+              // 两处落地，缺一不可：
+              //   ① 事件日志（SSE 快照重放可见，部署中/失败时也能看到）；
+              //   ② **结果状态（⑤ 完成屏渲染）**——日志会被完成屏取代，而收尾屏上的身份
+              //      「可整段粘贴」是验收要求（2026-09-23 走查发现：只进日志则完成屏看不到）。
+              // rootDir 用本向导实例目录（与 `unself deploy` 用 inst.path 同基准）；
+              // workbench 包按实例侧 node_modules 解析，而非进程 cwd（cwd 与实例可无关）。
+              let identity: string[] = [];
+              try {
+                identity = await resolveIdentityLines({ rootDir: deps.getState().instancePath });
+              } catch (err) {
+                // 内部已兜底占位；走到这里的意外不能静默吞（收尾屏要可见）
+                identity = [`身份信息输出失败：${err instanceof Error ? err.message : String(err)}`];
+              }
               const logIdentity = (text: string): void => {
                 const snap = deps.getState();
                 pushEvent(snap, { kind: 'log', text });
                 deps.setState(snap);
                 broadcast(text);
               };
-              try {
-                // rootDir 用本向导实例目录（与 `unself deploy` 用 inst.path 同基准）；
-                // workbench 包按实例侧 node_modules 解析，而非进程 cwd（cwd 与实例可无关）。
-                await reportIdentity({ rootDir: deps.getState().instancePath, log: logIdentity });
-              } catch (err) {
-                // reportIdentity 内部已兜底占位；走到这里的意外不能静默吞（收尾屏要可见）
-                logIdentity(`✗ 身份信息输出失败：${err instanceof Error ? err.message : String(err)}`);
-              }
-              // 身份行落进事件日志后才置 done：向导轮询到 done 时，SSE 快照必已含三项身份（无竞态窗口）。
+              for (const line of identity) logIdentity(line);
               const cur = deps.getState();
               deps.setState(
-                completeDeploy(cur, { baseUrl: r.baseUrl, setupUrl: r.setupToken ? `/setup?token=${r.setupToken}` : null }),
+                completeDeploy(cur, {
+                  baseUrl: r.baseUrl,
+                  setupUrl: r.setupToken ? `/setup?token=${r.setupToken}` : null,
+                  identity,
+                }),
               );
             })
             .catch((err: unknown) => {

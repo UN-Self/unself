@@ -40,6 +40,9 @@ export interface WizardError {
 export interface WizardResult {
   baseUrl: string
   setupUrl: string | null
+  /** 版本身份三项（#287，决策 #80）：完成屏展示，可整段复制（日志会被完成屏取代）。
+   *  可缺省（旧快照/早期状态回放）：完成屏按空数组处理，不崩。 */
+  identity?: string[]
 }
 
 export interface WizardEnvHint {
