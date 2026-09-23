@@ -17,6 +17,7 @@ import { pathToFileURL } from 'node:url';
 export const RELEASE_TARGETS = {
   sdk: { package: '@unself/sdk', kind: 'workspace', dir: 'core/sdk' },
   installer: { package: '@unself/installer', kind: 'workspace', dir: 'app/installer' },
+  workbench: { package: '@unself/workbench', kind: 'workspace', dir: 'app/workbench' },
   hello: { package: '@unself/hello', kind: 'module', id: 'hello', dir: 'app/modules/hello' },
   chat: { package: '@unself/chat', kind: 'module', id: 'chat', dir: 'app/modules/chat' },
 };
