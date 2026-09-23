@@ -133,6 +133,20 @@ describe('#272 init 输出资源名 + deploy 进度/撞车开关', () => {
     expect(o.out.join('\n')).toContain('装配完成：https://mysite-workbench.workers.dev');
   });
 
+  it('收尾屏带三项身份（#287，决策 #80）：安装器版本 + 40 位 commit + workbench 版本', async () => {
+    await run(opts(['init', 'mysite', join(root, 'mysite')]));
+    const o = opts(['deploy'], {
+      deployNineSteps: async () => ({ baseUrl: 'https://mysite-workbench.workers.dev', setupToken: null }),
+    });
+    await run(o);
+    expect(o.errs).toEqual([]);
+    const text = o.out.join('\n');
+    expect(text).toContain('装配完成：https://mysite-workbench.workers.dev');
+    expect(text).toContain('unself 版本：v');
+    expect(text).toMatch(/commit [0-9a-f]{40}\b|commit dev\b/);
+    expect(text).toMatch(/@unself\/workbench v\d+\.\d+\.\d+/);
+  });
+
   it('parseArgs 识别 --allow-adopt / --allow-shared-account 且不污染位置参数', () => {
     expect(parseArgs(['deploy', '--allow-adopt'])).toMatchObject({ cmd: 'deploy', args: [], allowAdopt: true });
     expect(parseArgs(['deploy', '--allow-shared-account'])).toMatchObject({ cmd: 'deploy', allowAdopt: true });

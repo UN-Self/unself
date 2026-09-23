@@ -231,15 +231,18 @@ describe('provisionAll（③ 壳产物：搬运 workbench 包内产物，目标�
       await writeFile(join(shellAssets, 'index.html'), '<html><body>OLD BUILD</body></html>');
       await writeFile(join(shellAssets, 'assets/index-OLD.js'), 'console.log("old")');
 
+      // #287：搬运行顺带报平台产物版本——捕获 log 断言（行为，不查源码）
+      const logs: string[] = [];
       const provisioned = await provisionAll({
         rootDir,
         // 最小合法配置（类型断言沿用本文件现有风格）；modules 传空数组：跳过 esbuild，聚焦壳搬运
         config: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } } as UnselfConfig,
         modules: [],
         dbIds: { core: 'core-uuid', modules: 'modules-uuid' },
-        log: () => {},
+        log: (msg) => logs.push(msg),
         platform,
       });
+      expect(logs.some((m) => m.includes('搬运壳产物') && m.includes('@unself/workbench v0.0.0-test'))).toBe(true);
 
       // 产物来自包内（当前内容，不是上次那份）
       expect(await readFile(join(shellAssets, 'index.html'), 'utf8')).toContain('FIXTURE SHELL');

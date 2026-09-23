@@ -4,11 +4,12 @@
  * 覆盖：init/list(--json)/use/current/destroy/未知命令/help；路径可见性（pathline 首尾出现）；
  * 红灯验证：变异 use 未写 current、destroy 未删目录 → 用例必红（T7 汇编引用）。
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseArgs, run, defaultInstanceName, type RunOptions } from '../src/cli';
+import { formatIdentity } from '../src/lib/identity';
 import {
   emptyRegistry,
   loadRegistry,
@@ -57,6 +58,53 @@ describe('parseArgs', () => {
     expect(parseArgs([])).toMatchObject({ cmd: 'wizard', json: false, purge: false });
     expect(parseArgs(['list', '--json'])).toMatchObject({ cmd: 'list', json: true });
     expect(parseArgs(['destroy', 'a', '--purge'])).toMatchObject({ cmd: 'destroy', args: ['a'], purge: true });
+  });
+
+  it('--version / -v 识别为命令（#287： KNOWN_COMMANDS 缺了它就会落回「未知命令」）', () => {
+    expect(parseArgs(['--version']).cmd).toBe('--version');
+    expect(parseArgs(['-v']).cmd).toBe('-v');
+  });
+});
+
+describe('--version（#287，决策 #80：三项身份可自证）', () => {
+  /** 安装器包版本真值：按包名定位 app/installer 的 package.json（相对本测试文件上两级，不硬算仓库根）。 */
+  function installerVersion(): string {
+    const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')) as {
+      name?: string;
+      version?: string;
+    };
+    if (pkg.name !== '@unself/installer' || !pkg.version) throw new Error('安装器 package.json 形状变了');
+    return pkg.version;
+  }
+
+  /** 三项身份的行为断言（--version 与收尾屏共用）：版本、40 位 commit、workbench 版本，且无「未知命令」。 */
+  function expectThreeIdentityLines(text: string): void {
+    expect(text).toContain(`unself 版本：v${installerVersion()}`);
+    expect(text).toMatch(/commit [0-9a-f]{40}\b|commit dev\b/);
+    expect(text).toMatch(/@unself\/workbench v\d+\.\d+\.\d+/);
+    expect(text).not.toContain('未知命令');
+  }
+
+  it('--version 输出三项且零副作用（不需要当前实例/注册表）', async () => {
+    await run(opts(['--version']));
+    expect(errs).toEqual([]);
+    expectThreeIdentityLines(out.join('\n'));
+  });
+
+  it('-v 同口径', async () => {
+    await run(opts(['-v']));
+    expect(errs).toEqual([]);
+    expectThreeIdentityLines(out.join('\n'));
+  });
+
+  it('身份格式化：workbench 解析失败 → 「不可用 + 原因」占位，不留空不抛', () => {
+    const text = formatIdentity({
+      installer: { version: '0.0.0-test', commit: 'dev' },
+      workbenchVersion: null,
+      workbenchProblem: 'node_modules 里没这个包',
+    });
+    expect(text).toContain('unself 版本：v0.0.0-test');
+    expect(text).toContain('平台产物不可用：@unself/workbench（node_modules 里没这个包）');
   });
 });
 

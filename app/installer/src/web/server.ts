@@ -43,6 +43,7 @@ import {
 // 实际 API Token 缺 KV 权限同样 10000）。errors.ts 零依赖纯函数，不违反「壳不 import 引擎
 // 重运行时」纪律。
 import { advise as engineAdvise } from '../engine/errors';
+import { reportIdentity } from '../lib/identity';
 import { themeVarBlock } from './theme';
 import { resolveWebDistDir } from './web-path';
 
@@ -660,12 +661,28 @@ export function createWizardServer(opts: ServeOptions): Server {
                 broadcast(text);
               },
             })
-            .then((r) => {
+            .then(async (r) => {
+              broadcast(`✓ 装配完成：${r.baseUrl}`);
+              // 收尾身份三项（#287，决策 #80）：与 `unself --version`、`unself deploy` 共用 reportIdentity——
+              // 报障可整段粘贴。进事件日志（SSE 快照重放可见）+ 广播；解析失败占位不抛
+              //（收尾屏不能因身份解析挂掉）。
+              const logIdentity = (text: string): void => {
+                const snap = deps.getState();
+                pushEvent(snap, { kind: 'log', text });
+                deps.setState(snap);
+                broadcast(text);
+              };
+              try {
+                await reportIdentity({ rootDir: process.cwd(), log: logIdentity });
+              } catch (err) {
+                // reportIdentity 内部已兜底占位；走到这里的意外不能静默吞（收尾屏要可见）
+                logIdentity(`✗ 身份信息输出失败：${err instanceof Error ? err.message : String(err)}`);
+              }
+              // 身份行落进事件日志后才置 done：向导轮询到 done 时，SSE 快照必已含三项身份（无竞态窗口）。
               const cur = deps.getState();
               deps.setState(
                 completeDeploy(cur, { baseUrl: r.baseUrl, setupUrl: r.setupToken ? `/setup?token=${r.setupToken}` : null }),
               );
-              broadcast(`✓ 装配完成：${r.baseUrl}`);
             })
             .catch((err: unknown) => {
               const cur = deps.getState();
