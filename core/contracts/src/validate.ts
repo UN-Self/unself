@@ -295,6 +295,9 @@ function parseManifestWithDiagnostics(manifestText: string): {
       storage: 'storage',
       tables: 'tables',
       compat: 'compat',
+      // manifest.license 的 SPDX 形状错归入 license 类目（与包内 LICENSE 文件检查同目，
+      // 但两者是独立规则：文件存在性 vs 声明形状，互不掩盖，见下方 ④）
+      license: 'license',
     };
     return {
       diagnostics: parsed.error.issues.map((issue) => ({
@@ -417,6 +420,8 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
     }
 
     // ④ LICENSE 存在（NOTICE 属 GPL 类模块的义务，缺 LICENSE 本身已拦）
+    //    与 manifest.license（SPDX 声明形状，schema 层已验）是**两条独立规则**：
+    //    前者管「包里有许可证文本」，后者管「声明写成合法 SPDX」——一个成立不豁免另一个。
     if (input.licenseText === undefined) {
       errors.push({
         level: 'error',
@@ -473,6 +478,7 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
       'description',
       'icon',
       'coreOrigin',
+      'license',
     ]);
     const unknown = Object.keys(rawRecord).filter((k) => !known.has(k));
     if (unknown.length > 0) {

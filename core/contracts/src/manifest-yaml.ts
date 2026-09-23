@@ -78,6 +78,8 @@ export function manifestYamlToCandidate(parsed: ParsedManifestYaml): ManifestCan
     runtimes: lists.runtimes ?? [],
     ...(scalars.description ? { description: scalars.description } : {}),
     ...(scalars.icon ? { icon: scalars.icon } : {}),
+    // 许可证（issue #292）：SPDX 表达式标量，形状校验在 ModuleManifestSchema
+    ...(scalars.license ? { license: scalars.license } : {}),
     ...(lists.permissions ? { permissions: lists.permissions } : {}),
     ...(storageAccepts || storagePreferred || storageDeclaration
       ? {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { z } from 'zod';
+import { isValidSpdxExpression } from './spdx';
 
 /**
  * 模块清单（manifest.json）契约 v1：字段冻结（决策 #56/#57，2026-09-17 定稿）。
@@ -131,6 +132,18 @@ export const ModuleManifestSchema = z
      * 硬禁止 '*'（superRefine）——通配等于向任意页面泄露模块 token。
      */
     coreOrigin: z.string().optional(),
+    /**
+     * 模块自身的许可证（SPDX 表达式，如 `MIT` / `Apache-2.0` / `MIT OR Apache-2.0`，
+     * issue #292；契约 v1 增量字段，有默认值故不 bump CONTRACT_VERSION，决策 #57）。
+     * pack 用它写 npm 生成的 `package.json.license`；省略 = 回落平台默认（AGPL-3.0-only）。
+     * 只验形状不查表（见 ./spdx），非法形状在 schema 层直接拒绝。
+     */
+    license: z
+      .string()
+      .refine(isValidSpdxExpression, {
+        message: 'license 不是合法的 SPDX 表达式形状（如 MIT / Apache-2.0 / "MIT OR Apache-2.0"）',
+      })
+      .optional(),
   })
   .superRefine((manifest, ctx) => {
     const accepts = manifest.storage?.accepts;
