@@ -2,6 +2,7 @@
 import { z } from 'zod';
 
 export * from './manifest';
+export * from './build-info';
 export * from './token';
 export * from './validate';
 export * from './messages';
