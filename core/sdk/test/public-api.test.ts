@@ -8,6 +8,10 @@ import { describe, expect, it } from 'vitest';
 import * as sdk from '../src/index';
 import type {
   CreateModuleSDKOptions,
+  ManifestSchema,
+  ModuleConfigField,
+  ModuleManifest,
+  ModulePermission,
   ModuleSDK,
   ModuleStorage,
   ModuleTokenClaims,
@@ -29,6 +33,15 @@ describe('@unself/sdk 公开导出面（#283 A2）', () => {
     expect(typeof sdk.tokenCssName).toBe('function');
   });
 
+  it('契约对外可见面导出可用（#294 / 决策 #78②）', () => {
+    expect(typeof sdk.CONTRACT_VERSION).toBe('string');
+    expect(Array.isArray(sdk.MODULE_PERMISSIONS)).toBe(true);
+    expect(typeof sdk.ModuleManifestSchema.parse).toBe('function');
+    expect(typeof sdk.ModuleManifestSchema.safeParse).toBe('function');
+    expect(typeof sdk.isKnownPermission).toBe('function');
+    expect(typeof sdk.manifestFromYamlText).toBe('function');
+  });
+
   it('全部公开类型可解析（编译期；运行期仅确认参照值可用）', () => {
     const moduleSdk: ModuleSDK | undefined = undefined;
     const options: CreateModuleSDKOptions | undefined = undefined;
@@ -36,7 +49,12 @@ describe('@unself/sdk 公开导出面（#283 A2）', () => {
     const storage: ModuleStorage | undefined = undefined;
     const tokens: ThemeTokens = {};
     const claims: ModuleTokenClaims | undefined = undefined;
-    expect([moduleSdk, options, verifyOptions, storage, claims]).toBeDefined();
+    const manifest: ModuleManifest | undefined = undefined;
+    const permission: ModulePermission | undefined = undefined;
+    const configField: ModuleConfigField | undefined = undefined;
+    const schema: ManifestSchema = sdk.ModuleManifestSchema;
+    expect([moduleSdk, options, verifyOptions, storage, claims, manifest, permission, configField]).toBeDefined();
     expect(tokens).toEqual({});
+    expect(typeof schema.safeParse).toBe('function');
   });
 });
