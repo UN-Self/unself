@@ -519,7 +519,8 @@ async function exec(opts: RunOptions): Promise<number> {
     log(`装配完成：${result.baseUrl}`);
     log(result.setupToken ? `setup 深链：/setup?token=${result.setupToken}` : '已有管理员：setup 已封箱。');
     // 收尾屏身份三项（#287，决策 #80）：报障可整段粘贴；与 --version、向导⑤共用同一出口。
-    await reportIdentity({ rootDir: process.cwd(), log });
+    // rootDir 用实例目录（inst.path）：workbench 包按存放实例的 node_modules 解析，与装配引擎同一基准。
+    await reportIdentity({ rootDir: inst.path, log });
     echoPathline(inst.path, log);
     return 0;
   }

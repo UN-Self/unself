@@ -21,7 +21,7 @@
  * 本无单一真值，标 'dev' 是诚实的占位（不 crash、不假称某个 SHA）。
  * 测试可通过 `identityLines`/`formatIdentity` 的显式入参注入任意身份（不依赖全局）。
  */
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** esbuild `--define` 注入的构建期身份（发布产物形态）；开发树 = undefined。 */
@@ -33,25 +33,15 @@ export interface InstallerIdentity {
   commit: string;
 }
 
-/** package.json 路径（statSync 探测用）。 */
-function pkgStatPath(dir: string): string {
-  return join(dir, 'package.json');
-}
-
 /** 读安装器包 package.json 的 version（dist 形态向上一级、源码形态当前目录向上都能命中）。 */
 function installerPackageVersion(): string {
-  // node:fs 的 existsSync 在此环境对包目录自身会误判 false（探针实测），改用 statSync+try/catch 判存在。
+  // dist/unself.mjs 运行期 import.meta.dirname = …/app/installer/dist → 向上一级即包根；
+  // 源码/tsx 形态 = …/app/installer/src/lib → 需要上两级。两处候选逐个试，判据是包名。
   const base = typeof import.meta.dirname === 'string' ? import.meta.dirname : process.cwd();
   for (const dir of [base, join(base, '..'), join(base, '..', '..')]) {
-    let statOk = false;
+    if (!existsSync(join(dir, 'package.json'))) continue;
     try {
-      statOk = statSync(pkgStatPath(dir)).isFile();
-    } catch {
-      statOk = false;
-    }
-    if (!statOk) continue;
-    try {
-      const pkg = JSON.parse(readFileSync(pkgStatPath(dir), 'utf8')) as { name?: string; version?: string };
+      const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { name?: string; version?: string };
       // 判据 = 包名（防向上误读用户项目/其他包的 package.json）
       if (pkg.name === '@unself/installer' && pkg.version) return pkg.version;
     } catch {

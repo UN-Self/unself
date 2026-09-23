@@ -673,7 +673,9 @@ export function createWizardServer(opts: ServeOptions): Server {
                 broadcast(text);
               };
               try {
-                await reportIdentity({ rootDir: process.cwd(), log: logIdentity });
+                // rootDir 用本向导实例目录（与 `unself deploy` 用 inst.path 同基准）；
+                // workbench 包按实例侧 node_modules 解析，而非进程 cwd（cwd 与实例可无关）。
+                await reportIdentity({ rootDir: deps.getState().instancePath, log: logIdentity });
               } catch (err) {
                 // reportIdentity 内部已兜底占位；走到这里的意外不能静默吞（收尾屏要可见）
                 logIdentity(`✗ 身份信息输出失败：${err instanceof Error ? err.message : String(err)}`);
