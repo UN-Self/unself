@@ -111,11 +111,11 @@ export function formatIdentity(input: {
 }
 
 /**
- * 解析 + 格式化一条龙（#287）：`unself --version`、`unself deploy` 收尾屏、向导⑤ SSE 收尾
+ * 解析 + 格式化一条龙（#287）：`unself --version`、`unself deploy` 收尾屏、向导⑤ 完成屏
  * 三处共用的唯一出口——再添第四处也必须走这里，防止格式漂移。
  * 解析失败（包未装 / IO 异常）不抛不静默留空：占位行带原因。
  */
-export async function reportIdentity(input: { rootDir: string; log: (line: string) => void }): Promise<void> {
+export async function resolveIdentityLines(input: { rootDir: string }): Promise<string[]> {
   const installer = installerIdentity();
   let workbenchVersion: string | null = null;
   let problem: string | undefined;
@@ -124,11 +124,16 @@ export async function reportIdentity(input: { rootDir: string; log: (line: strin
   } catch (e) {
     problem = e instanceof Error ? e.message : String(e);
   }
-  for (const line of identityLines({
+  return identityLines({
     installer,
     workbenchVersion,
     ...(problem !== undefined ? { workbenchProblem: problem } : {}),
-  })) {
+  });
+}
+
+/** 解析 + 逐行打印（#287）：`--version` / 部署收尾屏的文本输出形态。 */
+export async function reportIdentity(input: { rootDir: string; log: (line: string) => void }): Promise<void> {
+  for (const line of await resolveIdentityLines({ rootDir: input.rootDir })) {
     input.log(line);
   }
 }

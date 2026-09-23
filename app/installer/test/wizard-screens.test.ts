@@ -350,4 +350,38 @@ describe('⑤ 完成屏：独立激活入口 + 复制同位换位 + 封箱分流
     });
     expect(wrapper.find('[data-test=open-login]').attributes('href')).toBe('https://x.example.com/login');
   });
+
+  it('完成屏展示版本身份三项（#287，决策 #80）：安装器版本 + commit + workbench 版本', async () => {
+    const wrapper = mount(DoneScreen, {
+      props: {
+        result: {
+          baseUrl: 'https://x.example.com',
+          setupUrl: '/setup?token=tok',
+          identity: [
+            'unself 版本：v0.3.0（commit 7e511f6a00d2ebe57a5069a5624a3c9eceff3da6）',
+            '平台产物：@unself/workbench v0.1.1',
+          ],
+        },
+        instancePath: '/tmp/demo/unself',
+        modules: ['hello'],
+      },
+    });
+    // 收敛到 data-test 容器内的可见文本（不看类名/DOM 结构）
+    const text = wrapper.find('[data-test=build-identity]').text();
+    expect(text).toContain('unself 版本：v0.3.0');
+    expect(text).toContain('commit 7e511f6a00d2ebe57a5069a5624a3c9eceff3da6');
+    expect(text).toContain('@unself/workbench v0.1.1');
+  });
+
+  it('完成屏无身份（旧快照/identity 缺省）→ 不崩、不渲染空容器', async () => {
+    const wrapper = mount(DoneScreen, {
+      props: {
+        result: { baseUrl: 'https://x.example.com', setupUrl: null },
+        instancePath: '/tmp/demo/unself',
+        modules: ['hello'],
+      },
+    });
+    expect(wrapper.find('[data-test=build-identity]').exists()).toBe(true);
+    expect(wrapper.find('[data-test=build-identity]').text()).toBe('');
+  });
 });

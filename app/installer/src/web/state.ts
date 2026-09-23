@@ -115,11 +115,17 @@ export const SHARED_CONSENT_NOTE =
   '该模块将在共享数据库中自建表：它将获得共享数据库的完整访问权（与其他模块零隔离）；' +
   '表名以模块 id 为前缀，禁止跨模块外键（三护栏由装配器硬校验）。';
 
-/** 部署结果（⑤ 收尾：baseUrl + setup 深链）。 */
+/** 部署结果（⑤ 收尾：baseUrl + setup 深链 + 版本身份）。 */
 export interface WizardResult {
   baseUrl: string;
   /** setup token 存在时给 /setup?token=… 深链；sealed（已有管理员）为 null。 */
   setupUrl: string | null;
+  /**
+   * 版本身份三项（#287，决策 #80）：安装器版本 + commit + 平台产物 workbench 版本，
+   * 与 `unself --version` 同一出口生成。**落在结果状态而非部署日志**：日志会被完成屏
+   * 取代（用户自然走完后只剩完成屏），「报障可整段粘贴」要求它在完成屏上仍可见、可复制。
+   */
+  identity: string[];
 }
 
 /**

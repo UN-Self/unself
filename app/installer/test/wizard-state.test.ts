@@ -132,9 +132,14 @@ describe('④ 进度事件 + ⑤ 收尾 + ⑥ 幂等重跑', () => {
     pushEvent(s, { kind: 'log', text: '第二步' });
     expect(s.events.map((e) => e.i)).toEqual([0, 1]);
 
-    const done = completeDeploy(s, { baseUrl: 'https://x.workers.dev', setupUrl: '/setup?token=t' });
+    const done = completeDeploy(s, {
+      baseUrl: 'https://x.workers.dev',
+      setupUrl: '/setup?token=t',
+      identity: ['unself 版本：v0.0.0-test（commit dev）', '平台产物：@unself/workbench v0.0.0-test'],
+    });
     expect(done.step).toBe('done');
     expect(done.result?.baseUrl).toBe('https://x.workers.dev');
+    expect(done.result?.identity).toHaveLength(2);
 
     const failed = failDeploy(s, { cause: ' boom ', owner: 'code', fix: '重跑' });
     expect(failed.step).toBe('failed');
