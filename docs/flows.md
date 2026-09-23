@@ -14,9 +14,9 @@ npx @unself/installer
        ③½ 存储落点四级单选（core / shared / dedicated），按 manifest.storage 声明校验
        ④ 资源名预览（本实例将占用的 CF 资源名）+ 「允许接管」开关（默认关）
   └─ 九步装配（幂等，可随时重跑）：
-       ① D1（core / modules）② 迁移（按模块独立记账）③ R2 ④ 密钥 ⑤ Worker ⑥ 模块 Worker + 路由
-       ⑦ 壳资产与注册表 ⑧ 域名 / DNS / TLS ⑨ 冒烟（health + 各模块 health + 主题体检；不可达必红）
-  └─ 收尾屏：setup 深链 + 引擎版本与 commit（决策 #80）
+       ① D1（core / modules）② 迁移（按模块独立记账）③ Shell Worker 构建上传 ④ 模块 Worker + 路由
+       ⑤ 注册表写入 ⑥ R2 桶 ⑦ OIDC 配置 ⑧ 一次性 setup token ⑨ 冒烟（health + 各模块 health + 主题体检；不可达必红）
+  └─ 收尾屏：setup 深链（引擎版本/commit 展示见 #287，未落）
 
 浏览器打开 setup 深链 → 设管理员用户名密码 → 进工作台（壳）
   └─ 点侧栏模块 → 跨子域 iframe 加载 → 模块用 resolveShellOrigin() 取壳 origin（#277）

@@ -8,7 +8,7 @@
 |---|---|---|
 | 形态 | 页面在 ChatGPT 桌面版内置浏览器里打开时，通过 `document.modelContext.registerTool` 注册站点工具 | 独立服务进程（stdio/HTTP/SSE），agent 客户端主动连接 |
 | 支持方 | OpenAI Codex/ChatGPT Work（实验标准）；社区桥接 `chgold/webmcp-client` 可接 Claude Desktop | Claude Desktop、Cursor、Copilot、自定义本地 agent 等全部支持 |
-| EdgeChat 现状 | ✅ 已实现，注册 5 个工具：`edgechat.login / list_channels / read_messages / send_message / open_dm`（frontend/src/webmcp.ts，261 行） | ❌ 无现成 MCP server，也无 CLI（源码确认：仅 webmcp.ts + Telegram 桥） |
+| 上游 EdgeChat 现状（2026-09-10 源码调研） | ✅ 已实现，注册 5 个工具：`edgechat.login / list_channels / read_messages / send_message / open_dm`（frontend/src/webmcp.ts，261 行）。**注**：改编后的 `@unself/chat` 未保留 webmcp | ❌ 无现成 MCP server，也无 CLI（源码确认：仅 webmcp.ts + Telegram 桥） |
 
 ## 本地 agent 接入方案（基于源码调研）
 

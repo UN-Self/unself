@@ -154,7 +154,7 @@ async function borrowWranglerOauth(bin: string, env: AuthEnv, opts: ResolveAuthO
   }
 }
 
-/** 版本探测：`wrangler --version` ≠ 已验证版本（4.129.0）→ 警告行（实测依据 docs/audit/241-*）。 */
+/** 版本探测：`wrangler --version` ≠ 已验证版本（4.129.0）→ 警告行（实测依据 issue #241）。 */
 async function probeVersionWarning(bin: string, env: AuthEnv, injected?: ExecFileLike): Promise<string | undefined> {
   try {
     const execFile = injected ?? execFileAsync;

@@ -38,21 +38,23 @@
 
 ```text
 1. manifest   模块声明自己
-2. module-sdk 模块与壳的桥：身份、通知、导航、主题
+2. SDK（`@unself/sdk`）模块与壳的桥：身份、通知、导航、主题
 3. Core API   模块间互通只走核心，不走隔壁
 ```
 
 manifest 只保留必要字段：
 
 ```yaml
-id: chat.edgechat
+id: chat                   # 实例内名字；^[a-z][a-z0-9-]+$（决策 #59，不含点）
 route: /m/chat
 entry: https://team.example.com/m/chat/   # 完整 URL，第一方默认同域路径
-runtime: worker            # worker | docker | external
-requires:                  # 依赖的核心能力；仅支持 block 式 list（flow 式 `[a,b]` 解析器报错）
-  - identity
-capabilities:
-  - messaging
+runtimes: [worker]         # worker | docker | external（数组，契约 v1）
+permissions:               # 权限词表（storage/acl/notify/ai/realtime/mail）
+  - storage
+  - notify
+storage:                   # 数据落点声明（四级：core/shared/dedicated/external）
+  accepts: [dedicated]
+  preferred: dedicated
 version: 1.0.0
 icon: inbox                # 可选，Lucide 图标名（[a-z0-9-]）；
                            # 缺省/未知时壳回退模块名首字
@@ -86,7 +88,7 @@ icon: inbox                # 可选，Lucide 图标名（[a-z0-9-]）；
 | sub | 核心内部稳定用户 id | `issuer + sub` 映射留在核心，换身份源不影响模块数据 |
 | 交付 | postMessage 握手 | 不进 URL、不进 Cookie、不进日志 |
 
-**踢人**：成员停用时核心广播停用事件（manifest lifecycle 钩子），模块立即清理；10 分钟 token 过期作为兑底上限。
+**踢人**：成员停用时核心停发模块 token 并广播停用事件（registry 停用；生命周期导出/清理走 `GET /life/export`、`POST /life/purge`）；10 分钟 token 过期作为兜底上限。
 
 **首个管理员**：部署完成输出一次性 setup token 链接；部署者打开并设置管理员用户名+密码（内置身份为默认；OIDC 为折叠可选），核心将该用户登记为管理员，setup 随即封死。不依赖身份源 groups claim，安全边界是“能读到部署输出的人 = 部署者”。
 
@@ -120,10 +122,9 @@ Docker：openresty 按 location 分发，两者等价
 规则：**状态存储归模块，基础设施服务归核心；数据边界靠契约执行，不靠物理分库。**
 
 ```text
-D1 共 2 个库：
-├─ core    用户、角色、模块注册表、会话、审计、setup token
-└─ modules 全部模块业务数据，表前缀 = 模块 id
-          （chat_messages / docs_documents / board_tasks …）
+D1：core 库（用户、角色、模块注册表、会话、审计、setup token）
+    modules 库（平台记账表 + `shared` 级模块自建表，表前缀 = 模块 id）
+    模块业务数据按四级落点（core / shared / dedicated / external，见下）
 
 R2/S3：统一存储适配层，对象按模块前缀隔离（chat/ docs/ meetings/），
        模块只存对象引用，换桶不动模块
@@ -239,8 +240,6 @@ unself-todo-1.2.0.tgz
 
 > 完整字段表、`validate` 清单与发布流程见 [docs/modules.md](modules.md)。
 
-**主题与部署解耦**：模块产物里只有语义令牌名字（`var(--unself-*)`），没有值。部署时零令牌；值只在运行时由壳统一下发（见本文档「注入双通道」）。换主题不重部署模块。
-
 
 ### 跨模块协作三原语（已拍板，2026-09-06）
 
@@ -302,7 +301,7 @@ Stalwart ≥ 0.16.10（JMAP 全合规）为集成前提。
 | L2 契约改造 | 认证与存储对齐（token 验签、SDK 存储、表前缀） | 需要数据隔离与统一身份的服务 |
 | L3 深度重写 | fork 后大刀阔斧：删耦合、改架构、自维护 | 需要彻底重构上游实现的场景；EdgeChat 不走此档（2026-09-15 起走搬运+适配，决策 #50） |
 
-**第三方 DX 是产品面**：module-sdk 文档、模块脚手架（create-unself-module）、契约示例是产品交付物的一部分；「写一个模块放进去」的顺畅度决定平台成色。
+**第三方 DX 是产品面**：`@unself/sdk` 文档与契约示例是产品交付物的一部分（决策 #82：不做脚手架/模板生成器）；「写一个模块放进去」的顺畅度决定平台成色。
 
 
 ## 代码组织：可插拔 monorepo（用户拍板，2026-09-06）
@@ -315,7 +314,7 @@ monorepo 保留，目的是让核心协议、模块清单、适配器和部署�
 ```text
 unself/
 ├── core/                       # 依赖库
-│   ├── contracts/              # 模块、身份、权限、通知协议（内部；对外可见部分由 SDK 具名导出）
+│   ├── contracts/              # 模块、身份、权限、通知协议（内部；对外暴露面见 issue #294，未落）
 │   ├── sdk/                    # 第三方模块开发 SDK（发 npm：@unself/sdk）
 │   ├── ui/                     # 自研 UI 基元（tokens 与组件）
 │   ├── control-plane/          # 可复用控制面库（CF REST 客户端 + 资源编排）
@@ -348,7 +347,7 @@ unself/
 **许可证边界**（已拍板，2026-09-06）：
 
 1. **核心选 AGPL-3.0**：自托管产品防“拿代码开托管服务不回馈”的标准答案（Grafana/MinIO/Mastodon 同路）；威胁模型是云厂商白嫖，GPL 看不住托管路径，MIT/Apache 方向就不对。接受代价：AGPL 只强制开源、不阻止竞争性 fork；个别公司贡献政策会劝退贡献者，9 人社区可忽略。用户是唯一初始版权人，接受外部贡献前可随时改许可证或卖商业授权，这扇门目前开着。
-2. **边界标注**：根 `LICENSE` = AGPL-3.0 全文（核心/SDK/自研模块/文档）；`app/modules/chat-edgechat/` 下 GPL-3.0 模块级 LICENSE（上游继承，注明含本仓库修改）；MiroTalk 相关件 AGPL-3.0；根 `NOTICE` 记录上游归属；`third_party/components.yaml` 登记每个外部件的版本/来源/SPDX/接入方式；新代码文件头 `// SPDX-License-Identifier: AGPL-3.0-only`（脚手架自动带上）。
+2. **边界标注**：根 `LICENSE` = AGPL-3.0 全文（核心/SDK/自研模块/文档）；`app/modules/chat/` 为 GPL-3.0-only（上游继承，manifest 声明 + 根 `NOTICE`/`third_party` 登记，注明含本仓库修改）；MiroTalk 相关件 AGPL-3.0；根 `NOTICE` 记录上游归属；`third_party/components.yaml` 登记每个外部件的版本/来源/SPDX/接入方式；新代码文件头 `// SPDX-License-Identifier: AGPL-3.0-only`（脚手架自动带上）。
 3. **合并判定铁律**：代码进同一构建产物才是“合并”；独立 Worker + HTTP 边界 + 标准协议 ≠ 合并；从 GPL 上游搬运进衍生件时必须固定 commit + 按件登记（third_party/components.yaml）+ 最小适配，不把上游代码复制进核心构建产物（2026-09-15 修订，决策 #50）；fork 过的件必须登记。魔改 EdgeChat 后端自用不分发二进制则无公开义务，但源码照常在仓库中。
 
 
@@ -500,7 +499,7 @@ hello 页  身份行（token claims 姓名/邮箱）+ 计数按钮并排：
 5. **实时能力可运行在 CF**：WebSocket + Durable Objects 是聊天和会议小型信令室的默认实现；不把实时能力预设为 VPS 常驻进程。
 6. **P2P 媒体与信令分离**：Worker 承载会议鉴权、房间与信令，WebRTC 直接传媒体；TURN/SFU/录制按需放入 Docker 或外部基础设施。
 7. **许可证按代码和构建产物隔离**：不通过目录名称假设许可证隔离，必须保留独立依赖、构建和服务边界。
-8. **模块契约三通道**：壳与模块之间只有 manifest、module-sdk、Core API；模块默认 iframe 装载于 `/m/<模块id>/`，第一方同域同规，第三方可换独立域名 entry，契约不变；安全靠短时 token 验签，不靠 origin 隔离。
+8. **模块契约三通道**：壳与模块之间只有 manifest、`@unself/sdk`、Core API；模块默认 iframe 装载于 `/m/<模块id>/`，第一方同域同规，第三方可换独立域名 entry，契约不变；安全靠短时 token 验签，不靠 origin 隔离。
 9. **数据边界按四级声明**（#55）：core 库独立护住平台数据；模块业务数据按 `core`/`shared`/`dedicated`/`external` 四级由部署者选择，`shared` 靠表前缀隔离 + SDK 收口 + 三护栏；模块必须实现 export/purge 生命周期接口。
 10. **装配与启停分离**：装配只在部署时由自建 REST 客户端执行（#65），运行时进程不持有 Cloudflare 凭证；已部署模块的启停是注册表开关，秒级生效，免重部署。
 11. **跨模块协作走核心**：模块互通只经核心代调（act claim 双主体）；资源级权限记核心通用 ACL；AI、存储等基础设施能力由核心配置、SDK 供给。

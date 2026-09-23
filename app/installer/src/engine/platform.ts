@@ -24,7 +24,7 @@ export interface WranglerConfigDirInput {
 }
 
 /**
- * wrangler 配置目录（实测 wrangler 4.129.0/4.129.1 布局，实测记录 docs/audit/241-*）：
+ * wrangler 配置目录（实测 wrangler 4.129.0/4.129.1 布局，实测记录 issue #241）：
  * - WRANGLER_CONFIG_DIR 显式指定（wrangler 官方约定）；
  * - 否则 XDG_CONFIG_HOME/.wrangler（实测 XDG_CONFIG_HOME=/tmp/empty 时 whoami 变未登录——
  *   即 wrangler 读 $XDG_CONFIG_HOME/.wrangler/config/default.toml）；
@@ -45,7 +45,7 @@ export function wranglerConfigDirFor(input: WranglerConfigDirInput): string | nu
   return null;
 }
 
-/** 本 issue 实测基线版本（docs/audit/241-oauth覆盖实测-2026-09-17.md：wrangler 4.129.0）。 */
+/** 本 issue 实测基线版本（issue #241：wrangler 4.129.0）。 */
 export const VERIFIED_WRANGLER_VERSION = '4.129.0';
 
 /** 从 `wrangler --version` 输出提取版本号（容忍装饰行如 ⛅️ wrangler 4.129.1；4.129.0/4.129.1 实测形状）。 */
@@ -57,7 +57,7 @@ export function parseWranglerVersionOutput(stdout: string): string | null {
 /** 版本警告文案（≠ 基线即警告，含更高版本——覆盖面矩阵未验证；null = 无警告）。 */
 export function wranglerVersionWarning(ver: string | null, verified = VERIFIED_WRANGLER_VERSION): string | null {
   if (!ver) {
-    return '未取到 wrangler 版本：OAuth 覆盖矩阵只在 wrangler 4.129.0 实测过（docs/audit/241-*），本次借用无法确认版本，权限覆盖以实测矩阵为准。';
+    return '未取到 wrangler 版本：OAuth 覆盖矩阵只在 wrangler 4.129.0 实测过（审计 241），本次借用无法确认版本，权限覆盖以实测矩阵为准。';
   }
   if (ver !== verified) {
     return `wrangler 版本 ${ver} ≠ 已验证的 ${verified}：OAuth 覆盖矩阵（D1/R2/KV/zone 路由全过、仅 Total TLS 不可用）只在该版本实测过；版本不同覆盖面可能漂移——若装配中途报权限不足，改用 API Token 路径。`;

@@ -599,7 +599,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   }
   if (config.domain) {
     // #309 ④：DNS 自建按凭证来源分流。wrangler OAuth 的 scope 集合不含 dns_records 读写
-    // （2026-09-21 实测，wrangler 4.129.1，docs/audit/241-*），必挂 10000——跳过并给人话指引，
+    // （2026-09-21 实测，wrangler 4.129.1，issue #241），必挂 10000——跳过并给人话指引，
     // 部署不因此失败（资源/路由/产物全部就绪，仅 DNS 记录一个人工步骤；冒烟⑨会明报域名不通）。
     // ensureDns 显式注入（测试）时按注入走，不参与分流。
     if (input.ensureDns) {

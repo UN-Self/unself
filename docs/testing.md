@@ -54,7 +54,8 @@ node scripts/check-migrations-upgrade.mjs  # 跨版本迁移闸门
 - 视觉与动线走查由**主会话**用浏览器（agent-browser）执行，单测不替代肉眼；worker 在 PR 里标注待走查项，不自行跳过。
 - **真浏览器渲染是部署类与 UI 类改动的标准动作**（#279 血泪教训：HTTP 全绿、`/api/health` 200，页面却是白屏——静态资产 content-type 错）。凡改动装配产物、静态资产、壳/模块前端、CSP 或跨域，验收**必须**含一次真实浏览器打开（看到页面真的渲染、关键交互真的能点），并把响应头/截图作为原件留档。仅凭 curl 返回 200 不算通过。
 - 纯重构 PR：旧测试零改动通过，这是「测行为不测实现」的直接推论。
-- **CI 顺序：`install → build → typecheck → test → lint → 迁移闸门`**（issue #283 起）。原因：`@unself/sdk` 的 `main`/`types` 指向 `dist/`（发布形态），与其他 workspace 包的「`types → ./src/index.ts`」不同——**干净树上不先构建，typecheck/test 会报 `Cannot find module '@unself/sdk'`**。本地因残留 `dist/` 而显示绿色是假绿，验收一律以 CI（或干净树）为准。
+- **CI 顺序：`install → verify-workflows → verify-paths → build → typecheck → test → verify:tokens → check-migrations-upgrade`**（= 上「门禁」8 段；issue #283 起 build 前移）。原因：`@unself/sdk` 的 `main`/`types` 指向 `dist/`（发布形态），与其他 workspace 包的「`types → ./src/index.ts`」不同——**干净树上不先构建，typecheck/test 会报 `Cannot find module '@unself/sdk'`**。本地因残留 `dist/` 而显示绿色是假绿，验收一律以 CI（或干净树）为准。
+- **发布类改动（release.yml）**：tag 触发，**不重跑 CI**（PR 阶段已跑门禁）；发版前提 = tag 在 `main` 上 + 一次真机走查记录（口径见 release.yml 头注释）。
 
 ## 开工前边界自查（8 项，每个 issue 开工前逐条自问自答）
 
@@ -75,7 +76,7 @@ node scripts/check-migrations-upgrade.mjs  # 跨版本迁移闸门
 
 规则：
 
-- **涉及生产/真实环境核验的查询与输出必须落文件**：SQL 命令原文 + 原始输出（含行数、时间戳），存进仓库 `docs/audit/`（随 PR 提交）或当次 issue 指定的持久路径；不留只在终端/聊天里。
-- **落档的取证文件不列入 /tmp 清理**：/tmp 只放可再生的临时物；取证原件不可再生（现场已变），清理脚本与人工清理都必须跳过它们。
-- 文件名建议：`docs/audit/<issue 号>-<主题>-<日期>.md`（如 `docs/audit/190-b9-唯一性预检-2026-09-15.md`）。
+- **涉及生产/真实环境核验的查询与输出必须落档**：SQL 命令原文 + 原始输出（含行数、时间戳），**作为评论落进当次 issue（或 PR 描述）**；不留只在终端/聊天里，也不落成 `docs/` 文档（决策 #94）。
+- **落档的取证不可再生**：现场数据当天可能清零，文字转述不算证据；评论一旦发出即为原件。
+- 评论开头注明**日期 + 基线**（commit / wrangler 版本 / 实例名），如 `2026-09-15 · 基线 190-b9`。
 - 只读查询优先；确需写操作的取证，先留档查询计划再执行。
