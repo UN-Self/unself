@@ -4,7 +4,7 @@
  * - Bearer token（CLOUDFLARE_API_TOKEN 或借 wrangler OAuth，见 token.ts）；
  * - v4 信封解析（success/errors/result），错误 → CloudflareApiError（code/message/status）；
  * - fetch 注入（测试替身）；multipart 上传用原生 FormData。
- * 端点形状实测：wrangler 4.129.0 源码 + 2026-09-17 真机探针（docs/audit/244-*）。
+ * 端点形状实测：wrangler 4.129.0 源码 + 2026-09-17 真机探针（issue #244）。
  */
 
 const API_BASE = 'https://api.cloudflare.com/client/v4';

@@ -60,7 +60,7 @@ export function advise(err: unknown, credSource: CredentialSourceHint = null): F
     };
   }
   // #309 ④ + 2026-09-21 走查实锤：wrangler OAuth scope 集合不含 DNS 记录读写（#241 实测
-  // docs/audit/241-*），自有域 + OAuth 在 dns_records 上必挂 10000；API Token 缺其它权限组
+  // issue #241），自有域 + OAuth 在 dns_records 上必挂 10000；API Token 缺其它权限组
   // （KV/D1/R2…）同样 10000。三分支：OAuth/未知来源 → 原人工步骤指引；API Token → 点名
   // 缺失权限组 + 深链接重建（幂等重跑解决不了权限缺口）。
   if (/\b10000\b/.test(msg)) {

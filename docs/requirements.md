@@ -10,13 +10,13 @@
 ## 1. 身份与成员体系（P0）
 
 - [x] **登录**：内置账号（用户名+密码）为默认；可选接入标准 OIDC（Issuer、Client ID、scope 和 claim 映射；Stalwart、Keycloak、Authentik、Zitadel 等任意兼容提供方），SSO 按钮按实例配置显隐。（2026-09-13 对齐决策 #4/#20）
-- [ ] 用户主键为 `instance_id + issuer + sub`，邮箱只用于显示和通知，不能作为不可变身份主键。
+- [x] 用户主键为 `issuer + sub`（每实例独立库，`instance_id` 冗余故不落列），邮箱只用于显示和通知，不能作为不可变身份主键。（2026-09-23 对齐：`0001_init.sql` `UNIQUE(issuer, sub)`）
 - [ ] 团队角色：管理员 / 用户 / 访客；管理员只管理当前这一套实例对应的一个团队，模块权限由实例配置和模块自身策略共同决定。
 - [x] 成员加入唯一入口=邀请链接（一次性+限期，决策 #27）；已有 OIDC 账号首登自动 JIT 建档复用（决策 #20）。（2026-09-13 对齐）
-- [ ] 模块身份：模块不接触外部 OIDC，只接受核心签发的模块 token（JWT、aud=模块、10 分钟、静默续期、postMessage 握手交付）；模块后端只验签。
-- [ ] 模块 token 中的 sub 为核心内部稳定用户 id；`issuer + sub` 映射仅存于核心。
-- [ ] 成员停用即时广播踢人事件，token 短时效作兑底上限；登出由壳清会话并广播，外部身份源 SLO 暂缓。
-- [ ] 首个管理员通过一次性 setup token 产生，使用后立即失效封死。
+- [x] 模块身份：模块不接触外部 OIDC，只接受核心签发的模块 token（JWT、aud=模块、10 分钟、静默续期、postMessage 握手交付）；模块后端只验签。（2026-09-23 对齐：#217 模块 JWT 验签落地；`core/sdk` client 10 分钟静默续期）
+- [x] 模块 token 中的 sub 为核心内部稳定用户 id；`issuer + sub` 映射仅存于核心。（2026-09-23 对齐：签发只写 sub=内部 uid）
+- [ ] 成员停用即时广播踢人事件，token 短时效作兜底上限；登出由壳清会话并广播，外部身份源 SLO 暂缓。
+- [x] 首个管理员通过一次性 setup token 产生，使用后立即失效封死。（2026-09-23 对齐：#165 加固 + `one_time_tokens` 迁移）
 - [ ] 邮箱开户、密码管理、应用专用密码和离职停用通过可选 Provisioning 适配器实现；支持 Stalwart API、SCIM 或 Webhook，但不是 OIDC 的职责。
 
 ## 2. 邮件（可选适配器）
@@ -24,7 +24,7 @@
 - [x] 本团队 Stalwart 参考部署具备 SMTP、IMAP、DNS 与外发基础设施。
 - [x] 平台邮件能力=运行时邮件配置（/admin/settings mail 段）+ SMTP 发信与 Stalwart 开户适配器；支撑入职激活（开户 + 激活链接）与通知邮件；邮件模板仅三个 render——`account_ready` / `invite_result` / `module_toggled`（`core/adapters/mail-smtp/src/templates.ts`），站内通知另有 `invite_pending`，**无独立欢迎信**；Git 事件投递在 M3。（2026-09-15 对齐）
 - [ ] Stalwart 适配器支持可选的开户、禁用、应用密码和限速管理。
-- [ ] 未配置邮件时，平台仍可运行，通知默认使用站内通知。
+- [x] 未配置邮件时，平台仍可运行，通知默认使用站内通知。（2026-09-23 对齐：M1 最小版（弱化形态）实机验收通过，见 issue #22）
 - [ ] 邮局与 OIDC Provider 可以是同一个服务，也可以完全分离。
 
 ## 3. Git 集成（可选模块）
@@ -38,13 +38,13 @@
 
 每个模块都必须可独立启用、禁用、部署和升级。模块未启用时不得出现在统一壳边栏，也不得要求创建其专属云资源。
 
-模块是自包含部署单元：默认以 iframe 装载在单域名路径 `/m/<模块id>/` 下，壳与模块之间只有 manifest、module-sdk 和 Core API 三条通道；模块内部实现（包括对 EdgeChat/MiroTalk 的大改）壳概不知情，第三方模块可在 manifest.entry 填独立域名。
+模块是自包含部署单元：默认以 iframe 装载在单域名路径 `/m/<模块id>/` 下，壳与模块之间只有 manifest、`@unself/sdk` 和 Core API 三条通道；模块内部实现（包括对 EdgeChat/MiroTalk 的大改）壳概不知情，第三方模块可在 manifest.entry 填独立域名。
 
 ### 4.1 IM 即时通讯（可选）
-- [ ] 默认官方实现：EdgeChat（Cloudflare Workers + Durable Objects）。
+- [x] 默认官方实现：EdgeChat（Cloudflare Workers + Durable Objects）。（2026-09-23 对齐：`@unself/chat` 0.1.1 已发 npm）
 - [ ] 单聊、群聊、文件、@ 提醒、消息持久化和历史检索。
-- [ ] 逐条已读回执作为 EdgeChat 官方扩展。
-- [ ] 通过 OIDC 接入，不依赖其原始本地账号体系。
+- [x] 逐条已读回执作为 EdgeChat 官方扩展。（2026-09-23 对齐：#220 落地，#239 终验）
+- [x] 通过核心签发的模块 token 接入（模块不接触外部 OIDC），不依赖其原始本地账号体系。（2026-09-23 修正表述：#217）
 
 ### 4.2 日历（可选）
 - [ ] 个人日程、共享日程和会议邀请。

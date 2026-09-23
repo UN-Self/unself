@@ -25,7 +25,7 @@
 
 ## 其他去向
 
-- 原 docs/requirements.md §6 已确认架构决策（#1-#34）+ §6.6/散落拍板 → [docs/decisions.md](decisions.md)（统一编号 #1-#45，含日期与来源）
+- 原 docs/requirements.md §6 已确认架构决策（#1-#34）+ §6.6/散落拍板 → [docs/decisions.md](decisions.md)（统一编号 #1-#93，含日期与来源）
 - 原 docs/requirements.md §0 现状与约束（参考部署资产）→ [docs/product.md](product.md)「现状与约束」
 - 原 docs/requirements.md §7 第一性原理技术评估 → [docs/architecture.md](architecture.md)
 - 原 docs/requirements.md §8 下一步 → [docs/roadmap.md](roadmap.md)「当前状态」

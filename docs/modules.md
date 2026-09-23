@@ -6,7 +6,7 @@
 
 ## 0. 一句话
 
-模块 = **一个自包含的部署单元**，通过 manifest、module-sdk、Core API 三条通道与壳协作；壳对模块内部实现一无所知。
+模块 = **一个自包含的部署单元**，通过 manifest、`@unself/sdk`、Core API 三条通道与壳协作；壳对模块内部实现一无所知。
 
 按来源与形态分三类（决策 #31，与部署方式、信任边界一致）：
 
@@ -207,7 +207,7 @@ npm publish                        # ⑤ 发到你自己的 scope（如 @acme/un
   - `GET` / `PUT` / `DELETE` `/api/module-api/storage/:key`、`GET /api/module-api/storage/`（列键）= `core` 落点的 get/put/delete/list 四形状（**不承诺关系表**，决策 #55）
   - `POST /api/module-api/notify` = `notify` 词（站内通知，`module_notify` 类型；模块触发通知不直接发邮件）
   - `acl` / `ai` / `realtime` / `mail` 四个词**门禁已生效但端点未实现**（`501` 预留）
-  - 落地与收敛：端点与 `module_notify` 由 #243 落地；module-sdk 客户端收敛（消除「SDK 直连 D1」与「Core API 代理」两条并存）归 **#248**。
+  - 落地与收敛：端点与 `module_notify` 由 #243 落地；`@unself/sdk` 客户端收敛（消除「SDK 直连 D1」与「Core API 代理」两条并存）归 **#248**。
 - **`coreOrigin` 必填**：跨域模块必须显式配置，**禁止回落到 `'*'`**（决策 #63）。
 - **模块恒挂根路径**：模块代码按「部署在根路径」编写；`/m/<id>/` 前缀由**宿主**剥离（CF wrapper / 反代 / 独立域名本就挂根）。模块不要自己实现前缀逻辑。
 - **CSP / CORS**：自托管模块页必须带 `frame-ancestors <壳的 origin>`；Core API 按注册表 origin 白名单放行。
@@ -225,7 +225,7 @@ npm publish                        # ⑤ 发到你自己的 scope（如 @acme/un
 
 | 项 | 归属 |
 |---|---|
-| `permissions` 词表的最终定稿（首版 6 项） | 契约 v1 实现时随 `@unself/contracts` 落定 |
+| `permissions` 词表的对外可见面（首版 6 项） | 由 `@unself/sdk` 具名导出（决策 #78②；issue #294，未落） |
 | 发版约定细节 | 留档待定（决策 #57） |
 | DO / realtime 在 Docker 侧的平替原语 | 下一阶段 |
 | `oauth` 类型配置字段的交互细节 | 下一阶段 |

@@ -16,7 +16,7 @@ import {
 } from '../../src/engine/auth';
 import { findWranglerBin, parseWranglerTokenOutput } from '../../src/engine/rest/token';
 
-/** 93 字符实测形状的 OAuth token（docs/audit/241-*：cfoat_ 前缀 + base64url）。 */
+/** 93 字符实测形状的 OAuth token（issue #241：cfoat_ 前缀 + base64url）。 */
 const OAUTH_TOKEN = `cfoat_${'a'.repeat(86)}`;
 
 /** wrangler auth token 实测输出形状（装饰行 + token + 尾注）。 */
