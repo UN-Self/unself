@@ -35,7 +35,19 @@ export function makeChatApiError(status: number, message: string): ChatApiError 
 /** 网络传输抽象：live = fetch('/api' 相对同源)，mock = 内存路由。 */
 export type Transport = (path: string, init: RequestInit) => Promise<Response>
 
-const LIVE_BASE = '/api'
+/**
+ * 模块可能运行在自有 workers.dev 根路径，也可能被壳挂在同域 `/m/<id>/`。
+ * 同域 iframe 中 location.host 仍是壳域名，因此 API/WS 必须保留挂载前缀；
+ * 直接请求 `/api` 会落到 workbench，返回「not found」。
+ */
+export function liveModuleMount(pathname: string): string {
+  const match = pathname.match(/^(\/m\/[^/]+)(?:\/|$)/)
+  return match?.[1] ?? ''
+}
+
+export function liveApiBase(pathname: string): string {
+  return `${liveModuleMount(pathname)}/api`
+}
 
 /** Bearer 头装配；token 未就绪时显式失败（不发无凭证请求）。 */
 export function authHeaders(token: string | null): Record<string, string> {
@@ -50,7 +62,7 @@ export function createLiveTransport(): Transport {
   return async (path, init) => {
     let response: Response
     try {
-      response = await fetch(`${LIVE_BASE}${path}`, init)
+      response = await fetch(`${liveApiBase(globalThis.location.pathname)}${path}`, init)
     } catch {
       throw makeChatApiError(0, '网络不可用，请检查连接后重试')
     }
@@ -164,7 +176,7 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
       // live：`/api/ws/:kind/:id?token=`（上游 WEBSOCKET_AUTH：会话先经 worker 校验再升级）；
       // 浏览器 WebSocket 不能带 Authorization 头，token 走查询串是上游协议契约。
       const wsProtocol = globalThis.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const url = `${wsProtocol}//${globalThis.location.host}/api/ws/${handlers.kind}/${handlers.roomId}?token=${encodeURIComponent(handlers.token)}`
+      const url = `${wsProtocol}//${globalThis.location.host}${liveApiBase(globalThis.location.pathname)}/ws/${handlers.kind}/${handlers.roomId}?token=${encodeURIComponent(handlers.token)}`
       let socket: WebSocket | null = null
       try {
         socket = new WebSocket(url)
