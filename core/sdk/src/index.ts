@@ -4,7 +4,18 @@ export type { CreateModuleSDKOptions, ModuleSDK } from './client.js';
 // 主题语义名 → CSS 变量名单点转换（§6.5.3）：本地再导出，保证 .d.ts 自包含。
 export { tokenCssName } from './theme.js';
 // 公开结构类型（#283）：镜像 @unself/contracts，保证发布产物 .d.ts 自包含（第三方只装本包）。
-export type { ThemeTokens, ModuleTokenClaims } from './contract-types.js';
+export type { ThemeTokens, ModuleTokenClaims, ModuleConfigField } from './contract-types.js';
+// 契约对外可见面（决策 #78② / #294）：manifest schema、契约版本、权限词表——
+// 值在构建期内联，公开签名只引用本包自带的结构镜像，产物不引用 @unself/contracts。
+export { CONTRACT_VERSION, MODULE_PERMISSIONS, ModuleManifestSchema, isKnownPermission, manifestFromYamlText } from './contract-surface.js';
+export type {
+  ManifestIssue,
+  ManifestParseFailure,
+  ManifestParseSuccess,
+  ManifestSchema,
+  ModuleManifest,
+  ModulePermission,
+} from './contract-surface.js';
 export { verifyModuleToken } from './verify.js';
 export type { VerifyModuleTokenOptions } from './verify.js';
 // 存储客户端（#248 收敛（a)）：core 级唯一通道 = Core API 代理；createD1Storage 为兼容别名
