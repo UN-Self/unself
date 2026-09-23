@@ -33,7 +33,7 @@ export function parseReleaseTag(tag) {
   const m = /^([a-z]+)-v(.+)$/.exec(String(tag ?? '').trim());
   if (!m) {
     throw new Error(
-      `tag 形式不认识：「${tag}」。支持的四种：sdk-v0.1.0 / hello-v0.1.0 / chat-v0.1.0 / installer-v0.2.0`,
+      `tag 形式不认识：「${tag}」。支持的五种：sdk-v0.1.0 / hello-v0.1.0 / chat-v0.1.0 / workbench-v0.1.0 / installer-v0.3.0`,
     );
   }
   const [, name, version] = m;

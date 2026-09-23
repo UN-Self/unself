@@ -211,6 +211,33 @@ describe('worker 运行时 + 错误路径', () => {
 });
 
 describe('#285 生成的 package.json（npm 发布形态）', () => {
+  it('发布 tarball 保留作者仓库来源，且不带源码包脚本或私密元数据', async () => {
+    const dir = join(work, 'repository-module');
+    await makeModule(dir, MINI_MANIFEST);
+    const repository = { type: 'git', url: 'git+https://github.com/acme/modules.git', directory: 'modules/mini' };
+    await writeFile(join(dir, 'package.json'), JSON.stringify({
+      repository, private: true, scripts: { postinstall: 'do-not-run' }, token: 'do-not-publish',
+    }));
+    const packed = await packModuleDir({ dir, outDir: join(work, 'repository-out') });
+    const dest = join(work, 'repository-unpacked');
+    await extractTarball({ tarPath: packed.tarballPath, dest });
+    const pkg = JSON.parse(await readFile(join(dest, 'package', 'package.json'), 'utf8'));
+    expect(pkg.repository).toEqual(repository);
+    expect(pkg).not.toHaveProperty('private');
+    expect(pkg).not.toHaveProperty('scripts');
+    expect(pkg).not.toHaveProperty('token');
+  });
+
+  it('字符串 repository 也随包保留，未声明时不伪造平台仓库', async () => {
+    const dir = join(work, 'repository-string');
+    await makeModule(dir, MINI_MANIFEST);
+    const absent = await modulePackageFiles({ dir });
+    expect(JSON.parse(absent.files.find(f => f.name === 'package.json')!.data.toString())).not.toHaveProperty('repository');
+    await writeFile(join(dir, 'package.json'), JSON.stringify({ repository: 'github:acme/mini' }));
+    const present = await modulePackageFiles({ dir });
+    expect(JSON.parse(present.files.find(f => f.name === 'package.json')!.data.toString()).repository).toBe('github:acme/mini');
+  });
+
   const helloDir = () => join(REPO_ROOT, 'app', 'modules', 'hello');
   const readPkg = (files: Array<{ name: string; data: Buffer }>): { name: string; version: string; files: string[]; license: string } =>
     JSON.parse(files.find((f) => f.name === 'package.json')!.data.toString('utf8')) as {

@@ -12,7 +12,8 @@ import { parseReleaseTag, RELEASE_TARGETS, toGithubOutput } from '../../../scrip
 import { findRepoRoot } from './helpers/repo-root';
 
 describe('发布 tag → 包与版本（tag 即版本）', () => {
-  it('四个包各自解析出正确的包名与版本', () => {
+  it('五个包各自解析出正确的包名与版本', () => {
+    expect(parseReleaseTag('workbench-v0.1.1')).toMatchObject({ package: '@unself/workbench', version: '0.1.1', kind: 'workspace' });
     expect(parseReleaseTag('sdk-v0.1.0')).toMatchObject({ package: '@unself/sdk', version: '0.1.0' });
     expect(parseReleaseTag('hello-v0.1.0')).toMatchObject({ package: '@unself/hello', version: '0.1.0', id: 'hello' });
     expect(parseReleaseTag('chat-v0.1.0')).toMatchObject({ package: '@unself/chat', version: '0.1.0', id: 'chat' });
@@ -52,9 +53,8 @@ describe('发布 tag → 包与版本（tag 即版本）', () => {
     // 相对被测脚本所在仓库根解析（vitest 的 cwd 是包目录）
     const workflow = readFileSync(join(findRepoRoot(), '.github/workflows/release.yml'), 'utf8');
     expect(workflow).toContain('id-token: write');
-    for (const name of Object.keys(RELEASE_TARGETS)) {
-      expect(workflow).toContain(`'${name}-v*'`);
-    }
+    const triggers = [...workflow.matchAll(/'([a-z]+)-v\*'/g)].map(match => match[1]).sort();
+    expect(Object.keys(RELEASE_TARGETS).sort()).toEqual(triggers);
     // 无长期凭据：workflow 不得出现任何 npm token secret 引用
     expect(workflow).not.toContain('NODE_AUTH_TOKEN');
     expect(workflow).not.toContain('NPM_TOKEN');
