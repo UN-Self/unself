@@ -37,8 +37,16 @@
  *
  * 形状 vs 拼写（重要边界）：本模块不查 SPDX License List，因此任何**语法合法**的
  * idstring 都通过——`mitten` / `NotALicense` / `2020` 形状合法即通过，它们是不是
- * 真许可证由列表裁决，不在本层。只拒绝语法上不成立的形态（悬空操作符、缺空格、
- * 空 LicenseRef、括号不配对等）。
+ * 真许可证由列表裁决，不在本层。
+ *
+ * **由此不可回避的一则边界**：没有 `AND`/`OR` 分隔符的拼接串（如 `MITORApache-2.0`）
+ * 本身是一个合法 idstring——形状层与任意合法未知标识符（如 `NotALicense`）**无法区分**，
+ * 因此**接受**。这是「只验形状不查表」口径的直接推论，不是漏网：想拒绝它就必须查
+ * SPDX 标识表，而查表不在本 issue 范围（会引入需随列表版本维护的数据依赖）。
+ * 不得引入「看起来像两个词粘一起就拒」的启发式——那会误杀合法自定义标识符。
+ *
+ * 与本层确实能拒的相邻形态的区别：`MIT and Apache-2.0` / `MIT or Apache-2.0` 是
+ * **由空白分开的三个 idstring**（小写 `and`/`or` 不是操作符），词序列不构成表达式 → 拒。
  *
  * 递归下降解析：语法与 ABNF 逐条对应，越界即返回 false（不抛错——validate 走诊断流，pack 走 parse 抛错）。
  */
@@ -201,9 +209,9 @@ function parseSimple(p: Parser): boolean {
  * 语义边界：
  * - 合法：`MIT`、`Apache-2.0`、`AGPL-3.0-only`、`GPL-2.0+`、`MIT OR Apache-2.0`、
  *   `(MIT OR Apache-2.0) AND BSD-3-Clause`、`GPL-2.0-only WITH Classpath-exception-2.0`、
- *   `LicenseRef-Proprietary`、`DocumentRef-foo:LicenseRef-bar`
- * - 非法：空串/纯空白、悬空操作符（`MIT OR`）、操作符缺空格（`MITORApache-2.0`）、
- *   `+` 前有空格（`MIT +`）、小写 `or`（操作符大小写敏感）、引号包裹（`"MIT"`）、
+ *   `LicenseRef-Proprietary`、`DocumentRef-foo:LicenseRef-bar`、任意合法未知 idstring（`NotALicense`）
+ * - 非法：空串/纯空白、悬空操作符（`MIT OR`）、`+` 前有空格（`MIT +`）、小写 `or`
+ *   （操作符大小写敏感，`MIT or Apache-2.0` 的词序列不成立）、引号包裹（`"MIT"`）、
  *   `LicenseRef-`（空 idstring）、括号不配对、非 idstring 字符（`,` `/` 制表符 换行 非 ASCII）
  * - **不查表**：`mit`（小写标识符）形状合法即通过——标识符大小写不敏感，拼写裁决不在本层
  *
