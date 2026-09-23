@@ -23,6 +23,8 @@ function loadGeneratedEntry(options?: {
   assetsBody?: string;
   /** 资产响应的 content-type（#279 后应为上传时定对的真类型）。 */
   assetsContentType?: string;
+  /** 让页面路径先走 Worker 404，再命中显式 index.html 回退。 */
+  deepLinkFallback?: boolean;
   /** 注册表行（#273：frame-src 白名单真值源）；缺省 = 无 CORE_DB 绑定。 */
   registryManifests?: Array<{ entry: string }>;
 }): LoadedEntry {
@@ -31,7 +33,8 @@ function loadGeneratedEntry(options?: {
   const contentType = options?.assetsContentType ?? 'text/html; charset=utf-8';
   const env: Record<string, unknown> = {
     ASSETS: {
-      fetch: async (): Promise<Response> => {
+      fetch: async (request: Request): Promise<Response> => {
+        if (options?.deepLinkFallback && new URL(request.url).pathname !== '/index.html') return new Response('not here', { status: 404, headers: { 'content-type': 'text/plain' } });
         if (body === undefined) return new Response('not here', { status: 404, headers: { 'content-type': 'text/plain' } });
         return new Response(body, { status: 200, headers: { 'content-type': contentType } });
       },
@@ -56,7 +59,7 @@ function loadGeneratedEntry(options?: {
 describe('生产组合根（@unself/workbench src/entry.prod.ts）：SPA 回退的 HTML 必须带安全头', () => {
   it('/setup（走 Worker 的页面导航）回退出的 HTML 带 CSP + X-Frame-Options', async () => {
     const app = loadGeneratedEntry();
-    const res = await app.fetch(new Request('https://team.example.com/setup?token=x'));
+    const res = await app.fetch(new Request('https://team.example.com/setup?token=x', { headers: { accept: 'text/html' } }));
 
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
@@ -105,10 +108,8 @@ describe('生产组合根（@unself/workbench src/entry.prod.ts）：SPA 回退�
     expect(body).toContain('https://unself-module-hello.test-subdomain.workers.dev');
   });
 
-  it('workers.dev（#279）：资产类型退化成 octet-stream 时**不再**被伪造为 text/html——故障显式透出，不许伪装', async () => {
-    // #273 时代的 asHtmlDocument 会把导航请求命中的非 HTML 资产强改成 text/html，
-    // 从而把「上传 part 类型错」的回归藏起来（HTML 照常、只有 module 脚本白屏）。
-    // #279 修在上传侧（rest/mime.ts）后该兜底被删除：worker 只给真 HTML 补安全头，其余原样透出。
+  it('已知壳页面的旧 octet-stream 类型恢复为 HTML，并保留动态安全头', async () => {
+    // 按已知页面路径恢复类型；未知二进制及 JS/CSS 不按 Accept 冒充 HTML。
     const app = loadGeneratedEntry({
       assetsContentType: 'application/octet-stream',
       registryManifests: [{ entry: 'https://unself-module-hello.test-subdomain.workers.dev/' }],
@@ -118,8 +119,16 @@ describe('生产组合根（@unself/workbench src/entry.prod.ts）：SPA 回退�
         headers: { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
       }),
     );
-    expect(res.headers.get('content-type')).toBe('application/octet-stream');
-    expect(res.headers.has('content-security-policy')).toBe(false);
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(res.headers.has('content-security-policy')).toBe(true);
+  });
+
+  it('setup 深链：旧部署的 index.html 即使是 octet-stream 也按 HTML 导航', async () => {
+    const app = loadGeneratedEntry({ assetsContentType: 'application/octet-stream', deepLinkFallback: true });
+    const res = await app.fetch(new Request('https://team.example.com/setup?token=x', { headers: { accept: 'text/html' } }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'self'");
   });
 
   it('workers.dev（#279）：导航请求命中真 JS 资产时类型与 body 原样透出（不伪造 text/html、不加 CSP）', async () => {
