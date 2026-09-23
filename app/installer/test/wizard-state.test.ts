@@ -151,19 +151,24 @@ describe('④ 进度事件 + ⑤ 收尾 + ⑥ 幂等重跑', () => {
     expect(s.error?.fix.length).toBeGreaterThan(0);
   });
 
-  it('⑥ reset：清事件/错误/结果回 ①，实例路径与模块选择保留', () => {
+  it('⑥ reset：清事件/错误/结果并保留部署配置，回到可直接重跑的 ready', () => {
     let s = initialWizardState(instancePath, { modules: ['chat'] });
+    s = { ...s, domainChoice: 'custom', domain: 'team.example.com', storageChoices: { chat: 'dedicated' }, sharedConsent: true };
     s = beginDeploy(s);
     pushEvent(s, { kind: 'log', text: 'x' });
     s = failDeploy(s, { cause: 'x', owner: 'code', fix: 'y' });
 
     const r = resetWizard(s);
-    expect(r.step).toBe('auth');
+    expect(r.step).toBe('ready');
     expect(r.events).toEqual([]);
     expect(r.error).toBeNull();
     expect(r.result).toBeNull();
     expect(r.instancePath).toBe(instancePath);
     expect(r.modules).toEqual(['chat']);
+    expect(r.domainChoice).toBe('custom');
+    expect(r.domain).toBe('team.example.com');
+    expect(r.storageChoices).toEqual({ chat: 'dedicated' });
+    expect(r.sharedConsent).toBe(true);
   });
 });
 
@@ -317,11 +322,11 @@ describe('③★ module-config 步（#307：词表新增，纯函数语义）', 
     expect(gotFull.demo?.SECRET_KEY).toBe('');
   });
 
-  it('⑥ reset：configValues/moduleConfigs 保留（重跑不重填非 secret 配置）', () => {
+  it('⑥ reset：configValues/moduleConfigs 与部署配置保留（可直接重跑）', () => {
     let s = noSecretState();
     s = saveConfigValues(s, 'demo', { API_URL: 'https://x.example.com' }).state;
     const r = resetWizard({ ...s, step: 'failed' });
-    expect(r.step).toBe('auth');
+    expect(r.step).toBe('ready');
     expect(r.configValues.demo?.API_URL).toBe('https://x.example.com');
     expect(r.moduleConfigs).toHaveLength(1);
   });

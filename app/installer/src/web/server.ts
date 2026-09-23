@@ -8,7 +8,9 @@
  * 部署执行器由 deps.deploy 注入（测试替身 / CLI 接九步引擎），向导壳不 import 引擎。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { DEFAULT_THEME, tokenCssName } from '@unself/contracts';
+import { readFile } from 'node:fs';
+import { join } from 'node:path';
+import { buildTokenDeepLink } from '../engine/token';
 import {
   addModule,
   apexZone,
@@ -37,8 +39,25 @@ import {
   type WizardStep,
   type WizardStorageOption,
 } from './state';
-import { renderPage } from './page';
-export { renderPage };
+// 失败三要素单一真源（2026-09-21 走查实锤：本地副本已与引擎漂移——10000 一刀切归因 DNS，
+// 实际 API Token 缺 KV 权限同样 10000）。errors.ts 零依赖纯函数，不违反「壳不 import 引擎
+// 重运行时」纪律。
+import { advise as engineAdvise } from '../engine/errors';
+import { themeVarBlock } from './theme';
+import { resolveWebDistDir } from './web-path';
+
+/**
+ * ① 凭证来源追踪（走查反馈：② 屏按凭证分流——OAuth=手填完整域名，token=zone 下拉）。
+ * 'oauth' = submitOAuthSkip 走的；'token' = 真验过的 API Token（含 env token）；null = 未过①。
+ * page.ts 渲染时读取；setCredentialSource 在①推进时设置，reset 时清空。
+ */
+let credentialSource: 'oauth' | 'token' | null = null;
+export function currentCredentialSource(): 'oauth' | 'token' | null {
+  return credentialSource;
+}
+export function setCredentialSource(v: 'oauth' | 'token' | null): void {
+  credentialSource = v;
+}
 
 /** deps.moduleConfigs 未接线时的缺省（全部模块无配置页 → ③★ 自动跳过）。 */
 const EMPTY_CONFIGS: WizardModuleConfig[] = [];
@@ -184,40 +203,80 @@ export function viewStepOf(state: WizardState, reqStep: string | null): WizardSt
   const target = reqStep as WizardStep;
   if (!WIZARD_STEP_ORDER.includes(target)) return state;
   if (wizardStepIndexOf(target) >= wizardStepIndexOf(state.step)) return state;
+  // ③★ 自动跳过不可达：module-config 无声明 = 该步从未发生（同旧 renderPage 的
+  // configPages()||storageScreen 兜底语义），渲染视图落回当前步。
+  if (target === 'module-config' && state.moduleConfigs.length === 0) return state;
   return { ...state, step: target };
 }
 
-/** 失败三要素（与引擎 errors.advise（src/engine）同款映射，已知的才归类，其余归 code 给幂等重跑）。 */
+/** 失败三要素：单一真源（引擎 errors.advise）+ 凭证来源（token 路径必走显式 RestClient，
+ * 10000 归因按 token 权限组缺失；OAuth/空值直跑沿用 OAuth scope 缺口文案）。 */
 function advise(err: unknown): { cause: string; owner: 'token' | 'dns' | 'network' | 'code'; fix: string } {
-  const msg = err instanceof Error ? err.message : String(err);
-  if (/10405/.test(msg)) return { cause: msg.slice(0, 300), owner: 'token', fix: 'token 缺 Zone 级权限：按向导①的深链接重建 token 后重跑' };
-  // #309 ④：wrangler OAuth 无 dns_records 读写权限（#241 实测）——权限缺口重跑不会好，给人工步骤。
-  if (/\b10000\b/.test(msg))
-    return {
-      cause: msg.slice(0, 300),
-      owner: 'token' as const,
-      fix: 'wrangler OAuth 无 DNS 记录权限：在 CF 控制台为该域名手动添加 A 记录 192.0.2.1（开启代理），或在①改粘 API Token（含 Zone · DNS · Edit）后重跑',
-    };
-  if (/ENOTFOUND|无法获取/.test(msg)) return { cause: msg.slice(0, 300), owner: 'dns', fix: 'DNS 未生效：等 60 秒重跑（幂等，只补没完成的部分）' };
-  if (/fetch failed|ECONNRESET|ETIMEDOUT/.test(msg)) return { cause: msg.slice(0, 300), owner: 'network', fix: '网络中断或临时故障：检查网络后重跑' };
-  return { cause: msg.slice(0, 300), owner: 'code', fix: '直接重跑即可：装配器幂等收敛，不会重复创建资源' };
+  return engineAdvise(err, credentialSource === 'token' ? 'env-api-token' : (credentialSource === 'oauth' ? 'wrangler-oauth' : null));
 }
 
-/**
- * 向导页的令牌变量块：取值来自契约默认主题（`core/contracts/src/theme-tokens.json`
- * 是令牌取值的唯一定义处），页面样式一律引用 `var(--unself-*)`——照 AGENTS「样式只走 tokens」。
- * 源码里不出现任何颜色字面量（取值在运行时由数据渲染出来），故 verify-tokens 规则一通过。
- */
-export function themeVarBlock(): string {
-  return Object.entries(DEFAULT_THEME)
-    .map(([dotted, value]) => `${tokenCssName(dotted)}: ${value};`)
-    .join(' ');
-}
 
+/** 静态资产 MIME（白名单；未知扩展名 = octet-stream 原样，不猜）。 */
+const STATIC_MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.woff2': 'font/woff2',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+};
+
+/** dist/web 静态服务：路径穿越防护（resolve 后必须在 web 根内）；no-store 防「改了没生效」。 */
+function serveStatic(res: ServerResponse, pathname: string): void {
+  let webRoot: string;
+  try {
+    webRoot = resolveWebDistDir();
+  } catch (err) {
+    json(res, 500, { problem: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+  const bare = pathname === '/' || !pathname.includes('.');
+  const rel = bare ? 'index.html' : pathname.replace(/^\/+/, '');
+  const file = join(webRoot, rel);
+  if (!file.startsWith(webRoot)) {
+    json(res, 404, { problem: `未知路径 ${pathname}` });
+    return;
+  }
+  readFile(file, (err, data) => {
+    if (err) {
+      // 无扩展名回退到 index.html（SPA 深链）；资产缺失保持 404
+      if (bare) {
+        readFile(join(webRoot, 'index.html'), (err2, html) => {
+          if (err2) {
+            json(res, 500, { problem: '向导页面产物缺失：先在安装器包根执行 `pnpm build`（生成 dist/web）' });
+            return;
+          }
+          res.writeHead(200, { 'content-type': STATIC_MIME['.html']!, 'cache-control': 'no-store' });
+          res.end(html);
+        });
+        return;
+      }
+      json(res, 404, { problem: `未知路径 ${pathname}` });
+      return;
+    }
+    const ext = rel.slice(rel.lastIndexOf('.'));
+    res.writeHead(200, {
+      'content-type': STATIC_MIME[ext] ?? 'application/octet-stream',
+      'cache-control': 'no-store',
+    });
+    res.end(data);
+  });
+}
 
 /** 建向导服务（不 listen；端口由调用方/测试决定）。 */
 export function createWizardServer(opts: ServeOptions): Server {
   const { deps } = opts;
+  // ① 凭证来源随新服务重置（测试多实例隔离；生产一进程一向导）
+  setCredentialSource(null);
   // 宿主环境提示：初始由 deps 注入（#246）；② 选自有域后就地更新 needsTotalTls，不改调用方对象。
   let envHint = resolveEnvHint(deps);
   // 向导①粘贴的 token（#272）：只活在本次服务进程内存（不写 state、不进 /api/state、不落盘不回显）。
@@ -245,25 +304,25 @@ export function createWizardServer(opts: ServeOptions): Server {
       const url = new URL(req.url ?? '/', 'http://localhost');
       const state = deps.getState();
       try {
-        if (req.method === 'GET' && url.pathname === '/') {
-          // #309 ②：?step=<id> 渲染回退（只换视图不换状态）：目标步必须是步进器意义上
-          // 「已完成的步」（index < 当前），未完成步/未知值一律落回当前步——推进权限仍在 POST 端点。
-          const reqStep = url.searchParams.get('step');
-          const view = viewStepOf(state, reqStep);
-          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-          res.end(renderPage(view, envHint));
-          return;
-        }
         if (req.method === 'GET' && url.pathname === '/api/state') {
           // ⑥ 幂等重跑标语随状态查询返回；状态投影永不含 token 明文与 ③★ secret 值
           //（secret 只在服务进程内存 configSecrets；configValues 只收非 secret——双层不泄漏）。
+          // credentialSource（#246 走查定稿）：① 凭证来源随投影下发——SPA 据此分流②屏
+          //（token=zone 下拉 / OAuth=手填完整域名）。token 明文不在投影（hasToken 只有布尔）。
           json(res, 200, {
             ...state,
             hasEnv: envHint.hasEnvToken,
             envHint,
+            credentialSource,
             idempotent: true,
             idempotentNote: '任何时候重跑收敛同一终态',
           });
+          return;
+        }
+        if (req.method === 'GET' && url.pathname === '/api/meta') {
+          // SPA 启动元数据：token 深链接（权限预选唯一真源 = engine/token.ts）+ 主题变量
+          //（值唯一真源 = core/contracts theme-tokens.json；SPA 无构建期令牌）。
+          json(res, 200, { tokenDeepLink: buildTokenDeepLink('unself-deploy'), themeVars: themeVarBlock() });
           return;
         }
         // ② zone 自动发现（#307）：用 ① 的凭证列账户 active zone（无凭证/失败 → ok:false 走手填回退）。
@@ -290,15 +349,36 @@ export function createWizardServer(opts: ServeOptions): Server {
           res.end();
           return;
         }
+        if (req.method === 'GET') {
+          // 静态 SPA 服务（Vue 构建产物 dist/web；import.meta.url 定位，不依赖 cwd）：
+          // - 资产请求（带扩展名）：命中即按类型回；未命中 404
+          // - 其余 GET（含 /?step=…）：回 index.html（SPA 自行处理视图回退；?step= 守卫已移到前端，
+          //   服务端 viewStepOf 语义保留给直接访问 URL 的形态）
+          const view = viewStepOf(state, url.searchParams.get('step'));
+          void view;
+          serveStatic(res, url.pathname);
+          return;
+        }
         if (req.method === 'POST' && url.pathname === '/api/step1') {
           // 已过①再提交 = 换凭证重验（同 #309② 回退①场景）：不再静默吞掉返回假成功——
           // 走完整 submitToken + 真验 + sessionToken 覆盖，验证失败 400 原地不动。
           const body = await readJsonBody(req);
           const raw = String(body.token ?? '');
+          // 环境已带 CLOUDFLARE_API_TOKEN（①屏提示「无需粘贴」）：空值 = 用 env 凭据直跑。
+          // 记 'token' 来源——引擎凭证优先级也是 env token 在前（deploy.ts 缺省 credentialSource）；
+          // ② 屏 zone 发现走它（wizardListZones('') → resolveAuth 同样优先 env token）。
+          if (raw.trim() === '' && envHint.hasEnvToken) {
+            setCredentialSource('token');
+            const skipped = submitOAuthSkip(state);
+            deps.setState(skipped);
+            json(res, 200, { step: skipped.step });
+            return;
+          }
           // 「可零输入直跑」的接线（让 #246 的文案与行为一致）：宿主探测到可用 wrangler OAuth
           // 且非 CI → 留空 = 用本机 OAuth 凭据（引擎按凭证优先级自取），不再报「token 为空」。
           if (raw.trim() === '' && envHint.oauthUsable && !envHint.ci) {
             sessionToken = '';
+            setCredentialSource('oauth');
             const skipped = submitOAuthSkip(state);
             deps.setState(skipped);
             json(res, 200, { step: skipped.step });
@@ -321,6 +401,7 @@ export function createWizardServer(opts: ServeOptions): Server {
           }
           // #272 接线：token 只留在本次服务内存（sessionToken），由 ④ 部署调用传给引擎。
           sessionToken = token;
+          setCredentialSource('token');
           deps.setState(r.state);
           json(res, 200, { step: r.state.step });
           return;
@@ -544,10 +625,12 @@ export function createWizardServer(opts: ServeOptions): Server {
             json(res, 400, { problem: `当前步骤 ${state.step} 不能开始装配（请先完成①②③）` });
             return;
           }
-          // ⑥ 幂等重跑：failed/done 重开前先 reset 回干净状态（token 明文本就不留存，重填）。
+          // ⑥ 幂等重跑：failed/done 重开前先 reset 清事件/结果并保留部署配置。
+          // 凭证不跟着重置（2026-09-22 走查实锤：重跑沿用服务端会话，避免重复输入）——
+          // sessionToken/credentialSource 保留，后续重新提交①时才覆盖；不再走①的人（OAuth 空提交
+          // 直跑）也不会撞旧值：reset 回 ready 后沿用当前服务端会话凭证。
           const base = state.step === 'ready' ? state : resetWizard(state);
           if (state.step !== 'ready') {
-            sessionToken = null; // reset 连带丢弃上一轮粘贴的 token
             clearConfigSecrets(); // ③★ secret 值同样只服务一轮（重跑重填，同 token 语义）
           }
           const body = await readJsonBody(req);

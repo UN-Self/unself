@@ -117,15 +117,22 @@ describe('#269 ③ 来源入口（向导）', () => {
       expect(previewCalls.at(-1)).toEqual(['hello', 'todo']);
       expect(holder.state.resourceNames).toEqual([{ kind: 'Worker', name: 'demo-hello-todo' }]);
 
-      // 页面：装配前「将要装什么」可见（#307 分屏：预览在③模块屏；把状态推进到 modules 步渲染）
+      // 投影：装配前「将要装什么」可读（#307 分屏：预览在③模块屏；SPA 渲染面在组件测试覆盖）
       holder.state = { ...holder.state, step: 'modules' };
       const page = await srv.get('/');
-      expect(page.text).toContain('将要安装的模块');
-      expect(page.text).toContain('npm:@acme/unself-todo@1.2.0');
-      expect(page.text).toContain('1.2.0');
-      expect(page.text).toContain('sha512-AAAABBBBCCCCDDDD');
-      expect(page.text).toContain('storage、notify');
-      expect(page.text).toContain('accepts=shared/core');
+      expect(page.status).toBe(200);
+      const st = JSON.parse((await srv.get('/api/state')).text) as {
+        moduleAdds: Array<Record<string, unknown>>;
+      };
+      expect(st.moduleAdds).toHaveLength(1);
+      expect(st.moduleAdds[0]).toMatchObject({
+        id: 'todo',
+        source: 'npm:@acme/unself-todo@1.2.0',
+        version: '1.2.0',
+        integrity: 'sha512-AAAABBBBCCCCDDDDEEEEFFFF',
+      });
+      expect(st.moduleAdds[0]!.permissions).toEqual(['storage', 'notify']);
+      expect(st.moduleAdds[0]!.storageAccepts).toEqual(['shared', 'core']);
     } finally {
       srv.close();
     }
@@ -322,7 +329,7 @@ describe('#269 状态机纯函数', () => {
     const s = initialWizardState(join(root, 'demo', 'unself'), { modules: ['hello'] });
     const added = addModule(s, { ...PREVIEW, storageAccepts: [...PREVIEW.storageAccepts] }).state;
     const reset = resetWizard(added);
-    expect(reset.step).toBe('auth');
+    expect(reset.step).toBe('ready');
     expect(reset.moduleAdds).toHaveLength(1);
     expect(reset.storageOptions.find((o) => o.id === 'todo')).toBeDefined();
   });

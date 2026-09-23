@@ -104,6 +104,8 @@ export async function smokeCheck(input: {
   coreUrl: string;
   modules: ModuleTarget[];
   timeoutMs?: number;
+  /** 真实装配验证壳身份与导航 MIME，防止旧 Worker 的健康响应误放行。 */
+  verifyWorkbench?: boolean;
 }): Promise<SmokeResult[]> {
   const targets: Array<{ name: string; url: string }> = [
     { name: 'core-api', url: `${input.coreUrl.replace(/\/+$/, '')}/api/health` },
@@ -119,9 +121,13 @@ export async function smokeCheck(input: {
       let ok = res.status === 200;
       let detail: string | undefined;
       if (ok) {
-        const body = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+        const body = (await res.json().catch(() => null)) as { ok?: boolean; service?: string } | null;
         ok = body?.ok === true;
         if (!ok) detail = '响应体缺 ok:true';
+        else if (input.verifyWorkbench && t.name === 'core-api' && body?.service !== 'workbench') {
+          ok = false;
+          detail = `壳服务不匹配：收到 ${body?.service ?? '(缺失)'}，预期 workbench；检查域名路由目标`;
+        }
       } else {
         detail = `HTTP ${res.status}`;
       }
@@ -134,6 +140,22 @@ export async function smokeCheck(input: {
         status: 0,
         detail: `不可达：${err instanceof Error ? err.message : String(err)}`,
       });
+    }
+  }
+  if (input.verifyWorkbench) {
+    for (const path of ['/login', '/setup']) {
+      const url = `${input.coreUrl.replace(/\/+$/, '')}${path}`;
+      const name = `workbench-page:${path}`;
+      try {
+        const res = await fetch(url, { headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(input.timeoutMs ?? 10_000) });
+        const type = res.headers.get('content-type') ?? '';
+        const attachment = /attachment/i.test(res.headers.get('content-disposition') ?? '');
+        const html = /<!doctype html|<html[\s>]/i.test(await res.text());
+        const ok = res.status === 200 && /^text\/html(?:;|$)/i.test(type) && !attachment && html;
+        results.push({ name, url, ok, status: res.status, detail: ok ? undefined : `页面不能正常打开：HTTP ${res.status}，Content-Type=${type || '(缺失)'}${attachment ? '，attachment' : ''}；检查 Shell 路由和静态资产响应头` });
+      } catch (err) {
+        results.push({ name, url, ok: false, status: 0, detail: `不可达：${err instanceof Error ? err.message : String(err)}` });
+      }
     }
   }
   return results;

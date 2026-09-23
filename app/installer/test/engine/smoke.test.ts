@@ -82,6 +82,27 @@ describe('smokeCheck 请求 URL 形态（§5.3 单域名路径制）', () => {
 });
 
 describe('smokeCheck 行为断言', () => {
+  it.each(['core-api', 'workbench'])('真实装配校验壳身份：%s', async service => {
+    stubFetch(async input => String(input).endsWith('/api/health')
+      ? jsonResponse(200, { ok: true, service })
+      : new Response('<!doctype html><html></html>', { headers: { 'content-type': 'text/html; charset=utf-8' } }));
+    const results = await smokeCheck({ coreUrl: 'https://team.example.com', modules: [], verifyWorkbench: true });
+    expect(results[0]?.ok).toBe(service === 'workbench');
+    expect(results.slice(1).every(r => r.ok)).toBe(true);
+  });
+
+  it.each([
+    ['application/octet-stream', '', false],
+    ['text/html', 'attachment; filename=login', false],
+    ['text/html; charset=utf-8', '', true],
+  ])('导航响应 %s / %s 必须能作为页面打开', async (type, disposition, ok) => {
+    stubFetch(async input => String(input).endsWith('/api/health')
+      ? jsonResponse(200, { ok: true, service: 'workbench' })
+      : new Response('<!doctype html><html></html>', { headers: { 'content-type': String(type), 'content-disposition': String(disposition) } }));
+    const results = await smokeCheck({ coreUrl: 'https://team.example.com', modules: [], verifyWorkbench: true });
+    expect(results).toHaveLength(3);
+    expect(results.slice(1).map(r => r.ok)).toEqual([ok, ok]);
+  });
   it('200 且 body {ok:true}：每项 ok=true、status=200、detail 缺省', async () => {
     stubFetch(async () => jsonResponse(200, { ok: true }));
     const results = await smokeCheck({ coreUrl: 'https://demo.handywote.top', modules: [{ id: 'hello', baseUrl: 'https://demo.handywote.top/m/hello' }] });
@@ -247,5 +268,4 @@ describe('checkModuleThemes（部署期主题体检 · §6.5.8 验产物，不�
     expect(results[1]?.unknown).toEqual(['--unsafe-color']);
   });
 });
-
 

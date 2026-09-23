@@ -17,6 +17,32 @@ describe('advise（已知失败 → 三要素）', () => {
     expect(a.fix).toContain('192.0.2.1');
     expect(a.fix).not.toContain('重跑本命令');
   });
+  it('10000（API Token 缺 KV 权限，2026-09-21 走查实锤）→ 点名 KV 权限组 + 深链接重建', () => {
+    const a = advise(
+      new Error('CF API GET /accounts/acc123/storage/kv/namespaces 失败：10000 Authentication error'),
+      'env-api-token',
+    );
+    expect(a.owner).toBe('token');
+    expect(a.cause).toContain('10000');
+    expect(a.fix).toContain('Workers KV Storage');
+    expect(a.fix).toContain('深链接');
+    expect(a.fix).not.toContain('wrangler OAuth');
+  });
+  it('10000（API Token 缺 DNS 权限）→ token 缺 DNS 组，不甩锅 OAuth 人工步骤', () => {
+    const a = advise(new Error('CF API POST /zones/z1/dns_records 失败：10000 Authentication error'), 'env-api-token');
+    expect(a.fix).toContain('DNS（Edit）');
+    expect(a.fix).not.toContain('192.0.2.1');
+  });
+  it('10000（API Token + 未知端点）→ 退化通用权限文案', () => {
+    const a = advise(new Error('CF API GET /accounts/acc/pages/projects 失败：10000 Authentication error'), 'env-api-token');
+    expect(a.owner).toBe('token');
+    expect(a.fix).toContain('重建 token');
+    expect(a.fix).not.toContain('Workers'); // 未知端点不硬拡权限组名
+  });
+  it('10000 不传凭证来源（旧调用方）→ 维持 OAuth 文案（向后兼容）', () => {
+    const a = advise(new Error('CF API GET /accounts/acc/storage/kv/namespaces 失败：10000 Authentication error'));
+    expect(a.fix).toContain('wrangler OAuth');
+  });
   it('DNS 解析失败（ENOTFOUND）→ dns + 等 60 秒重跑', () => {
     const a = advise(new Error('getaddrinfo ENOTFOUND demo.example.com'));
     expect(a.owner).toBe('dns');

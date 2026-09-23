@@ -1,0 +1,341 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/**
+ * 向导 SPA 基础样式：页面框架 + 布局排版。
+ * 值纪律：颜色/间距/圆角/字号/阴影/动效全部 var(--unself-*)（server.ts /api/state 随附
+ * 的 themeVars 运行时注入，取值唯一真源 = core/contracts theme-tokens.json）；
+ * 源码零字面量色值/魔法动效数；动效全部带 prefers-reduced-motion 降级。
+ * 组件级样式在 @unself/ui（scoped）；屏级布局样式在此（按屏组合，不写一次性碎片到组件里）。
+ */
+:root {
+  color-scheme: light;
+  font-family: system-ui, sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+body {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: var(--unself-space-6) var(--unself-space-4);
+  color: var(--unself-color-text);
+  background: var(--unself-color-bg);
+}
+code {
+  user-select: all;
+  word-break: break-all;
+  font-size: var(--unself-font-size-sm);
+}
+h2 {
+  font-size: var(--unself-font-size-xl);
+  margin: var(--unself-space-2) 0;
+}
+p.sub {
+  color: var(--unself-color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+  margin: var(--unself-space-2) 0;
+}
+
+/* 页头：实例目录常驻可复制 */
+.wizard-header {
+  display: flex;
+  align-items: center;
+  gap: var(--unself-space-2);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-md);
+  padding: var(--unself-space-2) var(--unself-space-3);
+  margin-bottom: var(--unself-space-5);
+  background: var(--unself-color-surface);
+  box-shadow: var(--unself-shadow-card);
+}
+.wizard-header strong {
+  font-size: var(--unself-font-size-sm);
+}
+
+/* 步进器：三态 + 已完成可点回退 */
+
+/* 屏容器：入场一次 lift+fade（#307 屏切换叙事） */
+.screen {
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-lg);
+  padding: var(--unself-space-5);
+  background: var(--unself-color-surface);
+  box-shadow: var(--unself-shadow-card);
+  animation: screen-in var(--unself-duration-slow) var(--unself-ease-out);
+}
+@keyframes screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--unself-motion-lift-y));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 表单 */
+label {
+  display: block;
+  margin: var(--unself-space-2) 0;
+}
+label.radio {
+  display: flex;
+  align-items: center;
+  gap: var(--unself-space-2);
+  font-size: var(--unself-font-size-base);
+}
+input[type='password'],
+input[type='text'],
+input[type='number'],
+input[type='url'],
+textarea {
+  width: 100%;
+  padding: var(--unself-space-2) var(--unself-space-3);
+  margin-top: var(--unself-space-1);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-md);
+  font: inherit;
+  color: var(--unself-color-text);
+  background: var(--unself-color-bg);
+  transition: border-color var(--unself-duration-fast) var(--unself-ease-out);
+}
+input:focus,
+textarea:focus {
+  outline: var(--unself-focus-ring);
+  border-color: var(--unself-color-primary);
+}
+.field {
+  margin: var(--unself-space-3) 0;
+}
+.field-label {
+  font-weight: 600;
+  font-size: var(--unself-font-size-base);
+}
+.field-key {
+  margin-left: var(--unself-space-2);
+  color: var(--unself-color-text-tertiary);
+  font-weight: 400;
+}
+.req {
+  color: var(--unself-color-danger);
+}
+.err {
+  color: var(--unself-color-danger);
+  font-size: var(--unself-font-size-sm);
+  white-space: pre-wrap;
+  min-height: 1em;
+}
+.ok-line {
+  color: var(--unself-color-success);
+}
+.ok {
+  color: var(--unself-color-success);
+}
+.hint {
+  color: var(--unself-color-text-tertiary);
+  font-size: var(--unself-font-size-sm);
+}
+.warn {
+  color: var(--unself-color-warning);
+  font-size: var(--unself-font-size-sm);
+}
+.kind {
+  color: var(--unself-color-info);
+  margin-left: var(--unself-space-2);
+  font-size: var(--unself-font-size-sm);
+}
+
+/* 动作行：主按钮在右、返回在左（居中；与旧版 actions 布局一致） */
+.actions {
+  display: flex;
+  gap: var(--unself-space-3);
+  margin-top: var(--unself-space-4);
+  align-items: center;
+  justify-content: center;
+}
+.actions .spacer {
+  flex: 1;
+}
+.btn-back {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-surface);
+  color: var(--unself-color-text);
+  padding: var(--unself-space-2) var(--unself-space-4);
+  transition:
+    transform var(--unself-duration-fast) var(--unself-ease-spring),
+    border-color var(--unself-duration-fast) var(--unself-ease-out);
+}
+.btn-back:hover {
+  transform: translateY(calc(-1 * var(--unself-motion-lift-y)));
+  border-color: var(--unself-color-primary);
+}
+.btn-big {
+  font-size: var(--unself-font-size-lg);
+  padding: var(--unself-space-3) var(--unself-space-6);
+}
+.btn-link {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ① 折叠入口 / ③ 高级折叠 */
+.fold {
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-md);
+  padding: var(--unself-space-2) var(--unself-space-3);
+  margin: var(--unself-space-2) 0;
+  background: var(--unself-color-surface);
+}
+.fold summary {
+  cursor: pointer;
+  color: var(--unself-color-info);
+  font-size: var(--unself-font-size-sm);
+}
+
+/* ① OAuth 主路径大卡 */
+.oauth-card {
+  text-align: center;
+  padding: var(--unself-space-6) var(--unself-space-4);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-md);
+  margin: var(--unself-space-2) 0;
+  background: var(--unself-color-surface);
+}
+.oauth-card .ok-line {
+  font-size: var(--unself-font-size-lg);
+  font-weight: 600;
+  margin-bottom: var(--unself-space-2);
+}
+
+/* ② zone 发现 */
+.zone-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--unself-space-2);
+  margin: var(--unself-space-3) 0;
+}
+.domain-combo {
+  display: flex;
+  align-items: stretch;
+  gap: var(--unself-space-2);
+  margin: var(--unself-space-2) 0;
+}
+.domain-combo > .u-field {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+.domain-combo > .u-field .u-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.domain-combo .dot {
+  align-self: center;
+  font-size: var(--unself-font-size-lg);
+  color: var(--unself-color-text-secondary);
+}
+
+/* ③ 模块添加卡 */
+.mod-adds {
+  list-style: none;
+  padding: 0;
+}
+.mod-adds ul {
+  padding-left: var(--unself-space-5);
+  margin: var(--unself-space-1) 0;
+}
+.adds-title {
+  font-size: var(--unself-font-size-base);
+  margin: var(--unself-space-3) 0 var(--unself-space-1);
+}
+.only-note {
+  color: var(--unself-color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+  margin: var(--unself-space-1) 0;
+}
+.only-note strong {
+  color: var(--unself-color-text);
+}
+
+/* ④ 装配：九步进度条 */
+
+/* 资源名预览 */
+.res-fold summary {
+  color: var(--unself-color-info);
+  font-size: var(--unself-font-size-sm);
+  cursor: pointer;
+}
+.res-names {
+  padding-left: var(--unself-space-5);
+  margin: var(--unself-space-2) 0;
+}
+.res-names li {
+  margin: var(--unself-space-1) 0;
+  font-size: var(--unself-font-size-sm);
+}
+
+/* 测试连接输出 */
+.test-out {
+  margin-left: var(--unself-space-2);
+  font-size: var(--unself-font-size-sm);
+}
+.test-out.ok {
+  color: var(--unself-color-success);
+}
+.test-out.err {
+  color: var(--unself-color-danger);
+}
+
+/* ⑤ 完成 */
+.done-wrap {
+  text-align: center;
+  padding: var(--unself-space-6) var(--unself-space-4);
+}
+
+/* 错误卡（失败三要素在屏内的落位；通用卡本体在 @unself/ui UErrorCard） */
+.screen .u-error {
+  margin: var(--unself-space-3) 0;
+}
+
+/* 复制反馈 */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* 启动失败反馈（main.ts 挂载前置阶段；业务专属，不进公共库） */
+.bootstrap-failure {
+  max-width: 32rem;
+  margin: var(--unself-space-8) auto;
+  padding: var(--unself-space-5);
+  border: 1px solid var(--unself-color-danger);
+  border-radius: var(--unself-radius-lg);
+  background: var(--unself-color-surface);
+  box-shadow: var(--unself-shadow-card);
+}
+.bootstrap-failure-title {
+  color: var(--unself-color-danger);
+  font-size: var(--unself-font-size-lg);
+  font-weight: 600;
+  margin: 0 0 var(--unself-space-2);
+}
+.bootstrap-failure-detail {
+  margin: 0 0 var(--unself-space-1);
+}
+.bootstrap-failure-hint {
+  color: var(--unself-color-text-secondary);
+  font-size: var(--unself-font-size-sm);
+  margin: 0;
+}

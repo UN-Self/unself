@@ -49,10 +49,13 @@ async function loadWrapper(options: {
   assetInits?: Record<string, ResponseInit>;
   /** 假 worker 响应开关（#277）：'json'（缺省，现有断言不变）或 'html'（回落 worker 渲染模块页场景）。 */
   workerResponse?: 'json' | 'html';
+  /** 要由 wrapper 从 app.js 转导的 ESM 具名导出。 */
+  namedExports?: string[];
 }): Promise<{
   assetCalls: AssetCall[];
   workerCalls: WorkerCall[];
   fetch: (path: string, init?: RequestInit) => Promise<Response>;
+  namedExports: Record<string, unknown>;
 }> {
   const dir = await mkdtemp(join(tmpdir(), 'unself-wrapper-'));
   temps.push(dir);
@@ -85,11 +88,15 @@ export default {
     return new Response(${workerBodyExpr}, { status: 200, headers: { 'content-type': '${workerResponseContentType}' } });
   },
 };
+export class ChannelRoom {}
+export class Scheduler {}
+export class UserInbox {}
 `,
   );
   await writeFile(join(dir, 'worker.js'), prefixStripWrapperSource(options.moduleId, {
     mount: options.mount ?? `/m/${options.moduleId}`,
     shellOrigin: options.shellOrigin ?? null,
+    namedExports: options.namedExports,
   }));
 
   const { recorder } = await import(pathToFileURL(join(dir, 'recorder.mjs')).href);
@@ -120,10 +127,21 @@ export default {
         { ASSETS: fakeAssets },
         { waitUntil: () => {}, passThroughOnException: () => {} },
       ),
+    namedExports: mod as Record<string, unknown>,
   };
 }
 
 describe('prefixStripWrapper 真实执行（资产分支 / 预取 / duplex，T5）', () => {
+  it('DO 类经 wrapper 从 main module 具名导出，Cloudflare 可将 new_sqlite_classes 解析为导出类', async () => {
+    const w = await loadWrapper({
+      moduleId: 'chat',
+      namedExports: ['ChannelRoom', 'Scheduler', 'UserInbox'],
+    });
+    expect(w.namedExports.ChannelRoom).toBeTypeOf('function');
+    expect(w.namedExports.Scheduler).toBeTypeOf('function');
+    expect(w.namedExports.UserInbox).toBeTypeOf('function');
+  });
+
   it('资产请求（/m/hello/sdk/x.js）：isAsset 判定成立 → ASSETS 收到剥前缀路径，worker 不被调用', async () => {
     const w = await loadWrapper({ moduleId: 'hello', assets: { '/sdk/x.js': '// sdk' } });
     const res = await w.fetch('/m/hello/sdk/x.js');

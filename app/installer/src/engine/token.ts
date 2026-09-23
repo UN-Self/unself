@@ -24,6 +24,7 @@ const TOKEN_PERMISSIONS = [
   { key: 'workers_scripts', type: 'edit' },
   { key: 'd1', type: 'edit' },
   { key: 'workers_r2', type: 'edit' },
+  { key: 'workers_kv_storage', type: 'edit' },
   { key: 'workers_routes', type: 'edit' },
   { key: 'dns', type: 'edit' },
   { key: 'ssl_and_certificates', type: 'edit' },
@@ -40,7 +41,7 @@ export function buildTokenDeepLink(name = 'unself-deploy'): string {
 
 /** 权限清单表（深链接格式失效时的退化输出，也与 README 权限清单对齐）。 */
 export const TOKEN_PERMISSION_TABLE: string[] = [
-  '  Account：Workers Scripts Edit、D1 Edit、R2 Edit',
+  '  Account：Workers Scripts Edit、D1 Edit、R2 Edit、Workers KV Storage Edit',
   '  Zone（自有域名所属 zone）：Workers Routes Edit、DNS Edit、SSL and Certificates Edit',
 ];
 

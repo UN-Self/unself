@@ -447,9 +447,9 @@ export function failDeploy(s: WizardState, err: WizardError): WizardState {
 }
 
 /**
- * ⑥ 幂等重跑：清错误/结果/事件回 ①（token 需重填——明文本就不留存）。
+ * ⑥ 幂等重跑：清错误/结果/事件，保留已确认部署配置并回到 ready（token 只保留服务端会话）。
  * ③ 添加的第三方模块（#269）与 ③★ 配置声明/非 secret 值（#307）随 storageOptions/resourceNames
- * 一起保留（重跑收敛同一终态：重填的只有 token 与 secret 值——两者都只在进程内存）。
+ * 一起保留（重跑收敛同一终态：部署配置复用，token 与 secret 仍只在进程内存）。
  */
 export function resetWizard(s: WizardState): WizardState {
   const fresh = initialWizardState(s.instancePath, {
@@ -458,7 +458,16 @@ export function resetWizard(s: WizardState): WizardState {
     resourceNames: s.resourceNames,
     moduleAdds: s.moduleAdds,
   });
-  return { ...fresh, moduleConfigs: s.moduleConfigs, configValues: s.configValues, step: 'auth' };
+  return {
+    ...fresh,
+    moduleConfigs: s.moduleConfigs,
+    configValues: s.configValues,
+    domainChoice: s.domainChoice,
+    domain: s.domain,
+    storageChoices: s.storageChoices,
+    sharedConsent: s.sharedConsent,
+    step: 'ready',
+  };
 }
 
 /**

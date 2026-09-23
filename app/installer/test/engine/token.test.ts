@@ -42,6 +42,7 @@ describe('buildTokenDeepLink（CF 官方模板 URL 格式）', () => {
       { key: 'workers_scripts', type: 'edit' },
       { key: 'd1', type: 'edit' },
       { key: 'workers_r2', type: 'edit' },
+      { key: 'workers_kv_storage', type: 'edit' },
       { key: 'workers_routes', type: 'edit' },
       { key: 'dns', type: 'edit' },
       { key: 'ssl_and_certificates', type: 'edit' },

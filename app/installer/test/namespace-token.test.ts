@@ -80,8 +80,8 @@ describe('#272 向导① token 接线', () => {
       expect(JSON.stringify(st)).not.toContain(TOKEN);
       expect(st.hasToken).toBe(true);
 
-      const html = await (await fetch(`${base}/`)).text();
-      expect(html).toContain('demo-core'); // 资源名预览段可见
+      const st2 = JSON.parse(JSON.stringify(st)) as { resourceNames: Array<{ kind: string; name: string }> };
+      expect(st2.resourceNames).toEqual([{ kind: 'D1（core 库）', name: 'demo-core' }]); // 资源名预览投影可见
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
