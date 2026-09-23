@@ -15,15 +15,14 @@
  * 所有请求（含壳 HTML 与静态资产）都经本入口——入口先按原路径取资产（保持直出语义），
  * 再对 HTML 下发按注册表生成的 frame-src 白名单（跨子域模块 iframe 需壳响应头含模块 origin）。
  *
- * #279：壳 HTML 过去以 application/octet-stream 存储（上传 part 类型写死），#273 曾在此对「导航请求
- * 命中非 HTML 资产」现场改写成 text/html 兜底（asHtmlDocument）。MIME 已在上传侧修对（rest/mime.ts），
- * 该兜底**删除**：它会把 JS/CSS/图片在带 `Accept: text/html` 的导航下谎报成 text/html，
- * 更会把「资产类型又退化成 octet-stream」的回归藏起来（HTML 照常、只有 module 脚本白屏）。
- * 现在「类型写错」直接原样透出——宁可显式故障，不要伪装。
+ * 2026-09-22 实测：ASSETS 的 SPA 回退可直接返回 200 + octet-stream，不能只修 404 分支。
+ * 已知页面与 JS/CSS 的旧 MIME 按资源路径修复；不根据 Accept 把任意文件伪装成 HTML。
+ * 两种域名形态都经本入口处理，避免自有域静态资产绕过修复。
  */
 import { createStalwartMailProvisioner, toStalwartProvisionerConfig } from '@unself/stalwart-provisioner';
 
 import { createApp, type Bindings } from './index';
+import { normalizeAssetResponse } from './asset-response';
 import { registryFrameOrigins } from './registry';
 import { withHtmlSecurityHeaders } from './security-headers';
 
@@ -58,15 +57,18 @@ export default {
       ? await registryFrameOrigins(env.CORE_DB, { selfOrigin: url.origin })
       : [];
     // run_worker_first=true（workers.dev 形态）后静态资产也经本入口：先按原路径取资产（保持直出语义）。
-    const asset = await env.ASSETS.fetch(request);
+    const asset = normalizeAssetResponse(await env.ASSETS.fetch(request), url.pathname);
     if (asset.status !== 404) {
-      // 只给真 HTML 补头；其余原样透出（#279：不再按 Accept 伪造 text/html）
+      // 包含资产服务已经完成 SPA 回退的 200 响应。
       return isHtml(asset) ? withHtmlSecurityHeaders(asset, frameOrigins) : asset;
     }
     if (!wantsHtml(request)) return res;
     // 决策 #47：SPA 深链（含 /setup*）的 HTML 不经静态资产的 _headers，在此补同一套头
     // （值同源：security-headers.ts）+ 现场生成的 frame-src 白名单。
-    const fallback = await env.ASSETS.fetch(new URL('/', url.origin).toString(), request);
-    return withHtmlSecurityHeaders(fallback, frameOrigins);
+    // Worker-first 的 `/setup*` 深链不依赖资产服务的 SPA 回退实现；显式取 index.html，
+    // 否则某些部署形态会把 `/setup` 当成缺失文件返回 404，浏览器无法进入激活页。
+    const fallback = await env.ASSETS.fetch(new Request(new URL('/index.html', url.origin), request));
+    if (fallback.status === 404) return res;
+    return withHtmlSecurityHeaders(normalizeAssetResponse(fallback, '/index.html'), frameOrigins);
   },
 };
