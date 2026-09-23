@@ -49,6 +49,25 @@ describe('isValidSpdxExpression：合法形状通过', () => {
     expect(isValidSpdxExpression('NotALicense')).toBe(true);
     expect(isValidSpdxExpression('2020')).toBe(true);
   });
+
+  it('不查表推论：无操作符的拼接串（MITORApache-2.0）是合法 idstring，形状层无法与 NotALicense 区分 → 接受', () => {
+    // 这是「只验形状不查表」口径的直接推论，不是漏网：
+    // MITORApache-2.0 与 NotALicense 同为 [A-Za-z0-9.-]+ 形态，形状层无依据区分。
+    // 想拒绝它必须查 SPDX 标识表（不在 #292 范围）。
+    // 本用例锁定该行为，防日后被「看起来像粘一起就拒」的无依据启发式篡改。
+    expect(isValidSpdxExpression('MITORApache-2.0')).toBe(true);
+    // 与它在形状层「同类」的未知标识符同结果 —— 两者必须一致，否则就是引入了拼写裁决
+    expect(isValidSpdxExpression('MITORApache-2.0')).toBe(isValidSpdxExpression('NotALicense'));
+  });
+
+  it('可区分的一侧：操作符被空白分开时词序列不成立（`MIT or Apache-2.0` 是三个 idstring，非单个词）', () => {
+    // 注意与上一条的区别：这里 OR 两侧有空白 → 切成三个 token，词序列不构成表达式
+    // 这与「小写 or 是拼写错」无关，是纯语法（缺少操作符）错误——形状层确实能拒。
+    expect(isValidSpdxExpression('MIT or Apache-2.0')).toBe(false);
+    expect(isValidSpdxExpression('MIT and Apache-2.0')).toBe(false);
+    // 凭空多出的第三个 idstring 同理不可归约
+    expect(isValidSpdxExpression('MITOR Apache-2.0')).toBe(false);
+  });
 });
 
 describe('isValidSpdxExpression：非法形状必拒', () => {
@@ -60,8 +79,8 @@ describe('isValidSpdxExpression：非法形状必拒', () => {
     ['悬空 OR', 'MIT OR'],
     ['悬空 WITH', 'MIT WITH'],
     ['WITH 后无例外', 'MIT WITH '],
-    ['操作符缺空格（粘成一词）', 'MIT and Apache-2.0'],
-    ['小写操作符（AND/OR/WITH 大小写敏感）', 'MIT or Apache-2.0'],
+    ['空白分开的小写 `and`（三个 idstring，词序列不成立；非拼写裁决）', 'MIT and Apache-2.0'],
+    ['空白分开的小写 `or`（同上，语法层可拒）', 'MIT or Apache-2.0'],
     ['`+` 前有空格', 'MIT +'],
     ['JSON 引号包裹', '"MIT"'],
     ['单引号包裹', "'MIT'"],
