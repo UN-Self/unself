@@ -290,6 +290,74 @@ describe('#285 生成的 package.json（npm 发布形态）', () => {
   });
 });
 
+describe('生成的 package.json.license（manifest.license，issue #292）', () => {
+  /** 造一个带 license 字段的最小源码模块目录（runtimes=external，不触发 esbuild）。 */
+  async function makeLicensedModule(name: string, licenseLine: string): Promise<string> {
+    const dir = join(work, name);
+    await makeModule(dir, [
+      'id: mini',
+      'version: 1.2.3',
+      'route: /m/mini',
+      'entry: http://localhost:8790/',
+      'runtimes:',
+      '  - external',
+      ...(licenseLine ? [licenseLine] : []),
+      '',
+    ].join('\n'));
+    return dir;
+  }
+
+  it('manifest 写 license: MIT → 生成的 package.json.license 为 MIT（解包后实测）', async () => {
+    const dir = await makeLicensedModule('license-mit', 'license: MIT');
+    const out = join(work, 'out-license-mit');
+    const packed = await packModuleDir({ dir, outDir: out });
+    const dest = join(work, 'unpacked-license-mit');
+    await extractTarball({ tarPath: packed.tarballPath, dest });
+    const pkg = JSON.parse(await readFile(join(dest, 'package', 'package.json'), 'utf8')) as {
+      license: string;
+    };
+    const manifest = JSON.parse(await readFile(join(dest, 'package', 'manifest.json'), 'utf8')) as {
+      license?: string;
+    };
+    expect(pkg.license).toBe('MIT');
+    // 作者声明同时落进 packed manifest.json（安装侧真相）
+    expect(manifest.license).toBe('MIT');
+  });
+
+  it('复合 SPDX（MIT OR Apache-2.0）原样写进 package.json.license', async () => {
+    const dir = await makeLicensedModule('license-or', 'license: MIT OR Apache-2.0');
+    const { files } = await modulePackageFiles({ dir });
+    const pkg = JSON.parse(files.find((f) => f.name === 'package.json')!.data.toString('utf8')) as {
+      license: string;
+    };
+    expect(pkg.license).toBe('MIT OR Apache-2.0');
+  });
+
+  it('不写 license 字段 → 回落平台默认 AGPL-3.0-only（向后兼容老 manifest）', async () => {
+    const dir = await makeLicensedModule('license-absent', '');
+    const { manifest, files } = await modulePackageFiles({ dir });
+    const pkg = JSON.parse(files.find((f) => f.name === 'package.json')!.data.toString('utf8')) as {
+      license: string;
+    };
+    expect(pkg.license).toBe('AGPL-3.0-only');
+    // 缺省时不向 packed manifest.json 伪造 license 字段（保持旧 manifest 形状）
+    expect(manifest.license).toBeUndefined();
+  });
+
+  it('官方 hello（manifest 无 license）打包仍回落平台默认（默认行为不变）', async () => {
+    const { files } = await modulePackageFiles({ dir: join(REPO_ROOT, 'app', 'modules', 'hello') });
+    const pkg = JSON.parse(files.find((f) => f.name === 'package.json')!.data.toString('utf8')) as {
+      license: string;
+    };
+    expect(pkg.license).toBe('AGPL-3.0-only');
+  });
+
+  it('非法 SPDX 形状（悬空操作符）→ 打包直接失败，不产出半个 tarball', async () => {
+    const dir = await makeLicensedModule('license-bad', 'license: MIT OR');
+    await expect(modulePackageFiles({ dir })).rejects.toThrow(/license/);
+  });
+});
+
 describe('writeTarball 底层', () => {
   it('成员名 > 100 字节走 GNU longname，extractTarball 往返成立', async () => {
     const longName = `package/${'d'.repeat(60)}/${'e'.repeat(60)}/manifest.json`; // 131 字节
