@@ -20,6 +20,20 @@ export type FrameState = 'idle' | 'handshaking' | 'ready' | 'failed'
 export const HANDSHAKE_TIMEOUT_MS = 15_000
 
 /**
+ * 壳侧握手诊断号前缀（#306）：超时/本地失败没有服务端响应，也就没有 x-request-id。
+ * 壳自己发一个短号给用户，报障时能对上「哪一次装载」——`UErrorCard` 的 requestId 位
+ * 对成员只承诺「可报障的编号」，来源是服务端还是壳不重要，但绝不能缺位。
+ */
+const SHELL_HANDSHAKE_ID_PREFIX = 'mh-'
+
+/** 生成壳侧握手诊断号（时间戳 base36 + 随机尾，够区分同一次会话内的装载）。 */
+export function makeHandshakeRequestId(): string {
+  const stamp = Date.now().toString(36)
+  const tail = Math.random().toString(36).slice(2, 8)
+  return `${SHELL_HANDSHAKE_ID_PREFIX}${stamp}-${tail}`
+}
+
+/**
  * 停用判定：token 接口 403（token-api 已带 status）为唯一真值，
  * 禁 frameError.message.includes('停用') 字符串嗅探（#83）。
  */
@@ -59,9 +73,50 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
     frameTokens = null
   }
 
+  /** 停表（进任何终态或换模块都必须调用；漏调 = 上一轮定时器把新状态误判超时）。 */
   function clearHandshakeTimer() {
     clearTimeout(handshakeTimer)
     handshakeTimer = undefined
+  }
+
+  /**
+   * 交到失败态（唯一出口）：停表 + 落错误对象（requestId 已由调用方给全）。
+   * 失败卡因此永不出现「有人话、无编号」的半截现场（#306 验收）。
+   */
+  function failFrame(error: ApiError | Error): void {
+    clearHandshakeTimer()
+    frameError.value = error
+    frameState.value = 'failed'
+  }
+
+  /**
+   * 进入握手态（唯一入口）：状态与超时定时器**在同一次调用里**绑定。
+   *
+   * #306 根因：旧实现把「进 handshaking」放在按 module 的 watch 回调里、把「上定时器」
+   * 放在另一个 watch([module, frameState]) 里。首次挂载时前者（flush post + immediate）
+   * 在 setup 期间同步把 state 置为 handshaking，而后者当时还没注册——pre-flush 的它
+   * 永远看不到 idle→handshaking 这次跃迁，定时器从未上过表：`ready` 缺失时骨架永久滞留，
+   * 15s 兜底形同虚设（正是 probe304 现场）。两者合并后，任何进入握手的路径都必然带表。
+   */
+  function enterHandshaking(): void {
+    clearHandshakeTimer()
+    frameState.value = 'handshaking'
+    handshakeTimer = setTimeout(() => {
+      handshakeTimer = undefined
+      if (frameState.value !== 'handshaking') return
+      const error = Error('模块加载超时，请稍后重试') as ApiError
+      // status 0 = 本地/网络不可达语义（与 api-client 的 NETWORK_UNAVAILABLE 同口径），
+      // 不冒充服务端状态码；requestId 由壳发放，供成员报障引用。
+      error.status = 0
+      error.requestId = makeHandshakeRequestId()
+      failFrame(error)
+    }, HANDSHAKE_TIMEOUT_MS)
+  }
+
+  /** 交到就绪态（唯一出口）：停表——迟到的超时回调不得再翻状态。 */
+  function readyFrame(): void {
+    clearHandshakeTimer()
+    frameState.value = 'ready'
   }
 
   /**
@@ -81,7 +136,7 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
         frameState.value = 'idle'
         return
       }
-      frameState.value = 'handshaking'
+      enterHandshaking()
       await nextTick()
       await attachBridgeFor(mod)
     },
@@ -114,8 +169,10 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
   async function attachBridgeFor(mod: RegistryModule): Promise<void> {
     const origin = frameOriginFor(mod.manifest?.entry ?? null)
     if (origin === null) {
-      frameError.value = new Error('模块入口配置无效，请联系管理员')
-      frameState.value = 'failed'
+      const error = Error('模块入口配置无效，请联系管理员') as ApiError
+      error.status = 0
+      error.requestId = makeHandshakeRequestId()
+      failFrame(error)
       return
     }
     const iframe = await waitForFrameEl()
@@ -131,29 +188,15 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
       frameOrigin: origin,
       tokens,
       onToken: () => {
-        frameState.value = 'ready'
+        readyFrame()
       },
       onError: (err) => {
-        frameError.value = err
-        frameState.value = 'failed'
+        failFrame(err)
       },
     })
     // 通道 A（§6.5.5）：同源模块直注 style#unself-tokens；跨域返回 null 走通道 B，不记句柄
     frameTokens = attachFrameTokens(iframe, tokens)
   }
-
-  // 15s 握手超时（§6.5 异常卡：加载中骨架 → 失败卡）
-  watch([module, frameState], ([, state]) => {
-    clearHandshakeTimer()
-    if (state === 'handshaking') {
-      handshakeTimer = setTimeout(() => {
-        if (frameState.value === 'handshaking') {
-          frameError.value = new Error('模块加载超时，请稍后重试')
-          frameState.value = 'failed'
-        }
-      }, HANDSHAKE_TIMEOUT_MS)
-    }
-  })
 
   /**
    * 手动重试：强制 iframe 重挂（frameReload 自增 → key 变化 → 新 iframe 重新发 ready），
@@ -163,7 +206,7 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
     const mod = module.value
     if (!mod) return
     frameError.value = null
-    frameState.value = 'handshaking'
+    enterHandshaking()
     detachBridge()
     detachFrameTokens()
     frameReload.value += 1
