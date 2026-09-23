@@ -43,6 +43,24 @@ const mailEnabled = ref(false)
 /** 当前选中 nav id（'workspace' 或模块 id）。 */
 const selectedId = ref('workspace')
 
+/**
+ * 模块宿主重挂计数（#306）：点击「已选中的同一个模块」时递增，逼 ModuleHost 重挂
+ * iframe 重新走握手。#306 现场：停用→启用后，用户回工作台点 hello——`selectedId`
+ * 本来就是 hello（落地即选它），赋值同值不触发 ModuleHost 的 watch，界面卡在上一轮的
+ * 失败/握手中，用户「点了没反应」。同 id 再点 = 明确的「再试一次」意图，必须落地为
+ * 一次真实重挂（frameKey 变化），而不是 no-op。
+ */
+const hostReload = ref(0)
+
+/** 导航点击（桌面左栏与窄屏标签栏共用）：同 id 再点 = 对该模块强制重握手。 */
+function onModuleNavClick(id: string) {
+  if (selectedId.value === id) {
+    hostReload.value += 1
+    return
+  }
+  selectedId.value = id
+}
+
 /** 手机端「我的」动作单开合（底部标签栏 → 用户名 + 退出）。 */
 const sheetOpen = ref(false)
 const sheetLayer = ref<HTMLElement | null>(null)
@@ -133,7 +151,7 @@ function onTabClick(item: NavItem) {
     sheetOpen.value = true
     return
   }
-  selectedId.value = item.id
+  onModuleNavClick(item.id)
 }
 </script>
 
@@ -154,7 +172,7 @@ function onTabClick(item: NavItem) {
           type="button"
           class="shell-nav-item"
           :class="{ 'shell-nav-item-active': selectedId === item.id }"
-          @click="selectedId = item.id"
+          @click="onModuleNavClick(item.id)"
         >
           <component
             :is="navIcon(item)"
@@ -234,7 +252,7 @@ function onTabClick(item: NavItem) {
           </div>
         </div>
 
-        <ModuleHost v-else :module="activeModule" />
+        <ModuleHost v-else :key="`${selectedId}#${hostReload}`" :module="activeModule" />
       </template>
     </main>
 
