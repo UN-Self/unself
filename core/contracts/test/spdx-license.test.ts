@@ -2,7 +2,7 @@
 /**
  * SPDX 表达式形状校验（issue #292）——行为测试。
  *
- * 边界（docs/modules.md §7 「license 形状」与 issue #292）：
+ * 边界（issue #292 口径；docs/modules.md 的 license 形状条目待文档修订跟进）：
  * - **形状**而非**拼写**：只拒绝语法上不成立的表达式，不查 SPDX License List——
  *   `mitten` / `NotALicense` / `2020` 形状合法即通过（是不是真许可证由列表裁决）。
  * - 语法依据 SPDX v2.3 Annex D（详见 ../src/spdx.ts 注释）。
@@ -29,9 +29,9 @@ describe('isValidSpdxExpression：合法形状通过', () => {
     '(MIT OR Apache-2.0) AND BSD-3-Clause',
     '(MIT)',
     'MIT AND (Apache-2.0 OR GPL-2.0+)',
-    // WITH 例外
+    // WITH 例外（左操作数须为 simple-expression；`license-id"+"` 合法，括号复合式非法）
     'GPL-2.0-only WITH Classpath-exception-2.0',
-    '(MIT OR GPL-2.0-only) WITH Classpath-exception-2.0',
+    'GPL-2.0+ WITH Classpath-exception-2.0',
     // 用户自定义引用
     'LicenseRef-Proprietary',
     'LicenseRef-Acme.1-2',
@@ -85,6 +85,12 @@ describe('isValidSpdxExpression：非法形状必拒', () => {
     ['JSON 引号包裹', '"MIT"'],
     ['单引号包裹', "'MIT'"],
     ['LicenseRef 空 idstring', 'LicenseRef-'],
+    ['`+` 挂 license-ref（ABNF: `+` 只挂 license-id）', 'LicenseRef-Proprietary+'],
+    ['`+` 挂 DocumentRef+LicenseRef', 'DocumentRef-a:LicenseRef-b+'],
+    ['括号复合式作 WITH 左操作数（ABNF: WITH 左为 simple-expression）', '(MIT OR GPL-2.0-only) WITH Classpath-exception-2.0'],
+    ['单括号 simple 作 WITH 左操作数', '(MIT) WITH Classpath-exception-2.0'],
+    ['保留 ref 前缀作例外标识', 'MIT WITH LicenseRef-x'],
+    ['DocumentRef 形态作例外标识', 'MIT WITH DocumentRef-a:LicenseRef-b'],
     ['DocumentRef 空 DocumentRef', 'DocumentRef-:LicenseRef-x'],
     ['DocumentRef 缺 LicenseRef 段', 'DocumentRef-acme:x'],
     ['括号不配对（缺右）', '(MIT'],
@@ -105,6 +111,18 @@ describe('isValidSpdxExpression：非法形状必拒', () => {
     ['对象形态的旧式 license', '{type:"MIT"}'],
   ])('拒绝：%s', (_label, expr) => {
     expect(isValidSpdxExpression(expr)).toBe(false);
+  });
+
+  it('对照参考实现：`+` 只挂 license-id、WITH 左须 simple（spdx-expression-parse 同判）', () => {
+    // 依据 SPDX v2.3 Annex D + 官方 spdx-expression-parse 实测（4.x）：
+    //   LicenseRef-…+ / (A OR B) WITH X / MIT WITH LicenseRef-x 三者官方解析器均报 Syntax error。
+    // 保留 ref 前缀是**形状**标记（非 list 查询），故这三类在形状层可定案。
+    expect(isValidSpdxExpression('LicenseRef-Proprietary+')).toBe(false);
+    expect(isValidSpdxExpression('DocumentRef-a:LicenseRef-b+')).toBe(false);
+    expect(isValidSpdxExpression('(MIT OR GPL-2.0-only) WITH Classpath-exception-2.0')).toBe(false);
+    expect(isValidSpdxExpression('MIT WITH LicenseRef-x')).toBe(false);
+    // 对照：`+` 挂普通 license-id 合法（含 WITH 左操作数）
+    expect(isValidSpdxExpression('GPL-2.0+ WITH Classpath-exception-2.0')).toBe(true);
   });
 
   it('非 string 输入（null / number / 对象）不抛错、返回 false', () => {
