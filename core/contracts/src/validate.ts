@@ -26,7 +26,7 @@ import {
   type ModulePermission,
 } from './index';
 import { manifestYamlToCandidate, parseManifestYamlFields, type ManifestCandidate } from './manifest-yaml';
-import { tableNamesFromSql } from './sql-tables';
+import { parseSqlStructure, tableNamesFromSql } from './sql-tables';
 import { sharedGuardProblems } from './shared-guards';
 
 export { manifestYamlToCandidate, parseManifestYamlFields };
@@ -403,6 +403,13 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
           });
         }
       };
+      // 不支持/矟形的语法位置：发布期明确拒绝（不能静默跳过）。shared 集的这部分已由
+      // sharedGuardProblems 的 sql-parse 报告；这里只补 dedicated/默认集，防重复。
+      for (const [name, sql] of dedicatedEntries) {
+        for (const problem of parseSqlStructure(sql).problems) {
+          errors.push({ level: 'error', check: 'tables', message: `${name}：${problem}` });
+        }
+      }
       // dedicated/默认集 ↔ manifest.tables（逻辑名=物理名）。
       // 单形态 shared 模块（迁移全归 shared 集）没有 dedicated 集，不拿空集去报「未建」。
       if (dedicatedEntries.length > 0 || !accepts.includes('shared')) {
