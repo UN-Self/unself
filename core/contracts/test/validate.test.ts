@@ -166,7 +166,7 @@ describe('六类硬错（docs/modules.md §7，每类红灯）', () => {
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
     manifest.storage = { accepts: ['shared'], declaration: 'shared' };
-    manifest.tables = ['todo_items'];
+    manifest.tablesShared = ['todo_items'];
     const undeclared = validateModulePackage({
       ...base,
       manifestText: JSON.stringify(manifest),
@@ -177,7 +177,7 @@ describe('六类硬错（docs/modules.md §7，每类红灯）', () => {
     expect(undeclared.ok).toBe(false);
     expect(undeclared.errors.some((e) => e.check === 'tables' && e.message.includes('todo_extra'))).toBe(true);
 
-    manifest.tables = ['todo_items', 'todo_ghost'];
+    manifest.tablesShared = ['todo_items', 'todo_ghost'];
     const ghost = validateModulePackage({
       ...base,
       manifestText: JSON.stringify(manifest),
@@ -241,7 +241,7 @@ describe('增量友好（#57）与附加检查', () => {
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
     manifest.storage = { accepts: ['shared'], declaration: 'shared' };
-    manifest.tables = ['todo_items'];
+    manifest.tablesShared = ['todo_items'];
     const result = validateModulePackage({
       ...base,
       manifestText: JSON.stringify(manifest),
@@ -271,7 +271,7 @@ describe('护栏③（决策 #55）：shared 前缀 + 禁跨模块外键——�
 
   it('accepts 含 shared 但迁移表名无模块前缀 → error(tables)，点名缺失前缀', () => {
     const result = validateModulePackage(sharedPkg(
-      { storage: { accepts: ['shared'] }, tables: ['items'] },
+      { storage: { accepts: ['shared'] }, tablesShared: ['todo_items'] },
       { '0001_init.sql': 'CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY);' },
     ));
     expect(result.ok).toBe(false);
@@ -282,7 +282,7 @@ describe('护栏③（决策 #55）：shared 前缀 + 禁跨模块外键——�
 
   it('accepts 含 shared 且外键指向清单之外的表 → error(tables)，点名跨模块外键', () => {
     const result = validateModulePackage(sharedPkg(
-      { storage: { accepts: ['shared'] }, tables: ['todo_items'] },
+      { storage: { accepts: ['shared'] }, tablesShared: ['todo_items'] },
       {
         '0001_init.sql':
           'CREATE TABLE IF NOT EXISTS todo_items (other_id INTEGER, FOREIGN KEY (other_id) REFERENCES other_module_table);',
@@ -298,7 +298,7 @@ describe('护栏③（决策 #55）：shared 前缀 + 禁跨模块外键——�
 
   it('合规 shared 包（前缀 + 模块内互引）→ 护栏③零报错', () => {
     const result = validateModulePackage(sharedPkg(
-      { storage: { accepts: ['shared'] }, tables: ['todo_items', 'todo_tags'] },
+      { storage: { accepts: ['shared'] }, tablesShared: ['todo_items', 'todo_tags'] },
       {
         '0001_init.sql': 'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY);',
         '0002_tags.sql': 'CREATE TABLE IF NOT EXISTS todo_tags (item_id INTEGER, FOREIGN KEY (item_id) REFERENCES todo_items);',
@@ -324,7 +324,7 @@ describe('迁移静态检查（决策 #61，#248）：逐条幂等 + 只写增�
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
     manifest.storage = { accepts: ['shared'], declaration: 'shared' };
-    manifest.tables = ['todo_items'];
+    manifest.tablesShared = ['todo_items'];
     return { ...base, manifestText: JSON.stringify(manifest), migrations };
   }
 
@@ -415,7 +415,7 @@ describe('storage.declaration（#55 增量字段：安装时用户选定）', ()
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
     manifest.storage = { accepts: ['core', 'shared'], preferred: 'core', declaration: 'shared' };
-    manifest.tables = ['todo_items'];
+    manifest.tablesShared = ['todo_items'];
     const result = validateModulePackage({
       ...base,
       manifestText: JSON.stringify(manifest),

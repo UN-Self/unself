@@ -3,11 +3,13 @@
 import { nextDailyUtcHour } from '../utils.js';
 import { runScheduledGc } from '../gc.js';
 import { durableObjectHealth } from '../maintenance/do-health.ts';
+// #310 接线点：DO 自有 env 也需同一层包装（表名前缀 + FILES 来源）
+import { wrapEnv } from '../unself-env.js';
 
 export class Scheduler {
   constructor(state, env) {
     this.state = state;
-    this.env = env;
+    this.env = wrapEnv(env);
   }
 
   async fetch(request) {

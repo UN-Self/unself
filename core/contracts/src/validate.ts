@@ -65,6 +65,11 @@ export interface ValidateResult {
 /** 迁移文件命名：000N_描述.sql（docs/modules.md §6，只增不改）。 */
 const MIGRATION_FILE_RE = /^0\d{3}_[A-Za-z0-9_-]+\.sql$/;
 
+/** 正则元字符转义（用于把模块 id 拼进迁移目录匹配）。 */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
 /**
  * 迁移静态检查诊断（决策 #61：逐条幂等 + 只写增量安全语句，进 validate）。
  * 定位粒度「文件 + 第几条语句」与装配器迁移失败报错同款（#248）。
@@ -359,46 +364,58 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
       ? declaration !== 'core'
       : false;
     if (selfBuilt) {
-      if (Object.keys(input.migrations ?? {}).length === 0) {
+      const migrationEntries = Object.entries(input.migrations ?? {});
+      if (migrationEntries.length === 0) {
         errors.push({
           level: 'error',
           check: 'tables',
           message: 'storage.accepts 含 shared/dedicated（自建表）但包内没有 migrations/',
         });
       }
-      const declaredTables = new Set(manifest.tables ?? []);
-      const created = new Set<string>();
-      for (const sql of Object.values(input.migrations ?? {})) {
-        for (const name of tableNamesFromSql(sql)) {
-          created.add(name);
+      // 迁移集按落点分类（#310）：键含 `<模块id>-shared/` = shared 集（物理名带模块前缀）；
+      // 单形态模块（声明 shared 但无独立 shared 目录）= 全部迁移都算 shared 集。
+      const sharedKeyRe = new RegExp(`(^|/)${escapeRegExp(manifest.id)}-shared/`);
+      const markedShared = migrationEntries.filter(([k]) => sharedKeyRe.test(k));
+      const sharedIsWholePackage = accepts.includes('shared') && markedShared.length === 0;
+      const sharedEntries = sharedIsWholePackage ? migrationEntries : markedShared;
+      const sharedKeys = new Set(sharedEntries.map(([k]) => k));
+      const dedicatedEntries = migrationEntries.filter(([k]) => !sharedKeys.has(k));
+      const createdOf = (entries: Array<[string, string]>): Set<string> => {
+        const set = new Set<string>();
+        for (const [, sql] of entries) for (const name of tableNamesFromSql(sql)) set.add(name);
+        return set;
+      };
+      const reportMismatch = (created: Set<string>, declared: Set<string>): void => {
+        const undeclared = [...created].filter((t) => !declared.has(t));
+        const missing = [...declared].filter((t) => !created.has(t));
+        if (undeclared.length > 0) {
+          errors.push({
+            level: 'error',
+            check: 'tables',
+            message: `迁移建了未申报的表：${undeclared.join(', ')}（「共享库不接收未经申报的表」是硬规则）`,
+          });
         }
+        if (missing.length > 0) {
+          errors.push({
+            level: 'error',
+            check: 'tables',
+            message: `tables 申报了迁移未建的表：${missing.join(', ')}（清单与迁移必须一致）`,
+          });
+        }
+      };
+      // dedicated/默认集 ↔ manifest.tables（逻辑名=物理名）。
+      // 单形态 shared 模块（迁移全归 shared 集）没有 dedicated 集，不拿空集去报「未建」。
+      if (dedicatedEntries.length > 0 || !accepts.includes('shared')) {
+        reportMismatch(createdOf(dedicatedEntries), new Set(manifest.tables ?? []));
       }
-      const undeclared = [...created].filter((t) => !declaredTables.has(t));
-      const missing = [...declaredTables].filter((t) => !created.has(t));
-      if (undeclared.length > 0) {
-        errors.push({
-          level: 'error',
-          check: 'tables',
-          message: `迁移建了未申报的表：${undeclared.join(', ')}（「共享库不接收未经申报的表」是硬规则）`,
-        });
-      }
-      if (missing.length > 0) {
-        errors.push({
-          level: 'error',
-          check: 'tables',
-          message: `tables 申报了迁移未建的表：${missing.join(', ')}（清单与迁移必须一致）`,
-        });
-      }
-      // ③½ shared 护栏③（决策 #55）：accepts 含 shared 的包，其迁移必须已满足「<模块id>_ 前缀 +
-      // 禁跨模块外键」——否则部署者一旦选 shared，装配期才炸，作者侧毫无预警。发布期在此拦下
-      // （与装配期 `checkSharedGuards` 共用同一份实现，见 shared-guards.ts）。
-      // 仅当模块真的声明支持 shared 时检查；纯 dedicated 模块不受前缀约束。
+      // shared 集 ↔ manifest.tablesShared（物理名，带模块前缀）
       if (accepts.includes('shared')) {
-        const guardMigrations = Object.entries(input.migrations ?? {}).map(([name, sql]) => ({ name, sql }));
+        reportMismatch(createdOf(sharedEntries), new Set(manifest.tablesShared ?? manifest.tables ?? []));
+        // 护栏③（决策 #55）：前缀 + 禁跨模块外键；与装配期 `checkSharedGuards` 共用同一份实现。
         for (const problem of sharedGuardProblems({
           moduleId: manifest.id,
-          tables: manifest.tables ?? [],
-          migrations: guardMigrations,
+          tables: manifest.tablesShared ?? manifest.tables ?? [],
+          migrations: sharedEntries.map(([name, sql]) => ({ name, sql })),
         })) {
           // 护栏②（未申报的表）上面已有更贴切的人话诊断，这里只补护栏③两类，防重复报。
           if (problem.kind === 'undeclared') continue;
@@ -407,7 +424,9 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
       }
 
       for (const file of Object.keys(input.migrations ?? {})) {
-        if (!MIGRATION_FILE_RE.test(file)) {
+        // 键可能带迁移目录前缀（如 `chat-shared/0001_baseline.sql`）；命名规范只看文件名。
+        const baseName = file.split('/').pop() ?? file;
+        if (!MIGRATION_FILE_RE.test(baseName)) {
           errors.push({
             level: 'error',
             check: 'tables',

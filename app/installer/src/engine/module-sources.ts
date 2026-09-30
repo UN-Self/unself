@@ -458,7 +458,15 @@ async function listMigrations(packageDir: string): Promise<Record<string, string
   const migRoot = join(packageDir, 'migrations');
   const direct = await readSqls(migRoot);
   if (Object.keys(direct).length > 0) return direct;
-  return readSqls(join(migRoot, await manifestIdOf(packageDir)));
+  const id = await manifestIdOf(packageDir);
+  // #310：同时收 `<id>/`（dedicated/默认）与 `<id>-shared/`（shared 物理表集），
+  // 键带子目录以区分两套迁移集（validate 按 `<id>-shared/` 归类 shared）。
+  const out: Record<string, string> = {};
+  for (const dir of [id, `${id}-shared`]) {
+    const files = await readSqls(join(migRoot, dir));
+    for (const [name, sql] of Object.entries(files)) out[`${dir}/${name}`] = sql;
+  }
+  return out;
 }
 
 /** 包根 manifest 的 id（migrations 子目录名约定 = <模块id>）。 */

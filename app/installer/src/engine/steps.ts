@@ -61,6 +61,15 @@ import {
   readChatPackageConfig,
 } from './chat-provision';
 import {
+  filesSourceVars,
+  resolveFilesSource,
+  resolveS3Credentials,
+  S3_ACCESS_SECRET_NAME,
+  S3_SECRET_SECRET_NAME,
+  type FilesSource,
+  type S3Credentials,
+} from './files-source';
+import {
   checkSharedGuards,
   dedicatedDbNameFor,
   doMigrationLedgerName,
@@ -209,6 +218,8 @@ export interface RunNineStepsOptions {
   configOverride?: UnselfConfig;
   /** 测试注入口：拦截 secret put（secretName 区分 core JWT 与 chat 密钥环）。 */
   putSecret?: (workerName: string, value: string, secretName: string) => Promise<void>;
+  /** 自备 S3 凭据（#310）；缺省从环境变量读（resolveS3Credentials），测试可注入。 */
+  s3Credentials?: { accessKeyId: string; secretAccessKey: string };
   /** 测试注入口：拦截 chat 前端构建（默认真实 vite build；返回产物相对 outDir/modules/ 路径）。 */
   buildChatFrontend?: (input: { rootDir: string; outDir: string; log: (msg: string) => void }) => Promise<string>;
   /**
@@ -369,12 +380,22 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
 
   const dbIds = await ensureDatabases(client, accountId, rep.log);
   const chatMod = selected.find((m) => m.id === CHAT_MODULE_ID);
-  let chatResources: { dbId: string; kvId: string } | null = null;
+  let chatResources: { dbId: string | null; kvId: string } | null = null;
   let chatPkg: Awaited<ReturnType<typeof readChatPackageConfig>> | null = null;
+  /** chat 生效落点（#310）：shared 走共享库（chat_ 前缀），dedicated 保持专属库。 */
+  let chatLevel: StorageLevel = 'dedicated';
+  /** chat FILES 来源（#310）：共享实例桶 / 模块独立桶 / 自备 S3。 */
+  let chatFiles: FilesSource | null = null;
   if (chatMod) {
     chatPkg = await readChatPackageConfig(chatMod.dir);
-    chatResources = await ensureChatResources(client, accountId, rep.log);
-    await ensureChatR2Bucket(client, accountId, rep.log);
+    chatLevel = storagePlans.get(CHAT_MODULE_ID)?.level ?? 'dedicated';
+    // shared 落点把 chat 表建进共享 modules 库，不建专属 D1（省配额，决策 #55/#310）。
+    chatResources = await ensureChatResources(client, accountId, rep.log, { createD1: chatLevel === 'dedicated' });
+    chatFiles = resolveFilesSource({ config, moduleId: CHAT_MODULE_ID, level: chatLevel });
+    // 模块独立桶才由 chat 供给；共享实例桶归步骤⑥，自备 S3 不建桶。
+    if (chatFiles.kind === 'r2' && chatFiles.origin === 'module') {
+      await ensureChatR2Bucket(client, accountId, rep.log);
+    }
   }
 
   // ② 迁移与数据落点（#248 四级）：core→无迁移；shared→共享库建表（三护栏硬校验）；
@@ -428,11 +449,11 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   const applyModuleStorage = async (mod: ModuleRef): Promise<void> => {
     const plan = storagePlans.get(mod.id) ?? storagePlanOf(mod);
     const level: StorageLevel = plan?.level ?? 'core';
-    if (mod.id === CHAT_MODULE_ID && chatResources) {
+    if (mod.id === CHAT_MODULE_ID && chatResources && level === 'dedicated' && chatResources.dbId) {
       // chat（#74/#248 普通化）：专属库在步骤①建（`unself-chat`），这里把 id 记进落点表——
       // 之后与任何 dedicated 模块走**同一条**通用迁移链（migrations/chat/0001_baseline.sql +
       // 独立记账 unself_migrations_chat），不再有「一次性灌 schema」的存储豁免。
-      // （chat 的 KV/R2/DO 绑定是模块资源，由包配置提供，见步骤④——与存储落点无关。）
+      // shared 落点不建专属库：表建在共享 modules 库，见步骤④的 D1 绑定与 DB_TABLE_PREFIX。
       dedicatedDbIds.set(mod.id, chatResources.dbId);
     }
     if (level === 'core') {
@@ -443,7 +464,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       rep.log(`模块 ${mod.id} 落点 external：自备外部库，装配器不接线（连接串走配置页）`);
       return;
     }
-    const migDir = migrationDirFor(mod.dir, mod.id);
+    const migDir = migrationDirFor(mod.dir, mod.id, level);
     const files = await readSqlFiles(migDir);
     if (files.length === 0) {
       throw new Error(
@@ -451,13 +472,15 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       );
     }
     const manifest = plan?.manifest;
-    const tables = manifest?.tables ?? [];
+    // shared 用物理表清单（带模块前缀；双形态用 tablesShared，单形态回落 tables），dedicated 用逻辑名清单（#310）。
+    const tables = level === 'shared' ? (manifest?.tablesShared ?? manifest?.tables ?? []) : (manifest?.tables ?? []);
     if (level === 'shared') {
-      // shared 三护栏③：命名前缀 + 禁止跨模块外键（装配时硬校验，违者停住）；
-      // 护栏②（tables 申报）在契约 schema 已拦，这里对实际建的表再兜一道。
+      // shared 三护栏③：命名前缀 + 禁止跨模块外键（装配时硬校验，违者停住）。
+      // 注意：这是**命名空间**护栏，不是权限隔离——共享库对模块零隔离，护栏只防表名碰撞与误引用。
+      // 护栏②（tablesShared 申报）在契约 schema 已拦，这里对实际建的表再兜一道。
       if (tables.length === 0) {
         throw new Error(
-          `模块 ${mod.id} 落点 shared 但未申报 tables 表名清单（护栏②）——共享库不接收未经申报的表`,
+          `模块 ${mod.id} 落点 shared 但未申报 tablesShared 物理表清单（护栏②）——共享库不接收未经申报的表`,
         );
       }
       const problems = checkSharedGuards({ moduleId: mod.id, tables, migrations: files });
@@ -720,6 +743,8 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
             zoneName: resolvedZone?.name,
             pkg: chatPkg,
             assetsDir: chatAssetsDir!,
+            storageLevel: chatLevel,
+            files: chatFiles!,
           })
         : moduleWranglerConfig({
             config,
@@ -767,12 +792,17 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       });
     }
     // STORAGE_LEVEL 入 vars（由 moduleWranglerConfig 生成，模块 SDK 据此选通道）
-    if (chatPkgMeta && chatResources) {
-      // chat 专属绑定（#219 决策 #50 豁免）：专属 D1 + SESSIONS KV + FILES R2 + DO 三绑定
+    if (chatPkgMeta && chatResources && chatFiles) {
+      // chat 绑定（#310）：落点 shared → D1 指共享 modules 库 + DB_TABLE_PREFIX=chat_；
+      // 落点 dedicated → 专属库（不变）。FILES 按统一来源：R2 绑桶，或自备 S3 的 FILES_S3_* vars。
+      const chatD1Id = modLevel === 'shared' ? dbIds.modules : chatResources.dbId;
       moduleBindings.push(
-        { type: 'd1', name: chatPkgMeta.d1Binding, id: chatResources.dbId },
+        { type: 'd1', name: chatPkgMeta.d1Binding, id: chatD1Id },
         { type: 'kv_namespace', name: 'SESSIONS', namespace_id: chatResources.kvId },
-        { type: 'r2_bucket', name: 'FILES', bucket_name: chatR2Name() },
+        ...(modLevel === 'shared' ? [{ type: 'plain_text', name: 'DB_TABLE_PREFIX', text: 'chat_' }] : []),
+        ...(chatFiles.kind === 'r2'
+          ? [{ type: 'r2_bucket', name: 'FILES', bucket_name: chatFiles.bucket }]
+          : Object.entries(filesSourceVars(chatFiles)).map(([name, text]) => ({ type: 'plain_text', name, text }))),
         ...chatPkgMeta.doBindings.map((b) => ({ type: 'durable_object_namespace', ...b })),
       );
     }
@@ -863,6 +893,21 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       } else {
         rep.log(`${CHAT_KEYRING_SECRET} 已配置：沿用现有加密密钥环`);
         chatKeyringAction = 'existing';
+      }
+      if (chatFiles?.kind === 's3') {
+        // 自备 S3 凭据（#310）：部署进程环境变量 → worker secret（不落 config/unself.lock）。
+        const creds: S3Credentials = input.s3Credentials ?? resolveS3Credentials();
+        const workerName = moduleWorkerName(mod.id);
+        for (const [name, value] of [
+          [S3_ACCESS_SECRET_NAME, creds.accessKeyId],
+          [S3_SECRET_SECRET_NAME, creds.secretAccessKey],
+        ] as const) {
+          if (await hasWorkerSecret(client, accountId, workerName, name)) continue;
+          if (input.putSecret) await input.putSecret(workerName, value, name);
+          else await putWorkerSecret(client, accountId, workerName, name, value);
+        }
+        await moduleUpload();
+        rep.log('FILES 自备 S3 凭据已写入 worker secret（不落 config/unself.lock）');
       }
     }
   }
@@ -970,7 +1015,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       kv: chatResources ? [{ name: chatKvName(), id: chatResources.kvId }] : [],
       r2: [
         ...(config.storage.provider === 'r2' ? [{ name: config.storage.bucket }] : []),
-        ...(chatMod ? [{ name: chatR2Name() }] : []),
+        ...(chatFiles?.kind === 'r2' && chatFiles.origin === 'module' ? [{ name: chatFiles.bucket }] : []),
       ],
       workers: [
         { name: coreWorkerName() },

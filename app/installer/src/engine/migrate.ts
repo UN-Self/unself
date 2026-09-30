@@ -121,9 +121,14 @@ export async function readSqlFiles(dir: string): Promise<Array<{ name: string; s
   return files;
 }
 
-/** 迁移模块目录：migrations/<模块id>/（包布局 §2；包根直放形态由 module-sources 兼容）。 */
-export function migrationDirFor(moduleDir: string, moduleId: string): string {
-  return join(moduleDir, 'migrations', moduleId);
+/** 迁移模块目录：migrations/<模块id>/（包布局 §2）。
+ * #310：shared 落点优先用 `migrations/<模块id>-shared/`（带前缀的物理表集）；不存在时回落
+ * `<模块id>/`（单形态模块，其迁移本身即须满足护栏③）。dedicated 恒用 `<模块id>/`。 */
+export function migrationDirFor(moduleDir: string, moduleId: string, level: StorageLevel = 'dedicated'): string {
+  const base = join(moduleDir, 'migrations', moduleId);
+  if (level !== 'shared') return base;
+  const sharedDir = join(moduleDir, 'migrations', `${moduleId}-shared`);
+  return existsSync(sharedDir) ? sharedDir : base;
 }
 
 /**

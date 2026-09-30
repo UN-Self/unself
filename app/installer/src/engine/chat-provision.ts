@@ -25,6 +25,7 @@ import type { RestClient } from './rest';
 import { stripJsonc } from './config';
 import type { UnselfConfig } from './config';
 import { moduleWorkerName, resourceName } from './naming';
+import { filesSourceVars, moduleFilesBucket, type FilesSource } from './files-source';
 
 /** chat 专属资源名（chat- 前缀，决策 #50；可带 UNSELF_RESOURCE_PREFIX 做同账户隔离，#257）。 */
 export const CHAT_MODULE_ID = 'chat';
@@ -53,8 +54,6 @@ export const CHAT_KEYRING_SECRET = 'EDGECHAT_ENCRYPTION_KEYRING';
 /** worker 侧 KV 绑定名（app/modules/chat/wrangler.jsonc）。
  * #231：worker 已无 SESSIONS 消费方（见 CHAT_KV_NAME 注释），生成配置暂时代持至 M3 清退。 */
 const KV_BINDING = 'SESSIONS';
-/** worker 侧 R2 绑定名（可选增强；装配端始终供给，缺绑定降级逻辑不再触发）。 */
-const R2_BINDING = 'FILES';
 
 /**
  * 确保 chat 专属 D1/KV 存在，返回 id（REST 查漏补建，幂等）。
@@ -63,9 +62,12 @@ export async function ensureChatResources(
   client: RestClient,
   accountId: string,
   log: (msg: string) => void,
-): Promise<{ dbId: string; kvId: string }> {
-  const dbId = await ensureD1(client, accountId, chatDbName(), log);
+  opts: { createD1?: boolean } = {},
+): Promise<{ dbId: string | null; kvId: string }> {
   const kvId = await ensureKvNamespace(client, accountId, chatKvName(), log);
+  // shared 落点把 chat 的表建在共享 modules 库，不建专属 D1（#310：shared 的动机之一就是省配额）。
+  if (opts.createD1 === false) return { dbId: null, kvId };
+  const dbId = await ensureD1(client, accountId, chatDbName(), log);
   return { dbId, kvId };
 }
 
@@ -138,7 +140,7 @@ export async function readChatPackageConfig(moduleDir: string): Promise<ChatPack
  */
 export function chatWranglerConfig(input: {
   config: UnselfConfig;
-  dbIds: { modules: string; chat: string };
+  dbIds: { modules: string; chat: string | null };
   kvId: string;
   /** 部署期注入的 core 公钥 JWKS 字符串（模块本地验签）。 */
   jwksJson: string;
@@ -147,8 +149,24 @@ export function chatWranglerConfig(input: {
   pkg: ChatPackageConfig;
   /** 前端产物目录（相对配置文件所在目录 modules/）。 */
   assetsDir: string;
+  /** 数据落点（#310）；缺省 dedicated（保持既有行为/测试）。 */
+  storageLevel?: 'core' | 'shared' | 'dedicated' | 'external';
+  /** FILES 来源（#310）；缺省模块独立桶（既有行为）。 */
+  files?: FilesSource;
 }): string {
   const { config, dbIds, kvId, jwksJson, zoneName, pkg, assetsDir } = input;
+  const storageLevel = input.storageLevel ?? 'dedicated';
+  const files: FilesSource = input.files ?? {
+    kind: 'r2',
+    binding: 'FILES',
+    origin: 'module',
+    bucket: moduleFilesBucket(CHAT_MODULE_ID),
+  };
+  // shared 落点：chat 的 D1 绑定指共享 modules 库，worker 靠 DB_TABLE_PREFIX 映射到 chat_ 前缀表。
+  const d1Binding =
+    storageLevel === 'shared'
+      ? { binding: pkg.d1Binding, database_name: chatDbName(), database_id: dbIds.modules }
+      : { binding: pkg.d1Binding, database_name: chatDbName(), database_id: dbIds.chat };
   return JSON.stringify(
     {
       $schema: 'node_modules/wrangler/config-schema.json',
@@ -169,29 +187,24 @@ export function chatWranglerConfig(input: {
         // 全部请求先跑 Worker（模块自管资产回退），与 hello 同款
         run_worker_first: true,
       },
-      d1_databases: [
-        {
-          binding: pkg.d1Binding,
-          database_name: chatDbName(),
-          database_id: dbIds.chat,
-        },
-      ],
+      d1_databases: [d1Binding],
       kv_namespaces: [
         {
           binding: KV_BINDING,
           id: kvId,
         },
       ],
-      r2_buckets: [
-        {
-          binding: R2_BINDING,
-          bucket_name: chatR2Name(),
-        },
-      ],
+      // FILES：R2 绑桶直接给绑定；自备 S3 无 R2 绑定，改交 FILES_S3_* vars + 部署期 secret。
+      ...(files.kind === 'r2'
+        ? { r2_buckets: [{ binding: files.binding, bucket_name: files.bucket }] }
+        : {}),
       durable_objects: { bindings: pkg.doBindings },
       ...(pkg.migrations.length > 0 ? { migrations: pkg.migrations } : {}),
       vars: {
         MODULE_ID: CHAT_MODULE_ID,
+        // shared 落点：worker 表名前缀（单一注入点，见 worker/src/db-tables.js）
+        ...(storageLevel === 'shared' ? { DB_TABLE_PREFIX: 'chat_' } : {}),
+        ...filesSourceVars(files),
         // 部署期注入公钥 JWKS（模块本地验签零运行时网络），其余 vars 包配置直通
         ...pkg.vars,
         CORE_JWKS_JSON: jwksJson,

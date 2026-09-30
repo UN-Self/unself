@@ -17,11 +17,11 @@ describe('#270 卸载策略定案', () => {
     expect(MODULE_UNINSTALL_STRATEGY).toBe('platform-tables-cleanup');
   });
 
-  it('shared 落点取 manifest.tables 清单', () => {
+  it('shared 落点取 manifest.tablesShared 物理清单', () => {
     const plan = platformUninstallPlan({
       id: 'todo',
       storage: { declaration: 'shared' },
-      tables: ['todo_items', 'todo_lists'],
+      tablesShared: ['todo_items', 'todo_lists'],
     });
     expect(plan).toEqual({ moduleId: 'todo', level: 'shared', tables: ['todo_items', 'todo_lists'] });
   });

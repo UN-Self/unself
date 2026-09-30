@@ -32,8 +32,12 @@ function officialInput(moduleId: 'hello' | 'chat'): Parameters<typeof validateMo
   };
   if (moduleId === 'chat') {
     input.migrations = {
-      '0001_baseline.sql': readFileSync(
+      'chat/0001_baseline.sql': readFileSync(
         join(REPO_ROOT, 'app', 'modules', 'chat', 'migrations', 'chat', '0001_baseline.sql'),
+        'utf8',
+      ),
+      'chat-shared/0001_baseline.sql': readFileSync(
+        join(REPO_ROOT, 'app', 'modules', 'chat', 'migrations', 'chat-shared', '0001_baseline.sql'),
         'utf8',
       ),
     };
@@ -57,20 +61,26 @@ describe('官方模块迁移到契约 v1 并通过 validate（验收①）', () 
     expect(result.ok).toBe(true);
   });
 
-  it('chat manifest.yaml 过 ModuleManifestSchema（dedicated + tables 申报 18 张）', () => {
+  it('chat manifest.yaml 过 ModuleManifestSchema（shared+dedicated，tables 18 / tablesShared 18）', () => {
     const text = readFileSync(join(REPO_ROOT, 'app', 'modules', 'chat', 'manifest.yaml'), 'utf8');
     const manifest = ModuleManifestSchema.parse(manifestFromYamlText(text));
-    expect(manifest.storage?.accepts).toEqual(['dedicated']);
+    expect(manifest.storage?.accepts).toEqual(['shared', 'dedicated']);
+    expect(manifest.storage?.preferred).toBe('dedicated');
     expect(manifest.tables).toHaveLength(18);
+    expect(manifest.tablesShared).toHaveLength(18);
+    expect(manifest.tablesShared?.every((t) => t.startsWith('chat_'))).toBe(true);
     expect(manifest.permissions).toEqual(['storage', 'notify']);
   });
 
-  it('chat 通过 validate：tables 申报与 0001_baseline.sql 实际建表逐一一致（真实文件）', () => {
+  it('chat 通过 validate：tables/tablesShared 与两套迁移实际建表逐一一致（真实文件）', () => {
     const input = officialInput('chat');
     const result = validateModulePackage(input);
-    // 先锚定：0001_baseline.sql 实际建表 = 18 张
-    const sql = input.migrations?.['0001_baseline.sql'] ?? '';
-    expect(tableNamesFromSql(sql)).toHaveLength(18);
+    // 先锚定：两套 baseline 各建 18 张，且 shared 集全部带前缀
+    const dedicatedSql = input.migrations?.['chat/0001_baseline.sql'] ?? '';
+    const sharedSql = input.migrations?.['chat-shared/0001_baseline.sql'] ?? '';
+    expect(tableNamesFromSql(dedicatedSql)).toHaveLength(18);
+    expect(tableNamesFromSql(sharedSql)).toHaveLength(18);
+    expect(tableNamesFromSql(sharedSql).every((t) => t.startsWith('chat_'))).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
   });

@@ -18,6 +18,7 @@ import { registerV1Routes } from './api/v1.js';
 import { ChannelRoom } from './do/ChannelRoom.js';
 import { Scheduler } from './do/Scheduler.js';
 import { UserInbox } from './do/UserInbox.js';
+import { wrapEnv } from './unself-env.js';
 import { forwardInboxConnection, forwardRoomConnection } from './do-bridge.js';
 import { runScheduledGc } from './gc.js';
 import {
@@ -147,9 +148,10 @@ app.onError((error, c) => {
 });
 
 export default {
-  fetch: app.fetch,
+  // #310 接线点：env 包装（DB 表名前缀 + FILES 来源择一）只在入口收口一次
+  fetch: (request, env, ctx) => app.fetch(request, wrapEnv(env), ctx),
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(runScheduledGc(env));
+    ctx.waitUntil(runScheduledGc(wrapEnv(env)));
   }
 };
 export { ChannelRoom, Scheduler, UserInbox };

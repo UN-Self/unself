@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # 模块契约 v1（docs/modules.md §3 字段冻结；决策 #56/#57）
 # entry 为占位：装配器覆写为实例内地址（§3）
-# storage=dedicated（决策 #55/#74）：专属 D1/KV/DO，tables 申报与 worker/schema-baseline.sql 一致
+# storage（决策 #55/#74/#310）：
+#   - dedicated（preferred/默认）：专属 D1/KV/DO，表名不带前缀，存量实例零迁移；
+#   - shared（仅新装可选）：表建在共享 modules 库，物理表名统一 chat_ 前缀（tablesShared）。
+#     shared 库对模块零隔离；chat_ 前缀与禁跨模块外键是**命名空间**护栏，不是权限隔离。
 id: chat
 route: /m/chat
 entry: http://localhost:8791/
@@ -14,6 +17,7 @@ permissions:
   - notify
 storage:
   accepts:
+    - shared
     - dedicated
   preferred: dedicated
 tables:
@@ -35,3 +39,22 @@ tables:
   - pending_r2_delete
   - core_identities
   - read_receipts
+tablesShared:
+  - chat_users
+  - chat_channels
+  - chat_channel_members
+  - chat_messages
+  - chat_user_blocks
+  - chat_channel_pins
+  - chat_message_reads
+  - chat_site_settings
+  - chat_registration_invites
+  - chat_registration_invite_uses
+  - chat_uploaded_files
+  - chat_device_sessions
+  - chat_realtime_tickets
+  - chat_message_events
+  - chat_message_event_compaction
+  - chat_pending_r2_delete
+  - chat_core_identities
+  - chat_read_receipts

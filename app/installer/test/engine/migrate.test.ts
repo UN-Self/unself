@@ -16,11 +16,29 @@ import {
   dedicatedDbNameFor,
   doMigrationLedgerName,
   foreignKeyTargets,
+  migrationDirFor,
   migrationFailure,
   planDoMigrations,
   storageLevelFor,
   tablePrefixFor,
 } from '../../src/engine/migrate';
+
+describe('migrationDirFor（#310：shared 用 <id>-shared/ 物理表集）', () => {
+  it('shared 优先 <id>-shared/；不存在时回落 <id>/；dedicated 恒用 <id>/', async () => {
+    const { mkdtemp, mkdir } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'unself-migdir-'));
+    await mkdir(join(dir, 'migrations', 'demo'), { recursive: true });
+    // 单形态模块：无 shared 目录 → shared 回落 <id>/
+    expect(migrationDirFor(dir, 'demo', 'shared')).toBe(join(dir, 'migrations', 'demo'));
+    expect(migrationDirFor(dir, 'demo', 'dedicated')).toBe(join(dir, 'migrations', 'demo'));
+    // 双形态：建了 <id>-shared/ → shared 用它，dedicated 不受影响
+    await mkdir(join(dir, 'migrations', 'demo-shared'), { recursive: true });
+    expect(migrationDirFor(dir, 'demo', 'shared')).toBe(join(dir, 'migrations', 'demo-shared'));
+    expect(migrationDirFor(dir, 'demo', 'dedicated')).toBe(join(dir, 'migrations', 'demo'));
+  });
+});
 
 describe('storageLevelFor（#55 四级缺省链）', () => {
   const M = (storage?: unknown) => ({ manifest: storage ? { storage } : undefined, id: 'demo' }) as Parameters<typeof storageLevelFor>[0];
