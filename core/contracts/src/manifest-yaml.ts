@@ -16,6 +16,11 @@
 export interface ParsedManifestYaml {
   scalars: Record<string, string>;
   lists: Record<string, string[]>;
+  /**
+   * 出现过的键路径（含**空值键**，如 `license:`）——用于区分「字段显式声明但为空」
+   * 与「完全省略」。目前只有 `license` 消费它（issue #292 退回），其余字段行为不变。
+   */
+  declared?: string[];
 }
 
 /** 契约候选对象：ModuleManifestSchema.parse 的直接输入（§3 字段名）。 */
@@ -28,6 +33,8 @@ const LIST_ITEM_RE = /^\s*-\s+(.+?)\s*(?:#.*)?$/;
 export function parseManifestYamlFields(text: string): ParsedManifestYaml {
   const scalars: Record<string, string> = {};
   const lists: Record<string, string[]> = {};
+  /** 出现过的键路径（含空值键）——记录「声明过」这一事实，见 ParsedManifestYaml.declared。 */
+  const declared: string[] = [];
   /** 最近一个顶层块键（嵌套标量与 list 归属锚点）。 */
   let topLevelKey: string | null = null;
   /** 最近一个键（顶层或嵌套，list 项归属用）。 */
@@ -41,6 +48,7 @@ export function parseManifestYamlFields(text: string): ParsedManifestYaml {
       // 嵌套标量恒归属最近顶层块（一层嵌套，如 storage.preferred），
       // 不受中间 list 项影响；更深嵌套不在 §3 字段表内，不做。
       const path = indent === 0 ? key : topLevelKey ? `${topLevelKey}.${key}` : key;
+      declared.push(path);
       if (value.startsWith('[')) {
         throw new Error(
           `manifest: 不支持 flow 式 list「${path}: ${value}」——改用 block 式多行（docs/modules.md，#64）`,
@@ -61,7 +69,32 @@ export function parseManifestYamlFields(text: string): ParsedManifestYaml {
       (lists[currentKey] ??= []).push(item[1]!);
     }
   }
-  return { scalars, lists };
+  return { scalars, lists, declared };
+}
+
+/**
+ * `license` 声明的形状还原（issue #292 退回）。
+ *
+ * 契约口径：**只有完全省略 `license` 键**才允许 `pack` 回落平台默认；只要声明过，
+ * 无论形态（空值 / list / 嵌套对象）都必须把「声明存在」带出去交 `ModuleManifestSchema`
+ * 判非法——不能静默丢弃后回落 AGPL（那是把有法律含义的错误信息写进 npm 元数据）。
+ * 与 JSON 入口一致：`"license": ""` / `[...]` / `{...}` / `null` 在 JSON 路径同样被 schema 拒。
+ *
+ * 只针对 `license` 一个键，不扩到通用 YAML 重写（其他空值键行为不变）。
+ */
+function resolveLicenseField(parsed: ParsedManifestYaml): { present: boolean; value: unknown } {
+  const { scalars, lists } = parsed;
+  if (scalars.license !== undefined) return { present: true, value: scalars.license };
+  if (lists.license !== undefined) return { present: true, value: lists.license };
+  const nestedKeys = Object.keys(scalars).filter((key) => key.startsWith('license.'));
+  if (nestedKeys.length > 0) {
+    const nested: Record<string, string> = {};
+    for (const key of nestedKeys) nested[key.slice('license.'.length)] = scalars[key]!;
+    return { present: true, value: nested };
+  }
+  // `license:` 空值：存在但无值 → 以空串带出（schema 形状校验必拒），不是「省略」
+  if ((parsed.declared ?? []).includes('license')) return { present: true, value: '' };
+  return { present: false, value: undefined };
 }
 
 /** 解析产物 → 契约候选对象（只映射 §3 冻结字段；config 等待定形态此处不解析）。 */
@@ -70,6 +103,7 @@ export function manifestYamlToCandidate(parsed: ParsedManifestYaml): ManifestCan
   const storageAccepts = lists['storage.accepts'];
   const storagePreferred = scalars['storage.preferred'];
   const storageDeclaration = scalars['storage.declaration'];
+  const license = resolveLicenseField(parsed);
   return {
     id: scalars.id,
     route: scalars.route,
@@ -78,8 +112,9 @@ export function manifestYamlToCandidate(parsed: ParsedManifestYaml): ManifestCan
     runtimes: lists.runtimes ?? [],
     ...(scalars.description ? { description: scalars.description } : {}),
     ...(scalars.icon ? { icon: scalars.icon } : {}),
-    // 许可证（issue #292）：SPDX 表达式标量，形状校验在 ModuleManifestSchema
-    ...(scalars.license ? { license: scalars.license } : {}),
+    // 许可证（issue #292）：声明过就必须带出（含空值/list/嵌套对象），交 schema 判非法；
+    // 只有完全省略才 omit —— 省略时 pack 才回落平台默认
+    ...(license.present ? { license: license.value } : {}),
     ...(lists.permissions ? { permissions: lists.permissions } : {}),
     ...(storageAccepts || storagePreferred || storageDeclaration
       ? {
