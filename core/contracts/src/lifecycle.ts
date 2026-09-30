@@ -126,12 +126,16 @@ export function platformUninstallPlan(manifest: {
   id?: string;
   storage?: { declaration?: string; preferred?: string };
   tables?: string[];
+  /** shared 落点的物理表清单（#310）；生效落点为 shared 时用它，dedicated 用 `tables`。 */
+  tablesShared?: string[];
 }): PlatformUninstallPlan {
   const level = effectiveStorageLevel(manifest);
   const selfBuilt = level === 'shared' || level === 'dedicated';
+  // shared 物理表清单优先（带模块前缀，护栏③）；单形态模块回落 tables；缺申报时回落空清单（宁可不删也不猜）。
+  const declared = level === 'shared' ? (manifest.tablesShared ?? manifest.tables) : manifest.tables;
   return {
     moduleId: manifest.id ?? '',
     level,
-    tables: selfBuilt ? [...(manifest.tables ?? [])] : [],
+    tables: selfBuilt ? [...(declared ?? [])] : [],
   };
 }

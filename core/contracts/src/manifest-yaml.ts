@@ -126,6 +126,7 @@ export function manifestYamlToCandidate(parsed: ParsedManifestYaml): ManifestCan
         }
       : {}),
     ...(lists.tables ? { tables: lists.tables } : {}),
+    ...(lists.tablesShared ? { tablesShared: lists.tablesShared } : {}),
     ...(lists.compat ? { compat: { min: lists.compat[0], max: lists.compat[1] } } : {}),
   };
 }

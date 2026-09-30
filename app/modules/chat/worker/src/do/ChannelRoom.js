@@ -20,6 +20,8 @@ import { authorizeRoom } from '../room-access.js';
 import { projectUnreadMessage } from '../unread-projection.js';
 import { isVerifiedInternalRequest, parseVerifiedPrincipal } from '../verified-identity.js';
 import { durableObjectHealth } from '../maintenance/do-health.ts';
+// #310 接线点：DO 自有 env 也需同一层包装（表名前缀 + FILES 来源）
+import { wrapEnv } from '../unself-env.js';
 
 const MESSAGE_SIZE_LIMIT = 10 * 1024;
 
@@ -75,7 +77,7 @@ function normalizeWebSocketMessage(message) {
 export class ChannelRoom {
   constructor(state, env) {
     this.state = state;
-    this.env = env;
+    this.env = wrapEnv(env);
     this.connections = new Map();
 
     for (const socket of this.state.getWebSockets()) {

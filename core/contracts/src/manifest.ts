@@ -115,6 +115,12 @@ export const ModuleManifestSchema = z
     storage: ModuleStorageSchema.optional(),
     /** 本模块的表名清单：accepts 含 shared 时必需（硬护栏）。 */
     tables: z.array(TableNameSchema).optional(),
+    /**
+     * shared 落点的**物理**表名清单（#310，决策 #55 护栏②）：必须带 `<模块id>_` 前缀。
+     * 与 `tables` 分开的理由：双形态模块（chat）dedicated 用不带前缀的逻辑名、shared 用带前缀的物理名，
+     * 单一 `tables` 列表无法同时表达；卸载按生效落点择一（lifecycle.platformUninstallPlan）。
+     */
+    tablesShared: z.array(TableNameSchema).optional(),
     /** 配置页字段声明（#53/#66）。 */
     config: ModuleConfigSchema.optional(),
     /** 契约版本区间（#57）；省略 = 接受任意版本。 */
@@ -148,21 +154,23 @@ export const ModuleManifestSchema = z
   .superRefine((manifest, ctx) => {
     const accepts = manifest.storage?.accepts;
     const declared = manifest.storage?.declaration;
-    if (accepts?.includes('shared') && (!manifest.tables || manifest.tables.length === 0) && declared !== 'core') {
-      // docs/modules.md §4 三护栏之一：shared 必须申报表名清单（卸载/备份按清单执行）。
-      // declaration=core（用户实际装 core，shared 不会落库）时豁免——装的是哪一级，才执行哪一级护栏。
+    const declaresTables = (manifest.tables?.length ?? 0) > 0 || (manifest.tablesShared?.length ?? 0) > 0;
+    // 护栏②（#55/#310）：声明支持 shared（且实际不是装 core）时必须申报表清单。
+    // 单形态模块用 tables（shared 物理名本身须带前缀）；双形态模块（chat）额外用 tablesShared。
+    if (accepts?.includes('shared') && declared !== 'core' && !declaresTables) {
       ctx.addIssue({
         code: 'custom',
         path: ['tables'],
-        message: 'storage.accepts 含 shared 时必须申报 tables（表名清单，docs/modules.md §4 护栏②）',
+        message:
+          'storage.accepts 含 shared 时必须申报 tables（或双形态用 tablesShared）（shared 表清单，须带模块前缀；docs/modules.md §4 护栏②）',
       });
     }
-    // 用户实际选了 shared → tables 申报同样必需（装的是哪一级，就执行哪一级的护栏）
-    if (declared === 'shared' && (!manifest.tables || manifest.tables.length === 0)) {
+    // 用户实际选了 shared → 表清单同样必需（装的是哪一级，就执行哪一级的护栏）
+    if (declared === 'shared' && !declaresTables) {
       ctx.addIssue({
         code: 'custom',
         path: ['tables'],
-        message: 'storage.declaration=shared（用户选定）时必须申报 tables（表名清单，docs/modules.md §4 护栏②）',
+        message: 'storage.declaration=shared（用户选定）时必须申报 tables 或 tablesShared（shared 表清单）',
       });
     }
     if (manifest.storage?.preferred && accepts && !accepts.includes(manifest.storage.preferred)) {

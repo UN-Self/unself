@@ -130,3 +130,27 @@
 - **同步策略**：默认不跟上游；上游出现值得移植的安全修复时**人工 port**（逐条评估 + 走本仓门禁），不做 merge/rebase，不新建 GitHub fork 关系（沿用决策 #50）。
 - **现状更正（#248 后）**：chat schema 已从搬运期的 `worker/schema-baseline.sql` 迁入标准迁移链 `migrations/chat/0001_baseline.sql`，按 `unself_migrations_chat` 独立记账重放；上文提及 `worker/schema-baseline.sql` 的段落是 #216 搬运时点记录，该文件已不存在，以本节为准。
 - **shared 化的额外影响（#310）**：若 chat 采用 `storage=shared`，表名须加 `chat_` 前缀并改写全部 `REFERENCES`（上游原名 → `chat_*`），与上游 diff 进一步扩大，更不可能自动合并——这正是「事实接管」的落点；改名实现与验收边界见 #310 拆出的实现 issue。
+
+## shared 落点与 FILES 统一来源（#310 实现）
+
+### 新增文件（均为 unself 集成层，非上游件）
+
+- `migrations/chat-shared/0001_baseline.sql`：由 `migrations/chat/0001_baseline.sql` 机械派生，18 张表名 + 全部 `REFERENCES` + 索引/触发器名统一 `chat_` 前缀（共享库防跨模块重名），逐条幂等。**dedicated 基线原文件不动**——存量 dedicated 实例按文件名记账，升级后仍读原（不带前缀的）数据。
+- `worker/src/db-tables.js`：`applyTablePrefix(db, prefix)` —— D1 绑定边界的表名映射（引号感知整词替换，跳过单引号字面量）。**上游 SQL 文件零改动**，保 fork 逐字节一致。
+- `worker/src/files-s3.js`：`createS3Files(config, fetchImpl)` —— 自备 S3 的 FILES 适配器（SigV4），与 R2 绑定同形。
+- `worker/src/unself-env.js`：`wrapEnv(env)` —— 单一包装点：DB 按 `DB_TABLE_PREFIX` 加前缀；FILES 三来源择一（R2 绑定 / `FILES_S3_*` / 无 → 上游判空降级）。缺参不静默回退。
+- 测试：`test/chat-shared-schema.test.ts`、`test/chat-db-tables.test.ts`、`test/chat-files-s3.test.ts`、`test/chat-shared-storage.test.ts`（真 SQLite 加载 `chat_` 基线跑 bootstrap，验证读写落在前缀表）。
+
+### 新增接线点（对上游件的最小改动）
+
+1. **`worker/src/index.js`**：`fetch`/`scheduled` 包一层 `wrapEnv(env)`。
+2. **`worker/src/do/ChannelRoom.js` / `do/Scheduler.js`**：构造器 `this.env = wrapEnv(env)`（DO 自有 env 不经 worker 入口）。DO 的存储/逻辑不变。
+
+### 落点选择与护栏（装配侧，非本模块文件）
+
+- 装配器 `migrationDirFor`：shared 优先 `migrations/<id>-shared/`，dedicated 恒用 `migrations/<id>/`。
+- chat manifest：`accepts: [shared, dedicated]`、`preferred: dedicated`；`tables`（dedicated 逻辑名）+ `tablesShared`（shared 物理名，`chat_` 前缀）。
+
+### 零隔离口径（重要）
+
+shared 是**零隔离**的共享 modules 库。`chat_` 前缀与「禁跨模块外键」只是**命名空间**护栏（防表名碰撞与误引用），**不是权限隔离**——不阻止模块读写其他模块的表，不得在文案/承诺里表述为隔离能力。
