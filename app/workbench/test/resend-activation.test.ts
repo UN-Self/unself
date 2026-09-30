@@ -624,6 +624,122 @@ describe('#152 重发激活邮件', () => {
     ).toEqual({ count: 0 });
   });
 
+  it('同一邀请双真实激活并发：仅一个进入 resetPassword，另一个在外部动作前被拒（[200,404]）', async () => {
+    const fx = await fixture();
+    const pendingMail: PendingSend[] = [];
+    let resetCalls = 0;
+    let releaseReset!: () => void;
+    const resetGate = new Promise<void>((resolve) => {
+      releaseReset = resolve;
+    });
+    const fake = createFakeMailProvisioner();
+    fake.accounts.set('m@example.com', { displayName: '成员', disabled: false, password: 'init' });
+    const provisioner = {
+      ...fake,
+      resetPassword: async (input: { email: string; password: string }) => {
+        resetCalls += 1;
+        await resetGate;
+        return fake.resetPassword(input);
+      },
+    };
+    const app = createApp({
+      createMailSender: () => gatedSender(pendingMail),
+      createMailProvisioner: () => provisioner,
+    });
+    const background: Promise<unknown>[] = [];
+
+    // resend 签发新令牌 N，后台投递挂起 → 旧 O 与新 N 都未用，两条都可达
+    expect((await resend(app, fx, 'u1', fakeExecutionContext(background))).status).toBe(200);
+    await until(() => pendingMail.length === 1);
+    const newToken = activationTokenFrom(pendingMail[0]!.message.text);
+    const activate = (token: string) =>
+      app.request(
+        `https://team.example.com/api/activate/${token}`,
+        { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'newpass123' }) },
+        fx.env,
+      );
+
+    const first = activate(fx.oldToken);
+    const second = activate(newToken);
+    // 排他证明：只有一方进入外部 resetPassword
+    await until(() => resetCalls === 1);
+    releaseReset();
+    const [a, b] = await Promise.all([first, second]);
+    expect([a.status, b.status].sort((x, y) => x - y)).toEqual([200, 404]);
+    expect(resetCalls).toBe(1);
+
+    // 成功后不残留可用链接；挂起的投递放行后亦不得复活
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 0 });
+    pendingMail[0]!.resolve();
+    await Promise.allSettled(background);
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 0 });
+  });
+
+  it('激活失败回滚只放回本行：不误清他行，失败期间另一链接被拒，回滚后原链接可重试', async () => {
+    const fx = await fixture();
+    const pendingMail: PendingSend[] = [];
+    let resetCalls = 0;
+    let releaseReset!: () => void;
+    const resetGate = new Promise<void>((resolve) => {
+      releaseReset = resolve;
+    });
+    const fake = createFakeMailProvisioner();
+    fake.accounts.set('m@example.com', { displayName: '成员', disabled: false, password: 'init' });
+    const provisioner = {
+      ...fake,
+      resetPassword: async (input: { email: string; password: string }) => {
+        resetCalls += 1;
+        if (resetCalls === 1) {
+          await resetGate;
+          throw new Error('smtp down');
+        }
+        return fake.resetPassword(input);
+      },
+    };
+    const app = createApp({
+      createMailSender: () => gatedSender(pendingMail),
+      createMailProvisioner: () => provisioner,
+    });
+    const background: Promise<unknown>[] = [];
+    expect((await resend(app, fx, 'u1', fakeExecutionContext(background))).status).toBe(200);
+    await until(() => pendingMail.length === 1);
+    const newToken = activationTokenFrom(pendingMail[0]!.message.text);
+    const activate = (token: string) =>
+      app.request(
+        `https://team.example.com/api/activate/${token}`,
+        { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'newpass123' }) },
+        fx.env,
+      );
+
+    // 旧链接占用并进入 resetPassword（挂起）；期间新链接必须被拒在外部动作之前
+    const oldAttempt = activate(fx.oldToken);
+    await until(() => resetCalls === 1);
+    const newAttempt = activate(newToken);
+    // 旧链接仍持有占用（gate 未放行）时，新链接同步落定且不得进入 resetPassword
+    const newRes = await newAttempt;
+    expect(newRes.status).toBe(404);
+    expect(resetCalls).toBe(1);
+    releaseReset();
+    const oldRes = await oldAttempt;
+    expect(oldRes.status).toBeGreaterThanOrEqual(400);
+
+    // 失败回滚只放回本行：旧链接可重试，新链接未被误清也没被消费
+    expect((await activationPage(app, fx, fx.oldToken)).status).toBe(200);
+    expect((await activationPage(app, fx, newToken)).status).toBe(200);
+    expect((await activate(fx.oldToken)).status).toBe(200);
+
+    pendingMail[0]!.resolve();
+    await Promise.allSettled(background);
+  });
+
   it('已激活（令牌已消费）→ 409 且零副作用，文案是 resend 语境', async () => {
     const fx = await fixture();
     const sent: MailMessage[] = [];
