@@ -356,6 +356,50 @@ describe('生成的 package.json.license（manifest.license，issue #292）', ()
     const dir = await makeLicensedModule('license-bad', 'license: MIT OR');
     await expect(modulePackageFiles({ dir })).rejects.toThrow(/license/);
   });
+
+  // —— YAML 声明存在性（issue #292 退回）：非法形态必拒、只有省略才回落 ——
+
+  /** 造最小源码模块目录，licenseLines 原样追加（省略 = 不声明）。 */
+  async function makeModuleWithLicenseLines(name: string, licenseLines: string[]): Promise<string> {
+    const dir = join(work, name);
+    await makeModule(dir, [
+      'id: mini',
+      'version: 1.2.3',
+      'route: /m/mini',
+      'entry: http://localhost:8790/',
+      'runtimes:',
+      '  - external',
+      ...licenseLines,
+      '',
+    ].join('\n'));
+    return dir;
+  }
+
+  it.each([
+    ['空值（只有 key）', 'empty', ['license:']],
+    ['list 形态', 'list', ['license:', '  - MIT']],
+    ['嵌套对象形态', 'nested', ['license:', '  type: MIT']],
+  ] as Array<[string, string, string[]]>)(
+    'YAML 显式非法 %s → pack 失败且不产出包（不静默回落 AGPL）',
+    async (_label, safeName, lines) => {
+      const dir = await makeModuleWithLicenseLines(`license-yaml-${safeName}`, lines);
+      const out = join(work, `out-yaml-${safeName}`);
+      // 打包前校验即拒：modulePackageFiles 抛错（不会走到 writeTarball），packModuleDir 同拒
+      await expect(modulePackageFiles({ dir })).rejects.toThrow(/license/);
+      await expect(packModuleDir({ dir, outDir: out })).rejects.toThrow(/license/);
+      expect(existsSync(out)).toBe(false);
+    },
+  );
+
+  it('YAML 真正省略 license → pack 回落 AGPL-3.0-only（且不伪造 manifest.json.license）', async () => {
+    const dir = await makeModuleWithLicenseLines('license-yaml-omitted', []);
+    const { manifest, files } = await modulePackageFiles({ dir });
+    const pkg = JSON.parse(files.find((f) => f.name === 'package.json')!.data.toString('utf8')) as {
+      license: string;
+    };
+    expect(pkg.license).toBe('AGPL-3.0-only');
+    expect(manifest.license).toBeUndefined();
+  });
 });
 
 describe('writeTarball 底层', () => {

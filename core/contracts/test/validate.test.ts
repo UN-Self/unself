@@ -465,4 +465,72 @@ describe('manifest.license（SPDX 声明，issue #292）', () => {
     const parsed = ModuleManifestSchema.parse(manifestFromYamlText(yaml));
     expect(parsed.license).toBe('MIT');
   });
+
+  // —— YAML 入口的「声明存在性」（issue #292 退回）：只有完全省略才回落，非法声明必拒 ——
+
+  /** 最小模块的 manifest.yaml；licenseLines 原样追加（省略 = 不声明）。 */
+  function minimalYamlWithLicense(...licenseLines: string[]): string {
+    return [
+      'id: todo',
+      'version: 1.0.0',
+      'runtimes:',
+      '  - worker',
+      'route: /m/todo',
+      'entry: https://team.example.com/m/todo/',
+      ...licenseLines,
+      '',
+    ].join('\n');
+  }
+
+  /** YAML 形态的最小包输入（其余字段与 minimalInput 同值）。 */
+  function yamlInput(...licenseLines: string[]): Parameters<typeof validateModulePackage>[0] {
+    return { ...minimalInput(), manifestText: minimalYamlWithLicense(...licenseLines) };
+  }
+
+  it('YAML 真正省略 license → 通过（回落只发生在完全省略时）', () => {
+    const result = validateModulePackage(yamlInput());
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('YAML 合法 SPDX（MIT / MIT OR Apache-2.0）→ 通过', () => {
+    expect(validateModulePackage(yamlInput('license: MIT')).ok).toBe(true);
+    expect(validateModulePackage(yamlInput('license: MIT OR Apache-2.0')).ok).toBe(true);
+  });
+
+  const yamlIllegalDeclarations: Array<[string, string[]]> = [
+    ['空值（只有 key）', ['license:']],
+    ['空值 + 注释', ['license:   # explicit empty']],
+    ['list 形态', ['license:', '  - MIT']],
+    ['嵌套对象形态', ['license:', '  type: MIT']],
+    ['非法 SPDX 形状', ['license: MIT OR']],
+  ];
+
+  it.each(yamlIllegalDeclarations)(
+    'YAML 显式声明 %s → error(license)，不静默回落平台默认',
+    (_label, lines) => {
+      const result = validateModulePackage(yamlInput(...lines));
+      expect(result.ok).toBe(false);
+      expect(result.errors.map((e) => e.check)).toContain('license');
+    },
+  );
+
+  it('JSON/YAML 两入口一致：同义声明同结果（非法必拒、合法/省略同过）', () => {
+    const checks = (input: Parameters<typeof validateModulePackage>[0]) =>
+      validateModulePackage(input).errors.map((e) => e.check);
+    // 非法：YAML 空值 ↔ JSON ""；YAML list ↔ JSON []；YAML 嵌套对象 ↔ JSON {}；非法形状两边同拒
+    expect(checks(yamlInput('license:'))).toContain('license');
+    expect(checks(withLicense(''))).toContain('license');
+    expect(checks(yamlInput('license:', '  - MIT'))).toContain('license');
+    expect(checks(withLicense(['MIT']))).toContain('license');
+    expect(checks(yamlInput('license:', '  type: MIT'))).toContain('license');
+    expect(checks(withLicense({ type: 'MIT' }))).toContain('license');
+    expect(checks(yamlInput('license: MIT OR'))).toContain('license');
+    expect(checks(withLicense('MIT OR'))).toContain('license');
+    // 合法与省略：两入口均通过
+    expect(validateModulePackage(yamlInput('license: MIT')).ok).toBe(true);
+    expect(validateModulePackage(withLicense('MIT')).ok).toBe(true);
+    expect(validateModulePackage(yamlInput()).ok).toBe(true);
+    expect(validateModulePackage(minimalInput()).ok).toBe(true);
+  });
 });
