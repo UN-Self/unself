@@ -49,7 +49,7 @@ async function mintToken(): Promise<string> {
     .sign(pair.privateKey);
 }
 
-describe('shared 落点（chat_ 前缀）读写行为（#310）', () => {
+describe('shared 落点（chat_ 前缀）读写行为（issue 310）', () => {
   it('bootstrap 经前缀表完成 JIT 建档 + general 入席，行落 chat_* 表', async () => {
     const token = await mintToken();
     const res = await app.request('https://chat.example/api/bootstrap', {
