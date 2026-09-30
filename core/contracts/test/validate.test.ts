@@ -207,6 +207,46 @@ describe('护栏③与真 SQLite 对照（#310 实测退回：括号/注释形�
     expect(result.errors.some((e) => e.message.includes('IF'))).toBe(false);
     expect(result.ok).toBe(true);
   });
+
+  it("REFERENCES 'foreign_table'（单引号）→ 真库建出跳模块 FK，validate 必须拒绝", () => {
+    const sql =
+      "CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY, f INTEGER REFERENCES 'foreign_table'(id));";
+    const db = new DatabaseSync(':memory:');
+    db.exec('CREATE TABLE IF NOT EXISTS [foreign_table] (id INTEGER PRIMARY KEY);');
+    db.exec(sql);
+    const fk = db.prepare("SELECT \"table\" AS t FROM pragma_foreign_key_list('todo_items')").all() as Array<{ t: string }>;
+    expect(fk.map((r) => r.t)).toEqual(['foreign_table']);
+    db.close();
+
+    const result = validateModulePackage(sharedPkgWith(sql));
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) => e.check === 'tables' && e.message.includes('foreign_table') && e.message.includes('外键')),
+    ).toBe(true);
+  });
+
+  it('列名是含 -- 的双引号标识符时，其后的跨模块 REFERENCES 不被吞掉', () => {
+    const sql =
+      'CREATE TABLE IF NOT EXISTS todo_items ("-- harmless column" INTEGER, f INTEGER REFERENCES foreign_table(id));';
+    const db = new DatabaseSync(':memory:');
+    db.exec('CREATE TABLE IF NOT EXISTS foreign_table (id INTEGER PRIMARY KEY);');
+    db.exec(sql);
+    const fk = db.prepare("SELECT \"table\" AS t FROM pragma_foreign_key_list('todo_items')").all() as Array<{ t: string }>;
+    expect(fk.map((r) => r.t)).toEqual(['foreign_table']);
+    db.close();
+
+    const result = validateModulePackage(sharedPkgWith(sql));
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) => e.check === 'tables' && e.message.includes('foreign_table') && e.message.includes('外键')),
+    ).toBe(true);
+  });
+
+  it("CREATE TABLE 'todo_items'（不支持的真实语法）→ 显式拒绝，不静默跳过", () => {
+    const result = validateModulePackage(sharedPkgWith("CREATE TABLE 'todo_items' (id INTEGER);"));
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.check === 'tables' && e.message.includes('CREATE TABLE'))).toBe(true);
+  });
 });
 
 describe('六类硬错（docs/modules.md §7，每类红灯）', () => {
