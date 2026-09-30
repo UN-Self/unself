@@ -65,7 +65,7 @@ const NPM_NAME_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 
 /**
  * 生成 `package.json` 的 license 字段（issue #292）。
- * manifest.license（SPDX 表达式，契约 §3 增量字段）优先；未声明时回落平台自身交付许可
+ * manifest.license（SPDX 表达式，issue #292 契约增量字段；docs/modules.md §3 表格修订待跟进）优先；未声明时回落平台自身交付许可
  * （AGPL-3.0-only）——老 manifest 无该字段，行为与 #285 时期完全一致（向后兼容）。
  * 形状已由 `ModuleManifestSchema` 在入口处验过（非法直接 parse 失败，不会走到这里）。
  */

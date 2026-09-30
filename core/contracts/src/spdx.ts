@@ -63,6 +63,16 @@ type Token =
 /** idstring = 1*(ALPHA / DIGIT / "-" / "." )。 */
 const IDSTRING_RE = /^[A-Za-z0-9][A-Za-z0-9.-]*$/;
 
+/**
+ * token 是否是可识别的 license-ref 形状（`LicenseRef-…` / `DocumentRef-…:LicenseRef-…`）。
+ * 前缀是**形状**特征（见 tokenize 的 ref 校验），不是 SPDX License List 查询。两条判定依赖它：
+ * - `+` 只挂 license-id（ABNF: simple-expression = license-id / license-id"+" / license-ref）；
+ * - license-exception-id 不取保留的 ref 前缀（`LicenseRef-` 依 ABNF 只构成 license-ref）。
+ */
+function isLicenseRefValue(value: string): boolean {
+  return value.startsWith('LicenseRef-') || value.includes(':');
+}
+
 /** 标识符起止字符判定（tokenizer 逐字符收词用）。 */
 function isIdChar(ch: string): boolean {
   return /[A-Za-z0-9.-]/.test(ch);
@@ -141,6 +151,39 @@ interface Parser {
   pos: number;
 }
 
+/** 当前 token 的操作符值；非操作符 token 返回 undefined。 */
+function opValue(p: Parser): 'AND' | 'OR' | 'WITH' | undefined {
+  const token = p.tokens[p.pos];
+  return token?.kind === 'op' ? token.value : undefined;
+}
+
+/**
+ * operand：`simple-expression` 或 `"(" compound-expression ")"`。
+ * 返回值区分二者——ABNF 中 `"(" compound ")"` 属 compound-expression 而**不属**
+ * simple-expression，故它不能作 `WITH` 的左操作数（`(MIT OR X) WITH Y` 形状非法）。
+ */
+function parseOperand(p: Parser): 'simple' | 'paren' | false {
+  if (p.tokens[p.pos]?.kind === 'lparen') {
+    p.pos++;
+    if (!parseCompound(p)) return false;
+    if (p.tokens[p.pos]?.kind !== 'rparen') return false;
+    p.pos++;
+    return 'paren';
+  }
+  return parseSimple(p) ? 'simple' : false;
+}
+
+/**
+ * license-exception-id：形状层只验 idstring（不查 Annex A.2 例外表）；
+ * 但保留前缀 `LicenseRef-`/`DocumentRef-` 依 ABNF 只构成 license-ref，不作例外标识。
+ */
+function parseExceptionId(p: Parser): boolean {
+  const token = p.tokens[p.pos];
+  if (token?.kind !== 'id' || isLicenseRefValue(token.value)) return false;
+  p.pos++;
+  return true;
+}
+
 /**
  * compound-expression：
  *   simple-expression
@@ -150,54 +193,43 @@ interface Parser {
  * | "(" compound-expression ")"
  *
  * `AND`/`OR` 左结合（ABNF 如此），但对形状校验不产生差异——只判能否归约成完整表达式。
- * `+` 只允许紧跟 simple-expression（license-id"+"），且必须在 `WITH` 之外（`GPL-2.0+ WITH ...` 非法）。
+ * `WITH` 左操作数必须是 **simple-expression**：`license-id"+"` 可以（`GPL-2.0+ WITH …` 合法，
+ * `+` 属 simple-expression 的一种），而 `"(" compound ")"` 不可以。
+ * `+` 不可挂 license-ref（ABNF 里 license-ref 是与 license-id"+" 并列的分支）。
  */
 function parseCompound(p: Parser): boolean {
-  if (!parseSimple(p)) return false;
-  // simple-expression "WITH" license-exception-id
-  //   license-exception-id 是空 idstring 的标识符（形状层不查表）；`+` 后缀在此非法
-  if (p.tokens[p.pos]?.kind === 'op' && (p.tokens[p.pos] as { value: string }).value === 'WITH') {
-    p.pos++;
-    const next = p.tokens[p.pos];
-    if (next?.kind !== 'id') return false;
-    p.pos++;
-  }
-  // compound AND/OR compound（左结合循环）
-  while (p.tokens[p.pos]?.kind === 'op') {
-    const op = (p.tokens[p.pos] as { value: 'AND' | 'OR' | 'WITH' }).value;
-    if (op !== 'AND' && op !== 'OR') return false;
-    p.pos++;
-    if (!parseSimple(p)) return false;
-    if (p.tokens[p.pos]?.kind === 'op' && (p.tokens[p.pos] as { value: string }).value === 'WITH') {
+  // WITH 只允许紧跟 simple 类操作数；括号复合式后接 WITH 在此不消费，留给底部残留检查判非法。
+  const chainWith = (operand: 'simple' | 'paren' | false): boolean => {
+    if (operand === false) return false;
+    if (operand === 'simple' && opValue(p) === 'WITH') {
       p.pos++;
-      const next = p.tokens[p.pos];
-      if (next?.kind !== 'id') return false;
-      p.pos++;
+      return parseExceptionId(p);
     }
+    return true;
+  };
+  if (!chainWith(parseOperand(p))) return false;
+  // compound AND/OR compound（左结合循环）
+  while (opValue(p) === 'AND' || opValue(p) === 'OR') {
+    p.pos++;
+    if (!chainWith(parseOperand(p))) return false;
   }
-  return true;
+  // 残留操作符（如 `(MIT) WITH X` 未被消费的 WITH）即形状非法
+  return opValue(p) === undefined;
 }
 
 /**
- * simple-expression = license-id ["+"] / license-ref / "(" compound-expression ")"。
+ * simple-expression = license-id / license-id"+" / license-ref。
  * `+` 为紧跟标识符的词法单元；tokenizer 记录它与前一 token 是否相邻——
- * `MIT +`（`+` 前有空白，而且 `+` 落在下一个 simple-expression 之前）在此拒绝。
+ * `MIT +`（`+` 前有空白）在此拒绝；`license-ref` 不接受 `+`（ABNF 并列分支）。
  */
 function parseSimple(p: Parser): boolean {
   const token = p.tokens[p.pos];
-  if (token?.kind === 'lparen') {
-    p.pos++;
-    if (!parseCompound(p)) return false;
-    if (p.tokens[p.pos]?.kind !== 'rparen') return false;
-    p.pos++;
-    return true;
-  }
   if (token?.kind !== 'id') return false;
   p.pos++;
-  // license-id"+"：`+` 必须无空白紧跟标识符（见 tokenize 的 adjacency 记录）
   const after = p.tokens[p.pos];
   if (after?.kind === 'plus') {
-    if (after.adjacent !== true) return false;
+    // `+` 必须无空白紧跟，且前一 token 必须是 license-id（不能是 license-ref）
+    if (after.adjacent !== true || isLicenseRefValue(token.value)) return false;
     p.pos++;
   }
   return true;
@@ -212,7 +244,9 @@ function parseSimple(p: Parser): boolean {
  *   `LicenseRef-Proprietary`、`DocumentRef-foo:LicenseRef-bar`、任意合法未知 idstring（`NotALicense`）
  * - 非法：空串/纯空白、悬空操作符（`MIT OR`）、`+` 前有空格（`MIT +`）、小写 `or`
  *   （操作符大小写敏感，`MIT or Apache-2.0` 的词序列不成立）、引号包裹（`"MIT"`）、
- *   `LicenseRef-`（空 idstring）、括号不配对、非 idstring 字符（`,` `/` 制表符 换行 非 ASCII）
+ *   `LicenseRef-`（空 idstring）、`+` 挂 license-ref（`LicenseRef-x+`）、括号复合式作 `WITH`
+ *   左操作数（`(MIT OR X) WITH Y`）、保留 ref 前缀作例外标识（`MIT WITH LicenseRef-x`）、
+ *   括号不配对、非 idstring 字符（`,` `/` 制表符 换行 非 ASCII）
  * - **不查表**：`mit`（小写标识符）形状合法即通过——标识符大小写不敏感，拼写裁决不在本层
  *
  * @param input 候选 SPDX 表达式（调用方应保证是 string；非 string 直接 false，不抛）
