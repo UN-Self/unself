@@ -258,6 +258,66 @@ describe('增量友好（#57）与附加检查', () => {
   });
 });
 
+describe('护栏③（决策 #55）：shared 前缀 + 禁跨模块外键——发布期与装配期同一份实现', () => {
+  function sharedPkg(
+    manifestPatch: Record<string, unknown>,
+    migrations: Record<string, string>,
+  ): Parameters<typeof validateModulePackage>[0] {
+    const base = minimalInput();
+    const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
+    Object.assign(manifest, manifestPatch);
+    return { ...base, manifestText: JSON.stringify(manifest), migrations };
+  }
+
+  it('accepts 含 shared 但迁移表名无模块前缀 → error(tables)，点名缺失前缀', () => {
+    const result = validateModulePackage(sharedPkg(
+      { storage: { accepts: ['shared'] }, tables: ['items'] },
+      { '0001_init.sql': 'CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY);' },
+    ));
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) => e.check === 'tables' && e.message.includes('items') && e.message.includes('todo_')),
+    ).toBe(true);
+  });
+
+  it('accepts 含 shared 且外键指向清单之外的表 → error(tables)，点名跨模块外键', () => {
+    const result = validateModulePackage(sharedPkg(
+      { storage: { accepts: ['shared'] }, tables: ['todo_items'] },
+      {
+        '0001_init.sql':
+          'CREATE TABLE IF NOT EXISTS todo_items (other_id INTEGER, FOREIGN KEY (other_id) REFERENCES other_module_table);',
+      },
+    ));
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some(
+        (e) => e.check === 'tables' && e.message.includes('other_module_table') && e.message.includes('外键'),
+      ),
+    ).toBe(true);
+  });
+
+  it('合规 shared 包（前缀 + 模块内互引）→ 护栏③零报错', () => {
+    const result = validateModulePackage(sharedPkg(
+      { storage: { accepts: ['shared'] }, tables: ['todo_items', 'todo_tags'] },
+      {
+        '0001_init.sql': 'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY);',
+        '0002_tags.sql': 'CREATE TABLE IF NOT EXISTS todo_tags (item_id INTEGER, FOREIGN KEY (item_id) REFERENCES todo_items);',
+      },
+    ));
+    expect(result.errors.filter((e) => e.check === 'tables')).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it('纯 dedicated 模块不受前缀约束（护栏③只针对 shared）→ 无前缀也不报护栏', () => {
+    const result = validateModulePackage(sharedPkg(
+      { storage: { accepts: ['dedicated'], preferred: 'dedicated' }, tables: ['items'] },
+      { '0001_init.sql': 'CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY);' },
+    ));
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe('迁移静态检查（决策 #61，#248）：逐条幂等 + 只写增量安全语句', () => {
   /** shared 级合法最小包（带迁移入口）。 */
   function sharedInput(migrations: Record<string, string>): Parameters<typeof validateModulePackage>[0] {

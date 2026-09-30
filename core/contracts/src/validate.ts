@@ -26,8 +26,12 @@ import {
   type ModulePermission,
 } from './index';
 import { manifestYamlToCandidate, parseManifestYamlFields, type ManifestCandidate } from './manifest-yaml';
+import { tableNamesFromSql } from './sql-tables';
+import { sharedGuardProblems } from './shared-guards';
 
 export { manifestYamlToCandidate, parseManifestYamlFields };
+// 契约对外可见面继续从 validate 提供（历史导入点不变）；表名解析单一实现住 sql-tables.ts。
+export { tableNamesFromSql } from './sql-tables';
 export type { ManifestCandidate };
 
 /** license 证据缺失或非法时的兜底标签。 */
@@ -57,9 +61,6 @@ export interface ValidateResult {
   errors: ValidateDiagnostic[];
   warnings: ValidateDiagnostic[];
 }
-
-/** 建表 SQL 的 CREATE TABLE 表名抓取（容忍引号、IF NOT EXISTS、schema 修饰省略）。 */
-const CREATE_TABLE_RE = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?/gi;
 
 /** 迁移文件命名：000N_描述.sql（docs/modules.md §6，只增不改）。 */
 const MIGRATION_FILE_RE = /^0\d{3}_[A-Za-z0-9_-]+\.sql$/;
@@ -165,15 +166,6 @@ export function splitSqlStatements(sql: string): string[] {
   }
   push();
   return parts;
-}
-
-/** 从 SQL 文本抓全部建表表名（去重）。 */
-export function tableNamesFromSql(sql: string): string[] {
-  const names = new Set<string>();
-  for (const match of sql.matchAll(CREATE_TABLE_RE)) {
-    names.add(match[1]!);
-  }
-  return [...names];
 }
 
 /**
@@ -397,6 +389,23 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
           message: `tables 申报了迁移未建的表：${missing.join(', ')}（清单与迁移必须一致）`,
         });
       }
+      // ③½ shared 护栏③（决策 #55）：accepts 含 shared 的包，其迁移必须已满足「<模块id>_ 前缀 +
+      // 禁跨模块外键」——否则部署者一旦选 shared，装配期才炸，作者侧毫无预警。发布期在此拦下
+      // （与装配期 `checkSharedGuards` 共用同一份实现，见 shared-guards.ts）。
+      // 仅当模块真的声明支持 shared 时检查；纯 dedicated 模块不受前缀约束。
+      if (accepts.includes('shared')) {
+        const guardMigrations = Object.entries(input.migrations ?? {}).map(([name, sql]) => ({ name, sql }));
+        for (const problem of sharedGuardProblems({
+          moduleId: manifest.id,
+          tables: manifest.tables ?? [],
+          migrations: guardMigrations,
+        })) {
+          // 护栏②（未申报的表）上面已有更贴切的人话诊断，这里只补护栏③两类，防重复报。
+          if (problem.kind === 'undeclared') continue;
+          errors.push({ level: 'error', check: 'tables', message: problem.message });
+        }
+      }
+
       for (const file of Object.keys(input.migrations ?? {})) {
         if (!MIGRATION_FILE_RE.test(file)) {
           errors.push({
