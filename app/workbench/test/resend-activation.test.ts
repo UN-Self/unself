@@ -5,15 +5,18 @@
  * 口径：
  * - 成功重发：旧令牌作废、新链接可用、审计 activation_resent；
  * - 发信失败：旧链接原样可用、未送达的新令牌作废、响应不再 502、审计 activation_resend_failed；
+ * - 失败后重试：失败占位行不得遮住旧有效令牌，重试必须 200（#152 验收实锤回归）；
  * - 后台化：注入假 executionCtx（waitUntil）时响应秒回，且投递完成前旧链接仍有效
  *   （作废与投递成功绑定，不是发出请求就毁旧链接）；
- * - 重复重发：后一次链接替换前一次，任一时刻至多一个有效链接；
- * - 已激活（令牌已消费）→ 409 且零副作用；过期未用令牌仍可重发并获新 48h 有效期；
+ * - 真实双请求链式并发 + 可控 sender 成功/失败交错：按 rowid（签发顺序）收敛，最终仅一个未用链接；
+ * - 真实消费激活后重发 409：不因回退搜索旧行而重新放行；
+ * - 重复重发：后一次链接替换前一次；已激活→ 409；过期未用令牌仍可重发并获新 48h；
  * - 防账号枚举：不存在与存在但非内置成员同形 404。
  *
  * 断言打在行为上（HTTP 状态 / 库行 / 邮件副作用），改坏业务必红。
  */
 import type { MailMessage, MailSender } from '@unself/mail-smtp';
+import { createFakeMailProvisioner } from '@unself/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';
@@ -107,6 +110,78 @@ function fakeExecutionContext(background: Promise<unknown>[]) {
     passThroughOnException: () => {},
     props: {},
   };
+}
+
+interface PendingSend {
+  message: MailMessage;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+/** 可控 sender：每个 send 挂起，测试逐个 resolve/reject 编排成功/失败交错。 */
+function gatedSender(pending: PendingSend[]): MailSender {
+  return {
+    send: (message: MailMessage) =>
+      new Promise<void>((resolve, reject) => {
+        pending.push({ message, resolve, reject });
+      }),
+  };
+}
+
+/** 轮询到条件成立（后台任务推进到发信点），不依赖固定 sleep。 */
+async function until(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 500 && !check(); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (!check()) {
+    throw new Error('等待条件超时');
+  }
+}
+
+/** 已投递明文令牌 → 库中 rowid（判定「较新签发者」用，不依赖发信顺序）。 */
+async function rowidOf(fx: ResendFixture, token: string): Promise<number> {
+  const row = fx.db.first<{ rowid: number }>(
+    'SELECT rowid FROM invite_activations WHERE token_hash = ?',
+    await hashOneTimeToken(token),
+  );
+  if (!row) {
+    throw new Error('投递令牌不在库中');
+  }
+  return row.rowid;
+}
+
+/** 打两次真实 resend（各自假 executionCtx，链式读到上一未投递令牌），等两封邮件到发信点。 */
+async function enterTwoResends(
+  app: ReturnType<typeof createApp>,
+  fx: ResendFixture,
+  pending: PendingSend[],
+  background: Promise<unknown>[],
+): Promise<void> {
+  for (let i = 0; i < 2; i += 1) {
+    expect((await resend(app, fx, 'u1', fakeExecutionContext(background))).status).toBe(200);
+  }
+  await until(() => pending.length === 2);
+}
+
+/** 取两条已投递记录的 { pending, token, rowid } 并按 rowid 升序（older/newer）。 */
+async function orderedSends(fx: ResendFixture, pending: PendingSend[]) {
+  const entries = await Promise.all(
+    pending.map(async (p) => {
+      const token = activationTokenFrom(p.message.text);
+      return { pending: p, token, rowid: await rowidOf(fx, token) };
+    }),
+  );
+  entries.sort((a, b) => a.rowid - b.rowid);
+  return { older: entries[0]!, newer: entries[1]! };
+}
+
+/** 断言处置：已验证的存活明文令牌 200、被取代的 404。 */
+async function expectInvalid(
+  app: ReturnType<typeof createApp>,
+  fx: ResendFixture,
+  token: string,
+): Promise<void> {
+  expect((await activationPage(app, fx, token)).status).toBe(404);
 }
 
 describe('#152 重发激活邮件', () => {
@@ -226,49 +301,146 @@ describe('#152 重发激活邮件', () => {
     expect(fx.db.query("SELECT action FROM audit_log WHERE action = 'activation_resent'")).toHaveLength(2);
   });
 
-  it('并发抢令牌输家：旧令牌被抢先作废时，本次新链接退位作废', async () => {
+  it('失败后重试成功：失败占位行不遮住旧有效令牌（不再 409）', async () => {
     const fx = await fixture();
     const sent: MailMessage[] = [];
-    // 双 gate：reached 表示后台已走到发信点（尚未投递成功），gate 控制投递完成时机
-    let reachedSend!: () => void;
-    const reached = new Promise<void>((resolve) => {
-      reachedSend = resolve;
-    });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    let healthy = false;
     const app = createApp({
       createMailSender: () => ({
         send: async (message: MailMessage) => {
+          if (!healthy) {
+            throw new Error('smtp connection refused');
+          }
           sent.push(message);
-          reachedSend();
-          await gate;
         },
       }),
     });
 
-    const background: Promise<unknown>[] = [];
-    expect((await resend(app, fx, 'u1', fakeExecutionContext(background))).status).toBe(200);
-    await reached;
-    const newToken = activationTokenFrom(sent[0]?.text ?? '');
+    // 第一次：发信失败 → 旧链接保留，失败的新行标记作废
+    expect((await resend(app, fx)).status).toBe(200);
+    expect(fx.db.first('SELECT used_at FROM invite_activations WHERE token_hash = ?', fx.oldTokenHash)).toEqual({ used_at: null });
+    expect((await activationPage(app, fx, fx.oldToken)).status).toBe(200);
 
-    // 模拟并发 claim/另一次重发在本次投递完成前抢先作废旧令牌（used_at IS NULL 守卫的唯一赢家）
-    fx.db.run(
-      "UPDATE invite_activations SET used_at = 'invalidated@concurrent' WHERE token_hash = ?",
-      fx.oldTokenHash,
-    );
-    release();
+    // 第二次：同一 fixture 重试 → 关键回归：必须 200（旧模型因最新行是作废占位而误判 409）
+    healthy = true;
+    const retry = await resend(app, fx);
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ ok: true });
+
+    // 重试链接可用、旧链接被取代、只剩一条未用
+    expect(sent).toHaveLength(1);
+    const retryToken = activationTokenFrom(sent[0]?.text ?? '');
+    expect((await activationPage(app, fx, retryToken)).status).toBe(200);
+    expect((await activationPage(app, fx, fx.oldToken)).status).toBe(404);
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 1 });
+  });
+
+  it('双请求链式并发均成功：只保留较新签发的链接（与完成顺序无关）', async () => {
+    const fx = await fixture();
+    const pending: PendingSend[] = [];
+    const app = createApp({ createMailSender: () => gatedSender(pending) });
+    const background: Promise<unknown>[] = [];
+    await enterTwoResends(app, fx, pending, background);
+    const { older, newer } = await orderedSends(fx, pending);
+
+    // 先放行较早签发者、再放行较新签发者
+    older.pending.resolve();
+    newer.pending.resolve();
     await Promise.allSettled(background);
 
-    // 输家退位：本次新令牌也被作废，不会留下第二个有效链接
+    await expectInvalid(app, fx, fx.oldToken);
+    await expectInvalid(app, fx, older.token);
+    expect((await activationPage(app, fx, newer.token)).status).toBe(200);
     expect(
-      fx.db.first<{ used_at: string }>(
-        'SELECT used_at FROM invite_activations WHERE token_hash = ?',
-        await hashOneTimeToken(newToken),
-      )?.used_at,
-    ).toMatch(/^invalidated@/);
-    expect((await activationPage(app, fx, newToken)).status).toBe(404);
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 1 });
+  });
+
+  it('双请求并发交错（较新失败 / 较早成功）：失败收敛为较早链接存活', async () => {
+    const fx = await fixture();
+    const pending: PendingSend[] = [];
+    const app = createApp({ createMailSender: () => gatedSender(pending) });
+    const background: Promise<unknown>[] = [];
+    await enterTwoResends(app, fx, pending, background);
+    const { older, newer } = await orderedSends(fx, pending);
+
+    newer.pending.reject(new Error('smtp failed'));
+    older.pending.resolve();
+    await Promise.allSettled(background);
+
+    await expectInvalid(app, fx, fx.oldToken);
+    await expectInvalid(app, fx, newer.token);
+    expect((await activationPage(app, fx, older.token)).status).toBe(200);
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 1 });
+  });
+
+  it('双请求并发交错（较早失败 / 较新成功）：失败收敛为较新链接存活', async () => {
+    const fx = await fixture();
+    const pending: PendingSend[] = [];
+    const app = createApp({ createMailSender: () => gatedSender(pending) });
+    const background: Promise<unknown>[] = [];
+    await enterTwoResends(app, fx, pending, background);
+    const { older, newer } = await orderedSends(fx, pending);
+
+    older.pending.reject(new Error('smtp failed'));
+    newer.pending.resolve();
+    await Promise.allSettled(background);
+
+    await expectInvalid(app, fx, fx.oldToken);
+    await expectInvalid(app, fx, older.token);
+    expect((await activationPage(app, fx, newer.token)).status).toBe(200);
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 1 });
+  });
+
+  it('真实消费激活后 resend 409：不因回退搜索旧行而重新放行', async () => {
+    const fx = await fixture();
+    const sent: MailMessage[] = [];
+    const provisioner = createFakeMailProvisioner();
+    provisioner.accounts.set('m@example.com', { displayName: '成员', disabled: false, password: 'init' });
+    const app = createApp({
+      createMailSender: () => recordingSender(sent),
+      createMailProvisioner: () => provisioner,
+    });
+
+    expect((await resend(app, fx)).status).toBe(200);
+    const token = activationTokenFrom(sent[0]?.text ?? '');
+    // 走真实激活路由消费（注入假 provisioner，预建工作邮箱账号）
+    const activated = await app.request(
+      `https://team.example.com/api/activate/${token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: 'newpass123' }),
+      },
+      fx.env,
+    );
+    expect(activated.status).toBe(200);
+
+    const before = fx.db.first<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1'",
+    )?.count;
+    const retry = await resend(app, fx);
+    expect(retry.status).toBe(409);
+    expect(((await retry.json()) as { detail: string }).detail).toMatch(/重发|激活链接/);
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1'",
+      )?.count,
+    ).toBe(before);
   });
 
   it('已激活（令牌已消费）→ 409 且零副作用，文案是 resend 语境', async () => {

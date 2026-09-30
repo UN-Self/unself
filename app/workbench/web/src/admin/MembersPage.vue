@@ -81,7 +81,7 @@ async function runToggle(member: AdminMember, disabling: boolean): Promise<void>
  */
 async function onResendActivation(member: AdminMember): Promise<void> {
   busyId.value = member.id; actionError.value = null; actionNotice.value = null;
-  try { await resendMemberActivation(member.id); actionNotice.value = '激活邮件已重发' } catch (err) { const error = err as ApiError; actionError.value = error.detail ?? error.message } finally { busyId.value = null }
+  try { await resendMemberActivation(member.id); actionNotice.value = '已提交后台发送；若新人未收到，可让其从邀请链接重新获取激活链接' } catch (err) { const error = err as ApiError; actionError.value = error.detail ?? error.message } finally { busyId.value = null }
 }
 
 /** 打开重置密码弹层（#192 F6：站内输入替代 window.prompt）。 */

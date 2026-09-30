@@ -16,7 +16,7 @@ import {
   type MemberStatus,
 } from '../services/members';
 import { readSession } from '../session';
-import { findInviteActivationForInvite, invalidateInviteActivation, issueInviteActivation } from '../services/invite-activations';
+import { findInviteActivationForInvite, invalidateInviteActivation, issueInviteActivation, supersedeOlderInviteActivations } from '../services/invite-activations';
 import { hashOneTimeToken } from '../one-time-token';
 import { configuredMailSender, deliverNotification, type CreateMailSender } from '../services/notifications';
 import { runInBackground } from '../services/notification-background';
@@ -77,9 +77,10 @@ export function registerMemberRoutes(
    *   「旧链接被毁、新链接锁在发不出的邮件里」（D1 曾实锤 qweq 此状态）；
    * - 投递失败/未装配：作废本次未送达的新令牌，旧链接保留；不再用 502 表达投递失败。
    *
-   * 并发（双击/双标签）：投递成功后用 `invalidateInviteActivation` 的 `used_at IS NULL` 守卫
-   * 原子抢旧令牌——赢家保留自己的新令牌，输家（含被 claim 抢先重签）作废自己的新令牌退位，
-   * 投递成功者最终至多保留一个有效链接（投递失败者只清理自己的新令牌，旧链接按设计保留）。
+   * 并发（双击/双标签、链式读到上一未投递令牌）：投递成功后按 **rowid（签发顺序）** 作废所有更早的未用令牌
+   * （`supersedeOlderInviteActivations`）——较新签发者最终获胜，与完成顺序无关；较新者失败时只作废自己，
+   * 较早的成功者仍然有效。失败重发写入的作废占位行由选择侧跳过（`findInviteActivationForInvite`），
+   * 不会遮住仍未用的旧链接——这是「失败后重试必须 200」的关键。
    *
    * 防账号枚举：不存在与存在但非 builtin 的成员同回 404 { error: 'member not found' }，不区分。
    */
@@ -110,10 +111,8 @@ export function registerMemberRoutes(
         await audit(db, actorId, 'activation_resend_failed', memberId);
         return;
       }
-      const won = await invalidateInviteActivation(db, activation.token_hash);
-      if (!won) {
-        await invalidateInviteActivation(db, newTokenHash);
-      }
+      // 成功后取代所有更早的未用令牌（含本次读到的那条）；按 rowid 定序，并发较新签发者最终获胜。
+      await supersedeOlderInviteActivations(db, invite.token_hash, newTokenHash);
       await audit(db, actorId, 'activation_resent', memberId);
     });
     return c.json({ ok: true });

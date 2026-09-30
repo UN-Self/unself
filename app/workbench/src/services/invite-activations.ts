@@ -85,9 +85,12 @@ export interface InviteActivationRecord {
 }
 
 /**
- * 读某邀请最新的激活令牌行（重发/claim 重签入口用）。
- * 不变式：作废只发生在「当时最新」的行上，故最新行是唯一可能未用的行；
- * used_at 非空/行不存在由调用方按各自语义判。
+ * 读某邀请当前的激活令牌行（重发/claim/状态查询入口用）。
+ * 选「最新一行」但**跳过作废占位**（used_at 形如 `invalidated@...`）：作废占位只表示
+ * 某次刷新/失败尝试被撤销，不代表有效链接身份；一次失败重发写入的作废占位行不得
+ * 遮住它下面仍未用的旧链接（#152 验收实锤：旧模型直接选最新行 → 失败后重试误判 409）。
+ * 返回行可能是：未用（used_at NULL）或已真实消费（used_at 时间戳）——两者由调用方
+ * 按各自语义判（消费行仍视为不可重发，不得因回退搜索旧行而重新放行）。
  */
 export async function findInviteActivationForInvite(
   db: D1Database,
@@ -95,10 +98,29 @@ export async function findInviteActivationForInvite(
 ): Promise<InviteActivationRecord | null> {
   return db
     .prepare(
-      'SELECT token_hash, invite_token_hash, email, expires_at, used_at FROM invite_activations WHERE invite_token_hash = ? ORDER BY rowid DESC LIMIT 1',
+      "SELECT token_hash, invite_token_hash, email, expires_at, used_at FROM invite_activations WHERE invite_token_hash = ? AND (used_at IS NULL OR used_at NOT LIKE 'invalidated@%') ORDER BY rowid DESC LIMIT 1",
     )
     .bind(inviteTokenHash)
     .first<InviteActivationRecord>();
+}
+
+/**
+ * 新令牌投递成功后取代更早的未用令牌（#152）：作废同一邀请中 rowid 更小、仍未用的行。
+ * 按 **rowid（签发顺序）** 而非完成顺序定序：并发双重重发都成功时，较新签发者最终获胜、
+ * 不会被较晚完成的较旧请求反向清掉；较新签发者失败时作废自己，较早的成功者仍然有效。
+ * 只动 rowid 更小的行，不碰更新的并发行（由对方的成功/失败分支各自收敛）。
+ */
+export async function supersedeOlderInviteActivations(
+  db: D1Database,
+  inviteTokenHash: string,
+  keepTokenHash: string,
+): Promise<void> {
+  await db
+    .prepare(
+      "UPDATE invite_activations SET used_at = 'invalidated@' || datetime('now') WHERE invite_token_hash = ? AND used_at IS NULL AND rowid < (SELECT rowid FROM invite_activations WHERE token_hash = ?)",
+    )
+    .bind(inviteTokenHash, keepTokenHash)
+    .run();
 }
 
 /**
