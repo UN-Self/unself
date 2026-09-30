@@ -22,7 +22,7 @@ import {
   type Provisioned,
 } from './assemble';
 import { loadUnselfConfig, moduleIds, normalizeModuleEntries, type ModuleRef, type NormalizedModuleEntry, type UnselfConfig } from './config';
-import type { ModuleManifest } from '@unself/contracts';
+import { ModuleManifestSchema, type ModuleManifest } from '@unself/contracts';
 import { LOCK_FILENAME, emptyLock, parseLockText, serializeLock, type LockFile, type ResourceLedger } from './lock';
 import { lockRecordFrom, resolveSources } from './module-sources';
 import { resolvePlatformArtifacts } from './artifacts';
@@ -343,6 +343,31 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   const removedIds = resolution.removed;
   // 数据落点（#248 四级）：声明来自来源解析产物（manifest），用户选择覆写 config 条目的 storage.declaration。
   const storagePlans = storagePlansFor(selected, entries);
+  // 任何云资源写入前的前置校验（#310 验收退回）——不得依赖后续步骤偶然报错：
+  // 1) 覆写后的有效 manifest 重建校验（含 declaration ∈ accepts，由 schema superRefine 拦）；
+  // 2) 「仅新装 shared」：既有 dedicated 落点 + 用户改选 shared → 拒绝（避免静默重绑空 modules 库、旧数据不可见）。
+  for (const mod of selected) {
+    const plan = storagePlans.get(mod.id);
+    if (!plan?.manifest) continue;
+    const parsed = ModuleManifestSchema.safeParse(plan.manifest);
+    if (!parsed.success) {
+      const detail = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('；');
+      throw new Error(`模块 ${mod.id} 有效 manifest 非法（含用户 storage 覆写）——拒绝安装：${detail}`);
+    }
+    const accepts = parsed.data.storage?.accepts ?? [];
+    if (plan.level !== 'core' && !accepts.includes(plan.level)) {
+      throw new Error(
+        `模块 ${mod.id} 用户选定 storage=${plan.level} 不在 accepts=[${accepts.join(', ')}] 内（#55）——拒绝安装`,
+      );
+    }
+    const existingDedicated = lock.resources?.d1?.some((r) => r.name === dedicatedDbNameFor(mod.id)) ?? false;
+    if (existingDedicated && plan.level === 'shared') {
+      throw new Error(
+        `模块 ${mod.id} 既有 dedicated 数据在 ${dedicatedDbNameFor(mod.id)}，改选 shared 会静默重绑空 modules 库、旧数据不可见` +
+          '——仅新装可首选 shared；既有实例请走备份+重装的手工迁移（#310）',
+      );
+    }
+  }
   // lock 记录（决策 #60）：只有本次 config 声明的模块进 lock（removed 的旧记录随 removedIds 移除）。
   const lockModules: LockFile['modules'] = {};
   for (const mod of selected) {
