@@ -5,7 +5,6 @@ import { z } from 'zod';
 import { audit } from '../services/audit';
 import {
   classifyProvisionerFailure,
-  genericFailureDetail,
   type ClassifiedProvisionerFailure,
 } from '../services/provisioner-errors';
 import { buildStoredCredential } from '../services/passwords';
@@ -18,7 +17,9 @@ import {
 } from '../services/members';
 import { readSession } from '../session';
 import { findInviteActivationForInvite, invalidateInviteActivation, issueInviteActivation } from '../services/invite-activations';
+import { hashOneTimeToken } from '../one-time-token';
 import { configuredMailSender, deliverNotification, type CreateMailSender } from '../services/notifications';
+import { runInBackground } from '../services/notification-background';
 import type { Bindings } from '../index';
 
 /** 挂载管理端成员域（/api/admin/members）。 */
@@ -67,21 +68,54 @@ export function registerMemberRoutes(
     await audit(db, (await readSession(c))!.uid, 'member_password_reset', memberId);
     return c.json({ ok: true });
   });
+  /**
+   * 重发激活链接（#152 改造）：后台尽力投递 + 投递成功才作废旧链接。
+   *
+   * 与旧实现的区别（旧：先作废旧令牌 → 再同步发信 → 失败 502）：
+   * - 先签新令牌（不动旧令牌），响应立刻返回（有 executionCtx 时投递挂 waitUntil，#134 同口径）；
+   * - 后台投递**成功后**才作废旧令牌：发信失败时旧链接原样可用，不会出现
+   *   「旧链接被毁、新链接锁在发不出的邮件里」（D1 曾实锤 qweq 此状态）；
+   * - 投递失败/未装配：作废本次未送达的新令牌，旧链接保留；不再用 502 表达投递失败。
+   *
+   * 并发（双击/双标签）：投递成功后用 `invalidateInviteActivation` 的 `used_at IS NULL` 守卫
+   * 原子抢旧令牌——赢家保留自己的新令牌，输家（含被 claim 抢先重签）作废自己的新令牌退位，
+   * 同一时刻至多一个有效链接。
+   *
+   * 防账号枚举：不存在与存在但非 builtin 的成员同回 404 { error: 'member not found' }，不区分。
+   */
   app.post('/api/admin/members/:id/resend-activation', async (c) => {
     const db = c.env.CORE_DB;
     const memberId = c.req.param('id');
     const member = await db.prepare('SELECT id, issuer, status, personal_email FROM users WHERE id = ?').bind(memberId).first<{ id: string; issuer: string; status: string; personal_email: string | null }>();
     if (!member || member.issuer !== 'builtin') return c.json({ error: 'member not found' }, 404);
-    if (member.status !== 'active') return c.json({ error: 'resend activation failed', detail: '该成员当前不是 active 状态' }, 409);
+    if (member.status !== 'active') return c.json({ error: 'resend activation failed', detail: '成员当前未启用，无法重发激活邮件' }, 409);
     const invite = await db.prepare("SELECT token_hash, personal_email FROM invites WHERE status = 'approved' AND lower(personal_email) = lower(?) LIMIT 1").bind(member.personal_email ?? '').first<{ token_hash: string; personal_email: string }>();
-    if (!invite) return c.json({ error: 'resend activation failed', detail: '该成员关联的邀请未获批准' }, 409);
+    if (!invite) return c.json({ error: 'resend activation failed', detail: '该成员没有已批准的邀请，无法重发激活邮件' }, 409);
     const activation = await findInviteActivationForInvite(db, invite.token_hash);
-    if (!activation || activation.used_at !== null) return c.json({ error: 'resend activation failed', detail: '该成员无待激活邮箱账号' }, 409);
-    await invalidateInviteActivation(db, activation.token_hash);
-    const token = await issueInviteActivation(db, invite.token_hash, activation.email);
-    const result = await deliverNotification(db, await configuredMailSender(db, createMailSender), 'account_ready', { email: activation.email, activateUrl: new URL(c.req.url).origin + '/activate/' + token }, { invitedEmail: invite.personal_email });
-    if (result?.email === 'failed') return c.json({ error: 'resend activation failed', detail: genericFailureDetail('激活邮件发送失败，请检查邮件 API Key 配置') }, 502);
-    await audit(db, (await readSession(c))!.uid, 'activation_resent', memberId);
+    // used_at 非空＝链接已消费或被刷新作废：已激活或需本人在邀请页重新获取，管理员重发无从下手。
+    if (!activation || activation.used_at !== null) return c.json({ error: 'resend activation failed', detail: '该成员没有待使用的激活链接（可能已激活），无需重发；如链接失效请让其从邀请页重新获取' }, 409);
+
+    const actorId = (await readSession(c))!.uid;
+    const sender = await configuredMailSender(db, createMailSender);
+    // 先签新令牌、旧令牌原样保留：这封邮件发不出去时旧链接仍然可用。
+    const newToken = await issueInviteActivation(db, invite.token_hash, activation.email);
+    const activateUrl = new URL(c.req.url).origin + '/activate/' + newToken;
+    await runInBackground(c, async () => {
+      const result = await deliverNotification(db, sender, 'account_ready', { email: activation.email, activateUrl }, { invitedEmail: invite.personal_email });
+      const sent = result?.email === 'sent';
+      // 作废本不该留下的令牌：投递失败时是新令牌（从未送达），并发输家时是它自己的令牌（已退位）。
+      const newTokenHash = await hashOneTimeToken(newToken);
+      if (!sent) {
+        await invalidateInviteActivation(db, newTokenHash);
+        await audit(db, actorId, 'activation_resend_failed', memberId);
+        return;
+      }
+      const won = await invalidateInviteActivation(db, activation.token_hash);
+      if (!won) {
+        await invalidateInviteActivation(db, newTokenHash);
+      }
+      await audit(db, actorId, 'activation_resent', memberId);
+    });
     return c.json({ ok: true });
   });
 }
