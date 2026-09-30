@@ -44,19 +44,20 @@ export async function findInviteActivation(
 }
 
 /**
- * 原子消费（一次性）：命中回 `{ email, used_at }`（used_at = 本次写入值，供失败回滚精确守卫），
+ * 原子消费（一次性）：命中回 `{ email, used_at, invite_token_hash }`（used_at = 本次写入值，
+ * 供失败回滚精确守卫；invite_token_hash = 供消费后失效同邀请的其他未用链接），
  * 已用/过期/不存在回 null。
  */
 export async function consumeInviteActivation(
   db: D1Database,
   tokenHash: string,
-): Promise<{ email: string; used_at: string } | null> {
+): Promise<{ email: string; used_at: string; invite_token_hash: string } | null> {
   return db
     .prepare(
-      "UPDATE invite_activations SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') RETURNING email, used_at",
+      "UPDATE invite_activations SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') RETURNING email, used_at, invite_token_hash",
     )
     .bind(tokenHash)
-    .first<{ email: string; used_at: string }>();
+    .first<{ email: string; used_at: string; invite_token_hash: string }>();
 }
 
 /**
@@ -109,6 +110,12 @@ export async function findInviteActivationForInvite(
  * 按 **rowid（签发顺序）** 而非完成顺序定序：并发双重重发都成功时，较新签发者最终获胜、
  * 不会被较晚完成的较旧请求反向清掉；较新签发者失败时作废自己，较早的成功者仍然有效。
  * 只动 rowid 更小的行，不碰更新的并发行（由对方的成功/失败分支各自收敛）。
+ *
+ * 并发消费兜底（#152 复验）：若同一邀请已存在**真实消费**行（used_at 非空且非作废占位），
+ * 则本次新令牌（keep）也必须作废——否则「旧链接在后台投递期间被消费」会留下第二条可重设密码的
+ * 链接。判断写在同一条 UPDATE 的 `OR EXISTS(...)` 里（非先查后写）：与消费事务按 SQLite 写序
+ * 线性化——消费先提交则此处命中、新令牌作废；本语句先提交则旧行被作废、后续消费的
+ * `used_at IS NULL` 守卫必失败，两序都不会留下双重可用链接。
  */
 export async function supersedeOlderInviteActivations(
   db: D1Database,
@@ -117,7 +124,37 @@ export async function supersedeOlderInviteActivations(
 ): Promise<void> {
   await db
     .prepare(
-      "UPDATE invite_activations SET used_at = 'invalidated@' || datetime('now') WHERE invite_token_hash = ? AND used_at IS NULL AND rowid < (SELECT rowid FROM invite_activations WHERE token_hash = ?)",
+      `UPDATE invite_activations
+          SET used_at = 'invalidated@' || datetime('now')
+        WHERE invite_token_hash = ?
+          AND used_at IS NULL
+          AND (
+            rowid < (SELECT rowid FROM invite_activations WHERE token_hash = ?)
+            OR EXISTS (
+              SELECT 1 FROM invite_activations consumed
+               WHERE consumed.invite_token_hash = ?
+                 AND consumed.used_at IS NOT NULL
+                 AND consumed.used_at NOT LIKE 'invalidated@%'
+            )
+          )`,
+    )
+    .bind(inviteTokenHash, keepTokenHash, inviteTokenHash)
+    .run();
+}
+
+/**
+ * 真实消费成功后，作废同一邀请中除本次外仍未用的链接（#152 并发消费兜底另一侧）：
+ * 一次成功激活后不得残留可再次设密码的并发激活链接（含 claim 重签与 resend 各自签发的）。
+ * 只动 `used_at IS NULL` 行，不碰已消费/已作废行；与消费同属写事务，按 SQLite 写序收敛。
+ */
+export async function invalidateOtherInviteActivations(
+  db: D1Database,
+  inviteTokenHash: string,
+  keepTokenHash: string,
+): Promise<void> {
+  await db
+    .prepare(
+      "UPDATE invite_activations SET used_at = 'invalidated@' || datetime('now') WHERE invite_token_hash = ? AND token_hash != ? AND used_at IS NULL",
     )
     .bind(inviteTokenHash, keepTokenHash)
     .run();
