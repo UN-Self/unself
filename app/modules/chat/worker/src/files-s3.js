@@ -251,7 +251,9 @@ function canonicalHeaders(headers) {
     .sort(([nameA], [nameB]) => (nameA < nameB ? -1 : nameA > nameB ? 1 : 0));
   return {
     names: entries.map(([name]) => name).join(';'),
-    values: entries.map(([name, value]) => `${name}:${value}`).join('\n')
+    // SigV4：CanonicalHeaders 每条（含最后一条）都以 \n 结束，再与 SignedHeaders
+    // 以 \n 分隔，因此二者之间存在一个空行（见 create-signed-request 规范）。
+    values: entries.map(([name, value]) => `${name}:${value}\n`).join('')
   };
 }
 

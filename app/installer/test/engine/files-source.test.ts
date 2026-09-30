@@ -62,6 +62,21 @@ describe('resolveFilesSource（#310 三来源）', () => {
     expect(() => resolve('external', R2)).toThrow(/没有对象存储通道/);
   });
 
+  it('既有 dedicated 实例（旧 lock 有模块桶）：provider=s3 也保留模块 R2 落点（#310 升级兼容）', () => {
+    const preserved = resolveFilesSource({
+      config: config(S3),
+      moduleId: 'chat',
+      level: 'dedicated',
+      existingModuleBucket: true,
+    });
+    expect(preserved).toEqual({ kind: 'r2', binding: 'FILES', origin: 'module', bucket: moduleFilesBucket('chat') });
+  });
+
+  it('无旧模块桶的新装：provider=s3 才走 S3（新选择只对新装/显式切换生效）', () => {
+    const fresh = resolveFilesSource({ config: config(S3), moduleId: 'chat', level: 'dedicated' });
+    expect(fresh.kind).toBe('s3');
+  });
+
   it('filesSourceVars：仅自备 S3 注入 FILES_S3_* vars', () => {
     expect(filesSourceVars(resolve('shared', R2))).toEqual({});
     expect(filesSourceVars(resolve('shared', S3))).toEqual({

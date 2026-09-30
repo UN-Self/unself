@@ -228,6 +228,21 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
       const worker = decodeURIComponent(scriptPath[1]!);
       const rest = scriptPath[2] ?? '';
       if (rest === '' && method === 'PUT') {
+        // 状态型外部 fake（#310）：r2_bucket 绑定指向不存在的桶 → 平台拒。
+        // 真实 CF 对不存在桶的绑定/上传会失败；fake 必须同样拒绝，否则「先绑定后建桶」测不出来。
+        const bindings = (metadata?.bindings as Array<Record<string, unknown>> | undefined) ?? [];
+        const missing = bindings.filter(
+          (b) => b.type === 'r2_bucket' && typeof b.bucket_name === 'string' && !state.buckets.has(b.bucket_name),
+        );
+        if (missing.length > 0) {
+          return env(
+            null,
+            false,
+            10021,
+            `r2 bucket not found: ${missing.map((b) => String(b.bucket_name)).join(', ')}`,
+            400,
+          );
+        }
         state.uploads.push({ worker, metadata: metadata! });
         state.existingWorkers.add(worker);
         return env({ id: worker });

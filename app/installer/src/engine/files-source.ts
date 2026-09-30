@@ -45,9 +45,17 @@ export function resolveFilesSource(input: {
   config: UnselfConfig;
   moduleId: string;
   level: StorageLevel;
+  /**
+   * 既有实例已把本模块附件落在模块独立 R2（旧 lock 台账里有该桶）：#310 升级兼容——
+   * 即使实例 storage.provider 现为 s3，也保留原 R2 落点，否则历史附件留在旧桶不可读。
+   * 新的来源选择只对无此落点的新装/显式切换生效。
+   */
+  existingModuleBucket?: boolean;
 }): FilesSource {
-  const { config, level, moduleId } = input;
+  const { config, level, moduleId, existingModuleBucket } = input;
+  const moduleR2 = (): FilesSource => ({ kind: 'r2', binding: 'FILES', origin: 'module', bucket: moduleFilesBucket(moduleId) });
   if (config.storage.provider === 's3') {
+    if (existingModuleBucket) return moduleR2();
     return {
       kind: 's3',
       binding: 'FILES',
@@ -60,7 +68,7 @@ export function resolveFilesSource(input: {
     return { kind: 'r2', binding: 'FILES', origin: 'instance', bucket: config.storage.bucket };
   }
   if (level === 'dedicated') {
-    return { kind: 'r2', binding: 'FILES', origin: 'module', bucket: moduleFilesBucket(moduleId) };
+    return moduleR2();
   }
   throw new Error(
     `模块 ${moduleId} 落点 ${level} 没有对象存储通道（FILES 需 shared/dedicated 或 storage.provider=s3）——` +

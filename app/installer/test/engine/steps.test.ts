@@ -187,7 +187,7 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     expect(summary1.keypairAction).toBe('created');
   });
 
-  it('九步顺序：D1→迁移→上传→registry→R2→（⑦无操作）→签发⑧→HTTP⑨（请求时间序）', { timeout: 120_000 }, async () => {
+  it('九步顺序：D1/R2 前置供给→迁移→上传→registry→签发⑧→HTTP⑨（请求时间序；R2 桶在模块绑定前已建）', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'] });
     await runSteps({
       rootDir: ROOT,
@@ -208,10 +208,12 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     const r2Create = idxOf((c) => c.url.endsWith('/r2/buckets') && c.method === 'POST');
     const setupInsert = idxOf(sqlStartsWith('INSERT INTO setup_tokens'));
     expect(firstImport).toBeGreaterThan(firstD1);
+    // #310 验收退回：实例桶前置供给——模块上传/绑定前桶必须已在（否则 fresh 账户先绑后建）
+    expect(r2Create).toBeGreaterThan(firstD1);
+    expect(r2Create).toBeLessThan(firstImport);
     expect(firstUpload).toBeGreaterThan(firstImport);
     expect(registryUpsert).toBeGreaterThan(firstUpload);
-    expect(r2Create).toBeGreaterThan(registryUpsert);
-    expect(setupInsert).toBeGreaterThan(r2Create);
+    expect(setupInsert).toBeGreaterThan(registryUpsert);
     // registry 终态：#284 未选模块只来自 lock（config 只有 hello、lock 为空 → 没有可 disable 的）
     const toggles = calls.filter(sqlStartsWith('UPDATE module_registry'));
     expect(toggles).toHaveLength(0);

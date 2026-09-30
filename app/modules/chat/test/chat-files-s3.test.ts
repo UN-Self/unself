@@ -13,11 +13,19 @@ const config = {
   secretAccessKey: 'secret'
 };
 
-// 用独立实现（Python hashlib/hmac）预先算出的 SigV4 结果，锁死签名不漂移。
+// 用独立实现（/tmp/sigv4_ref.py，Python hashlib/hmac 按 SigV4 规范手写，非本实现产出）
+// 预先算出的 SigV4 结果，锁死签名不漂移。
+// 说明：CanonicalHeaders 每条（含最后一条）都以 \n 结束，再与 SignedHeaders 以 \n 分隔，
+// 故二者之间必有一个空行；旧值 8699339d... 正是「缺尾换行」的错误签名（同样由独立实现算出）。
 const EXPECTED_PUT_AUTHORIZATION =
   'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240101/us-east-1/s3/aws4_request, ' +
   'SignedHeaders=cache-control;content-type;host;x-amz-content-sha256;x-amz-date;x-amz-meta-filename, ' +
-  'Signature=8699339d61081508ea00c801e3264a70e65112b017447bd866e5e167e9293f0d';
+  'Signature=5e5871b2c1da1c7edcc81d2b283bb0eadcdcfbb22a082f30a0a94b9ff1239fac';
+
+// 缺尾换行 bug 的签名（独立实现按「CanonicalHeaders 与 SignedHeaders 之间无空行」算出）。
+// 仅用于红灯锚点的反向断言，让回退 bug 时错误信息一目了然。
+const BUGGY_MISSING_NEWLINE_SIGNATURE =
+  '8699339d61081508ea00c801e3264a70e65112b017447bd866e5e167e9293f0d';
 
 function recordingFetch(handler) {
   const calls = [];
@@ -85,6 +93,47 @@ describe('put', () => {
     });
 
     expect(calls[0].headers.get('authorization')).toBe(EXPECTED_PUT_AUTHORIZATION);
+  });
+
+  // 红灯锚点：直接断言规范化请求里 CanonicalHeaders 末行后有空行。
+  // 把 canonicalHeaders 改回 `${name}:${value}`.join('\n')（即缺终止换行）时本测试必红
+  // （见下方 toContain('...\n\n...') 与 not.toContain('...\n...')）。
+  it('红灯锚点：CanonicalHeaders 末行后有空行（缺尾换行即签名漂移）', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-01T00:00:00.000Z'));
+    const realDigest = crypto.subtle.digest.bind(crypto.subtle);
+    const canonicalRequests = [];
+    const spy = vi
+      .spyOn(crypto.subtle, 'digest')
+      .mockImplementation(async (algorithm, data) => {
+        const bytes = new Uint8Array(data);
+        // 签名流程里 digest 只用于 payload 与 canonicalRequest 两处，用首行方法名区分。
+        const asText = new TextDecoder().decode(bytes);
+        if (asText.startsWith('PUT\n')) {
+          canonicalRequests.push(asText);
+        }
+        return realDigest(algorithm, bytes);
+      });
+    try {
+      const { fetchImpl, calls } = recordingFetch(() => new Response(null, { status: 200 }));
+      const files = createS3Files(config, fetchImpl);
+      await files.put('user-1/file.txt', new Uint8Array([1, 2, 3]), {
+        httpMetadata: { contentType: 'text/plain', cacheControl: 'private, no-store' },
+        customMetadata: { filename: 'file.txt' }
+      });
+      expect(canonicalRequests).toHaveLength(1);
+      // 正向：末行 header 后紧跟两个换行（终止该行 + 与 SignedHeaders 之间的空行）。
+      expect(canonicalRequests[0]).toContain('x-amz-meta-filename:file.txt\n\ncache-control;');
+      // 反向：缺尾换行（只有一个换行）的错误形态不得出现。
+      expect(canonicalRequests[0]).not.toContain('x-amz-meta-filename:file.txt\ncache-control;');
+      // 签名锚点：等于独立实现按规范算出的值。
+      expect(calls[0].headers.get('authorization')).toBe(EXPECTED_PUT_AUTHORIZATION);
+      expect(calls[0].headers.get('authorization')).not.toContain(
+        BUGGY_MISSING_NEWLINE_SIGNATURE
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('同输入同 Authorization（可复现）', async () => {
