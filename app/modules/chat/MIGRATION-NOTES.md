@@ -121,3 +121,12 @@
 - **worker/src/do-bridge.js / do/ChannelRoom.js**：内部路由 POST /receipts（verified internal，同 /client-action 形状）+ GET /receipts/snapshot（最新30条聚合兜底，json_object 键 userId/readAt 与前端帧同形）；实际新增>0 才聚合广播 `{protocolVersion:1, type:'read_receipts', messageId(批内最大), userId, readAt, messageIds[]}`；上游广播机制零改动（回执事件=新增）
 - **前端**（自研件，非上游）：MessageBubble 回执标签（DM=已读✓✓/群聊=已读 n/m）、ReadReceipts 名单浮层（Teleport+Esc/遮罩/钮关闭）、chat-store readReceipts 真值+read_receipts 帧合并+recordVisibleRead 可见性上报（IntersectionObserver 批量）、session onTokenRenewed → store.refreshSocketToken（WS 控制帧换绑，决策 #51——**#225 遗留 live 接线在本 issue 补验**）
 - **测试**：worker `test/chat-read-receipts.test.ts`（11 用例：上报/幂等零事件/403/413/口径/跨房/DO 帧形+兜底快照）；frontend `test/read-receipts.test.ts`（15 用例：标签/浮层/帧幂等/上报去重/live api 契约/续期接线）；红灯证据 M1–M5 见 /tmp/tasks/evidence-220-worker.md（M1/M3 亦录 PR 描述）
+
+## fork 接管与基准纪律（#310，2026-09-30 口径确认）
+
+**停止跟随上游，事实接管当前 fork。** 依据 issue #310 开放问题 4 拍板：上游 aozorae/Edgechat 活跃度不足以抵消跟它的成本，且本模块已裁剪 Telegram 桥、调整认证面与目录布局——diff 已无法自动合并。
+
+- **基准点（钉死不变）**：上游 `aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d`（v2.7.0，GPL-3.0-only），出处登记见 `third_party/components.yaml`。
+- **同步策略**：默认不跟上游；上游出现值得移植的安全修复时**人工 port**（逐条评估 + 走本仓门禁），不做 merge/rebase，不新建 GitHub fork 关系（沿用决策 #50）。
+- **现状更正（#248 后）**：chat schema 已从搬运期的 `worker/schema-baseline.sql` 迁入标准迁移链 `migrations/chat/0001_baseline.sql`，按 `unself_migrations_chat` 独立记账重放；上文提及 `worker/schema-baseline.sql` 的段落是 #216 搬运时点记录，该文件已不存在，以本节为准。
+- **shared 化的额外影响（#310）**：若 chat 采用 `storage=shared`，表名须加 `chat_` 前缀并改写全部 `REFERENCES`（上游原名 → `chat_*`），与上游 diff 进一步扩大，更不可能自动合并——这正是「事实接管」的落点；改名实现与验收边界见 #310 拆出的实现 issue。
