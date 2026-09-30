@@ -62,6 +62,7 @@ import {
 } from './chat-provision';
 import {
   filesSourceVars,
+  moduleFilesBucket,
   resolveFilesSource,
   resolveS3Credentials,
   S3_ACCESS_SECRET_NAME,
@@ -135,17 +136,23 @@ interface StoragePlan {
 }
 
 /** 从解析产物推落点（无 resolved → core：解析前调用方用，解析后一律有 resolved）。 */
-function storagePlanOf(mod: ModuleRef): StoragePlan {
+function storagePlanOf(mod: ModuleRef, declaration?: string): StoragePlan {
   if (!mod.resolved) return { level: 'core' };
+  // 用户选定（config 条目 storage.declaration）覆写 manifest 声明后才进 level 判定（#248/#310）。
+  const base = mod.resolved.manifest;
+  const manifest = declaration
+    ? { ...base, storage: { ...(base.storage ?? { accepts: [] }), declaration: declaration as StorageLevel } }
+    : base;
   return {
-    level: storageLevelFor({ manifest: mod.resolved.manifest, id: mod.id }),
-    manifest: mod.resolved.manifest,
+    level: storageLevelFor({ manifest, id: mod.id }),
+    manifest,
   };
 }
 
-function storagePlansFor(modules: ModuleRef[]): Map<string, StoragePlan> {
+function storagePlansFor(modules: ModuleRef[], entries: NormalizedModuleEntry[]): Map<string, StoragePlan> {
+  const declaredById = new Map(entries.map((e) => [e.id, e.storage?.declaration]));
   const out = new Map<string, StoragePlan>();
-  for (const mod of modules) out.set(mod.id, storagePlanOf(mod));
+  for (const mod of modules) out.set(mod.id, storagePlanOf(mod, declaredById.get(mod.id)));
   return out;
 }
 
@@ -335,7 +342,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
    */
   const removedIds = resolution.removed;
   // 数据落点（#248 四级）：声明来自来源解析产物（manifest），用户选择覆写 config 条目的 storage.declaration。
-  const storagePlans = storagePlansFor(selected);
+  const storagePlans = storagePlansFor(selected, entries);
   // lock 记录（决策 #60）：只有本次 config 声明的模块进 lock（removed 的旧记录随 removedIds 移除）。
   const lockModules: LockFile['modules'] = {};
   for (const mod of selected) {
@@ -379,6 +386,11 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   }
 
   const dbIds = await ensureDatabases(client, accountId, rep.log);
+  // R2 实例桶前置供给（#310 验收退回）：模块绑定/上传前桶必须存在——否则 fresh 账户
+  // 先传 worker（带 r2 绑定）再建桶，会被平台拒。步骤⑥仍幂等复检（外部 S3 不建桶）。
+  if (config.storage.provider === 'r2') {
+    await ensureR2Bucket(client, accountId, config.storage.bucket, rep.log);
+  }
   const chatMod = selected.find((m) => m.id === CHAT_MODULE_ID);
   let chatResources: { dbId: string | null; kvId: string } | null = null;
   let chatPkg: Awaited<ReturnType<typeof readChatPackageConfig>> | null = null;
@@ -391,7 +403,9 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     chatLevel = storagePlans.get(CHAT_MODULE_ID)?.level ?? 'dedicated';
     // shared 落点把 chat 表建进共享 modules 库，不建专属 D1（省配额，决策 #55/#310）。
     chatResources = await ensureChatResources(client, accountId, rep.log, { createD1: chatLevel === 'dedicated' });
-    chatFiles = resolveFilesSource({ config, moduleId: CHAT_MODULE_ID, level: chatLevel });
+    // 既有实例兼容（#310）：旧 lock 台账里有 chat 模块 R2 桶 → 保留原附件落点，不被 provider 切换改道。
+    const existingModuleBucket = lock.resources?.r2?.some((r) => r.name === moduleFilesBucket(CHAT_MODULE_ID)) ?? false;
+    chatFiles = resolveFilesSource({ config, moduleId: CHAT_MODULE_ID, level: chatLevel, existingModuleBucket });
     // 模块独立桶才由 chat 供给；共享实例桶归步骤⑥，自备 S3 不建桶。
     if (chatFiles.kind === 'r2' && chatFiles.origin === 'module') {
       await ensureChatR2Bucket(client, accountId, rep.log);
@@ -447,7 +461,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
    * 抽成闭包是为了 sourced 模块能在**来源解析之后**补跑一趟（解析前 mod.dir 还空，读不到 manifest 与 migrations/）。
    */
   const applyModuleStorage = async (mod: ModuleRef): Promise<void> => {
-    const plan = storagePlans.get(mod.id) ?? storagePlanOf(mod);
+    const plan = storagePlans.get(mod.id) ?? storagePlanOf(mod, entries.find((e) => e.id === mod.id)?.storage?.declaration);
     const level: StorageLevel = plan?.level ?? 'core';
     if (mod.id === CHAT_MODULE_ID && chatResources && level === 'dedicated' && chatResources.dbId) {
       // chat（#74/#248 普通化）：专属库在步骤①建（`unself-chat`），这里把 id 记进落点表——
@@ -898,16 +912,17 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
         // 自备 S3 凭据（#310）：部署进程环境变量 → worker secret（不落 config/unself.lock）。
         const creds: S3Credentials = input.s3Credentials ?? resolveS3Credentials();
         const workerName = moduleWorkerName(mod.id);
+        // 凭据轮换：提供即写入（secret PUT 是 upsert）——不能因已存在而 continue，
+        // 否则部署者换了 key 仍用旧 key，日志却声称已写入（#310 验收退回）。
         for (const [name, value] of [
           [S3_ACCESS_SECRET_NAME, creds.accessKeyId],
           [S3_SECRET_SECRET_NAME, creds.secretAccessKey],
         ] as const) {
-          if (await hasWorkerSecret(client, accountId, workerName, name)) continue;
           if (input.putSecret) await input.putSecret(workerName, value, name);
           else await putWorkerSecret(client, accountId, workerName, name, value);
         }
         await moduleUpload();
-        rep.log('FILES 自备 S3 凭据已写入 worker secret（不落 config/unself.lock）');
+        rep.log('FILES 自备 S3 凭据已写入 worker secret（提供即覆盖；不落 config/unself.lock）');
       }
     }
   }
