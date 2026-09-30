@@ -226,6 +226,51 @@ describe('#152 重发激活邮件', () => {
     expect(fx.db.query("SELECT action FROM audit_log WHERE action = 'activation_resent'")).toHaveLength(2);
   });
 
+  it('并发抢令牌输家：旧令牌被抢先作废时，本次新链接退位作废', async () => {
+    const fx = await fixture();
+    const sent: MailMessage[] = [];
+    // 双 gate：reached 表示后台已走到发信点（尚未投递成功），gate 控制投递完成时机
+    let reachedSend!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      reachedSend = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const app = createApp({
+      createMailSender: () => ({
+        send: async (message: MailMessage) => {
+          sent.push(message);
+          reachedSend();
+          await gate;
+        },
+      }),
+    });
+
+    const background: Promise<unknown>[] = [];
+    expect((await resend(app, fx, 'u1', fakeExecutionContext(background))).status).toBe(200);
+    await reached;
+    const newToken = activationTokenFrom(sent[0]?.text ?? '');
+
+    // 模拟并发 claim/另一次重发在本次投递完成前抢先作废旧令牌（used_at IS NULL 守卫的唯一赢家）
+    fx.db.run(
+      "UPDATE invite_activations SET used_at = 'invalidated@concurrent' WHERE token_hash = ?",
+      fx.oldTokenHash,
+    );
+    release();
+    await Promise.allSettled(background);
+
+    // 输家退位：本次新令牌也被作废，不会留下第二个有效链接
+    expect(
+      fx.db.first<{ used_at: string }>(
+        'SELECT used_at FROM invite_activations WHERE token_hash = ?',
+        await hashOneTimeToken(newToken),
+      )?.used_at,
+    ).toMatch(/^invalidated@/);
+    expect((await activationPage(app, fx, newToken)).status).toBe(404);
+  });
+
   it('已激活（令牌已消费）→ 409 且零副作用，文案是 resend 语境', async () => {
     const fx = await fixture();
     const sent: MailMessage[] = [];

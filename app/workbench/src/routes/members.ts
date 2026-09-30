@@ -79,7 +79,7 @@ export function registerMemberRoutes(
    *
    * 并发（双击/双标签）：投递成功后用 `invalidateInviteActivation` 的 `used_at IS NULL` 守卫
    * 原子抢旧令牌——赢家保留自己的新令牌，输家（含被 claim 抢先重签）作废自己的新令牌退位，
-   * 同一时刻至多一个有效链接。
+   * 投递成功者最终至多保留一个有效链接（投递失败者只清理自己的新令牌，旧链接按设计保留）。
    *
    * 防账号枚举：不存在与存在但非 builtin 的成员同回 404 { error: 'member not found' }，不区分。
    */
