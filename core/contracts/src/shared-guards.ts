@@ -8,7 +8,10 @@
  * schema 层只兜护栏②（accepts 含 shared 必申报 tables）；护栏③（前缀/外键）是迁移文本级检查，
  * 归这里与 validate。
  */
-import { tableNamesFromSql } from './sql-tables';
+import { foreignKeyTargets, tableNamesFromSql } from './sql-tables';
+
+// 单一 SQL 标识符解析在 sql-tables.ts；这里只保留 public 可见面（安装器经此再导出）。
+export { foreignKeyTargets } from './sql-tables';
 
 /** 参与护栏校验的迁移文件（文件名 + SQL 原文）。 */
 export interface SharedGuardMigration {
@@ -32,16 +35,6 @@ export interface SharedGuardProblem {
 /** shared 护栏③：表名必须以 `<模块id>_` 开头（模块 id 内的 - 转 _）。 */
 export function tablePrefixFor(moduleId: string): string {
   return `${moduleId.replaceAll('-', '_')}_`;
-}
-
-/** 抓 FOREIGN KEY … REFERENCES 的目标表名（容忍引号与大小写）。 */
-export function foreignKeyTargets(sql: string): string[] {
-  const names = new Set<string>();
-  const re = /REFERENCES\s+["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?/gi;
-  for (const m of sql.matchAll(re)) {
-    names.add(m[1]!);
-  }
-  return [...names];
 }
 
 /**
