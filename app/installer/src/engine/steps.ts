@@ -364,7 +364,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     if (existingDedicated && plan.level === 'shared') {
       throw new Error(
         `模块 ${mod.id} 既有 dedicated 数据在 ${dedicatedDbNameFor(mod.id)}，改选 shared 会静默重绑空 modules 库、旧数据不可见` +
-          '——仅新装可首选 shared；既有实例请走备份+重装的手工迁移（#310）',
+          '——仅新装可首选 shared；既有实例请走备份+重装的手工迁移（issue 310）',
       );
     }
   }
