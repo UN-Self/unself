@@ -23,6 +23,12 @@ import { createApp } from '../src/index';
 import { generateInstanceKeyPair } from '../src/keys';
 import { hashOneTimeToken } from '../src/one-time-token';
 import { createSessionToken } from '../src/session';
+import {
+  consumeInviteActivation,
+  invalidateOtherInviteActivations,
+  issueInviteActivation,
+  supersedeOlderInviteActivations,
+} from '../src/services/invite-activations';
 import { createCoreDb, type CoreTestDb } from './test-factory';
 
 interface ResendFixture {
@@ -443,6 +449,181 @@ describe('#152 重发激活邮件', () => {
     ).toBe(before);
   });
 
+  it('消费与后台投递竞态：旧链接在投递期间被激活后，新链接不得残留可用', async () => {
+    const fx = await fixture();
+    const pending: PendingSend[] = [];
+    const provisioner = createFakeMailProvisioner();
+    provisioner.accounts.set('m@example.com', { displayName: '成员', disabled: false, password: 'init' });
+    const app = createApp({
+      createMailSender: () => gatedSender(pending),
+      createMailProvisioner: () => provisioner,
+    });
+    const background: Promise<unknown>[] = [];
+
+    // resend 先签发新令牌，后台投递挂起（尚未送达、尚未取代旧令牌）
+    expect((await resend(app, fx, 'u1', fakeExecutionContext(background))).status).toBe(200);
+    await until(() => pending.length === 1);
+    const newToken = activationTokenFrom(pending[0]!.message.text);
+
+    // 用户在投递完成前用旧链接完成激活（真实 /api/activate → 真消费 + resetPassword）
+    const activated = await app.request(
+      `https://team.example.com/api/activate/${fx.oldToken}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'newpass123' }) },
+      fx.env,
+    );
+    expect(activated.status).toBe(200);
+
+    // 放行后台投递
+    pending[0]!.resolve();
+    await Promise.allSettled(background);
+
+    // 关键：新令牌必须被作废，不能残留第二条可设密码的能力
+    expect((await activationPage(app, fx, newToken)).status).toBe(404);
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 0 });
+  });
+
+  it('claim 重签与 resend 交错：至多一条可用，消费后无残留且再 resend 409', async () => {
+    const fx = await fixture();
+    const claimInvitePlain = 'invite-claim-plaintext';
+    const claimInviteHash = await hashOneTimeToken(claimInvitePlain);
+    const claimOldHash = await hashOneTimeToken('claim-old-plaintext');
+    fx.db.run(
+      "INSERT INTO users (id, issuer, sub, display_name, personal_email, role, status) VALUES ('u_claim','builtin','u_claim','认领者','claim@example.com','member','active')",
+    );
+    fx.db.run(
+      "INSERT INTO invites (token_hash,status,personal_email,email_prefix,display_name,expires_at) VALUES (?, 'approved','claim@example.com','claim','认领者','2099-01-01 00:00:00')",
+      claimInviteHash,
+    );
+    fx.db.run(
+      "INSERT INTO invite_activations (token_hash, invite_token_hash, email, expires_at) VALUES (?, ?, 'claim@example.com', datetime('now','+1 day'))",
+      claimOldHash,
+      claimInviteHash,
+    );
+
+    const pending: PendingSend[] = [];
+    const provisioner = createFakeMailProvisioner();
+    provisioner.accounts.set('claim@example.com', { displayName: '认领者', disabled: false, password: 'init' });
+    const app = createApp({
+      createMailSender: () => gatedSender(pending),
+      createMailProvisioner: () => provisioner,
+    });
+    const background: Promise<unknown>[] = [];
+
+    // resend 先签发新令牌（读到旧 O），后台挂起；用户走 claim 重签（读到 resend 的新令牌并作废它）
+    expect((await resend(app, fx, 'u_claim', fakeExecutionContext(background))).status).toBe(200);
+    await until(() => pending.length === 1);
+    const resendToken = activationTokenFrom(pending[0]!.message.text);
+    const claimed = await app.request(
+      `https://team.example.com/api/invite/${claimInvitePlain}/claim-activation`,
+      { method: 'POST' },
+      fx.env,
+    );
+    expect(claimed.status).toBe(200);
+    const claimToken = activationTokenFrom(((await claimed.json()) as { activationUrl: string }).activationUrl);
+
+    pending[0]!.resolve();
+    await Promise.allSettled(background);
+
+    // 至多一条可用：claim 链接可用，resend 链接已退位
+    expect((await activationPage(app, fx, claimToken)).status).toBe(200);
+    expect((await activationPage(app, fx, resendToken)).status).toBe(404);
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = ? AND used_at IS NULL",
+        claimInviteHash,
+      ),
+    ).toEqual({ count: 1 });
+
+    // 消费 claim 链接后不得残留，再 resend 409
+    const activated = await app.request(
+      `https://team.example.com/api/activate/${claimToken}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'newpass123' }) },
+      fx.env,
+    );
+    expect(activated.status).toBe(200);
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = ? AND used_at IS NULL",
+        claimInviteHash,
+      ),
+    ).toEqual({ count: 0 });
+    expect((await resend(app, fx, 'u_claim')).status).toBe(409);
+  });
+
+  it('resetPassword 失败时释放本次消费，原链接可重试（#151 保持）', async () => {
+    const fx = await fixture();
+    const sent: MailMessage[] = [];
+    const fake = createFakeMailProvisioner();
+    fake.accounts.set('m@example.com', { displayName: '成员', disabled: false, password: 'init' });
+    let failFirst = true;
+    const flaky = {
+      ...fake,
+      resetPassword: async (input: { email: string; password: string }) => {
+        if (failFirst) {
+          failFirst = false;
+          throw new Error('smtp down');
+        }
+        return fake.resetPassword(input);
+      },
+    };
+    const app = createApp({ createMailSender: () => recordingSender(sent), createMailProvisioner: () => flaky });
+
+    expect((await resend(app, fx)).status).toBe(200);
+    const token = activationTokenFrom(sent[0]?.text ?? '');
+    const request = () =>
+      app.request(
+        `https://team.example.com/api/activate/${token}`,
+        { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'newpass123' }) },
+        fx.env,
+      );
+
+    const failed = await request();
+    expect(failed.status).toBeGreaterThanOrEqual(400);
+    // resetPassword 失败不烧链接：GET 仍 200，重试可成功
+    expect((await activationPage(app, fx, token)).status).toBe(200);
+    expect((await request()).status).toBe(200);
+  });
+
+  it('消费一侧收敛：同一邀请存在两条未用链接时，激活其一后另一条必被作废', async () => {
+    const fx = await fixture();
+    const provisioner = createFakeMailProvisioner();
+    provisioner.accounts.set('m@example.com', { displayName: '成员', disabled: false, password: 'init' });
+    const app = createApp({
+      createMailSender: () => recordingSender([]),
+      createMailProvisioner: () => provisioner,
+    });
+    // 构造「resend 与 claim 交错各自签发」的持久化状态：同邀请两条未用链接
+    const extraPlain = 'extra-concurrent-token';
+    fx.db.run(
+      "INSERT INTO invite_activations (token_hash, invite_token_hash, email, expires_at) VALUES (?, 'i1', 'm@example.com', datetime('now','+1 day'))",
+      await hashOneTimeToken(extraPlain),
+    );
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 2 });
+
+    const activated = await app.request(
+      `https://team.example.com/api/activate/${fx.oldToken}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'newpass123' }) },
+      fx.env,
+    );
+    expect(activated.status).toBe(200);
+
+    // 一次成功激活后：另一条未用链接被作废，无残留
+    expect((await activationPage(app, fx, extraPlain)).status).toBe(404);
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 0 });
+  });
+
   it('已激活（令牌已消费）→ 409 且零副作用，文案是 resend 语境', async () => {
     const fx = await fixture();
     const sent: MailMessage[] = [];
@@ -495,5 +676,52 @@ describe('#152 重发激活邮件', () => {
     expect(oidc.status).toBe(404);
     expect(missing.status).toBe(404);
     expect(await oidc.json()).toEqual(await missing.json());
+  });
+});
+
+/**
+ * 服务级：路由层无法构造的乱序——「resend 读到旧令牌 → 旧令牌被消费 → 新令牌才插入」，
+ * 验证投递成功侧按「同邀请已存在真实消费行」原子作废新令牌（supersede 的 OR EXISTS）。
+ * 断言打在持久化状态（used_at / 未用行数）上。
+ */
+describe('#152 激活令牌模型并发收敛（乱序）', () => {
+  it('消费先于新令牌插入：投递成功时按已消费原子作废新令牌', async () => {
+    const fx = await fixture();
+
+    // 消费“重发已读到”的旧令牌（此刻新令牌尚未签发）
+    expect(await consumeInviteActivation(fx.db.d1, fx.oldTokenHash)).not.toBeNull();
+    await invalidateOtherInviteActivations(fx.db.d1, 'i1', fx.oldTokenHash);
+
+    // 重发在陈旧读之后才插入新令牌
+    const newToken = await issueInviteActivation(fx.db.d1, 'i1', 'm@example.com');
+    const newHash = await hashOneTimeToken(newToken);
+
+    // 后台投递成功：必须作废新令牌（不得残留第二条可设密码的链接）
+    await supersedeOlderInviteActivations(fx.db.d1, 'i1', newHash);
+    expect(
+      fx.db.first<{ used_at: string }>(
+        'SELECT used_at FROM invite_activations WHERE token_hash = ?',
+        newHash,
+      )?.used_at,
+    ).toMatch(/^invalidated@/);
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 0 });
+  });
+
+  it('无消费时投递成功只取代更早未用行，保留新令牌', async () => {
+    const fx = await fixture();
+    const newToken = await issueInviteActivation(fx.db.d1, 'i1', 'm@example.com');
+    const newHash = await hashOneTimeToken(newToken);
+    await supersedeOlderInviteActivations(fx.db.d1, 'i1', newHash);
+
+    expect(fx.db.first('SELECT used_at FROM invite_activations WHERE token_hash = ?', newHash)).toEqual({ used_at: null });
+    expect(
+      fx.db.first<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM invite_activations WHERE invite_token_hash = 'i1' AND used_at IS NULL",
+      ),
+    ).toEqual({ count: 1 });
   });
 });

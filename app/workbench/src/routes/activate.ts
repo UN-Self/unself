@@ -18,7 +18,7 @@ import { z } from 'zod';
 import type { Bindings, CoreApiDependencies } from '../index';
 import { hashOneTimeToken } from '../one-time-token';
 import { audit } from '../services/audit';
-import { consumeInviteActivation, findInviteActivation, releaseInviteActivation } from '../services/invite-activations';
+import { consumeInviteActivation, findInviteActivation, invalidateOtherInviteActivations, releaseInviteActivation } from '../services/invite-activations';
 import { configuredMailProvisioner } from '../services/members';
 import {
   activationFailureDetail,
@@ -96,6 +96,10 @@ export function registerActivateRoutes(
         : activationFailureDetail(failure.detail);
       return c.json({ error: detail }, failure.status);
     }
+    // #152 并发消费兜底：激活真成功后，作废同邀请仍在用的其他链接（claim 重签 / 并发重发
+    // 各自签发的），确保「一次成功激活后无第二条可重设密码的链接」；失败回滚路径不调，
+    // 保留「原链接可重试」（#151）。
+    await invalidateOtherInviteActivations(db, activation.invite_token_hash, await hashOneTimeToken(c.req.param('token')));
     await audit(db, 'system', 'account_activated', activation.email);
     return c.json({ ok: true, loginHint: LOGIN_HINT });
   });
