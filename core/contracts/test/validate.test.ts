@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
 
 import { CONTRACT_VERSION, ModuleManifestSchema } from '../src/manifest';
 import { manifestFromYamlText, validateModulePackage } from '../src/validate';
@@ -131,6 +132,79 @@ describe('validateModulePackage：绿路径', () => {
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
     manifest.compat = { min: '0.9', max: '1.0' };
     const result = validateModulePackage({ ...base, manifestText: JSON.stringify(manifest) });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe('护栏③与真 SQLite 对照（#310 实测退回：括号/注释形态漏检）', () => {
+  function sharedPkgWith(migrationSql: string): Parameters<typeof validateModulePackage>[0] {
+    const base = minimalInput();
+    const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
+    manifest.storage = { accepts: ['shared'] };
+    manifest.tablesShared = ['todo_items'];
+    return { ...base, manifestText: JSON.stringify(manifest), migrations: { '0001_init.sql': migrationSql } };
+  }
+
+  it('REFERENCES [foreign_table] → 真库建出跳模块 FK，validate 必须拒绝', () => {
+    const sql =
+      'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY, f INTEGER REFERENCES [foreign_table](id));';
+    const db = new DatabaseSync(':memory:');
+    db.exec('CREATE TABLE IF NOT EXISTS [foreign_table] (id INTEGER PRIMARY KEY);');
+    db.exec(sql);
+    const fk = db
+      .prepare("SELECT \"table\" AS t FROM pragma_foreign_key_list('todo_items')")
+      .all() as Array<{ t: string }>;
+    expect(fk.map((r) => r.t)).toEqual(['foreign_table']);
+    db.close();
+
+    const result = validateModulePackage(sharedPkgWith(sql));
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) => e.check === 'tables' && e.message.includes('foreign_table') && e.message.includes('外键')),
+    ).toBe(true);
+  });
+
+  it('REFERENCES /* comment */ foreign_table → 真库建出 FK，validate 必须拒绝', () => {
+    const sql =
+      'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY, f INTEGER REFERENCES /* explanatory comment */ foreign_table(id));';
+    const db = new DatabaseSync(':memory:');
+    db.exec('CREATE TABLE IF NOT EXISTS foreign_table (id INTEGER PRIMARY KEY);');
+    db.exec(sql);
+    const fk = db
+      .prepare("SELECT \"table\" AS t FROM pragma_foreign_key_list('todo_items')")
+      .all() as Array<{ t: string }>;
+    expect(fk.map((r) => r.t)).toEqual(['foreign_table']);
+    db.close();
+
+    const result = validateModulePackage(sharedPkgWith(sql));
+    expect(result.ok).toBe(false);
+    expect(
+      result.errors.some((e) => e.check === 'tables' && e.message.includes('foreign_table') && e.message.includes('外键')),
+    ).toBe(true);
+  });
+
+  it('括号引号的本模块内引用（[todo_items]）→ 真库可建、validate 通过', () => {
+    const sql =
+      'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY, p INTEGER REFERENCES [todo_items](id));';
+    const db = new DatabaseSync(':memory:');
+    db.exec(sql);
+    const fk = db
+      .prepare("SELECT \"table\" AS t FROM pragma_foreign_key_list('todo_items')")
+      .all() as Array<{ t: string }>;
+    expect(fk.map((r) => r.t)).toEqual(['todo_items']);
+    db.close();
+
+    const result = validateModulePackage(sharedPkgWith(sql));
+    expect(result.errors.filter((e) => e.check === 'tables')).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it('CREATE TABLE IF NOT EXISTS [foreign_table] 不再被认成表名 IF', () => {
+    const result = validateModulePackage(
+      sharedPkgWith('CREATE TABLE IF NOT EXISTS [todo_items] (id INTEGER PRIMARY KEY);'),
+    );
+    // 建表名解析为 todo_items（在申报清单内）→ 无“未申报的表 IF”之类误报
+    expect(result.errors.some((e) => e.message.includes('IF'))).toBe(false);
     expect(result.ok).toBe(true);
   });
 });
