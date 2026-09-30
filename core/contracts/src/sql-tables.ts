@@ -34,8 +34,8 @@ export interface SqlStructure {
   problems: string[];
 }
 
-const isIdentStart = (c: string): boolean => /[A-Za-z_]/.test(c);
-const isIdentPart = (c: string): boolean => /[A-Za-z0-9_$]/.test(c);
+const isIdentStart = (c: string): boolean => /[A-Za-z_]/.test(c) || c.charCodeAt(0) >= 0x80;
+const isIdentPart = (c: string): boolean => /[A-Za-z0-9_$]/.test(c) || c.charCodeAt(0) >= 0x80;
 const isWord = (t: SqlToken | undefined, w: string): boolean =>
   t !== undefined && t.type === 'word' && t.value.toLowerCase() === w;
 
@@ -178,6 +178,22 @@ export function parseSqlStructure(sql: string): SqlStructure {
     if (isWord(t, 'create')) {
       let j = i + 1;
       if (isWord(tokens[j], 'temp') || isWord(tokens[j], 'temporary')) j += 1;
+      // 不支持虚拟表（#310 复验 #5）：`CREATE VIRTUAL TABLE … USING fts5/…` 会连带建影子表
+      // （foreign_search + *_data/_idx/_content/_docsize/_config），无法用 tables 清单申报，
+      // 也不能当成普通建表静默跳过——显式拒绝。
+      if (isWord(tokens[j], 'virtual')) {
+        let k = j + 1;
+        if (isWord(tokens[k], 'table')) {
+          k += 1;
+          if (isWord(tokens[k], 'if') && isWord(tokens[k + 1], 'not') && isWord(tokens[k + 2], 'exists')) k += 3;
+          const vName = tokens[k];
+          const vText = vName && (vName.type === 'word' || vName.type === 'quoted') ? vName.value : '(未识别)';
+          outProblems.push(
+            `不支持虚拟表（CREATE VIRTUAL TABLE ${vText} …）：其影子表无法用 tables 清单申报；shared 需普通表`,
+          );
+        }
+        continue;
+      }
       if (!isWord(tokens[j], 'table')) continue; // CREATE VIEW/INDEX/… 与本解析无关
       j += 1;
       if (isWord(tokens[j], 'if')) {
