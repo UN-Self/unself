@@ -66,13 +66,13 @@ function expectNoCloudWrites(fake: ReturnType<typeof makeCfRestFake>): void {
   expect(fake.state.uploads).toHaveLength(0);
 }
 
-async function run(fake: ReturnType<typeof makeCfRestFake>, config: ReturnType<typeof configWith>, preLock?: string) {
+async function run(fake: ReturnType<typeof makeCfRestFake>, config: ReturnType<typeof configWith>, preLock = JSON.stringify(emptyLock())) {
   return runNineSteps({
     rootDir: ROOT,
     client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
     yes: true,
     configOverride: config as never,
-    ...(preLock ? { preLock } : {}),
+    preLock,
     fetchJwks: async () => FIXED_JWKS,
     http: SMOKE_OK,
     workbenchDir: WB,

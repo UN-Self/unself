@@ -20,6 +20,9 @@ import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { findRepoRoot } from '../helpers/repo-root';
 import { cleanupTempWorkbenches, tempWorkbenchDir } from './helpers/fake-repo';
 
+/** 空 lock：模拟「无既有资源的新装」，同时避免测试把 unself.lock 写到仓库根。 */
+const FRESH_LOCK = JSON.stringify(emptyLock());
+
 const ROOT = findRepoRoot();
 const WB = await tempWorkbenchDir();
 afterAll(cleanupTempWorkbenches);
@@ -78,6 +81,7 @@ describe('#310 ① fresh shared 装配（桶供给前置）', () => {
       yes: true,
       configOverride: R2_SHARED_CONFIG as never,
       fetchJwks: async () => FIXED_JWKS,
+      preLock: FRESH_LOCK,
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -111,6 +115,7 @@ describe('#310 ② 自备 S3 与凭据轮换', () => {
       configOverride: S3_CONFIG as never,
       s3Credentials: S3_CREDS,
       fetchJwks: async () => FIXED_JWKS,
+      preLock: FRESH_LOCK,
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
