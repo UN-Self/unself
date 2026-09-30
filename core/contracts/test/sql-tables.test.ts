@@ -91,6 +91,74 @@ describe('不支持/畸形的真实语法显式拒绝（problems 非空）', () 
   });
 });
 
+describe('与真 SQLite 边界矩阵（解析结果必须与真库一致，或显式拒绝）', () => {
+  interface Case {
+    name: string;
+    sql: string;
+    support: boolean;
+  }
+  const cases: Case[] = [
+    { name: '普通建表', sql: 'CREATE TABLE todo_items (id INTEGER PRIMARY KEY);', support: true },
+    { name: 'IF NOT EXISTS + 括号', sql: 'CREATE TABLE IF NOT EXISTS [todo_items] (id INTEGER PRIMARY KEY);', support: true },
+    { name: '双引号/反引号', sql: 'CREATE TABLE "a" (id INTEGER); CREATE TABLE `b` (id INTEGER);', support: true },
+    { name: '注释夹 CREATE/TABLE/名', sql: 'CREATE TABLE IF NOT EXISTS /* c */ [t] (id INTEGER);', support: true },
+    {
+      name: '单引号 REFERENCES 目标',
+      sql: "CREATE TABLE [ref] (id INTEGER PRIMARY KEY); CREATE TABLE [t] (id INTEGER, f INTEGER REFERENCES 'ref'(id));",
+      support: true,
+    },
+    {
+      name: 'Unicode 标识符 REFERENCES（不得截断）',
+      sql: 'CREATE TABLE [todo_items外] (id INTEGER PRIMARY KEY); CREATE TABLE [t] (id INTEGER, f INTEGER REFERENCES todo_items外(id));',
+      support: true,
+    },
+    {
+      name: '引号内含 -- 的列名 + REFERENCES',
+      sql: 'CREATE TABLE [ref] (id INTEGER PRIMARY KEY); CREATE TABLE [t] ("-- harmless column" INTEGER, f INTEGER REFERENCES ref(id));',
+      support: true,
+    },
+    {
+      name: '字符串/注释里的伪关键字',
+      sql: "CREATE TABLE [t] (id INTEGER); INSERT INTO t VALUES ('CREATE TABLE ghost (id INTEGER)'); -- CREATE TABLE ghost2 (id INTEGER)\n/* REFERENCES ghost3(id) */",
+      support: true,
+    },
+    { name: '不支持：CREATE VIRTUAL TABLE（fts5 影子表）', sql: 'CREATE VIRTUAL TABLE IF NOT EXISTS foreign_search USING fts5(content);', support: false },
+    { name: "不支持：CREATE TABLE 'x'（字符串名）", sql: "CREATE TABLE 'x' (id INTEGER);", support: false },
+  ];
+
+  function realStructure(sql: string): { tables: string[]; refs: string[] } {
+    const db = new DatabaseSync(':memory:');
+    db.exec(sql);
+    const tables = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{
+        name: string;
+      }>
+    ).map((r) => r.name);
+    const refs = new Set<string>();
+    for (const t of tables) {
+      const rows = db.prepare(`SELECT "table" AS t FROM pragma_foreign_key_list('${t}')`).all() as Array<{ t: string }>;
+      for (const r of rows) refs.add(r.t);
+    }
+    db.close();
+    return { tables, refs: [...refs].sort() };
+  }
+
+  for (const c of cases) {
+    it(`${c.name}`, () => {
+      const real = realStructure(c.sql);
+      const parsed = parseSqlStructure(c.sql);
+      if (!c.support) {
+        // 不支持的真实语法：必须显式拒绝（不静默跳过）；真库确实建了东西也说明漏检危害
+        expect(parsed.problems.length).toBeGreaterThan(0);
+        return;
+      }
+      expect(parsed.problems).toEqual([]);
+      expect([...parsed.tables].sort()).toEqual(real.tables);
+      expect([...parsed.references].sort()).toEqual(real.refs);
+    });
+  }
+});
+
 describe('真 SQLite 对照（node:sqlite 3.53.4）', () => {
   it('REFERENCES [users] / /* c */ users / 单引号 users 真库都建出 FK，解析器同结论', () => {
     const db = new DatabaseSync(':memory:');

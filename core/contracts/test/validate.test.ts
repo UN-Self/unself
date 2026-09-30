@@ -247,6 +247,41 @@ describe('护栏③与真 SQLite 对照（#310 实测退回：括号/注释形�
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.check === 'tables' && e.message.includes('CREATE TABLE'))).toBe(true);
   });
+
+  it('REFERENCES todo_items外（Unicode 标识符不得截断为已申报 todo_items）→ 真库 FK 指向未申报表，validate 拒绝', () => {
+    const sql =
+      'CREATE TABLE IF NOT EXISTS todo_items外 (id INTEGER PRIMARY KEY);\n' +
+      'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER, f INTEGER REFERENCES todo_items外(id));';
+    const db = new DatabaseSync(':memory:');
+    db.exec(sql);
+    const fk = db
+      .prepare("SELECT \"table\" AS t FROM pragma_foreign_key_list('todo_items')")
+      .all() as Array<{ t: string }>;
+    expect(fk.map((r) => r.t)).toEqual(['todo_items外']);
+    db.close();
+
+    const result = validateModulePackage(sharedPkgWith(sql));
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.message.includes('todo_items外'))).toBe(true);
+  });
+
+  it('CREATE VIRTUAL TABLE（fts5 影子表）→ 未支持必显式拒绝，不静默跳过', () => {
+    const sql =
+      'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY);\n' +
+      'CREATE VIRTUAL TABLE IF NOT EXISTS foreign_search USING fts5(content);';
+    const db = new DatabaseSync(':memory:');
+    db.exec(sql);
+    const created = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'foreign_search%'")
+      .all() as Array<{ name: string }>;
+    // 真库确实建了 foreign_search + 影子表（>1）
+    expect(created.length).toBeGreaterThan(1);
+    db.close();
+
+    const result = validateModulePackage(sharedPkgWith(sql));
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.check === 'tables' && e.message.includes('虚拟表'))).toBe(true);
+  });
 });
 
 describe('六类硬错（docs/modules.md §7，每类红灯）', () => {

@@ -261,4 +261,74 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
       await rm(rootDir, { recursive: true, force: true });
     }
   });
+
+  it('shared 落点用 Unicode 标识符外键（不得截断）→ 装配停住', { timeout: 120_000 }, async () => {
+    const rootDir = await makeFakeRepoRoot('unself-tiers-uni-');
+    try {
+      await writeFixture(rootDir, {
+        id: 'bad-mod',
+        level: 'shared',
+        tables: ['bad_mod_items'],
+        migration:
+          'CREATE TABLE IF NOT EXISTS bad_mod_items外 (id INTEGER PRIMARY KEY);\n' +
+          'CREATE TABLE IF NOT EXISTS bad_mod_items (id INTEGER, f INTEGER REFERENCES bad_mod_items外(id));\n',
+      });
+      const fake = makeCfRestFake();
+      let thrown: unknown;
+      try {
+        await runNineSteps({
+          rootDir,
+          workbenchDir: workbenchDirOf(rootDir),
+          client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+          yes: true,
+          configOverride: { domain: '', modules: [{ id: 'bad-mod', source: 'file:./app/modules/bad-mod' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+          fetchJwks: async () => FIXED_JWKS,
+          http: { smoke: async () => [] },
+          reporter: { step: () => {}, log: () => {} },
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      const message = thrown instanceof Error ? thrown.message : String(thrown);
+      expect(message).toContain('bad_mod_items外');
+      expect(fake.state.ledgerTables.has('unself_migrations_bad_mod')).toBe(false);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it('shared 落点用 CREATE VIRTUAL TABLE（未支持）→ 装配停住，不静默跳过', { timeout: 120_000 }, async () => {
+    const rootDir = await makeFakeRepoRoot('unself-tiers-vtab-');
+    try {
+      await writeFixture(rootDir, {
+        id: 'bad-mod',
+        level: 'shared',
+        tables: ['bad_mod_items'],
+        migration:
+          'CREATE TABLE IF NOT EXISTS bad_mod_items (id INTEGER PRIMARY KEY);\n' +
+          'CREATE VIRTUAL TABLE IF NOT EXISTS foreign_search USING fts5(content);\n',
+      });
+      const fake = makeCfRestFake();
+      let thrown: unknown;
+      try {
+        await runNineSteps({
+          rootDir,
+          workbenchDir: workbenchDirOf(rootDir),
+          client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+          yes: true,
+          configOverride: { domain: '', modules: [{ id: 'bad-mod', source: 'file:./app/modules/bad-mod' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+          fetchJwks: async () => FIXED_JWKS,
+          http: { smoke: async () => [] },
+          reporter: { step: () => {}, log: () => {} },
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      const message = thrown instanceof Error ? thrown.message : String(thrown);
+      expect(message).toContain('虚拟表');
+      expect(fake.state.ledgerTables.has('unself_migrations_bad_mod')).toBe(false);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
 });
