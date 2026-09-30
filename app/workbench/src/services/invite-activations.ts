@@ -44,9 +44,19 @@ export async function findInviteActivation(
 }
 
 /**
- * 原子消费（一次性）：命中回 `{ email, used_at, invite_token_hash }`（used_at = 本次写入值，
- * 供失败回滚精确守卫；invite_token_hash = 供消费后失效同邀请的其他未用链接），
- * 已用/过期/不存在回 null。
+ * 原子消费（一次性，**邀请级排他**）：命中回 `{ email, used_at, invite_token_hash }`
+ * （used_at = 本次写入值，供失败回滚精确守卫；invite_token_hash = 供消费后失效其他未用链接），
+ * 已用/过期/不存在/同邀请已有真实消费回 null。
+ *
+ * 排他语义（#152 复验）：同一邀请下**至多一次真实消费**。除当前 token 的 `used_at IS NULL`
+ * 外，另加 `NOT EXISTS(同邀请存在真实消费行)`——两条并发激活请求（旧令牌/新令牌各一）
+ * 在 SQLite 写序下线性化：先到者写入真实 used_at 获胜，后到者的 NOT EXISTS 立即为假、
+ * 在进入外部 resetPassword **之前**就被拒（404），不会出现两次重置。
+ *
+ * 占用与真实完成的关系（不得误读）：本次 `used_at` 是外部 resetPassword **之前**写入的
+ * 「占用标记」，数据库写入与外部副作用不在同一事务；resetPassword 失败时由
+ * releaseInviteActivation 凭本次 used_at 精确放回（#151）。失败回滚只动本行，
+ * 因此不会解除/误清另一条已成功消费的链接。
  */
 export async function consumeInviteActivation(
   db: D1Database,
@@ -54,7 +64,7 @@ export async function consumeInviteActivation(
 ): Promise<{ email: string; used_at: string; invite_token_hash: string } | null> {
   return db
     .prepare(
-      "UPDATE invite_activations SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') RETURNING email, used_at, invite_token_hash",
+      "UPDATE invite_activations SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL AND expires_at > datetime('now') AND NOT EXISTS (SELECT 1 FROM invite_activations s WHERE s.invite_token_hash = invite_activations.invite_token_hash AND s.used_at IS NOT NULL AND s.used_at NOT LIKE 'invalidated@%') RETURNING email, used_at, invite_token_hash",
     )
     .bind(tokenHash)
     .first<{ email: string; used_at: string; invite_token_hash: string }>();
@@ -113,9 +123,10 @@ export async function findInviteActivationForInvite(
  *
  * 并发消费兜底（#152 复验）：若同一邀请已存在**真实消费**行（used_at 非空且非作废占位），
  * 则本次新令牌（keep）也必须作废——否则「旧链接在后台投递期间被消费」会留下第二条可重设密码的
- * 链接。判断写在同一条 UPDATE 的 `OR EXISTS(...)` 里（非先查后写）：与消费事务按 SQLite 写序
- * 线性化——消费先提交则此处命中、新令牌作废；本语句先提交则旧行被作废、后续消费的
- * `used_at IS NULL` 守卫必失败，两序都不会留下双重可用链接。
+ * 链接。判断写在同一条 UPDATE 的 `OR EXISTS(...)` 里（非先查后写）：与消费的原子写入按 SQLite
+ * 写序线性化——消费先提交则此处命中、新令牌作废；本语句先提交则旧行被作废，后续消费因
+ * `used_at IS NULL` 不再成立而失败。主排他约束在 consumeInviteActivation 的邀请级 NOT EXISTS，
+ * 本条是投递成功后的收尾（防竞态遗留）。
  */
 export async function supersedeOlderInviteActivations(
   db: D1Database,
@@ -145,7 +156,8 @@ export async function supersedeOlderInviteActivations(
 /**
  * 真实消费成功后，作废同一邀请中除本次外仍未用的链接（#152 并发消费兜底另一侧）：
  * 一次成功激活后不得残留可再次设密码的并发激活链接（含 claim 重签与 resend 各自签发的）。
- * 只动 `used_at IS NULL` 行，不碰已消费/已作废行；与消费同属写事务，按 SQLite 写序收敛。
+ * 只动 `used_at IS NULL` 行，不碰已消费/已作废行；此处的失效是**消费成功后的清理**，
+ * 排他的主约束在 consumeInviteActivation（邀请级 NOT EXISTS），本条不得被当作排他手段。
  */
 export async function invalidateOtherInviteActivations(
   db: D1Database,
