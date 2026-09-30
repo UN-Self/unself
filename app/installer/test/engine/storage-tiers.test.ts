@@ -188,4 +188,40 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
       await rm(rootDir, { recursive: true, force: true });
     }
   });
+
+  it('shared 落点装到无模块前缀的表 → 装配停住（护栏③：表名必须 <模块id>_）', { timeout: 120_000 }, async () => {
+    const rootDir = await makeFakeRepoRoot('unself-tiers-prefix-');
+    try {
+      await writeFixture(rootDir, {
+        id: 'bad-mod',
+        level: 'shared',
+        tables: ['items'],
+        // 表名不带 bad_mod_ 前缀（护栏③）：即使已申报，也必须在跑迁移前停住
+        migration: 'CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY);\n',
+      });
+      const fake = makeCfRestFake();
+      let thrown: unknown;
+      try {
+        await runNineSteps({
+          rootDir,
+          workbenchDir: workbenchDirOf(rootDir),
+          client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
+          yes: true,
+          configOverride: { domain: '', modules: [{ id: 'bad-mod', source: 'file:./app/modules/bad-mod' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+          fetchJwks: async () => FIXED_JWKS,
+          http: { smoke: async () => [] },
+          reporter: { step: () => {}, log: () => {} },
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      const message = thrown instanceof Error ? thrown.message : String(thrown);
+      expect(message).toContain('护栏');
+      expect(message).toContain('bad_mod_');
+      // 停住 = 没静默回退到 dedicated/自己的库，也没留下「装了一半」的记账
+      expect(fake.state.ledgerTables.has('unself_migrations_bad_mod')).toBe(false);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -6,6 +6,7 @@ export * from './build-info';
 export * from './spdx';
 export * from './token';
 export * from './validate';
+export * from './shared-guards';
 export * from './messages';
 export * from './lifecycle';
 export * from './lifecycle-schema';
