@@ -24,7 +24,7 @@ import {
   LOGIN_FAILURE_WINDOW_SECONDS,
   recordLoginFailure,
 } from '../services/rate-limit';
-import { pickDisplayName, pickEmail, pickNameOrNull, upsertUser } from '../services/users';
+import { getDisplayName, pickDisplayName, pickEmail, pickNameOrNull, upsertUser } from '../services/users';
 import {
   fakeSaltFor,
   parseStoredCredential,
@@ -287,7 +287,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       return c.json({ error: 'signing key not provisioned (run deploy bootstrap)' }, 503);
     }
     const token = await createSessionToken(
-      { uid, iss: config.issuer, sub: String(result.claims.sub), name },
+      { uid, iss: config.issuer, sub: String(result.claims.sub), name: (await getDisplayName(c.env.CORE_DB, uid)) ?? name },
       secret,
     );
     setCookie(c, SESSION_COOKIE, token, sessionCookieOptions());

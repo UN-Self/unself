@@ -344,6 +344,7 @@ describe('OIDC 登录路由', () => {
       'role',
       'status',
       'created_at',
+      'profile_revision',
     ]);
     const e = { ...oidcEnv(baseEnv), JWT_PRIVATE_KEY: pair.privateKeyPem };
 

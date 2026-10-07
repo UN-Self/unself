@@ -12,10 +12,11 @@ import { registerMemberRoutes } from './routes/members';
 import { registerModuleApiRoutes } from './routes/module-api';
 import { registerModuleRoutes } from './routes/modules';
 import { registerNotificationRoutes } from './routes/notifications';
+import { registerProfileRoutes } from './routes/profile';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerMailTestRoutes } from './routes/mail-test';
 import { registerSetupRoutes } from './routes/setup';
-import { readMailAccess, type CreateMailProvisioner } from './services/members';
+import type { CreateMailProvisioner } from './services/members';
 import type { CreateMailSender } from './services/notifications';
 
 export { getSigningRuntime } from './keys';
@@ -69,23 +70,7 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
 
   app.get('/api/health', (c) => c.json({ ok: true, service: 'workbench' }));
 
-  /**
-   * 当前会话用户（shell 判断登录态 / #10-13 前端用；role 供前端能力判断，真值以服务端为准）。
-   * #168：mailEnabled/mailPortalUrl 供成员态入口与说明页（登录态 + 非敏感，口径同邀请页公开开关）。
-   * #187：登录态与 status 判定由 /api/me 前缀上的会话守卫给出（session/member 来自上下文），
-   * 本处理器只做响应整形；未登录 401、停用/已删 403 的形状由守卫统一。
-   */
-  app.get('/api/me', async (c) => {
-    const session = c.get('session');
-    const member = c.get('member');
-    const mail = await readMailAccess(c.env.CORE_DB);
-    return c.json({
-      authenticated: true,
-      user: { id: session.uid, name: session.name, issuer: session.iss, sub: session.sub, role: member.role },
-      mailEnabled: mail.enabled,
-      mailPortalUrl: mail.portalUrl,
-    });
-  });
+  registerProfileRoutes(app);
 
   // ---------------------------------------------------------------------------
   // 路由域挂载（一域一文件；组合根只做组装，不写业务）

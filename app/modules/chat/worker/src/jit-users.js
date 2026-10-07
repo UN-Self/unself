@@ -35,7 +35,7 @@ export async function jitEnsureUser(db, claims) {
 
   const found = await db
     .prepare(
-      `SELECT id, username, display_name, is_disabled, disabled_until, deleted_at
+      `SELECT id, username, display_name, core_profile_revision, is_disabled, disabled_until, deleted_at
        FROM users
        WHERE username = ?
        LIMIT 1`
@@ -55,12 +55,13 @@ export async function jitEnsureUser(db, claims) {
     return { ok: false, status: 401, message: '账号已停用' };
   }
 
-  // display_name 为空时用 claims.name 回填（一次性，不逐请求 UPDATE）。
-  if (displayName && !String(user.display_name || '').trim()) {
-    db.prepare('UPDATE users SET display_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .bind(displayName, user.id)
-      .run();
-    user.display_name = displayName;
+  // Core 的单调修订号保护展示投影：旧 token 与续期乱序都不能回退昵称。
+  const revision = claims.profile_revision;
+  if (displayName && Number.isSafeInteger(revision) && revision >= 0 && revision > Number(user.core_profile_revision)) {
+    const updated = await db.prepare(
+      'UPDATE users SET display_name = ?, core_profile_revision = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND core_profile_revision < ?'
+    ).bind(displayName, revision, user.id, revision).run();
+    if (updated.meta.changes) user.display_name = displayName;
   }
 
   return {

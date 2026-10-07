@@ -61,6 +61,16 @@ export async function logout(): Promise<void> {
   }
 }
 
+/** 当前成员在 Core 修改昵称；Chat 无独立资料写入口。 */
+export async function updateMyName(name: string): Promise<string> {
+  const result = await request<{ name: string }>('/api/me', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  return result.name
+}
+
 /**
  * 登录整页跳转地址：next 为登录成功后的站内回跳（仅本站绝对路径）。
  * 直访登录页时 next 为空，后端回 /，由工作台落地规则决定第一个启用模块。
