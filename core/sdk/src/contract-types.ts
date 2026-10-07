@@ -106,4 +106,6 @@ export interface ModuleTokenClaims {
   act?: { sub: string };
   /** 会话展示名（可选）。 */
   name?: string;
+  /** Core 资料的单调修订号。 */
+  profile_revision?: number;
 }

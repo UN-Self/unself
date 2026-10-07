@@ -25,7 +25,7 @@ export function pickDisplayName(claims: Record<string, unknown>): string {
 }
 
 /**
- * JIT 建档：issuer+sub 唯一；存在则复用（更新展示名/邮箱），否则插入。
+ * JIT 建档：issuer+sub 唯一；存在则复用（仅空昵称回填，更新邮箱），否则插入。
  * created 供首登消费已批准邀请判定（#49：只在建档时消费，不重复消费）。
  */
 export async function upsertUser(
@@ -40,7 +40,7 @@ export async function upsertUser(
     .first<{ id: string }>();
   if (existing) {
     await db
-      .prepare('UPDATE users SET display_name = ?, email = COALESCE(?, email) WHERE id = ?')
+      .prepare("UPDATE users SET display_name = CASE WHEN display_name IS NULL OR trim(display_name) = '' THEN ? ELSE display_name END, profile_revision = profile_revision + CASE WHEN display_name IS NULL OR trim(display_name) = '' THEN 1 ELSE 0 END, email = COALESCE(?, email) WHERE id = ?")
       .bind(identity.name, email ?? null, existing.id)
       .run();
     return { id: existing.id, created: false };
@@ -51,6 +51,24 @@ export async function upsertUser(
     .bind(id, identity.issuer, identity.sub, identity.name, email ?? null, 'user')
     .run();
   return { id, created: true };
+}
+
+/** 公共展示名只从 Core 读取；会话 Cookie 的 name 可能早于用户改名。 */
+export async function getDisplayName(db: D1Database, userId: string): Promise<string | null> {
+  return (await getProfileIdentity(db, userId))?.name ?? null;
+}
+
+export async function getProfileIdentity(db: D1Database, userId: string): Promise<{ name: string; revision: number } | null> {
+  const row = await db.prepare('SELECT display_name, profile_revision FROM users WHERE id = ? AND status = ?')
+    .bind(userId, 'active').first<{ display_name: string | null; profile_revision: number }>();
+  return row ? { name: row.display_name ?? '', revision: row.profile_revision } : null;
+}
+
+/** 当前用户修改自己的昵称。 */
+export async function updateDisplayName(db: D1Database, userId: string, name: string): Promise<boolean> {
+  const result = await db.prepare('UPDATE users SET display_name = ?, profile_revision = profile_revision + 1 WHERE id = ? AND status = ?')
+    .bind(name, userId, 'active').run();
+  return (result.meta.changes ?? 0) > 0;
 }
 
 /** 把用户提升为管理员（首个管理员诞生，§5.2）。 */

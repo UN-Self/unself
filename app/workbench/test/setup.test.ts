@@ -676,6 +676,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
       'role',
       'status',
       'created_at',
+      'profile_revision',
     ]);
   });
 

@@ -17,7 +17,8 @@
  * - first() 无行回 null，支持 first('col') 单列；行是普通对象（非 null 原型）；
  * - datetime('now') 文本语义由 SQLite 原生保证。
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
@@ -155,7 +156,10 @@ export const SHARED_SCHEMA_BASELINE_PATH = fileURLToPath(
  */
 export function createChatDb(opts: { schemaPath?: string } = {}): ChatTestDb {
   const sqlite = new DatabaseSync(':memory:');
-  sqlite.exec(readFileSync(opts.schemaPath ?? SCHEMA_BASELINE_PATH, 'utf8'));
+  const migrationDir = dirname(opts.schemaPath ?? SCHEMA_BASELINE_PATH);
+  for (const file of readdirSync(migrationDir).filter((name) => name.endsWith('.sql')).sort()) {
+    sqlite.exec(readFileSync(join(migrationDir, file), 'utf8'));
+  }
   return {
     d1: {
       prepare: (sql: string) => new SqliteD1Statement(sqlite, sql),

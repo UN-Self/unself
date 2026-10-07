@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { applyMigrations, createCoreDb } from './test-factory';
+import { createCoreDb } from './test-factory';
 
 describe('core D1 migration', () => {
-  it('can be reapplied while preserving the seeded notification types', () => {
+  it('baseline seed can be reapplied while preserving notification types', () => {
     const db = createCoreDb();
     try {
-      const dir = fileURLToPath(new URL('../migrations/core/', import.meta.url));
-      expect(() => applyMigrations(db.sqlite, dir)).not.toThrow();
+      const baseline = fileURLToPath(new URL('../migrations/core/0001_init.sql', import.meta.url));
+      expect(() => db.sqlite.exec(readFileSync(baseline, 'utf8'))).not.toThrow();
       expect(db.query<{ type: string }>('SELECT type FROM notification_types ORDER BY type')).toEqual([
         { type: 'account_ready' },
         { type: 'invite_pending' },

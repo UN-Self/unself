@@ -9,6 +9,7 @@ import { listModules, ModuleRegistrationSchema, registryFrameOrigins, toggleModu
 import { audit } from '../services/audit';
 import { configuredMailSender, deliverNotification } from '../services/notifications';
 import { readSession } from '../session';
+import { getProfileIdentity } from '../services/users';
 import type { Bindings } from '../index';
 
 /**
@@ -68,9 +69,10 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
     if (!runtime) {
       return c.json({ error: 'signing key not provisioned (run deploy bootstrap)' }, 503);
     }
+    const profile = await getProfileIdentity(c.env.CORE_DB, session.uid);
     const issued = await issueModuleToken(
       runtime,
-      { userId: session.uid, moduleId, name: session.name },
+      { userId: session.uid, moduleId, name: profile?.name ?? session.name, profileRevision: profile?.revision },
       { issuer: MODULE_TOKEN_ISSUER },
     );
     return c.json(issued);

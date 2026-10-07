@@ -5,7 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import App from './App.vue'
-import { fetchMe, logout } from './lib/session-api'
+import { fetchMe, logout, updateMyName } from './lib/session-api'
 import { fetchEnabledModules } from './lib/registry-api'
 import { fetchModuleToken } from './lib/token-api'
 import { HANDSHAKE_TIMEOUT_MS } from './lib/use-module-frame'
@@ -57,6 +57,7 @@ vi.mock('./lib/session-api', () => ({
   }),
   loginUrl: (next?: string) => `/api/auth/login${next ? `?next=${encodeURIComponent(next)}` : ''}`,
   logout: vi.fn().mockResolvedValue(undefined),
+  updateMyName: vi.fn().mockResolvedValue('新昵称'),
 }))
 
 vi.mock('./lib/registry-api', async (importOriginal) => {
@@ -65,6 +66,27 @@ vi.mock('./lib/registry-api', async (importOriginal) => {
     ...actual,
     fetchEnabledModules: vi.fn().mockResolvedValue([MODULE]),
   }
+})
+
+describe('Core 昵称编辑', () => {
+  it('保存后更新工作台昵称并重挂当前模块', async () => {
+    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '旧昵称' }))
+    vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
+    vi.mocked(updateMyName).mockResolvedValue('新昵称')
+    const wrapper = await mountApp()
+    await settle()
+    const oldFrame = wrapper.find('iframe').element
+
+    await wrapper.find('[aria-label="修改昵称"]').trigger('click')
+    await wrapper.find('#profile-name').setValue('新昵称')
+    await wrapper.find('.profile-dialog').trigger('submit')
+    await settle()
+
+    expect(updateMyName).toHaveBeenCalledWith('新昵称')
+    expect(wrapper.find('[data-test="user-name"]').text()).toBe('新昵称')
+    expect(wrapper.find('iframe').element).not.toBe(oldFrame)
+    wrapper.unmount()
+  })
 })
 
 vi.mock('./lib/token-api', () => ({

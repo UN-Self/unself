@@ -24,6 +24,8 @@ export const ModuleTokenClaimsSchema = z.object({
   act: z.object({ sub: z.string() }).optional(),
   /** 会话展示名（可选；身份行展示用，避免前端再走一次用户查询）。 */
   name: z.string().optional(),
+  /** Core 资料的单调修订号；模块用它拒绝旧 token 回退展示资料。 */
+  profile_revision: z.number().int().nonnegative().optional(),
 });
 
 export type ModuleTokenClaims = z.infer<typeof ModuleTokenClaimsSchema>;
