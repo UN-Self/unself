@@ -29,6 +29,7 @@ export interface Channel {
   canManage: boolean
   memberCount: number
   lastMessageAt: string | null
+  lastMessagePreview?: string | null
   unreadCount: number
   mentionUnreadCount: number
 }
@@ -52,6 +53,7 @@ export interface Dm {
   kind: 'dm'
   name: string
   lastMessageAt: string | null
+  lastMessagePreview?: string | null
   unreadCount: number
   mentionUnreadCount: number
   otherUser: UserSummary

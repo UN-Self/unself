@@ -59,7 +59,7 @@ export function registerChannelRoutes(app) {
   app.get('/api/channels', async (c) => {
     const session = c.get('session');
     await ensureGeneralChannelMembership(c.env.DB, session.userId);
-    const channels = await listVisibleChannels(c.env.DB, session.userId);
+    const channels = await listVisibleChannels(c.env.DB, session.userId, c.env);
     return c.json({
       channels,
       publicChannels: channels.filter((channel) => channel.kind === 'public'),

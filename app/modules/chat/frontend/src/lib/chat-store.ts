@@ -235,7 +235,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     state.readReceipts[messageId] = { count: 1, readBy: [{ userId, username: '', displayName: '', readAt }] }
   }
 
-  const findRoomList = (room: RoomKey): { unreadCount: number; mentionUnreadCount: number } | null => {
+  const findRoomList = (room: RoomKey): Channel | Dm | null => {
     if (room.kind === 'dm') return state.dms.find((d) => d.id === room.id) ?? null
     return state.channels.find((c) => c.id === room.id) ?? null
   }
@@ -252,6 +252,14 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     if (!rememberMessage(message)) return
     if (message.sender.id === state.myUserId) mySentMessageIds.add(message.id)
     state.messages.push(message)
+    const room = state.currentRoom
+    if (room) {
+      const entry = findRoomList(room)
+      if (entry) {
+        entry.lastMessageAt = message.createdAt
+        entry.lastMessagePreview = message.content.trim() || (message.attachment?.kind === 'voice' ? '[语音]' : message.attachment ? `[附件] ${message.attachment.name}` : '')
+      }
+    }
     oldestMessageId = Math.min(oldestMessageId, message.id)
   }
 
@@ -464,8 +472,13 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       if (state.currentRoom && roomKeyString(state.currentRoom) === roomKeyString(room)) return
       const entry = findRoomList(room)
       if (!entry) return
-      entry.unreadCount += 1
-      if (frame.mentionsMe) entry.mentionUnreadCount += 1
+      entry.unreadCount = frame.unreadCount
+      entry.mentionUnreadCount = Math.max(
+        frame.mentionUnreadCount ?? 0,
+        entry.mentionUnreadCount + (frame.mentionsMe ? 1 : 0),
+      )
+      entry.lastMessageAt = frame.createdAt
+      entry.lastMessagePreview = frame.contentPreview || (frame.sender.displayName ? `${frame.sender.displayName} 发来一条消息` : '新消息')
     },
 
     closeSockets: () => {
@@ -533,20 +546,13 @@ export function attachInboxSocket(
 }
 
 function openInbox(api: ChatApi, token: string, store: ChatStore): { close(): void } {
-  // 收件箱与房间共用 /api/ws/:kind/:id 面；上游有独立 /api/inbox/ws，
-  // 本阶段前端先挂 general 频道的房间连接充当全屋广播（#216 未定 inbox 端点，缺口已记录回报）。
-  const handle = api.openRoomSocket({
-    kind: 'public',
-    roomId: 1,
+  const handle = api.openInboxSocket({
     token,
     onStatus: () => {},
     onMessage: (frame) => {
       const parsed = frame as WsRoomMessageNotice | { type: string }
       if ((parsed as WsRoomMessageNotice).type === 'room_message') {
         store.receiveInboxFrame(parsed as WsRoomMessageNotice)
-      } else if ((parsed as { type: string; message?: unknown }).type === 'message') {
-        // 房间广播帧在收件箱挂载点也会到达：交给 store 的去重通道
-        store.receiveRoomFrame(parsed as RoomFrame)
       }
     },
   })

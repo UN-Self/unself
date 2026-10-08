@@ -2,6 +2,7 @@
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/data/channels.js（GPL-3.0-only，裁剪版）
 import { userAvatarUrl } from "../profile-avatar.js";
 import { publicFileUrl } from "../utils.js";
+import { messagePreview } from './message-preview.js';
 
 function mapVisibleChannel(row) {
 	return {
@@ -42,12 +43,18 @@ function mapAdminChannel(row, includeAvatar) {
 	return channel;
 }
 
-export async function listVisibleChannels(db, userId) {
+export async function listVisibleChannels(db, userId, env) {
 	const normalizedUserId = Number(userId);
 	const { results } = await db
 		.prepare(
 				`SELECT
 				   c.id, c.name, c.description, c.avatar_key, c.kind,
+				   latest.id AS last_message_id, latest.content AS last_message_content,
+				   latest.sender_id AS last_message_sender_id, latest.sender_kind AS last_message_sender_kind,
+				   latest.source AS last_message_source, latest.external_sender_id AS last_message_external_sender_id,
+				   latest.attachment_key AS last_message_attachment_key,
+				   latest.attachment_name AS last_message_attachment_name,
+				   latest.attachment_kind AS last_message_attachment_kind,
 				   CASE WHEN c.name = 'general' THEN 1 ELSE 0 END AS is_general,
 			   owner.display_name AS owner_display_name,
 			   EXISTS (SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ?) AS is_member,
@@ -76,6 +83,7 @@ export async function listVisibleChannels(db, userId) {
 					     ELSE 0 END AS attention_unread_count
 				 FROM channels c
 			 LEFT JOIN users owner ON owner.id = c.created_by
+			 LEFT JOIN messages latest ON latest.id = (SELECT m.id FROM messages m WHERE m.channel_id = c.id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1)
 			 WHERE c.kind IN ('public', 'private')
 			   AND c.deleted_at IS NULL
 				   AND (c.kind = 'public' OR EXISTS (SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ?))
@@ -99,7 +107,7 @@ export async function listVisibleChannels(db, userId) {
 				normalizedUserId,
 			)
 		.all();
-	return results.map(mapVisibleChannel);
+	return Promise.all(results.map(async (row) => ({ ...mapVisibleChannel(row), lastMessagePreview: Number(row.is_member) ? await messagePreview(env, row) : null })));
 }
 
 export async function listAdminChannels(db, { includeAvatar = true } = {}) {

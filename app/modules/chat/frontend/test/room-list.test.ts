@@ -94,8 +94,10 @@ describe('RoomList（#218）', () => {
   })
 
   it('私聊行显示对方昵称', () => {
-    const wrapper = mountList({ dms: [dm()] })
+    const wrapper = mountList({ dms: [dm({ lastMessagePreview: '最新消息' })] })
     expect(wrapper.text()).toContain('Alice')
+    expect(wrapper.text()).toContain('最新消息')
+    expect(wrapper.text()).not.toContain('@alice')
     wrapper.unmount()
   })
 

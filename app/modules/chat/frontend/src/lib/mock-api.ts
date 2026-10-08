@@ -427,6 +427,13 @@ export function createMockChatApi(
       },
     }
   }
+  api.openInboxSocket = (handlers) => api.openRoomSocket({
+    kind: 'public',
+    roomId: 1,
+    token: handlers.token,
+    onStatus: handlers.onStatus,
+    onMessage: handlers.onMessage,
+  })
 
   return api
 }

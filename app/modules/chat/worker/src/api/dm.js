@@ -10,7 +10,7 @@ import { activeUserSql } from '../user-status.js';
 export function registerDmRoutes(app) {
   app.get('/api/dm', async (c) => {
     const session = c.get('session');
-    const dms = await listUserDms(c.env.DB, session.userId);
+    const dms = await listUserDms(c.env.DB, session.userId, c.env);
     return c.json({ dms });
   });
 
