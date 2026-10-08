@@ -93,6 +93,26 @@ describe('ChatLayout 布局切换（#218）', () => {
     wrapper.unmount()
   })
 
+  it('新消息面板可以选择成员并提交新建群组', async () => {
+    const wrapper = mount(ChatLayout, {
+      props: {
+        channels: [channel], dms: [],
+        contacts: [{ id: 9, username: 'alice', displayName: 'Alice', avatarUrl: '' }],
+        activeRoom: null, messages: [], currentUserId: 1,
+        loadingRooms: false, loadingMessages: false, loadingEarlier: false, noEarlier: false,
+      },
+    })
+    await wrapper.find('[aria-label="新建私聊"]').trigger('click')
+    await wrapper.find('[role="menuitem"]:last-child').trigger('click')
+    await wrapper.get('[data-test="group-name"]').setValue('项目讨论群')
+    await wrapper.find('.chat-member-option').trigger('click')
+    const createButton = wrapper.findAll('button').find((button) => button.text() === '创建群组')
+    expect(createButton).toBeDefined()
+    await createButton!.trigger('click')
+    expect(wrapper.emitted('create-group')).toEqual([[{ name: '项目讨论群', memberUserIds: [9] }]])
+    wrapper.unmount()
+  })
+
   it('桌面（matchMedia false）双栏：列表与消息流同屏', async () => {
     const wrapper = mount(ChatLayout, {
       props: {

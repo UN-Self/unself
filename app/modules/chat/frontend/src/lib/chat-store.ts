@@ -77,6 +77,9 @@ export interface ChatStore {
   loadDms(): Promise<void>
   /** 创建或复用与指定成员的私聊，并打开会话。 */
   openDm(userId: number): Promise<void>
+  createChannel(input: { name: string; description?: string; kind?: 'public' | 'private'; memberUserIds: number[] }): Promise<void>
+  inviteChannelMembers(channelId: number, userIds: number[]): Promise<void>
+  listChannelMembers(channelId: number): Promise<import('./types').ChannelMember[]>
   loadContacts(): Promise<void>
   /** 打开会话：拉历史 + 清未读 + 记忆偏好 + 建房 socket。 */
   openRoom(room: RoomKey, displayName: string): Promise<void>
@@ -287,6 +290,22 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       else state.dms.unshift(result.dm)
       await store.openRoom({ kind: 'dm', id: result.dm.id }, result.dm.otherUser.displayName || result.dm.name)
     },
+
+    createChannel: async (input) => {
+      const result = await api.createChannel(input)
+      const existing = state.channels.findIndex((channel) => channel.id === result.channel.id)
+      if (existing >= 0) state.channels.splice(existing, 1, result.channel)
+      else state.channels.unshift(result.channel)
+      await store.openRoom({ kind: result.channel.kind, id: result.channel.id }, result.channel.name)
+    },
+
+    inviteChannelMembers: async (channelId, userIds) => {
+      const result = await api.inviteChannelMembers(channelId, userIds)
+      const channel = state.channels.find((item) => item.id === channelId)
+      if (channel) channel.memberCount = result.members.length
+    },
+
+    listChannelMembers: async (channelId) => (await api.listChannelMembers(channelId)).members,
 
     loadContacts: async () => {
       const result = await api.listContacts()

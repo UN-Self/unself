@@ -480,7 +480,7 @@ const replyPreview = computed(() => {
       />
 
       <button
-        v-if="!recording"
+        v-if="!recording && text.trim().length === 0"
         type="button"
         class="composer-icon-btn"
         data-test="record-start"
@@ -492,6 +492,7 @@ const replyPreview = computed(() => {
         <Mic :size="18" aria-hidden="true" />
       </button>
       <UButton
+        v-show="text.trim().length > 0"
         variant="primary"
         size="sm"
         type="button"
@@ -517,7 +518,7 @@ const replyPreview = computed(() => {
   position: relative;
   display: flex;
   align-items: flex-end;
-  gap: var(--unself-space-2);
+  gap: var(--unself-space-1);
   padding: 0;
 }
 .composer-emoji-wrap {
@@ -581,8 +582,9 @@ const replyPreview = computed(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--unself-touch-target);
-  min-height: var(--unself-touch-target);
+  width: 40px;
+  min-width: 40px;
+  min-height: 40px;
   border: none;
   border-radius: var(--unself-radius-full);
   background: transparent;
@@ -608,6 +610,7 @@ const replyPreview = computed(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 40px;
   min-width: 40px;
   min-height: 40px;
   padding: 0;

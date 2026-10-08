@@ -33,6 +33,11 @@ export interface Channel {
   mentionUnreadCount: number
 }
 
+export interface ChannelMember extends UserSummary {
+  role: string
+  joinedAt?: string
+}
+
 /** 用户摘要（/api/contacts 出参项，上游 mapUserSummary）。 */
 export interface UserSummary {
   id: number

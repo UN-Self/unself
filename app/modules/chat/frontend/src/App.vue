@@ -5,12 +5,13 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import ChatLayout from './components/ChatLayout.vue'
 import Composer from './components/Composer.vue'
 import ReadReceipts from './components/ReadReceipts.vue'
+import GroupDetails from './components/GroupDetails.vue'
 import { createChatApi, type ChatApi } from './lib/api'
 import { createChatStore, roomKeyString } from './lib/chat-store'
 import { createMockChatApi } from './lib/mock-api'
 import { createChatSession, userIdFromToken } from './lib/session'
 import { createChatStorage } from './lib/storage'
-import type { Message, RoomKind, UserSummary } from './lib/types'
+import type { ChannelMember, Message, RoomKind, UserSummary } from './lib/types'
 
 /**
  * 聊天模块根视图（#218 T5 合成）：mock/live 双模式接线。
@@ -103,6 +104,10 @@ const activeRoom = computed(() => {
 })
 
 const contacts = computed<UserSummary[]>(() => store.state.contacts)
+const groupDetailsOpen = ref(false)
+const groupMembers = ref<ChannelMember[]>([])
+const groupDetailsError = ref('')
+const groupDetailsBusy = ref(false)
 
 function onSelect(room: { kind: RoomKind; id: number }): void {
   void store.openRoom(room, displayNameFor(room))
@@ -114,9 +119,44 @@ function onOpenDm(userId: number): void {
   })
 }
 
+function onCreateGroup(input: { name: string; memberUserIds: number[] }): void {
+  void store.createChannel({ ...input, kind: 'private' }).catch((error) => {
+    store.state.historyError = error instanceof Error ? error.message : String(error)
+  })
+}
+
 function onBack(): void {
   store.closeSockets()
   store.state.currentRoom = null
+}
+
+async function onOpenGroupDetails(): Promise<void> {
+  const room = store.state.currentRoom
+  if (!room || room.kind === 'dm') return
+  groupDetailsOpen.value = true
+  groupDetailsError.value = ''
+  groupDetailsBusy.value = true
+  try {
+    groupMembers.value = await store.listChannelMembers(room.id)
+  } catch (error) {
+    groupDetailsError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    groupDetailsBusy.value = false
+  }
+}
+
+async function onInviteMembers(userIds: number[]): Promise<void> {
+  const room = store.state.currentRoom
+  if (!room || room.kind === 'dm') return
+  groupDetailsBusy.value = true
+  try {
+    await store.inviteChannelMembers(room.id, userIds)
+    groupMembers.value = await store.listChannelMembers(room.id)
+  } catch (error) {
+    groupDetailsError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    groupDetailsBusy.value = false
+  }
 }
 
 // ---------- #220 已读回执：可见性上报 + 名单浮层 ----------
@@ -254,6 +294,8 @@ const contextKey = computed(() =>
       @load-earlier="onLoadEarlier"
       @show-receipts="onShowReceipts"
       @visible-read="onVisibleRead"
+      @create-group="onCreateGroup"
+      @open-group-details="onOpenGroupDetails"
     >
       <template #composer>
         <Composer
@@ -282,6 +324,18 @@ const contextKey = computed(() =>
       :audience-size="audienceSize"
       :room-name="store.state.roomName"
       @close="closeReceipts"
+    />
+
+    <GroupDetails
+      v-if="groupDetailsOpen && activeRoom && activeRoom.kind !== 'dm'"
+      :name="activeRoom.name"
+      :members="groupMembers"
+      :contacts="contacts"
+      :can-manage="store.state.channels.find((channel) => channel.id === activeRoom?.id)?.canManage ?? false"
+      :busy="groupDetailsBusy"
+      :error="groupDetailsError"
+      @close="groupDetailsOpen = false"
+      @invite="onInviteMembers"
     />
 
     <div v-if="!handshakeError && !handshakeReady" class="chat-root-boot" data-test="handshaking" aria-busy="true">
