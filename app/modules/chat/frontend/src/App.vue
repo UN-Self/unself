@@ -7,7 +7,7 @@ import Composer from './components/Composer.vue'
 import ReadReceipts from './components/ReadReceipts.vue'
 import GroupDetails from './components/GroupDetails.vue'
 import { createChatApi, type ChatApi } from './lib/api'
-import { createChatStore, roomKeyString } from './lib/chat-store'
+import { attachInboxSocket, createChatStore, roomKeyString } from './lib/chat-store'
 import { createMockChatApi } from './lib/mock-api'
 import { createChatSession, userIdFromToken } from './lib/session'
 import { createChatStorage } from './lib/storage'
@@ -28,6 +28,7 @@ const storage = createChatStorage()
 
 // 先建占位引用（装配顺序：session 回调 → store；见下方接线）
 let storeRef: ReturnType<typeof createChatStore> | null = null
+let inboxHandle: { close(): void } | null = null
 const session = createChatSession({
   // #220/#225 live 接线：静默续期拿到新 token → 房间 socket 发 token_refresh 控制帧换绑
   onTokenRenewed: (token) => {
@@ -65,6 +66,7 @@ async function bootstrap(): Promise<void> {
   try {
     await session.handshake()
     handshakeReady.value = true
+    inboxHandle = attachInboxSocket(store, chatApi, () => session.getToken())
     // #229：token 到位后重算本人身份（此前一次性求值早于握手 → live 恒 0）。
     // contacts 未载入时解析结果仍为 0，载入完成后（loadContacts 内）再重算一次。
     store.refreshMyUserId()
@@ -84,6 +86,8 @@ async function bootstrap(): Promise<void> {
 void bootstrap()
 
 onBeforeUnmount(() => {
+  inboxHandle?.close()
+  inboxHandle = null
   store.closeSockets()
   session.dispose()
 })
