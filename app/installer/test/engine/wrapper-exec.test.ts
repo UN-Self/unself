@@ -49,7 +49,7 @@ async function loadWrapper(options: {
   /** ASSETS.fetch 命中表：路径 → 完整 ResponseInit（status/headers，含 content-type；#277 注入判定用）。 */
   assetInits?: Record<string, ResponseInit>;
   /** 假 worker 响应开关（#277）：'json'（缺省，现有断言不变）或 'html'（回落 worker 渲染模块页场景）。 */
-  workerResponse?: 'json' | 'html';
+  workerResponse?: 'json' | 'html' | 'websocket';
   /** 要由 wrapper 从 app.js 转导的 ESM 具名导出。 */
   namedExports?: string[];
 }): Promise<{
@@ -73,6 +73,9 @@ async function loadWrapper(options: {
   const workerBodyExpr = workerResponseKind === 'html'
     ? JSON.stringify('<!doctype html><html><head><title>module</title></head><body>worker page</body></html>')
     : `JSON.stringify({ worker: true, pathname: url.pathname })`;
+  const workerResponseExpr = workerResponseKind === 'websocket'
+    ? `({ status: 101, webSocket: { __fakeWebSocket: true }, headers: new Headers() })`
+    : `new Response(${workerBodyExpr}, { status: 200, headers: { 'content-type': '${workerResponseContentType}' } })`;
   await writeFile(
     join(dir, 'app.js'),
     `import { recorder } from './recorder.mjs';
@@ -87,7 +90,7 @@ export default {
     }
     const upgrade = request.headers.get('upgrade');
     recorder.workerCalls.push({ pathname: url.pathname, method: request.method, body, ...(upgrade ? { upgrade } : {}) });
-    return new Response(${workerBodyExpr}, { status: 200, headers: { 'content-type': '${workerResponseContentType}' } });
+    return ${workerResponseExpr};
   },
 };
 export class ChannelRoom {}
@@ -197,6 +200,16 @@ describe('prefixStripWrapper 真实执行（资产分支 / 预取 / duplex，T5�
     expect(w.workerCalls).toEqual([
       { pathname: '/api/inbox/ws', method: 'GET', body: null, upgrade: 'websocket' },
     ]);
+  });
+
+  it('WebSocket 101 响应：保留 runtime webSocket 对象，不被壳上下文包装重建', async () => {
+    const w = await loadWrapper({ moduleId: 'chat', shellOrigin: 'https://shell.example', workerResponse: 'websocket' });
+    const res = await w.fetch('/m/chat/api/inbox/ws?token=test', {
+      method: 'GET',
+      headers: { Upgrade: 'websocket', Connection: 'Upgrade' },
+    });
+    expect(res.status).toBe(101);
+    expect((res as unknown as { webSocket: { __fakeWebSocket: boolean } }).webSocket.__fakeWebSocket).toBe(true);
   });
 
   it('非 GET（POST 到资产形路径）不走资产分支：isAsset 判定含 method === GET', async () => {

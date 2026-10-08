@@ -483,6 +483,9 @@ const BODYLESS = [101, 204, 205, 304];
 //   幂等只豁免 meta 插入（已含则不重复插）；frame-ancestors 照补、失真标头照删。
 async function withShellContext(res) {
   if (!SHELL_ORIGIN) return res;
+  // WebSocket 握手响应必须原样返回。重新构造 101 Response 会丢失
+  // Cloudflare runtime 注入的 webSocket 对象，浏览器随后把握手判为失败。
+  if (res.status === 101) return res;
   const headers = new Headers(res.headers);
   const contentType = headers.get('Content-Type') || '';
   const nullBody = BODYLESS.includes(res.status);
