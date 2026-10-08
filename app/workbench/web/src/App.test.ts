@@ -356,6 +356,28 @@ describe('App.vue 退出登录行为', () => {
     expect(logout).not.toHaveBeenCalled()
     wrapper.unmount()
   })
+
+  it('手机端从动作单打开昵称弹窗后，关闭时焦点回到仍存在的「我的」标签', async () => {
+    const wrapper = await mountAs(SHORT_NAME, true)
+    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')!
+    ;(meTab.element as HTMLElement).focus()
+    await meTab.trigger('click')
+    await flushPromises()
+
+    const profileButton = wrapper.find('.shell-sheet-profile')
+    ;(profileButton.element as HTMLElement).focus()
+    expect(document.activeElement).toBe(profileButton.element)
+    await profileButton.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.profile-dialog').exists()).toBe(true)
+    expect(wrapper.find('[data-test="me-sheet"]').exists()).toBe(false)
+
+    await wrapper.find('.profile-dialog [aria-label="关闭"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.profile-dialog').exists()).toBe(false)
+    expect(document.activeElement).toBe(meTab.element)
+    wrapper.unmount()
+  })
 })
 
 /**

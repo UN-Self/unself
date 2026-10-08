@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, type ComponentPublicInstance } from 'vue'
 import { LogOut, LayoutDashboard, KeyRound, Pencil, ShieldCheck, User, X } from 'lucide-vue-next'
 import { RouterLink } from 'vue-router'
 import { UButton, UErrorCard, USkeleton } from '@unself/ui'
@@ -39,11 +39,22 @@ const profileName = ref('')
 const profileSaving = ref(false)
 const profileError = ref('')
 const profileDialog = ref<HTMLElement | null>(null)
-const { onKeydown: onProfileKeydown } = useLayerFocus(profileOpen, () => profileDialog.value)
+const meTab = ref<HTMLElement | null>(null)
+const profileFromSheet = ref(false)
+const { onKeydown: onProfileKeydown } = useLayerFocus(
+  profileOpen,
+  () => profileDialog.value,
+  () => profileFromSheet.value ? meTab.value : null,
+)
+
+function setMeTab(element: Element | ComponentPublicInstance | null) {
+  meTab.value = (element as HTMLElement | null)
+}
 
 function openProfile() {
   profileName.value = user.value?.name ?? ''
   profileError.value = ''
+  profileFromSheet.value = sheetOpen.value
   sheetOpen.value = false
   profileOpen.value = true
 }
@@ -296,6 +307,7 @@ function onTabClick(item: NavItem) {
         type="button"
         class="shell-tab"
         :data-test="item.id === ME_TAB.id ? 'me-tab' : 'module-tab'"
+        :ref="item.id === ME_TAB.id ? setMeTab : undefined"
         :class="{ 'shell-tab-active': selectedId === item.id }"
         :aria-current="selectedId === item.id ? 'page' : undefined"
         :aria-haspopup="item.id === ME_TAB.id ? 'dialog' : undefined"

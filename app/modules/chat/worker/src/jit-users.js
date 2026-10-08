@@ -61,7 +61,20 @@ export async function jitEnsureUser(db, claims) {
     const updated = await db.prepare(
       'UPDATE users SET display_name = ?, core_profile_revision = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND core_profile_revision < ?'
     ).bind(displayName, revision, user.id, revision).run();
-    if (updated.meta.changes) user.display_name = displayName;
+    if (updated.meta.changes) {
+      user.display_name = displayName;
+      user.core_profile_revision = revision;
+    } else {
+      // Another request may have committed a newer Core profile after the initial read.
+      // Re-read so this request never returns the stale value it observed before the race.
+      const current = await db.prepare(
+        'SELECT display_name, core_profile_revision FROM users WHERE id = ?'
+      ).bind(user.id).first();
+      if (current) {
+        user.display_name = current.display_name;
+        user.core_profile_revision = current.core_profile_revision;
+      }
+    }
   }
 
   return {

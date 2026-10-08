@@ -23,4 +23,51 @@ describe('Chat 使用 Core 昵称展示投影', () => {
     sqlite.close();
   });
 
+  it('条件更新落空时重读，返回并发请求已经提交的昵称', async () => {
+    const sqlite = new DatabaseSync(':memory:');
+    applyMigrations(sqlite, fileURLToPath(new URL('../migrations/chat/', import.meta.url)));
+    const real = createD1Adapter(sqlite);
+    let profileRead = false;
+    const db = {
+      prepare(sql: string) {
+        if (sql.startsWith('SELECT id, username, display_name')) {
+          return {
+            bind(...values: unknown[]) {
+              const statement = real.prepare(sql).bind(...values);
+              return {
+                all: async () => {
+                  const result = await statement.all();
+                  if (!profileRead && result.results[0]) {
+                    profileRead = true;
+                    result.results[0].display_name = '旧昵称';
+                    result.results[0].core_profile_revision = 0;
+                  }
+                  return result;
+                },
+              };
+            },
+          };
+        }
+        if (sql.startsWith('UPDATE users SET display_name')) {
+          return {
+            bind() {
+              return {
+                run: async () => {
+                  sqlite.prepare('UPDATE users SET display_name = ?, core_profile_revision = ? WHERE username = ?')
+                    .run('并发新昵称', 2, 'core:u_race');
+                  return { meta: { changes: 0 } };
+                },
+              };
+            },
+          };
+        }
+        return real.prepare(sql);
+      },
+    };
+
+    const result = await jitEnsureUser(db, { iss: 'unself-core', sub: 'u_race', name: '请求昵称', profile_revision: 1 });
+    expect(result).toMatchObject({ ok: true, user: { displayName: '并发新昵称' } });
+    sqlite.close();
+  });
+
 });
