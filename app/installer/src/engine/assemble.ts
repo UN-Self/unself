@@ -539,9 +539,11 @@ export default {
     }
     // 模块代码按「部署在根路径」编写：剥掉挂载前缀
     url.pathname = path;
-    const headers = new Headers(request.headers);
-    // Hono 实例是对象非函数：走 .fetch（与 core 入口同款调用约定）
-    const res = await worker.fetch(new Request(url, { method: request.method, headers, body: request.body, duplex: 'half' }), env, ctx);
+    // Hono 实例是对象非函数：走 .fetch（与 core 入口同款调用约定）。
+    // 以原 Request 作为 init 保留 WebSocket upgrade 元数据；只复制
+    // method/headers/body 会让 Durable Object 看不到 Upgrade 并返回 426。
+    const forwarded = new Request(url, request);
+    const res = await worker.fetch(forwarded, env, ctx);
     return withShellContext(res);
   },
 };
