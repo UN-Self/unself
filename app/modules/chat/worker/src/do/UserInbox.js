@@ -28,7 +28,8 @@ export class UserInbox {
     if (health) return health;
     const url = new URL(request.url);
 
-    if (url.pathname === '/connect') {
+    // 直连部署会把浏览器原始路径直接转发到 DO；本地/旧内部调用仍使用 /connect。
+    if (url.pathname === '/connect' || url.pathname === '/api/inbox/ws') {
       const userId = parseVerifiedUserId(request);
       if (!userId) {
         return new Response('Unauthorized', { status: 401 });
