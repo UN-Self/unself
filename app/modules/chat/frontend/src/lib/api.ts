@@ -13,6 +13,7 @@
 import type {
   Attachment,
   Channel,
+  ChannelMember,
   Dm,
   Message,
   MessagesPage,
@@ -96,6 +97,9 @@ export interface ChatApi {
   listDms(): Promise<{ dms: Dm[] }>
   openDm(userId: number): Promise<OpenDmResult>
   joinChannel(channelId: number): Promise<{ ok: true }>
+  createChannel(input: { name: string; description?: string; kind?: 'public' | 'private'; memberUserIds: number[] }): Promise<{ channel: Channel }>
+  listChannelMembers(channelId: number): Promise<{ members: ChannelMember[] }>
+  inviteChannelMembers(channelId: number, userIds: number[]): Promise<{ members: ChannelMember[] }>
   getMessages(kind: RoomKind, roomId: number, before?: number | null): Promise<MessagesPage>
   /** 已读上报（#220）：HTTP 批量端点，幂等；空数组不发请求。 */
   reportMessagesRead(kind: RoomKind, roomId: number, messageIds: number[]): Promise<void>
@@ -224,6 +228,9 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
     listDms: () => get<{ dms: Dm[] }>('/dm'),
     openDm: (userId) => postJson<OpenDmResult>('/dm/open', { userId }),
     joinChannel: (channelId) => postJson<{ ok: true }>(`/channels/${channelId}/join`, {}),
+    createChannel: (input) => postJson<{ channel: Channel }>('/channels', input),
+    listChannelMembers: (channelId) => get<{ members: ChannelMember[] }>(`/channels/${channelId}/members`),
+    inviteChannelMembers: (channelId, userIds) => postJson<{ members: ChannelMember[] }>(`/channels/${channelId}/invite`, { userIds }),
     getMessages: (kind, roomId, before) =>
       get<MessagesPage>(`/messages${query({ kind, roomId, before: before ?? undefined })}`),
     // #220 已读上报走 HTTP（决策：回执批量/幂等语义在 REST 端点闭环，socket 只收广播）

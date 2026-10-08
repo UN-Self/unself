@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
-import { ArrowLeft, Hash, Lock, UserPlus } from 'lucide-vue-next'
+import { ArrowLeft, Hash, Lock, UserPlus, Users, X } from 'lucide-vue-next'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import MessageList from './MessageList.vue'
@@ -55,7 +55,34 @@ const emit = defineEmits<{
   /** 他人消息进入视口 → 根层批量上报已读（#220）。 */
   'visible-read': [messageIds: number[]]
   'open-dm': [userId: number]
+  'create-group': [input: { name: string; memberUserIds: number[] }]
+  'open-group-details': []
 }>()
+
+const newMessageOpen = ref(false)
+const contactQuery = ref('')
+const filteredContacts = computed(() => props.contacts.filter((contact) =>
+  `${contact.displayName} ${contact.username}`.toLowerCase().includes(contactQuery.value.trim().toLowerCase()),
+))
+const groupOpen = ref(false)
+const groupName = ref('')
+const selectedMemberIds = ref<number[]>([])
+
+function toggleMember(userId: number): void {
+  selectedMemberIds.value = selectedMemberIds.value.includes(userId)
+    ? selectedMemberIds.value.filter((id) => id !== userId)
+    : [...selectedMemberIds.value, userId]
+}
+
+function submitGroup(): void {
+  const name = groupName.value.trim()
+  if (!name) return
+  emit('create-group', { name, memberUserIds: [...selectedMemberIds.value] })
+  groupName.value = ''
+  selectedMemberIds.value = []
+  groupOpen.value = false
+  newMessageOpen.value = false
+}
 
 /** 响应式窄屏判定：跟随 matchMedia 翻转并回调；无 matchMedia 环境降级恒 false（桌面布局）。 */
 function useNarrow(onChange: (narrow: boolean) => void): { matches: boolean; dispose: () => void } {
@@ -114,20 +141,28 @@ const roomIcon = computed(() => {
     <section v-if="showListPane" class="chat-list" data-test="list-pane">
       <header class="chat-list-head">
         <span class="chat-title">聊天</span>
-        <details v-if="contacts.length" class="chat-new-dm">
-          <summary aria-label="新建私聊" title="新建私聊"><UserPlus :size="16" aria-hidden="true" /></summary>
-          <div class="chat-new-dm-menu" role="menu" aria-label="选择私聊成员">
+        <button type="button" class="chat-new-message" data-test="new-message" aria-label="新建私聊" @click="newMessageOpen = !newMessageOpen">
+          <UserPlus :size="17" aria-hidden="true" />
+          <span>新消息</span>
+        </button>
+        <div v-if="newMessageOpen" class="chat-new-message-menu" role="menu" aria-label="新消息">
+          <p class="chat-menu-label">新建对话</p>
+          <input v-model="contactQuery" class="chat-contact-search" aria-label="搜索联系人" placeholder="搜索联系人" />
             <button
-              v-for="contact in contacts"
+              v-for="contact in filteredContacts"
               :key="contact.id"
               type="button"
               role="menuitem"
-              @click="emit('open-dm', contact.id)"
+              @click="emit('open-dm', contact.id); newMessageOpen = false"
             >
+              <span class="chat-contact-avatar">{{ (contact.displayName || contact.username).slice(0, 1) }}</span>
               {{ contact.displayName || contact.username }}
             </button>
-          </div>
-        </details>
+            <button type="button" role="menuitem" @click="groupOpen = true">
+              <Users :size="16" aria-hidden="true" />
+              新建群组
+            </button>
+        </div>
       </header>
       <RoomList
         :channels="channels"
@@ -156,9 +191,10 @@ const roomIcon = computed(() => {
           返回
         </UButton>
         <component :is="roomIcon" :size="16" aria-hidden="true" />
-        <span class="chat-room-title" data-test="room-title">
-          {{ activeRoom?.name ?? '' }}
-        </span>
+        <button type="button" class="chat-room-title-button" :disabled="!activeRoom || activeRoom.kind === 'dm'" @click="emit('open-group-details')">
+          <span class="chat-room-title" data-test="room-title">{{ activeRoom?.name ?? '' }}</span>
+          <small v-if="activeRoom?.kind !== 'dm'">查看成员</small>
+        </button>
       </header>
 
       <div v-if="loadingMessages" class="chat-room-loading" data-test="messages-loading">
@@ -183,6 +219,25 @@ const roomIcon = computed(() => {
         <slot name="composer" />
       </div>
     </section>
+
+    <div v-if="groupOpen" class="chat-modal-backdrop" role="presentation" @click.self="groupOpen = false">
+      <section class="chat-modal" role="dialog" aria-modal="true" aria-labelledby="group-title">
+        <header class="chat-modal-head">
+          <div><p class="chat-eyebrow">新消息</p><h2 id="group-title">新建群组</h2></div>
+          <button type="button" class="chat-icon-button" aria-label="关闭" @click="groupOpen = false"><X :size="18" /></button>
+        </header>
+        <label class="chat-field">群组名称<input v-model="groupName" data-test="group-name" placeholder="例如：项目讨论群" /></label>
+        <p class="chat-field-label">选择成员</p>
+        <div class="chat-member-picker">
+          <button v-for="contact in filteredContacts" :key="contact.id" type="button" class="chat-member-option" :class="{ selected: selectedMemberIds.includes(contact.id) }" @click="toggleMember(contact.id)">
+            <span class="chat-contact-avatar">{{ (contact.displayName || contact.username).slice(0, 1) }}</span>
+            <span>{{ contact.displayName || contact.username }}</span>
+            <span class="chat-check" aria-hidden="true">{{ selectedMemberIds.includes(contact.id) ? '✓' : '' }}</span>
+          </button>
+        </div>
+        <footer class="chat-modal-actions"><button type="button" class="chat-secondary-button" @click="groupOpen = false">取消</button><UButton type="button" size="md" :disabled="!groupName.trim()" @click="submitGroup">创建群组</UButton></footer>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -217,6 +272,39 @@ const roomIcon = computed(() => {
 .chat-new-dm {
   position: relative;
 }
+.chat-new-message {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--unself-space-2);
+  min-height: 36px;
+  padding: 0 var(--unself-space-2);
+  border: 0;
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-primary-soft);
+  color: var(--unself-color-primary);
+  font: inherit;
+  font-size: var(--unself-font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.chat-new-message:hover { background: var(--unself-color-surface-active); }
+.chat-new-message-menu {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% - var(--unself-space-2));
+  right: var(--unself-space-4);
+  width: 220px;
+  padding: var(--unself-space-2);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-bg);
+  box-shadow: var(--unself-shadow-pop);
+}
+.chat-menu-label, .chat-eyebrow, .chat-field-label { margin: var(--unself-space-2); color: var(--unself-color-text-tertiary); font-size: var(--unself-font-size-xs); font-weight: 600; }
+.chat-new-message-menu button { display:flex; align-items:center; gap: var(--unself-space-2); width:100%; padding: var(--unself-space-2); border:0; border-radius:var(--unself-radius-sm); background:transparent; color:var(--unself-color-text); text-align:left; font:inherit; cursor:pointer; }
+.chat-new-message-menu button:hover { background: var(--unself-color-surface-hover); }
+.chat-contact-search { width:100%; box-sizing:border-box; min-height:36px; margin-bottom:var(--unself-space-2); padding:0 var(--unself-space-2); border:1px solid var(--unself-color-border); border-radius:var(--unself-radius-md); background:var(--unself-color-bg); color:var(--unself-color-text); font:inherit; }
+.chat-contact-avatar { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; flex:0 0 28px; border-radius:var(--unself-radius-full); background:var(--unself-color-primary-soft); color:var(--unself-color-primary); font-size:var(--unself-font-size-sm); font-weight:600; }
 .chat-new-dm summary {
   display: inline-flex;
   align-items: center;
@@ -299,6 +387,9 @@ const roomIcon = computed(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.chat-room-title-button { display:flex; align-items:center; gap:var(--unself-space-2); padding:0; border:0; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+.chat-room-title-button small { color:var(--unself-color-text-tertiary); font-size:var(--unself-font-size-xs); font-weight:400; }
+.chat-room-title-button:disabled { cursor:default; }
 .chat-back {
   display: inline-flex;
   align-items: center;
@@ -331,6 +422,19 @@ const roomIcon = computed(() => {
 .chat-composer-slot {
   background: var(--unself-color-bg);
 }
+.chat-modal-backdrop { position:absolute; inset:0; z-index:5; display:grid; place-items:center; padding:var(--unself-space-4); background:color-mix(in srgb, var(--unself-color-text) 18%, transparent); }
+.chat-modal { width:min(420px, 100%); max-height:min(620px, 100%); overflow:auto; padding:var(--unself-space-5); border:1px solid var(--unself-color-border); border-radius:var(--unself-radius-lg); background:var(--unself-color-bg); box-shadow:var(--unself-shadow-pop); }
+.chat-modal-head, .chat-modal-actions { display:flex; align-items:center; justify-content:space-between; gap:var(--unself-space-3); }
+.chat-modal h2 { margin:0 0 var(--unself-space-4); font-size:var(--unself-font-size-lg); }
+.chat-icon-button, .chat-secondary-button { border:0; border-radius:var(--unself-radius-md); background:transparent; color:var(--unself-color-text-secondary); cursor:pointer; }
+.chat-icon-button { display:grid; place-items:center; width:36px; height:36px; }
+.chat-field { display:grid; gap:var(--unself-space-2); color:var(--unself-color-text-secondary); font-size:var(--unself-font-size-sm); }
+.chat-field input { min-height:40px; box-sizing:border-box; padding:0 var(--unself-space-3); border:1px solid var(--unself-color-border); border-radius:var(--unself-radius-md); background:var(--unself-color-bg); color:var(--unself-color-text); font:inherit; }
+.chat-member-picker { display:grid; gap:var(--unself-space-1); margin:0 0 var(--unself-space-5); }
+.chat-member-option { display:flex; align-items:center; gap:var(--unself-space-2); padding:var(--unself-space-2); border:1px solid transparent; border-radius:var(--unself-radius-md); background:transparent; color:var(--unself-color-text); font:inherit; text-align:left; cursor:pointer; }
+.chat-member-option:hover, .chat-member-option.selected { border-color:var(--unself-color-primary-soft); background:var(--unself-color-surface-active); }
+.chat-check { margin-left:auto; color:var(--unself-color-primary); font-weight:700; }
+.chat-secondary-button { padding:0 var(--unself-space-3); min-height:40px; }
 
 /* ---------- 窄屏单栏（≤768px = tokens.css --unself-bp-md） ---------- */
 @media (max-width: 768px) {

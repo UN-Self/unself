@@ -277,6 +277,39 @@ export function createMockChatApi(
     return { ok: true as const }
   }
 
+  api.createChannel = async (input) => {
+    const id = Math.max(0, ...world.channels.map((channel) => channel.id)) + 1
+    const channel: Channel = {
+      id,
+      name: input.name.trim(),
+      description: input.description?.trim() ?? '',
+      kind: input.kind ?? 'private',
+      isGeneral: false,
+      ownerDisplayName: world.me.displayName,
+      isMember: true,
+      myRole: 'owner',
+      canManage: true,
+      memberCount: input.memberUserIds.length + 1,
+      lastMessageAt: null,
+      unreadCount: 0,
+      mentionUnreadCount: 0,
+    }
+    world.channels.push(channel)
+    world.messagesByRoom.set(`${channel.kind}:${channel.id}`, [])
+    return { channel }
+  }
+  api.listChannelMembers = async (channelId) => {
+    const channel = world.channels.find((item) => item.id === channelId)
+    if (!channel) throw Object.assign(new Error('群组不存在'), { status: 404 })
+    return { members: [world.me, ...world.contacts.filter((user) => user.id !== world.me.id).slice(0, Math.max(0, channel.memberCount - 1))].map((user) => ({ ...user, role: user.id === world.me.id ? 'owner' : 'member' })) }
+  }
+  api.inviteChannelMembers = async (channelId, userIds) => {
+    const channel = world.channels.find((item) => item.id === channelId)
+    if (!channel) throw Object.assign(new Error('群组不存在'), { status: 404 })
+    channel.memberCount += userIds.length
+    return api.listChannelMembers(channelId)
+  }
+
   api.getMessages = async (kind, roomId, before) => {
     const rows = listRoom(kind, roomId)
     const filtered = before ? rows.filter((r) => r.id < before) : rows
