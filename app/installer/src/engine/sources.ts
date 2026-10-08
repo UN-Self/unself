@@ -288,9 +288,15 @@ export function resolveLocalNpmPackage(input: {
 }
 
 /** 子进程跑 CLI 取 stdout（shell=false 参数数组；stderr 尾部随错误抛出）。 */
-function runCapture(cmd: string, args: string[], cwd?: string): Promise<string> {
+function runCapture(cmd: string, args: string[], cwd?: string, timeoutMs = 15_000): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    let timedOut = false;
+    const child = spawn(cmd, args, {
+      cwd,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: timeoutMs,
+    });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
@@ -298,11 +304,17 @@ function runCapture(cmd: string, args: string[], cwd?: string): Promise<string> 
     child.on('error', (err) =>
       reject(new Error(`无法运行 ${cmd}（PATH 里没有？）：${err.message}`)),
     );
-    child.on('close', (code) =>
-      code === 0
-        ? resolve(stdout)
-        : reject(new Error(`${cmd} ${args.join(' ')} 失败（${code}）：${stderr.slice(-800)}`)),
-    );
+    child.on('close', (code, signal) => {
+      if (code === 0) {
+        resolve(stdout);
+        return;
+      }
+      if (signal === 'SIGTERM' && timeoutMs > 0) timedOut = true;
+      const detail = timedOut
+        ? `超时（${timeoutMs}ms）`
+        : `${code ?? '信号 ' + (signal ?? '未知')}`;
+      reject(new Error(`${cmd} ${args.join(' ')} 失败（${detail}）：${stderr.slice(-800)}`));
+    });
   });
 }
 
@@ -342,7 +354,8 @@ export async function githubResolve(input: {
   const args = input.tag
     ? ['release', 'view', input.tag, '--repo', input.repo, '--json', 'assets']
     : ['release', 'view', '--repo', input.repo, '--json', 'assets'];
-  const out = await runCapture('gh', args, input.cwd);
+  // GitHub CLI 需要网络和认证；无效仓库/未登录时不能让安装器和 CI 无限等待。
+  const out = await runCapture('gh', args, input.cwd, 4_000);
   let parsed: { assets?: Array<{ name?: string; url?: string }> };
   try {
     parsed = JSON.parse(out) as typeof parsed;
