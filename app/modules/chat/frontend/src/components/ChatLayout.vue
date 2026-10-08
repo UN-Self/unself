@@ -5,7 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import MessageList from './MessageList.vue'
 import RoomList from './RoomList.vue'
-import { USkeleton } from '@unself/ui'
+import { UButton, USkeleton } from '@unself/ui'
 import { NARROW_MAX_PX, type MediaQueryLike } from '../lib/viewport'
 import type { Channel, Dm, Message, RoomKind, UserSummary } from '../lib/types'
 
@@ -143,16 +143,18 @@ const roomIcon = computed(() => {
     <section v-if="showRoomPane" class="chat-room" data-test="room-pane">
       <header class="chat-room-head">
         <!-- 窄屏返回（桌面无此钮——点左栏即切换） -->
-        <button
+        <UButton
           v-if="narrow"
           type="button"
+          variant="ghost"
+          size="sm"
           class="chat-back"
           data-test="back-button"
           @click="emit('back')"
         >
           <ArrowLeft :size="16" aria-hidden="true" />
           返回
-        </button>
+        </UButton>
         <component :is="roomIcon" :size="16" aria-hidden="true" />
         <span class="chat-room-title" data-test="room-title">
           {{ activeRoom?.name ?? '' }}
@@ -189,7 +191,7 @@ const roomIcon = computed(() => {
   display: flex;
   height: 100%;
   min-height: 0;
-  background: var(--unself-color-bg);
+  background: var(--unself-color-surface);
   color: var(--unself-color-text);
 }
 
@@ -197,14 +199,20 @@ const roomIcon = computed(() => {
 .chat-list {
   display: flex;
   flex-direction: column;
-  width: 264px;
+  width: 280px;
   flex-shrink: 0;
   border-right: 1px solid var(--unself-color-border);
-  background: var(--unself-color-surface);
+  background: var(--unself-color-bg);
   min-height: 0;
 }
 .chat-list-head {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--unself-space-3);
+  min-height: 64px;
+  box-sizing: border-box;
 }
 .chat-new-dm {
   position: relative;
@@ -215,7 +223,9 @@ const roomIcon = computed(() => {
   justify-content: center;
   min-width: var(--unself-touch-target);
   min-height: var(--unself-touch-target);
-  border-radius: var(--unself-radius-sm);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-bg);
   color: var(--unself-color-text-secondary);
   cursor: pointer;
   list-style: none;
@@ -234,10 +244,10 @@ const roomIcon = computed(() => {
   top: calc(100% + var(--unself-space-1));
   right: 0;
   display: grid;
-  min-width: 10rem;
+  min-width: 12rem;
   padding: var(--unself-space-1);
   border: 1px solid var(--unself-color-border);
-  border-radius: var(--unself-radius-sm);
+  border-radius: var(--unself-radius-md);
   background: var(--unself-color-bg);
   box-shadow: var(--unself-shadow-lg);
 }
@@ -248,6 +258,7 @@ const roomIcon = computed(() => {
   color: var(--unself-color-text);
   text-align: left;
   cursor: pointer;
+  border-radius: var(--unself-radius-sm);
 }
 .chat-new-dm-menu button:hover,
 .chat-new-dm-menu button:focus-visible {
@@ -274,14 +285,15 @@ const roomIcon = computed(() => {
   display: flex;
   align-items: center;
   gap: var(--unself-space-2);
-  min-height: var(--unself-touch-target);
-  padding: 0 var(--unself-space-4);
+  min-height: 64px;
+  padding: 0 var(--unself-space-6);
+  background: var(--unself-color-bg);
   border-bottom: 1px solid var(--unself-color-border);
   color: var(--unself-color-text-secondary);
 }
 .chat-room-title {
   font-size: var(--unself-font-size-base);
-  font-weight: 500;
+  font-weight: 600;
   color: var(--unself-color-text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -313,11 +325,11 @@ const roomIcon = computed(() => {
 
 .chat-room-loading {
   flex: 1;
-  padding: var(--unself-space-4);
+  padding: var(--unself-space-6);
 }
 
 .chat-composer-slot {
-  border-top: 1px solid var(--unself-color-border);
+  background: var(--unself-color-bg);
 }
 
 /* ---------- 窄屏单栏（≤768px = tokens.css --unself-bp-md） ---------- */
@@ -329,6 +341,11 @@ const roomIcon = computed(() => {
     width: 100%;
     flex: 1;
     border-right: none;
+  }
+  .chat-list-head,
+  .chat-room-head {
+    padding-left: var(--unself-space-4);
+    padding-right: var(--unself-space-4);
   }
   .chat-room {
     position: absolute;

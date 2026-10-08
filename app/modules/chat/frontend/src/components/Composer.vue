@@ -4,6 +4,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Mic, Paperclip, SendHorizontal, Smile, Square, X } from 'lucide-vue-next'
 
 import { clearDraft, loadDraft, saveDraft } from '../lib/draft'
+import { UButton, UCard } from '@unself/ui'
 import type { Message, UserSummary } from '../lib/types'
 import { createVoiceRecorder, isVoiceSupported } from '../lib/voice-recorder'
 import type { VoiceRecorder, VoiceRecording } from '../lib/voice-recorder'
@@ -439,7 +440,7 @@ const replyPreview = computed(() => {
         >
           <Smile :size="18" aria-hidden="true" />
         </button>
-        <div v-if="emojiOpen" class="composer-emoji-popover" data-test="emoji-picker" role="grid" aria-label="表情">
+        <UCard v-if="emojiOpen" padding="none" class="composer-emoji-popover" data-test="emoji-picker" role="grid" aria-label="表情">
           <button
             v-for="emoji in COMMON_EMOJI"
             :key="emoji"
@@ -449,7 +450,7 @@ const replyPreview = computed(() => {
             :aria-label="`插入${emoji}`"
             @click="insertEmoji(emoji)"
           >{{ emoji }}</button>
-        </div>
+        </UCard>
       </div>
       <button
         type="button"
@@ -490,7 +491,9 @@ const replyPreview = computed(() => {
       >
         <Mic :size="18" aria-hidden="true" />
       </button>
-      <button
+      <UButton
+        variant="primary"
+        size="sm"
         type="button"
         class="composer-send-btn"
         data-test="send"
@@ -499,7 +502,7 @@ const replyPreview = computed(() => {
         @click="sendText"
       >
         <SendHorizontal :size="18" aria-hidden="true" />
-      </button>
+      </UButton>
     </div>
   </div>
 </template>
@@ -507,6 +510,7 @@ const replyPreview = computed(() => {
 <style scoped>
 .composer {
   border-top: 1px solid var(--unself-color-border);
+  padding: var(--unself-space-2) var(--unself-space-3) var(--unself-space-3);
   background: var(--unself-color-bg);
 }
 .composer-row {
@@ -514,7 +518,7 @@ const replyPreview = computed(() => {
   display: flex;
   align-items: flex-end;
   gap: var(--unself-space-2);
-  padding: var(--unself-space-2) var(--unself-space-3);
+  padding: 0;
 }
 .composer-emoji-wrap {
   position: relative;
@@ -522,7 +526,7 @@ const replyPreview = computed(() => {
 .composer-emoji-popover {
   position: absolute;
   z-index: 2;
-  bottom: calc(100% + var(--unself-space-2));
+  bottom: calc(100% + var(--unself-space-3));
   left: 0;
   display: grid;
   grid-template-columns: repeat(8, minmax(2rem, 1fr));
@@ -531,10 +535,7 @@ const replyPreview = computed(() => {
   max-height: 14rem;
   overflow-y: auto;
   padding: var(--unself-space-2);
-  border: 1px solid var(--unself-color-border);
-  border-radius: var(--unself-radius-md);
-  background: var(--unself-color-bg);
-  box-shadow: var(--unself-shadow-lg);
+  box-shadow: var(--unself-shadow-pop);
 }
 .composer-emoji-item {
   display: inline-flex;
@@ -556,7 +557,9 @@ const replyPreview = computed(() => {
   flex: 1;
   resize: none;
   border: 1px solid var(--unself-color-border);
-  border-radius: var(--unself-radius-lg);
+  border-radius: var(--unself-radius-md);
+  min-height: 40px;
+  box-sizing: border-box;
   background: var(--unself-color-bg);
   color: var(--unself-color-text);
   font-size: var(--unself-font-size-base);
@@ -605,9 +608,10 @@ const replyPreview = computed(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--unself-touch-target);
-  min-height: var(--unself-touch-target);
-  border: none;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
   border-radius: var(--unself-radius-full);
   background: var(--unself-color-primary);
   color: var(--unself-color-bg);

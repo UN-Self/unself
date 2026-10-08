@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
-import { Hash, Lock, MessageCircle, Users } from 'lucide-vue-next'
+import { Hash, Lock, MessageCircle } from 'lucide-vue-next'
 import { computed } from 'vue'
 
 import { USkeleton } from '@unself/ui'
@@ -65,8 +65,10 @@ function isActive(kind: RoomKind, id: number): boolean {
               :aria-current="isActive(channel.kind, channel.id) ? 'true' : undefined"
               @click="emit('select', { kind: channel.kind, id: channel.id })"
             >
-              <Lock v-if="channel.kind === 'private'" :size="14" aria-hidden="true" />
-              <Hash v-else :size="14" aria-hidden="true" />
+              <span class="rooms-icon" aria-hidden="true">
+                <Lock v-if="channel.kind === 'private'" :size="17" />
+                <Hash v-else :size="17" />
+              </span>
               <span class="rooms-item-name">{{ channel.name }}</span>
               <span v-if="channel.unreadCount > 0" class="rooms-badge" data-test="unread-badge">
                 {{ channel.unreadCount > 99 ? '99+' : channel.unreadCount }}
@@ -88,7 +90,9 @@ function isActive(kind: RoomKind, id: number): boolean {
               :aria-current="isActive('dm', dm.id) ? 'true' : undefined"
               @click="emit('select', { kind: 'dm', id: dm.id })"
             >
-              <Users :size="14" aria-hidden="true" />
+              <span class="rooms-icon rooms-icon-dm" aria-hidden="true">
+                {{ (dm.otherUser.displayName || dm.name).slice(0, 1) }}
+              </span>
               <span class="rooms-item-name">{{ dm.otherUser.displayName || dm.name }}</span>
               <span v-if="dm.unreadCount > 0" class="rooms-badge" data-test="unread-badge">
                 {{ dm.unreadCount > 99 ? '99+' : dm.unreadCount }}
@@ -105,10 +109,10 @@ function isActive(kind: RoomKind, id: number): boolean {
 .rooms {
   display: flex;
   flex-direction: column;
-  gap: var(--unself-space-1);
+  gap: var(--unself-space-2);
   height: 100%;
   overflow-y: auto;
-  padding: var(--unself-space-2);
+  padding: var(--unself-space-3);
   scrollbar-width: thin;
 }
 .rooms-empty {
@@ -120,11 +124,11 @@ function isActive(kind: RoomKind, id: number): boolean {
   font-size: var(--unself-font-size-sm);
 }
 .rooms-section {
-  margin: var(--unself-space-2) 0 0;
+  margin: var(--unself-space-4) 0 var(--unself-space-1);
   padding: 0 var(--unself-space-2);
   font-size: var(--unself-font-size-xs);
   color: var(--unself-color-text-tertiary);
-  letter-spacing: 0.05em;
+  font-weight: 600;
 }
 .rooms-items {
   list-style: none;
@@ -132,15 +136,15 @@ function isActive(kind: RoomKind, id: number): boolean {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--unself-space-1);
 }
 .rooms-item {
   display: flex;
   align-items: center;
   gap: var(--unself-space-2);
   width: 100%;
-  min-height: 36px;
-  padding: 0 var(--unself-space-2);
+  min-height: 48px;
+  padding: var(--unself-space-1) var(--unself-space-2);
   border: none;
   border-radius: var(--unself-radius-md);
   background: transparent;
@@ -162,8 +166,28 @@ function isActive(kind: RoomKind, id: number): boolean {
 }
 .rooms-item-active {
   background: var(--unself-color-surface-active);
-  color: var(--unself-color-text);
-  font-weight: 500;
+  color: var(--unself-color-primary);
+  font-weight: 600;
+}
+.rooms-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-surface);
+  color: var(--unself-color-text-secondary);
+}
+.rooms-icon-dm {
+  border-radius: var(--unself-radius-full);
+  background: var(--unself-color-primary-soft);
+  color: var(--unself-color-primary);
+  font-weight: 600;
+}
+.rooms-item-active .rooms-icon {
+  color: var(--unself-color-primary);
 }
 .rooms-item-name {
   flex: 1;
