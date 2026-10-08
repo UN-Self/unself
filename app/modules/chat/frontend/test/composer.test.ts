@@ -57,6 +57,20 @@ beforeEach(() => {
 })
 
 describe('Composer 发送', () => {
+  it('打开 emoji 选择器并把 Unicode emoji 插入光标位置', async () => {
+    const wrapper = mountComposer()
+    const input = inputOf(wrapper)
+
+    await input.setValue('你好')
+    ;(input.element as HTMLTextAreaElement).setSelectionRange(2, 2)
+    await wrapper.get('[data-test="emoji-toggle"]').trigger('click')
+    expect(wrapper.find('[data-test="emoji-picker"]').exists()).toBe(true)
+    await wrapper.get('[data-test="emoji-picker"] button').trigger('click')
+
+    expect((input.element as HTMLTextAreaElement).value).toBe('你好😀')
+    expect(wrapper.find('[data-test="emoji-picker"]').exists()).toBe(false)
+  })
+
   it('空文本禁用发送；输入后点击发送 emit send(文本, mentionUserIds) 且清空输入', async () => {
     const wrapper = mountComposer()
     const send = wrapper.find('[data-test="send"]')

@@ -71,6 +71,28 @@ beforeEach(() => {
 })
 
 describe('ChatLayout 布局切换（#218）', () => {
+  it('从列表头部选择联系人发出新建私聊事件', async () => {
+    const wrapper = mount(ChatLayout, {
+      props: {
+        channels: [channel],
+        dms: [],
+        contacts: [{ id: 9, username: 'alice', displayName: 'Alice', avatarUrl: '' }],
+        activeRoom: null,
+        messages: [],
+        currentUserId: 1,
+        loadingRooms: false,
+        loadingMessages: false,
+        loadingEarlier: false,
+        noEarlier: false,
+      },
+    })
+
+    await wrapper.find('[aria-label="新建私聊"]').trigger('click')
+    await wrapper.find('[role="menuitem"]').trigger('click')
+    expect(wrapper.emitted('open-dm')).toEqual([[9]])
+    wrapper.unmount()
+  })
+
   it('桌面（matchMedia false）双栏：列表与消息流同屏', async () => {
     const wrapper = mount(ChatLayout, {
       props: {

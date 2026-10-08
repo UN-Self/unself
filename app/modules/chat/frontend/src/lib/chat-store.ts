@@ -75,6 +75,8 @@ export interface ChatStore {
 
   loadChannels(): Promise<void>
   loadDms(): Promise<void>
+  /** 创建或复用与指定成员的私聊，并打开会话。 */
+  openDm(userId: number): Promise<void>
   loadContacts(): Promise<void>
   /** 打开会话：拉历史 + 清未读 + 记忆偏好 + 建房 socket。 */
   openRoom(room: RoomKey, displayName: string): Promise<void>
@@ -276,6 +278,14 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       } catch {
         state.dmsState = 'error'
       }
+    },
+
+    openDm: async (userId) => {
+      const result = await api.openDm(userId)
+      const existing = state.dms.findIndex((dm) => dm.id === result.dm.id)
+      if (existing >= 0) state.dms.splice(existing, 1, result.dm)
+      else state.dms.unshift(result.dm)
+      await store.openRoom({ kind: 'dm', id: result.dm.id }, result.dm.otherUser.displayName || result.dm.name)
     },
 
     loadContacts: async () => {
