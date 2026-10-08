@@ -502,6 +502,12 @@ export class ChannelRoom {
       return;
     }
 
+    // 浏览器无法主动发送 WebSocket protocol ping；应用层探活避免边缘连接半开。
+    if (payload.type === 'ping') {
+      ws.send(JSON.stringify({ protocolVersion: 1, type: 'pong' }));
+      return;
+    }
+
     // #217 token 续期控制帧：先于一切业务类型判定（决策 #51 定案 C）。
     // 允许当前绑定已过期时刷新（这正是续期场景），但 socket 必须已有 meta（已建连）。
     if (payload.type === 'token_refresh') {

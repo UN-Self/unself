@@ -129,6 +129,18 @@ describe('chat WS 鉴权与 token 续期（#217 定案 C）', () => {
     expect(meta.room).toMatchObject({ id: 1, kind: 'public' });
   });
 
+  it('应用层 ping → pong，不进入业务消息分支', async () => {
+    const { makeToken } = await mintSetup();
+    const room = new ChannelRoom(new FakeDoState() as never, env as never);
+    const { server } = await connect(room, await makeToken({ sub: 'u_ping' }));
+    const before = messageCount();
+
+    await frame(room, server, { type: 'ping' });
+
+    expect(sentFrames(server).at(-1)).toMatchObject({ protocolVersion: 1, type: 'pong' });
+    expect(messageCount()).toBe(before);
+  });
+
   it('无效 token（错签）→ 建连 401；非成员 → 403', async () => {
     const { makeToken, signWithForeignKey } = await mintSetup();
     const room = new ChannelRoom(new FakeDoState() as never, env as never);
