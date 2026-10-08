@@ -25,6 +25,7 @@ interface WorkerCall {
   method: string;
   /** body 文本（POST 场景）；无 body 为 null。 */
   body: string | null;
+  upgrade?: string | null;
 }
 
 const temps: string[] = [];
@@ -84,7 +85,8 @@ export default {
       for await (const chunk of request.body) chunks.push(chunk);
       body = Buffer.concat(chunks).toString('utf8');
     }
-    recorder.workerCalls.push({ pathname: url.pathname, method: request.method, body });
+    const upgrade = request.headers.get('upgrade');
+    recorder.workerCalls.push({ pathname: url.pathname, method: request.method, body, ...(upgrade ? { upgrade } : {}) });
     return new Response(${workerBodyExpr}, { status: 200, headers: { 'content-type': '${workerResponseContentType}' } });
   },
 };
@@ -183,6 +185,18 @@ describe('prefixStripWrapper 真实执行（资产分支 / 预取 / duplex，T5�
     ]);
     // ASSETS 完全未被触碰（API 不是资产）
     expect(w.assetCalls).toHaveLength(0);
+  });
+
+  it('WebSocket 请求：剥前缀后仍保留 Upgrade 头，避免 Durable Object 握手被包装器降级为普通 GET', async () => {
+    const w = await loadWrapper({ moduleId: 'chat' });
+    const res = await w.fetch('/m/chat/api/inbox/ws?token=test', {
+      method: 'GET',
+      headers: { Upgrade: 'websocket', Connection: 'Upgrade' },
+    });
+    expect(res.status).toBe(200);
+    expect(w.workerCalls).toEqual([
+      { pathname: '/api/inbox/ws', method: 'GET', body: null, upgrade: 'websocket' },
+    ]);
   });
 
   it('非 GET（POST 到资产形路径）不走资产分支：isAsset 判定含 method === GET', async () => {
