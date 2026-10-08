@@ -28,7 +28,11 @@ const FOCUSABLE = [
  * - Tab：末元素按下 → 回首元素；首元素 shift+Tab → 去末元素（循环陷阱）
  * 返回的 onKeydown 挂在弹层容器（@keydown）或 document（open 时全局 Esc 兜底）。
  */
-export function useLayerFocus(open: Ref<boolean>, layer: () => HTMLElement | null): {
+export function useLayerFocus(
+  open: Ref<boolean>,
+  layer: () => HTMLElement | null,
+  restoreTarget?: () => HTMLElement | null,
+): {
   onKeydown: (event: KeyboardEvent) => void
 } {
   let restoreTo: HTMLElement | null = null
@@ -76,7 +80,7 @@ export function useLayerFocus(open: Ref<boolean>, layer: () => HTMLElement | nul
 
   watch(open, (now, was) => {
     if (now && !was) {
-      restoreTo = (document.activeElement as HTMLElement | null) ?? null
+      restoreTo = restoreTarget?.() ?? (document.activeElement as HTMLElement | null) ?? null
       void focusIn()
     } else if (!now && was) {
       focusBack()
