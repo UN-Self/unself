@@ -36,6 +36,13 @@ const hasAny = computed(() => props.channels.length > 0 || props.dms.length > 0)
 function isActive(kind: RoomKind, id: number): boolean {
   return props.activeRoom?.kind === kind && props.activeRoom.id === id
 }
+
+function lastActivity(value: string | null): string {
+  if (!value) return ''
+  const date = new Date(value.replace(' ', 'T'))
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
 </script>
 
 <template>
@@ -69,7 +76,8 @@ function isActive(kind: RoomKind, id: number): boolean {
                 <Lock v-if="channel.kind === 'private'" :size="17" />
                 <Hash v-else :size="17" />
               </span>
-              <span class="rooms-item-name">{{ channel.name }}</span>
+              <span class="rooms-item-copy"><span class="rooms-item-name">{{ channel.name }}</span><small>{{ channel.description || `${channel.memberCount} 位成员` }}</small></span>
+              <span v-if="channel.lastMessageAt" class="rooms-time">{{ lastActivity(channel.lastMessageAt) }}</span>
               <span v-if="channel.unreadCount > 0" class="rooms-badge" data-test="unread-badge">
                 {{ channel.unreadCount > 99 ? '99+' : channel.unreadCount }}
               </span>
@@ -93,7 +101,8 @@ function isActive(kind: RoomKind, id: number): boolean {
               <span class="rooms-icon rooms-icon-dm" aria-hidden="true">
                 {{ (dm.otherUser.displayName || dm.name).slice(0, 1) }}
               </span>
-              <span class="rooms-item-name">{{ dm.otherUser.displayName || dm.name }}</span>
+              <span class="rooms-item-copy"><span class="rooms-item-name">{{ dm.otherUser.displayName || dm.name }}</span><small>@{{ dm.otherUser.username }}</small></span>
+              <span v-if="dm.lastMessageAt" class="rooms-time">{{ lastActivity(dm.lastMessageAt) }}</span>
               <span v-if="dm.unreadCount > 0" class="rooms-badge" data-test="unread-badge">
                 {{ dm.unreadCount > 99 ? '99+' : dm.unreadCount }}
               </span>
@@ -143,7 +152,7 @@ function isActive(kind: RoomKind, id: number): boolean {
   align-items: center;
   gap: var(--unself-space-2);
   width: 100%;
-  min-height: 48px;
+  min-height: 58px;
   padding: var(--unself-space-1) var(--unself-space-2);
   border: none;
   border-radius: var(--unself-radius-md);
@@ -190,12 +199,15 @@ function isActive(kind: RoomKind, id: number): boolean {
   color: var(--unself-color-primary);
 }
 .rooms-item-name {
-  flex: 1;
+  display:block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.rooms-item-copy { display:block; flex:1; min-width:0; }
+.rooms-item-copy small { display:block; margin-top:var(--unself-space-1); overflow:hidden; color:var(--unself-color-text-tertiary); font-size:var(--unself-font-size-xs); font-weight:400; text-overflow:ellipsis; white-space:nowrap; }
+.rooms-time { align-self:flex-start; padding-top:var(--unself-space-2); color:var(--unself-color-text-tertiary); font-size:var(--unself-font-size-xs); font-variant-numeric:tabular-nums; }
 .rooms-badge {
   flex-shrink: 0;
   min-width: 18px;

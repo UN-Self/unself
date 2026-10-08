@@ -133,6 +133,10 @@ const roomIcon = computed(() => {
   if (props.activeRoom === null) return Hash
   return props.activeRoom.kind === 'private' ? Lock : Hash
 })
+const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
+  ? null
+  : props.channels.find((channel) => channel.id === props.activeRoom?.id),
+)
 </script>
 
 <template>
@@ -193,7 +197,7 @@ const roomIcon = computed(() => {
         <component :is="roomIcon" :size="16" aria-hidden="true" />
         <button type="button" class="chat-room-title-button" :disabled="!activeRoom || activeRoom.kind === 'dm'" @click="emit('open-group-details')">
           <span class="chat-room-title" data-test="room-title">{{ activeRoom?.name ?? '' }}</span>
-          <small v-if="activeRoom?.kind !== 'dm'">查看成员</small>
+          <small v-if="activeChannel">{{ activeChannel.memberCount }} 位成员</small>
         </button>
       </header>
 
@@ -337,7 +341,7 @@ const roomIcon = computed(() => {
   border: 1px solid var(--unself-color-border);
   border-radius: var(--unself-radius-md);
   background: var(--unself-color-bg);
-  box-shadow: var(--unself-shadow-lg);
+  box-shadow: var(--unself-shadow-pop);
 }
 .chat-new-dm-menu button {
   padding: var(--unself-space-2) var(--unself-space-3);

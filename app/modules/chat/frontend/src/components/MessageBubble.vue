@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Paperclip } from 'lucide-vue-next'
+import { UMessage, UMessageAvatar, UMessageBubble } from '@unself/ui'
 
 import VoiceBubble from './VoiceBubble.vue'
 import type { Message, ReadReceiptsSummary } from '../lib/types'
@@ -90,15 +91,13 @@ const fileAttachment = computed(() => {
 </script>
 
 <template>
-  <div
+  <UMessage
+    :mine="mine"
     class="bubble-row"
     :class="{ 'bubble-row-mine': mine, 'bubble-row-highlight': highlighted }"
     :data-test="mine ? 'bubble-mine' : 'bubble-theirs'"
   >
-    <img v-if="message.sender.avatarUrl" class="bubble-avatar" :src="message.sender.avatarUrl" alt="" />
-    <div v-else class="bubble-avatar bubble-avatar-fallback" aria-hidden="true">
-      {{ message.sender.displayName.slice(0, 1) }}
-    </div>
+    <UMessageAvatar :src="message.sender.avatarUrl" :name="message.sender.displayName" />
 
     <div class="bubble-main">
       <div class="bubble-meta">
@@ -112,7 +111,7 @@ const fileAttachment = computed(() => {
         <span class="bubble-reply-text">{{ replyDeleted ? '原消息已删除' : replyPreview }}</span>
       </div>
 
-      <div class="bubble-body">
+      <UMessageBubble class="bubble-body" :variant="mine ? 'solid' : 'soft'">
         <p class="bubble-text">{{ message.content }}</p>
 
         <VoiceBubble v-if="message.attachment && (message.attachment.kind === 'voice' || message.attachment.kind === 'audio')" :attachment="message.attachment" />
@@ -122,7 +121,7 @@ const fileAttachment = computed(() => {
           <span class="bubble-file-name">{{ fileAttachment.name }}</span>
           <span class="bubble-file-meta">{{ Math.max(1, Math.round((fileAttachment.size || 0) / 1024)) }} KB</span>
         </div>
-      </div>
+      </UMessageBubble>
 
       <!-- #220 已读回执标签（mine 尾部；DM=已读 ✓✓，群聊=已读 n/m）；点击开名单浮层（父层渲染） -->
       <button
@@ -141,38 +140,13 @@ const fileAttachment = computed(() => {
         </template>
       </button>
     </div>
-  </div>
+  </UMessage>
 </template>
 
 <style scoped>
-.bubble-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--unself-space-2);
-  max-width: 100%;
-  padding: var(--unself-space-1) 0;
-}
-.bubble-row-mine {
-  flex-direction: row-reverse;
-}
+.bubble-row { max-width:100%; padding:var(--unself-space-1) 0; }
 .bubble-row-highlight .bubble-main {
   outline: 1px solid var(--unself-color-primary-soft);
-}
-.bubble-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--unself-radius-full);
-  flex-shrink: 0;
-  object-fit: cover;
-}
-.bubble-avatar-fallback {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--unself-color-primary-soft);
-  color: var(--unself-color-primary);
-  font-size: var(--unself-font-size-sm);
-  font-weight: 600;
 }
 .bubble-main {
   display: flex;
@@ -216,18 +190,7 @@ const fileAttachment = computed(() => {
   white-space: nowrap;
 }
 .bubble-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--unself-space-1);
-  padding: var(--unself-space-2) var(--unself-space-3);
-  border-radius: var(--unself-radius-lg);
-  background: var(--unself-color-surface);
-  align-self: flex-start;
-}
-.bubble-row-mine .bubble-body {
-  background: var(--unself-color-primary);
-  color: var(--unself-color-bg);
-  align-self: flex-end;
+  max-width:100%;
 }
 .bubble-row-highlight .bubble-body {
   background: var(--unself-color-primary-soft);
