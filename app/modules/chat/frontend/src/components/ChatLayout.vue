@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
 import { ArrowLeft, Hash, Lock, UserPlus, Users, X } from 'lucide-vue-next'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import MessageList from './MessageList.vue'
 import RoomList from './RoomList.vue'
@@ -35,6 +35,7 @@ export interface ChatLayoutProps {
   readReceipts?: Record<number, import('../lib/types').ReadReceiptsSummary>
   /** 会话列表加载失败人话（#221 走查补：错误态替代空态，不再静默吞错）。 */
   loadError?: string | null
+  groupError?: string
 }
 
 const props = withDefaults(defineProps<ChatLayoutProps>(), {
@@ -43,6 +44,7 @@ const props = withDefaults(defineProps<ChatLayoutProps>(), {
   audienceSize: 0,
   readReceipts: () => ({}),
   loadError: null,
+  groupError: '',
   contacts: () => [],
 })
 
@@ -78,11 +80,15 @@ function submitGroup(): void {
   const name = groupName.value.trim()
   if (!name) return
   emit('create-group', { name, memberUserIds: [...selectedMemberIds.value] })
+}
+
+watch(() => props.activeRoom?.id, (id, previous) => {
+  if (!groupOpen.value || id === previous) return
   groupName.value = ''
   selectedMemberIds.value = []
   groupOpen.value = false
   newMessageOpen.value = false
-}
+})
 
 /** 响应式窄屏判定：跟随 matchMedia 翻转并回调；无 matchMedia 环境降级恒 false（桌面布局）。 */
 function useNarrow(onChange: (narrow: boolean) => void): { matches: boolean; dispose: () => void } {
@@ -239,6 +245,7 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
             <span class="chat-check" aria-hidden="true">{{ selectedMemberIds.includes(contact.id) ? '✓' : '' }}</span>
           </button>
         </div>
+        <p v-if="groupError" class="chat-group-error" role="alert">{{ groupError }}</p>
         <footer class="chat-modal-actions"><button type="button" class="chat-secondary-button" @click="groupOpen = false">取消</button><UButton type="button" size="md" :disabled="!groupName.trim()" @click="submitGroup">创建群组</UButton></footer>
       </section>
     </div>
@@ -438,6 +445,7 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
 .chat-member-option { display:flex; align-items:center; gap:var(--unself-space-2); padding:var(--unself-space-2); border:1px solid transparent; border-radius:var(--unself-radius-md); background:transparent; color:var(--unself-color-text); font:inherit; text-align:left; cursor:pointer; }
 .chat-member-option:hover, .chat-member-option.selected { border-color:var(--unself-color-primary-soft); background:var(--unself-color-surface-active); }
 .chat-check { margin-left:auto; color:var(--unself-color-primary); font-weight:700; }
+.chat-group-error { margin:0 0 var(--unself-space-3); color:var(--unself-color-danger); font-size:var(--unself-font-size-sm); }
 .chat-secondary-button { padding:0 var(--unself-space-3); min-height:40px; }
 
 /* ---------- 窄屏单栏（≤768px = tokens.css --unself-bp-md） ---------- */

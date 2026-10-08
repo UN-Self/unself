@@ -108,6 +108,7 @@ const groupDetailsOpen = ref(false)
 const groupMembers = ref<ChannelMember[]>([])
 const groupDetailsError = ref('')
 const groupDetailsBusy = ref(false)
+const groupCreationError = ref('')
 
 function onSelect(room: { kind: RoomKind; id: number }): void {
   void store.openRoom(room, displayNameFor(room))
@@ -120,8 +121,9 @@ function onOpenDm(userId: number): void {
 }
 
 function onCreateGroup(input: { name: string; memberUserIds: number[] }): void {
+  groupCreationError.value = ''
   void store.createChannel({ ...input, kind: 'private' }).catch((error) => {
-    store.state.historyError = error instanceof Error ? error.message : String(error)
+    groupCreationError.value = error instanceof Error ? error.message : String(error)
   })
 }
 
@@ -288,6 +290,7 @@ const contextKey = computed(() =>
       :audience-size="audienceSize"
       :read-receipts="store.state.readReceipts"
       :load-error="roomsError"
+      :group-error="groupCreationError"
       @select="onSelect"
       @open-dm="onOpenDm"
       @back="onBack"

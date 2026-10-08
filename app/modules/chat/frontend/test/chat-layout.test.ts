@@ -110,6 +110,11 @@ describe('ChatLayout 布局切换（#218）', () => {
     expect(createButton).toBeDefined()
     await createButton!.trigger('click')
     expect(wrapper.emitted('create-group')).toEqual([[{ name: '项目讨论群', memberUserIds: [9] }]])
+    await wrapper.setProps({ groupError: '群组名称已存在' })
+    expect(wrapper.get('[role="alert"]').text()).toBe('群组名称已存在')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    await wrapper.setProps({ groupError: '', activeRoom: { kind: 'private', id: 8, name: '项目讨论群' } })
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
