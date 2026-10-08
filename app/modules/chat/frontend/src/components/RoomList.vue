@@ -76,7 +76,7 @@ function lastActivity(value: string | null): string {
                 <Lock v-if="channel.kind === 'private'" :size="17" />
                 <Hash v-else :size="17" />
               </span>
-              <span class="rooms-item-copy"><span class="rooms-item-name">{{ channel.name }}</span><small>{{ channel.description || `${channel.memberCount} 位成员` }}</small></span>
+              <span class="rooms-item-copy"><span class="rooms-item-name">{{ channel.name }}</span><small>{{ channel.lastMessagePreview || channel.description || `${channel.memberCount} 位成员` }}</small></span>
               <span v-if="channel.lastMessageAt" class="rooms-time">{{ lastActivity(channel.lastMessageAt) }}</span>
               <span v-if="channel.unreadCount > 0" class="rooms-badge" data-test="unread-badge">
                 {{ channel.unreadCount > 99 ? '99+' : channel.unreadCount }}
@@ -101,7 +101,7 @@ function lastActivity(value: string | null): string {
               <span class="rooms-icon rooms-icon-dm" aria-hidden="true">
                 {{ (dm.otherUser.displayName || dm.name).slice(0, 1) }}
               </span>
-              <span class="rooms-item-copy"><span class="rooms-item-name">{{ dm.otherUser.displayName || dm.name }}</span><small>@{{ dm.otherUser.username }}</small></span>
+              <span class="rooms-item-copy"><span class="rooms-item-name">{{ dm.otherUser.displayName || dm.name }}</span><small>{{ dm.lastMessagePreview || '暂无消息' }}</small></span>
               <span v-if="dm.lastMessageAt" class="rooms-time">{{ lastActivity(dm.lastMessageAt) }}</span>
               <span v-if="dm.unreadCount > 0" class="rooms-badge" data-test="unread-badge">
                 {{ dm.unreadCount > 99 ? '99+' : dm.unreadCount }}

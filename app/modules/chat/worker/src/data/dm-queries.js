@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/data/dm-queries.js（GPL-3.0-only，裁剪版）
+<<<<<<< ours
+import { publicFileUrl } from "../utils.js";
+import { messagePreview } from './message-preview.js';
 import { userAvatarUrl } from "../profile-avatar.js";
 
 function mapUserDm(row) {
@@ -30,12 +33,18 @@ function mapAdminDm(row) {
 	};
 }
 
-export async function listUserDms(db, userId) {
+export async function listUserDms(db, userId, env) {
 	const normalizedUserId = Number(userId);
 	const { results } = await db
 		.prepare(
 			`SELECT
 			   c.id, c.dm_key,
+			   latest.id AS last_message_id, latest.content AS last_message_content,
+			   latest.sender_id AS last_message_sender_id, latest.sender_kind AS last_message_sender_kind,
+			   latest.source AS last_message_source, latest.external_sender_id AS last_message_external_sender_id,
+			   latest.attachment_key AS last_message_attachment_key,
+			   latest.attachment_name AS last_message_attachment_name,
+			   latest.attachment_kind AS last_message_attachment_kind,
 			   other.id AS other_user_id,
 			   other.username AS other_username,
 			   other.display_name AS other_display_name,
@@ -56,6 +65,7 @@ export async function listUserDms(db, userId) {
 			 JOIN channel_members me ON me.channel_id = c.id AND me.user_id = ?
 			 JOIN channel_members peer ON peer.channel_id = c.id AND peer.user_id != ?
 			 JOIN users other ON other.id = peer.user_id
+			 LEFT JOIN messages latest ON latest.id = (SELECT m.id FROM messages m WHERE m.channel_id = c.id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1)
 			 WHERE c.kind = 'dm' AND c.deleted_at IS NULL AND other.deleted_at IS NULL
 			 ORDER BY last_message_at DESC NULLS LAST, c.id DESC`,
 			)
@@ -70,7 +80,7 @@ export async function listUserDms(db, userId) {
 					normalizedUserId,
 				)
 		.all();
-	return results.map(mapUserDm);
+	return Promise.all(results.map(async (row) => ({ ...mapUserDm(row), lastMessagePreview: await messagePreview(env, row) })));
 }
 
 export async function listAdminDms(db) {

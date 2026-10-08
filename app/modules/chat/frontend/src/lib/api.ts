@@ -120,6 +120,11 @@ export interface ChatApi {
     onMessage: (frame: unknown) => void
     onStatus: (status: 'connecting' | 'open' | 'closed' | 'error') => void
   }): { close(): void; send?(text: string): void }
+  openInboxSocket(handlers: {
+    token: string
+    onMessage: (frame: unknown) => void
+    onStatus: (status: 'connecting' | 'open' | 'closed' | 'error') => void
+  }): { close(): void; send?(text: string): void }
 }
 
 export interface CreateChatApiOptions {
@@ -131,6 +136,7 @@ export interface CreateChatApiOptions {
   upload?: (file: File) => Promise<{ file: Attachment }>
   /** room socket 打开器（注入内存实现用于测试/mock）。 */
   openRoomSocket?: ChatApi['openRoomSocket']
+  openInboxSocket?: ChatApi['openInboxSocket']
 }
 
 function query(params: Record<string, string | number | undefined>): string {
@@ -208,6 +214,23 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
         },
       }
     })
+  const openInboxSocket =
+    options.openInboxSocket ??
+    ((handlers: Parameters<ChatApi['openInboxSocket']>[0]) => {
+      const wsProtocol = globalThis.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const url = `${wsProtocol}//${globalThis.location.host}${liveApiBase(globalThis.location.pathname)}/inbox/ws?token=${encodeURIComponent(handlers.token)}`
+      let socket: WebSocket | null = null
+      try { socket = new WebSocket(url) } catch { handlers.onStatus('error'); return { close() {} } }
+      handlers.onStatus('connecting')
+      socket.addEventListener('open', () => handlers.onStatus('open'))
+      socket.addEventListener('close', () => handlers.onStatus('closed'))
+      socket.addEventListener('error', () => handlers.onStatus('error'))
+      socket.addEventListener('message', (event) => {
+        const frame = parseSocketFrame(event.data)
+        if (frame !== undefined) handlers.onMessage(frame)
+      })
+      return { close() { socket?.close() }, send(text: string) { if (socket?.readyState === WebSocket.OPEN) socket.send(text) } }
+    })
 
   const requestJson = async <T,>(path: string, init: RequestInit): Promise<T> => {
     const response = await transport(path, init)
@@ -252,5 +275,6 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
       }),
     uploadFile,
     openRoomSocket,
+    openInboxSocket,
   }
 }
