@@ -51,7 +51,14 @@ export function forwardRoomConnection({ env, request, kind, roomId, principal })
 }
 
 export function forwardInboxConnection({ env, request, principal }) {
-	return getUserInboxStub(env, principal.userId).fetch(request);
+	// 收件箱 DO 不接触 JWT，只信入口 Worker 已验签后注入的用户头。
+	// 以原始 Request 为基底重写身份头，保留 WebSocket upgrade 元数据。
+	const forwarded = new Request(request.url, request);
+	const headers = createVerifiedPrincipalHeaders(forwarded.headers, principal);
+	for (const [key, value] of headers) {
+		forwarded.headers.set(key, value);
+	}
+	return getUserInboxStub(env, principal.userId).fetch(forwarded);
 }
 
 export async function notifyUserInbox(env, userId, payload) {
