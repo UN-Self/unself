@@ -61,6 +61,18 @@ export class UserInbox {
     return new Response('Not Found', { status: 404 });
   }
 
+  webSocketMessage(ws, message) {
+    if (typeof message !== 'string') return;
+    try {
+      const payload = JSON.parse(message);
+      if (payload?.type === 'ping') {
+        ws.send(JSON.stringify({ protocolVersion: 1, type: 'pong' }));
+      }
+    } catch {
+      // 收件箱只处理探活帧；未知或损坏的客户端帧静默丢弃。
+    }
+  }
+
   webSocketClose(ws) {
     this.connections.delete(ws);
   }

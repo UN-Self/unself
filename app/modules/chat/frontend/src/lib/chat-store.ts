@@ -375,6 +375,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
         onStatus: (status) => {
           if (status === 'open') state.realtimeStatus = 'open'
           else if (status === 'connecting') state.realtimeStatus = 'connecting'
+          else if (status === 'reconnecting') state.realtimeStatus = 'reconnecting'
           else if (status === 'error') state.realtimeStatus = 'error'
           else state.realtimeStatus = 'closed'
         },
@@ -546,7 +547,7 @@ export function attachInboxSocket(
 }
 
 function openInbox(api: ChatApi, token: string, store: ChatStore): { close(): void } {
-  const handle = api.openInboxSocket({
+  return api.openInboxSocket({
     token,
     onStatus: () => {},
     onMessage: (frame) => {
@@ -556,5 +557,4 @@ function openInbox(api: ChatApi, token: string, store: ChatStore): { close(): vo
       }
     },
   })
-  return handle
 }

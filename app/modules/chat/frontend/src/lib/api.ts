@@ -21,6 +21,7 @@ import type {
   RoomKind,
   UserSummary,
 } from './types'
+import { openReconnectableSocket } from './reconnectable-socket'
 
 /** 上游错误信封：{ error: string }（errorResponse），JSON 解析失败时无信封。 */
 export interface ChatApiError extends Error {
@@ -118,12 +119,12 @@ export interface ChatApi {
     roomId: number
     token: string
     onMessage: (frame: unknown) => void
-    onStatus: (status: 'connecting' | 'open' | 'closed' | 'error') => void
+    onStatus: (status: 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error') => void
   }): { close(): void; send?(text: string): void }
   openInboxSocket(handlers: {
     token: string
     onMessage: (frame: unknown) => void
-    onStatus: (status: 'connecting' | 'open' | 'closed' | 'error') => void
+    onStatus: (status: 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error') => void
   }): { close(): void; send?(text: string): void }
 }
 
@@ -182,27 +183,24 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
     })
   const openRoomSocket =
     options.openRoomSocket ??
-    ((handlers: Parameters<ChatApi['openRoomSocket']>[0]) => {
+    ((handlers: Parameters<ChatApi['openRoomSocket']>[0]) => openReconnectableSocket({
+      getToken: options.getToken,
+      connect: (token, connection) => {
       // live：`/api/ws/:kind/:id?token=`（上游 WEBSOCKET_AUTH：会话先经 worker 校验再升级）；
       // 浏览器 WebSocket 不能带 Authorization 头，token 走查询串是上游协议契约。
       const wsProtocol = globalThis.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const url = `${wsProtocol}//${globalThis.location.host}${liveApiBase(globalThis.location.pathname)}/ws/${handlers.kind}/${handlers.roomId}?token=${encodeURIComponent(handlers.token)}`
+      const url = `${wsProtocol}//${globalThis.location.host}${liveApiBase(globalThis.location.pathname)}/ws/${handlers.kind}/${handlers.roomId}?token=${encodeURIComponent(token)}`
       let socket: WebSocket | null = null
-      try {
-        socket = new WebSocket(url)
-      } catch {
-        handlers.onStatus('error')
-        return { close() {} }
-      }
-      socket.addEventListener('open', () => handlers.onStatus('open'))
-      socket.addEventListener('close', () => handlers.onStatus('closed'))
-      socket.addEventListener('error', () => handlers.onStatus('error'))
+      try { socket = new WebSocket(url) } catch { connection.onStatus('error'); return { close() {} } }
+      socket.addEventListener('open', () => connection.onStatus('open'))
+      socket.addEventListener('close', () => connection.onStatus('closed'))
+      socket.addEventListener('error', () => connection.onStatus('error'))
       socket.addEventListener('message', (event) => {
         // #235：浏览器文本帧 event.data = JSON 字符串，必须先解析再上抛——
         // onMessage 契约恒收对象（与 mock 实现同参，store 按对象判型）；
         // 非 JSON 或非对象帧（心跳/二进制等）静默丢弃，不污染上层状态机
         const frame = parseSocketFrame(event.data)
-        if (frame !== undefined) handlers.onMessage(frame)
+        if (frame !== undefined) connection.onMessage(frame)
       })
       return {
         close() {
@@ -213,24 +211,31 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
           if (socket && socket.readyState === WebSocket.OPEN) socket.send(text)
         },
       }
-    })
+      },
+      onMessage: handlers.onMessage,
+      onStatus: handlers.onStatus,
+    }))
   const openInboxSocket =
     options.openInboxSocket ??
-    ((handlers: Parameters<ChatApi['openInboxSocket']>[0]) => {
+    ((handlers: Parameters<ChatApi['openInboxSocket']>[0]) => openReconnectableSocket({
+      getToken: options.getToken,
+      connect: (token, connection) => {
       const wsProtocol = globalThis.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const url = `${wsProtocol}//${globalThis.location.host}${liveApiBase(globalThis.location.pathname)}/inbox/ws?token=${encodeURIComponent(handlers.token)}`
+      const url = `${wsProtocol}//${globalThis.location.host}${liveApiBase(globalThis.location.pathname)}/inbox/ws?token=${encodeURIComponent(token)}`
       let socket: WebSocket | null = null
-      try { socket = new WebSocket(url) } catch { handlers.onStatus('error'); return { close() {} } }
-      handlers.onStatus('connecting')
-      socket.addEventListener('open', () => handlers.onStatus('open'))
-      socket.addEventListener('close', () => handlers.onStatus('closed'))
-      socket.addEventListener('error', () => handlers.onStatus('error'))
+      try { socket = new WebSocket(url) } catch { connection.onStatus('error'); return { close() {} } }
+      socket.addEventListener('open', () => connection.onStatus('open'))
+      socket.addEventListener('close', () => connection.onStatus('closed'))
+      socket.addEventListener('error', () => connection.onStatus('error'))
       socket.addEventListener('message', (event) => {
         const frame = parseSocketFrame(event.data)
-        if (frame !== undefined) handlers.onMessage(frame)
+        if (frame !== undefined) connection.onMessage(frame)
       })
       return { close() { socket?.close() }, send(text: string) { if (socket?.readyState === WebSocket.OPEN) socket.send(text) } }
-    })
+      },
+      onMessage: handlers.onMessage,
+      onStatus: handlers.onStatus,
+    }))
 
   const requestJson = async <T,>(path: string, init: RequestInit): Promise<T> => {
     const response = await transport(path, init)
