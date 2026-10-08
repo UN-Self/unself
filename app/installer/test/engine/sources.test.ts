@@ -242,6 +242,15 @@ describe('npmResolve / githubResolve（子进程走真实 npm/gh 配置）', () 
       await expect(githubResolve({ repo: 'acme/no-such-repo-zzz-404', cwd: work })).rejects.toThrow(/gh release view/);
     }
   });
+  it('githubResolve：外部 gh 超时 → 有界失败，不拖住门禁', async () => {
+    const hasGh = spawnSync('gh', ['--version']).status === 0;
+    if (!hasGh) return;
+    const started = Date.now();
+    await expect(githubResolve({ repo: 'acme/no-such-repo-zzz-timeout', cwd: work })).rejects.toThrow(
+      /gh release view/,
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
 });
 
 // ---------------------------------------------------------------------------
