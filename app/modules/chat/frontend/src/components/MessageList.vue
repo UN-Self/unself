@@ -169,32 +169,33 @@ function onShowReceipts(message: Message): void {
     aria-label="消息流"
     @scroll.passive="onScroll"
   >
-    <!-- 顶部状态：更早历史加载中 / 没有更多 -->
-    <div v-if="loadingEarlier" class="stream-state" data-test="loading-earlier">
-      <USkeleton :lines="2" />
-    </div>
-    <div v-else-if="noEarlier && messages.length" class="stream-state" data-test="no-earlier">
-      <span class="stream-hint">没有更早的消息了</span>
-    </div>
+    <div class="stream-content">
+      <div v-if="loadingEarlier" class="stream-state" data-test="loading-earlier">
+        <USkeleton :lines="2" />
+      </div>
+      <div v-else-if="noEarlier && messages.length" class="stream-state" data-test="no-earlier">
+        <span class="stream-hint">没有更早的消息了</span>
+      </div>
 
-    <div v-if="!messages.length" class="stream-empty" data-test="stream-empty">
-      <USkeleton :lines="skeletonLines" />
-    </div>
+      <div v-if="!messages.length" class="stream-empty" data-test="stream-empty">
+        <USkeleton :lines="skeletonLines" />
+      </div>
 
-    <template v-for="section in sections" :key="section.label">
-      <div class="stream-day" data-test="day-divider">{{ section.label }}</div>
-      <template v-for="message in section.messages" :key="message.id">
-        <MessageBubble
-          :ref="(el) => observeBubbleEl(el, message.id, message.sender.id)"
-          :message="message"
-          :mine="message.sender.id === currentUserId"
-          :is-dm="isDm"
-          :audience-size="audienceSize"
-          :read-summary="readReceipts?.[message.id] ?? null"
-          @show-receipts="onShowReceipts"
-        />
+      <template v-for="section in sections" :key="section.label">
+        <div class="stream-day" data-test="day-divider">{{ section.label }}</div>
+        <template v-for="message in section.messages" :key="message.id">
+          <MessageBubble
+            :ref="(el) => observeBubbleEl(el, message.id, message.sender.id)"
+            :message="message"
+            :mine="message.sender.id === currentUserId"
+            :is-dm="isDm"
+            :audience-size="audienceSize"
+            :read-summary="readReceipts?.[message.id] ?? null"
+            @show-receipts="onShowReceipts"
+          />
+        </template>
       </template>
-    </template>
+    </div>
   </div>
 </template>
 
@@ -203,12 +204,22 @@ function onShowReceipts(message: Message): void {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--unself-space-3) var(--unself-space-4);
+  display: flex;
+  flex-direction: column;
+  background: var(--unself-color-surface);
+  scrollbar-width: thin;
+}
+.stream-content {
   display: flex;
   flex-direction: column;
   gap: var(--unself-space-2);
-  scrollbar-width: thin;
+  width: min(100%, 800px);
+  min-height: 100%;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: var(--unself-space-5) var(--unself-space-4);
 }
+.stream-content > :first-child { margin-top: auto; }
 .stream-state {
   display: flex;
   justify-content: center;
