@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
-import { ArrowLeft, Hash, Lock } from 'lucide-vue-next'
+import { ArrowLeft, Hash, Lock, UserPlus } from 'lucide-vue-next'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import MessageList from './MessageList.vue'
 import RoomList from './RoomList.vue'
 import { USkeleton } from '@unself/ui'
 import { NARROW_MAX_PX, type MediaQueryLike } from '../lib/viewport'
-import type { Channel, Dm, Message, RoomKind } from '../lib/types'
+import type { Channel, Dm, Message, RoomKind, UserSummary } from '../lib/types'
 
 /**
  * 聊天布局骨架（#218，worker A）：桌面（>768px）双栏 = 会话列表 + 消息流；
@@ -18,6 +18,7 @@ import type { Channel, Dm, Message, RoomKind } from '../lib/types'
 export interface ChatLayoutProps {
   channels: Channel[]
   dms: Dm[]
+  contacts?: UserSummary[]
   /** 当前房间；null = 未选中（窄屏显示列表，桌面显示空占位）。 */
   activeRoom: { kind: RoomKind; id: number; name: string } | null
   messages: Message[]
@@ -42,6 +43,7 @@ const props = withDefaults(defineProps<ChatLayoutProps>(), {
   audienceSize: 0,
   readReceipts: () => ({}),
   loadError: null,
+  contacts: () => [],
 })
 
 const emit = defineEmits<{
@@ -52,6 +54,7 @@ const emit = defineEmits<{
   'show-receipts': [message: Message]
   /** 他人消息进入视口 → 根层批量上报已读（#220）。 */
   'visible-read': [messageIds: number[]]
+  'open-dm': [userId: number]
 }>()
 
 /** 响应式窄屏判定：跟随 matchMedia 翻转并回调；无 matchMedia 环境降级恒 false（桌面布局）。 */
@@ -111,6 +114,20 @@ const roomIcon = computed(() => {
     <section v-if="showListPane" class="chat-list" data-test="list-pane">
       <header class="chat-list-head">
         <span class="chat-title">聊天</span>
+        <details v-if="contacts.length" class="chat-new-dm">
+          <summary aria-label="新建私聊" title="新建私聊"><UserPlus :size="16" aria-hidden="true" /></summary>
+          <div class="chat-new-dm-menu" role="menu" aria-label="选择私聊成员">
+            <button
+              v-for="contact in contacts"
+              :key="contact.id"
+              type="button"
+              role="menuitem"
+              @click="emit('open-dm', contact.id)"
+            >
+              {{ contact.displayName || contact.username }}
+            </button>
+          </div>
+        </details>
       </header>
       <RoomList
         :channels="channels"
@@ -185,6 +202,56 @@ const roomIcon = computed(() => {
   border-right: 1px solid var(--unself-color-border);
   background: var(--unself-color-surface);
   min-height: 0;
+}
+.chat-list-head {
+  position: relative;
+}
+.chat-new-dm {
+  position: relative;
+}
+.chat-new-dm summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--unself-touch-target);
+  min-height: var(--unself-touch-target);
+  border-radius: var(--unself-radius-sm);
+  color: var(--unself-color-text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+.chat-new-dm summary::-webkit-details-marker {
+  display: none;
+}
+.chat-new-dm summary:hover,
+.chat-new-dm summary:focus-visible {
+  background: var(--unself-color-surface-hover);
+  color: var(--unself-color-text);
+}
+.chat-new-dm-menu {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + var(--unself-space-1));
+  right: 0;
+  display: grid;
+  min-width: 10rem;
+  padding: var(--unself-space-1);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-sm);
+  background: var(--unself-color-bg);
+  box-shadow: var(--unself-shadow-lg);
+}
+.chat-new-dm-menu button {
+  padding: var(--unself-space-2) var(--unself-space-3);
+  border: 0;
+  background: transparent;
+  color: var(--unself-color-text);
+  text-align: left;
+  cursor: pointer;
+}
+.chat-new-dm-menu button:hover,
+.chat-new-dm-menu button:focus-visible {
+  background: var(--unself-color-surface-hover);
 }
 .chat-room {
   display: flex;

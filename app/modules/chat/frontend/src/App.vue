@@ -108,6 +108,12 @@ function onSelect(room: { kind: RoomKind; id: number }): void {
   void store.openRoom(room, displayNameFor(room))
 }
 
+function onOpenDm(userId: number): void {
+  void store.openDm(userId).catch((error) => {
+    store.state.historyError = error instanceof Error ? error.message : String(error)
+  })
+}
+
 function onBack(): void {
   store.closeSockets()
   store.state.currentRoom = null
@@ -226,6 +232,7 @@ const contextKey = computed(() =>
       v-else-if="handshakeReady"
       :channels="store.state.channels"
       :dms="store.state.dms"
+      :contacts="contacts.filter((contact) => contact.id !== store.state.myUserId)"
       :active-room="activeRoom"
       :messages="store.state.messages"
       :current-user-id="store.state.myUserId"
@@ -242,6 +249,7 @@ const contextKey = computed(() =>
       :read-receipts="store.state.readReceipts"
       :load-error="roomsError"
       @select="onSelect"
+      @open-dm="onOpenDm"
       @back="onBack"
       @load-earlier="onLoadEarlier"
       @show-receipts="onShowReceipts"

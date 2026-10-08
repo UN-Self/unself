@@ -1,13 +1,14 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Mic, Paperclip, SendHorizontal, Square, X } from 'lucide-vue-next'
+import { Mic, Paperclip, SendHorizontal, Smile, Square, X } from 'lucide-vue-next'
 
 import { clearDraft, loadDraft, saveDraft } from '../lib/draft'
 import type { Message, UserSummary } from '../lib/types'
 import { createVoiceRecorder, isVoiceSupported } from '../lib/voice-recorder'
 import type { VoiceRecorder, VoiceRecording } from '../lib/voice-recorder'
 import { formatVoiceDuration } from '../lib/waveform'
+import { COMMON_EMOJI } from '../lib/emoji'
 
 /**
  * 消息输入区（#218 C 路）：文本（markdown 语法由渲染端处理）+ @选择器 + 文件
@@ -58,6 +59,7 @@ const emit = defineEmits<{
 
 const text = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
+const emojiOpen = ref(false)
 
 /** 提及状态：随文本编辑同步增删（本次文本中真实被 @ 的联系人集合）。 */
 const mentionUserIds = ref<number[]>([])
@@ -224,6 +226,22 @@ function sendText(): void {
   void nextTick(updateHeight)
 }
 
+function insertEmoji(emoji: string): void {
+  const el = textarea.value
+  const start = el?.selectionStart ?? text.value.length
+  const end = el?.selectionEnd ?? start
+  text.value = `${text.value.slice(0, start)}${emoji}${text.value.slice(end)}`
+  syncMentionsFromText(text.value)
+  emojiOpen.value = false
+  void nextTick(() => {
+    if (!el) return
+    const caret = start + emoji.length
+    el.focus()
+    el.setSelectionRange(caret, caret)
+    updateHeight()
+  })
+}
+
 // ---------- 文件 ----------
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -321,6 +339,7 @@ watch(
   if (previous?.kind === room?.kind && previous?.id === room?.id) return
   if (recording.value) cancelRecording()
   pendingFile.value = null
+  emojiOpen.value = false
   if (room) {
     text.value = loadDraft(room.kind, room.id)
     syncMentionsFromText(text.value)
@@ -408,6 +427,30 @@ const replyPreview = computed(() => {
 
     <!-- 主输入行 -->
     <div class="composer-row">
+      <div class="composer-emoji-wrap">
+        <button
+          type="button"
+          class="composer-icon-btn"
+          data-test="emoji-toggle"
+          aria-label="插入表情"
+          :aria-expanded="emojiOpen"
+          :disabled="disabled || recording"
+          @click="emojiOpen = !emojiOpen"
+        >
+          <Smile :size="18" aria-hidden="true" />
+        </button>
+        <div v-if="emojiOpen" class="composer-emoji-popover" data-test="emoji-picker" role="grid" aria-label="表情">
+          <button
+            v-for="emoji in COMMON_EMOJI"
+            :key="emoji"
+            type="button"
+            class="composer-emoji-item"
+            role="gridcell"
+            :aria-label="`插入${emoji}`"
+            @click="insertEmoji(emoji)"
+          >{{ emoji }}</button>
+        </div>
+      </div>
       <button
         type="button"
         class="composer-icon-btn"
@@ -467,10 +510,47 @@ const replyPreview = computed(() => {
   background: var(--unself-color-bg);
 }
 .composer-row {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: var(--unself-space-2);
   padding: var(--unself-space-2) var(--unself-space-3);
+}
+.composer-emoji-wrap {
+  position: relative;
+}
+.composer-emoji-popover {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(100% + var(--unself-space-2));
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(8, minmax(2rem, 1fr));
+  gap: var(--unself-space-1);
+  width: min(20rem, calc(100vw - 2rem));
+  max-height: 14rem;
+  overflow-y: auto;
+  padding: var(--unself-space-2);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-bg);
+  box-shadow: var(--unself-shadow-lg);
+}
+.composer-emoji-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--unself-touch-target);
+  min-height: var(--unself-touch-target);
+  border: 0;
+  border-radius: var(--unself-radius-sm);
+  background: transparent;
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+.composer-emoji-item:hover,
+.composer-emoji-item:focus-visible {
+  background: var(--unself-color-surface-hover);
 }
 .composer-textarea {
   flex: 1;
