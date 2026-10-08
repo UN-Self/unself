@@ -12,6 +12,23 @@ import { createChatStorage } from '../src/lib/storage'
  * - 语音/文件附件经 uploadFile → attachment → 发送 → 到达对端
  */
 describe('mock 全链路：列表 → 房间 → 发送/接收（WS）→ 附件', () => {
+  it('选择联系人创建私聊后，store 打开新会话', async () => {
+    const api = createMockChatApi()
+    const store = createChatStore({
+      api,
+      storage: createChatStorage(),
+      myUserId: () => api.world.me.id,
+      getToken: () => 'mock-token',
+    })
+
+    await store.loadContacts()
+    await store.openDm(3)
+    expect(store.state.currentRoom).toEqual({ kind: 'dm', id: 103 })
+    expect(store.state.roomName).toBe('老王')
+    expect(store.state.dms.some((dm) => dm.otherUser.id === 3)).toBe(true)
+    store.closeSockets()
+  })
+
   it('打开房间显示历史，发送文本 → created 回包入列；WS 广播回显不重复', async () => {
     const api = createMockChatApi()
     const store = createChatStore({
