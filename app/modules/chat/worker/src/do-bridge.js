@@ -32,15 +32,15 @@ export async function forwardVerifiedRequest({
 		}
 	}
 
-	const init = {
-		method: request.method,
-		headers: createVerifiedPrincipalHeaders(request.headers, principal),
-	};
-	if (!["GET", "HEAD"].includes(request.method)) {
-		// 先把请求体固化为可重放字节，避免跨运行时转发 ReadableStream 时依赖 Node 专属 duplex 配置。
-		init.body = await request.arrayBuffer();
+	// 用原请求作为基底重写 URL。Cloudflare 的 WebSocket 升级信息不在普通
+	// headers 里，重新用 method/headers/body 组装 Request 会把它丢掉，DO
+	// 因而只能看到普通 GET 并返回 426。以原 Request 构造可保留 upgrade 元数据。
+	const forwarded = new Request(url.toString(), request);
+	const verifiedHeaders = createVerifiedPrincipalHeaders(forwarded.headers, principal);
+	for (const [key, value] of verifiedHeaders) {
+		forwarded.headers.set(key, value);
 	}
-	return stub.fetch(new Request(url.toString(), init));
+	return stub.fetch(forwarded);
 }
 
 export function forwardRoomConnection({ env, request, kind, roomId, principal }) {
