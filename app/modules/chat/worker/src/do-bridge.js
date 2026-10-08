@@ -44,22 +44,14 @@ export async function forwardVerifiedRequest({
 }
 
 export function forwardRoomConnection({ env, request, kind, roomId, principal }) {
-	return forwardVerifiedRequest({
-		stub: getChannelRoomStub(env, kind, roomId),
-		request,
-		pathname: "/connect",
-		searchParams: { kind, id: roomId, token: principal.token },
-		principal,
-	});
+	// WebSocket upgrade 必须使用浏览器发来的原始 Request。Cloudflare
+	// Durable Objects 官方模式是直接 stub.fetch(request)；重建 Request
+	// 会丢失运行时的 upgrade 元数据。JWT 已在原始 URL 中，DO 会自行验签。
+	return getChannelRoomStub(env, kind, roomId).fetch(request);
 }
 
 export function forwardInboxConnection({ env, request, principal }) {
-	return forwardVerifiedRequest({
-		stub: getUserInboxStub(env, principal.userId),
-		request,
-		pathname: "/connect",
-		principal,
-	});
+	return getUserInboxStub(env, principal.userId).fetch(request);
 }
 
 export async function notifyUserInbox(env, userId, payload) {

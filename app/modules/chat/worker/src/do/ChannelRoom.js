@@ -324,8 +324,9 @@ export class ChannelRoom {
     }
 
     const token = url.searchParams.get('token') || '';
-    const kind = url.searchParams.get('kind') || '';
-    const roomId = Number(url.searchParams.get('id') || '');
+    const pathRoom = url.pathname.match(/\/api\/ws\/(public|private|dm)\/(\d+)$/);
+    const kind = url.searchParams.get('kind') || pathRoom?.[1] || '';
+    const roomId = Number(url.searchParams.get('id') || pathRoom?.[2] || '');
 
     // #217 认证适配：两种通道都先验模块 JWT（本地验签，零网络）——
     // claims 必须落 meta（按消息重验 + 续期换绑都依赖它，实测 #217：内部通道若不带 claims，首条业务帧即 1008）：
