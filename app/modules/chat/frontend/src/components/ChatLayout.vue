@@ -212,6 +212,7 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
       </div>
       <MessageList
         v-else
+        :room-key="activeRoom ? `${activeRoom.kind}:${activeRoom.id}` : ''"
         :messages="messages"
         :current-user-id="currentUserId"
         :loading-earlier="loadingEarlier"

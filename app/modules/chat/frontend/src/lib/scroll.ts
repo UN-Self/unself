@@ -21,12 +21,28 @@ export function nearBottom(el: HTMLElement, thresholdPx?: number): boolean {
   return distance <= (thresholdPx ?? defaultThresholdPx(el))
 }
 
-/** 滚动到底部（新消息到达且用户本就在底部时调用）。 */
-export function scrollToBottom(el: HTMLElement): void {
-  // 实测 jsdom/部分环境 scrollTop 为 setter-only 不可写保护——先写再读回断言由调用方做；
-  // 这里仅写，绝不读。
+/** 定位到容器中的垂直位置；smooth 交由浏览器执行。 */
+export function scrollToPosition(
+  el: HTMLElement,
+  top: number,
+  behavior: ScrollBehavior = 'auto',
+): void {
+  // 原生 scrollTo 的 smooth 行为由浏览器执行；jsdom/旧 WebView 没有该方法时回退到 setter。
   try {
-    el.scrollTop = el.scrollHeight
+    if (typeof el.scrollTo === 'function') {
+      el.scrollTo({ top, behavior })
+      return
+    }
+    el.scrollTop = top
+  } catch {
+    // 只读保护环境（测试假元素冻结等）：滚动是尽力而为的展示增强。
+  }
+}
+
+/** 滚动到底部；新消息/按钮可以选择 smooth，首次定位默认立即到位。 */
+export function scrollToBottom(el: HTMLElement, behavior: ScrollBehavior = 'auto'): void {
+  try {
+    scrollToPosition(el, el.scrollHeight, behavior)
   } catch {
     // 只读保护环境（测试假元素冻结等）：静默——滚动是尽力而为的展示增强。
   }

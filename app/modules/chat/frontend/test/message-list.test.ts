@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import MessageList from '../src/components/MessageList.vue'
@@ -41,6 +41,7 @@ async function mountList(props: {
   loadingEarlier?: boolean
   noEarlier?: boolean
   currentUserId?: number
+  roomKey?: string
 }) {
   const wrapper = mount(MessageList, {
     props: {
@@ -58,8 +59,96 @@ async function mountList(props: {
 beforeEach(() => {
   vi.restoreAllMocks()
 })
+afterEach(() => vi.unstubAllGlobals())
 
 describe('MessageList（#218）', () => {
+  it('首次带历史消息挂载就定位到底部，不需要再收到新消息', async () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(2400)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400)
+    const wrapper = await mountList({ messages: [msg(1, 2), msg(2, 1)] })
+    const el = wrapper.get('[data-test="message-stream"]').element as HTMLElement
+    expect(el.scrollTop).toBeGreaterThanOrEqual(2000)
+    wrapper.unmount()
+  })
+
+  it('点击消息导航可以定位旧消息；点击回到最新重新触底', async () => {
+    const wrapper = await mountList({ messages: [msg(1, 2), msg(2, 1)] })
+    const viewport = wrapper.get('[data-test="message-stream"]')
+    const el = viewport.element as HTMLElement
+    installScrollGeometry(el, { scrollTop: 1600, scrollHeight: 2000, clientHeight: 400 })
+    await viewport.trigger('scroll')
+    await wrapper.get('button[aria-label="定位消息：对方用户，hello-1"]').trigger('click')
+    expect(el.scrollTop).toBeLessThan(1600)
+    await wrapper.get('button[aria-label="回到最新消息"]').trigger('click')
+    expect(el.scrollTop).toBeGreaterThanOrEqual(1600)
+    wrapper.unmount()
+  })
+
+  it('切换到消息条数相同的会话也重新定位到底部', async () => {
+    const wrapper = await mountList({ roomKey: 'public:1', messages: [msg(1, 2), msg(2, 1)] })
+    const viewport = wrapper.get('[data-test="message-stream"]')
+    const el = viewport.element as HTMLElement
+    installScrollGeometry(el, { scrollTop: 300, scrollHeight: 2000, clientHeight: 400 })
+    await viewport.trigger('scroll')
+    await wrapper.setProps({ roomKey: 'dm:2', messages: [msg(10, 2), msg(11, 1)] })
+    await wrapper.vm.$nextTick()
+    expect(el.scrollTop).toBeGreaterThanOrEqual(1600)
+    wrapper.unmount()
+  })
+
+  it('前插历史时补偿新增高度，保留正在阅读的位置', async () => {
+    const wrapper = await mountList({ messages: [msg(3, 2), msg(4, 1)] })
+    const viewport = wrapper.get('[data-test="message-stream"]')
+    const el = viewport.element as HTMLElement
+    installScrollGeometry(el, { scrollTop: 50, scrollHeight: 2000, clientHeight: 400 })
+    await viewport.trigger('scroll')
+    // 几何边界：模拟浏览器在 Vue 更新 DOM 后增加内容高度。
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () =>
+      el.querySelectorAll('[data-message-id]').length > 2 ? 2400 : 2000,
+    })
+    await wrapper.setProps({ messages: [msg(1, 2), msg(2, 1), msg(3, 2), msg(4, 1)] })
+    await wrapper.vm.$nextTick()
+    expect(el.scrollTop).toBe(450)
+    wrapper.unmount()
+  })
+
+  it.each([false, true])('侧轨使用平滑滚动；减少动态效果=%s 时立即定位', async (reduce) => {
+    vi.stubGlobal('matchMedia', () => ({ matches: reduce }))
+    const wrapper = await mountList({ messages: [msg(1, 2), msg(2, 1)] })
+    const viewport = wrapper.get('[data-test="message-stream"]')
+    const el = viewport.element as HTMLElement
+    installScrollGeometry(el, { scrollTop: 1600, scrollHeight: 2000, clientHeight: 400 })
+    const scroll = vi.fn((options: ScrollToOptions) => { el.scrollTop = options.top ?? 0 })
+    el.scrollTo = scroll as unknown as HTMLElement['scrollTo']
+    await viewport.trigger('scroll')
+    await wrapper.get('button[aria-label="定位消息：对方用户，hello-1"]').trigger('click')
+    expect(scroll).toHaveBeenLastCalledWith({ top: 1400, behavior: reduce ? 'auto' : 'smooth' })
+    await wrapper.get('button[aria-label="回到最新消息"]').trigger('click')
+    expect(scroll).toHaveBeenLastCalledWith({ top: 2000, behavior: reduce ? 'auto' : 'smooth' })
+    wrapper.unmount()
+  })
+
+  it('延迟布局增高时贴底跟随，离底阅读时不跳动', async () => {
+    let resized: () => void = () => {}
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe() {}
+      disconnect() {}
+    })
+    const wrapper = await mountList({ messages: [msg(1, 2), msg(2, 1)] })
+    const viewport = wrapper.get('[data-test="message-stream"]')
+    const el = viewport.element as HTMLElement
+    installScrollGeometry(el, { scrollTop: 1600, scrollHeight: 2400, clientHeight: 400 })
+    resized()
+    expect(el.scrollTop).toBe(2400)
+    el.scrollTop = 300
+    await viewport.trigger('scroll')
+    installScrollGeometry(el, { scrollTop: 300, scrollHeight: 2800, clientHeight: 400 })
+    resized()
+    expect(el.scrollTop).toBe(300)
+    wrapper.unmount()
+  })
+
   it('消息按 mine/theirs 分侧渲染；正文与时刻可见', async () => {
     const wrapper = await mountList({ messages: [msg(1, 2), msg(2, 1)] })
 
