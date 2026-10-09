@@ -160,7 +160,7 @@ describe('#235 集成面：解析后帧驱动 store（实时入列/回执递增�
     await Promise.resolve()
     expect(store.state.messages.map((m) => m.id)).toContain(900)
     expect(store.state.messages.length).toBe(before + 1)
-    expect(reportMessagesRead).toHaveBeenCalled()
+    await vi.waitFor(() => expect(reportMessagesRead).toHaveBeenCalled())
     store.closeSockets()
   })
 

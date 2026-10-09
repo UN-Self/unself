@@ -165,7 +165,7 @@ describe('store 回执状态与上报（#220）', () => {
     await store.openRoom({ kind: 'public', id: 1 }, 'general')
     await flushPromises()
     // 首页他人消息 = id 3、2（id 1 是我发的，跳过）
-    expect(postSpy).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(postSpy).toHaveBeenCalledTimes(1))
     expect(postSpy.mock.calls[0]?.[2]).toEqual(expect.arrayContaining([2, 3]))
     expect(postSpy.mock.calls[0]?.[2]).not.toContain(1)
     // 上报在 mock 世界落行：我的名字进了 id 3 的已读名单
@@ -235,12 +235,13 @@ describe('store 回执状态与上报（#220）', () => {
     })
     await store.openRoom({ kind: 'public', id: 1 }, 'general')
     await flushPromises()
+    await vi.waitFor(() => expect(api.reportMessagesRead).toHaveBeenCalledTimes(1))
     expect(store.state.loadingHistory).toBe('ready') // 失败不伤历史状态
 
     // 恢复网络后再次可见 → 重新上报同一批
     failing = false
     await store.recordVisibleRead([3, 2])
-    expect(api.reportMessagesRead).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(api.reportMessagesRead).toHaveBeenCalledTimes(2))
     store.closeSockets()
   })
 
@@ -258,6 +259,7 @@ describe('store 回执状态与上报（#220）', () => {
 
     await store.openRoom({ kind: 'public', id: 1 }, 'general')
     await flushPromises()
+    await vi.waitFor(() => expect(api.reportMessagesRead).toHaveBeenCalledTimes(1))
     const firstCalls = vi.mocked(api.reportMessagesRead).mock.calls.length
     await store.recordVisibleRead([3, 2]) // openRoom 已报过的消息
     expect(vi.mocked(api.reportMessagesRead).mock.calls.length).toBe(firstCalls)
@@ -465,8 +467,10 @@ describe('本人身份解析（#229：coreUserId × contacts 双源，迟到就�
       }),
     })
     await flushPromises()
-    const last = postSpy.mock.calls[postSpy.mock.calls.length - 1]?.[2] ?? []
-    expect(last).toEqual([10]) // 他人消息正常上报（帧内自动上报）
+    await vi.waitFor(() => expect(postSpy).toHaveBeenCalled())
+    const batches = postSpy.mock.calls.map((call) => call[2] as number[])
+    expect(batches.some((batch) => batch.includes(10))).toBe(true)
+    expect(batches.flat()).not.toContain(9)
     store.closeSockets()
   })
 

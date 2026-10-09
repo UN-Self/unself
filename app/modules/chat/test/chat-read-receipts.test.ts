@@ -154,6 +154,24 @@ function verifiedHeaders(userId: number): Record<string, string> {
 }
 
 describe('chat 已读回执（#220：上报/幂等/口径/推送/兜底）', () => {
+  it('200 条批次完整落库，重放不改回执时间或未读游标时间', async () => {
+    makeToken = await mintSetup();
+    const aliceId = await joinGeneral('u_alice', '爱丽丝');
+    const bobId = await joinGeneral('u_bob', '阿鲍');
+    const token = await makeToken({ sub: 'u_bob', name: '阿鲍' });
+    const ids = Array.from({ length: 200 }, (_, index) => 1000 + index);
+    for (const id of ids) db.run('INSERT INTO messages (id, channel_id, sender_id, content) VALUES (?, 1, ?, ?)', id, aliceId, 'batch');
+    const first = await reportRead(token, { kind: 'public', roomId: 1, messageIds: ids });
+    expect(first.status).toBe(200);
+    expect(first.json.receipts).toHaveLength(200);
+    expect(db.first<{ count: number }>('SELECT COUNT(*) AS count FROM read_receipts WHERE user_id = ?', bobId)?.count).toBe(200);
+    db.run("UPDATE message_reads SET updated_at = '2020-01-01 00:00:00' WHERE user_id = ?", bobId);
+    const replay = await reportRead(token, { kind: 'public', roomId: 1, messageIds: ids });
+    expect(replay.status).toBe(200);
+    expect(replay.json.receipts).toEqual([]);
+    expect(db.first<{ updated_at: string }>('SELECT updated_at FROM message_reads WHERE user_id = ?', bobId)?.updated_at).toBe('2020-01-01 00:00:00');
+  });
+
   it('上报正例：成员批量上报回 receipts 含 readAt，行真落库（db.query 直查）', async () => {
     const mint = await mintSetup();
     makeToken = mint;

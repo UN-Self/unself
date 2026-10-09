@@ -140,6 +140,8 @@ export interface CreateChatStoreOptions {
 }
 
 const HISTORY_PAGE_SIZE = 30
+const READ_BATCH_SIZE = 200
+const READ_BATCH_DELAY_MS = 200
 
 /** 创建聊天状态中枢（工厂注入边界替身，测试多实例互不干扰）。 */
 export function createChatStore(options: CreateChatStoreOptions): ChatStore {
@@ -179,6 +181,54 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
   /** 本人发出的消息 id（上报跳过——发件人恒已读，不计回执）。 */
   const mySentMessageIds = new Set<number>()
   const pendingVisibleIds = new Set<number>()
+  const queuedReadIds = new Set<number>()
+  const inFlightReadIds = new Set<number>()
+  let readRequestInFlight = false
+  let readFlushTimer: ReturnType<typeof setTimeout> | null = null
+  let queuedReadRoom: string | null = null
+
+  const clearReadQueue = (): void => {
+    if (readFlushTimer !== null) clearTimeout(readFlushTimer)
+    readFlushTimer = null
+    queuedReadRoom = null
+    queuedReadIds.clear()
+  }
+
+  const flushReadQueue = async (): Promise<void> => {
+    readFlushTimer = null
+    if (readRequestInFlight) {
+      // 房间切换或新消息可能在上一批请求尚未返回时发生；保留一个延后检查，
+      // 避免新房间的队列因并发请求而永久滞留。
+      scheduleReadFlush()
+      return
+    }
+    const room = state.currentRoom
+    if (!room || queuedReadRoom !== roomKeyString(room)) {
+      clearReadQueue()
+      return
+    }
+    const ids = [...queuedReadIds].slice(0, READ_BATCH_SIZE)
+    ids.forEach((id) => queuedReadIds.delete(id))
+    if (ids.length === 0) return
+    readRequestInFlight = true
+    ids.forEach((id) => inFlightReadIds.add(id))
+    try {
+      await api.reportMessagesRead(room.kind, room.id, ids)
+      ids.forEach((id) => reportedReadIds.add(id))
+    } catch {
+      // 失败批次不自动重试；下次消息进入视口/重新打开会话时再上报，
+      // 避免网络故障时形成无限请求循环。
+    } finally {
+      readRequestInFlight = false
+      ids.forEach((id) => inFlightReadIds.delete(id))
+      if (queuedReadIds.size > 0) scheduleReadFlush()
+    }
+  }
+
+  const scheduleReadFlush = (): void => {
+    if (readFlushTimer !== null) return
+    readFlushTimer = setTimeout(() => { void flushReadQueue() }, READ_BATCH_DELAY_MS)
+  }
 
   /**
    * #229 本人身份解析：claims.sub（core id）→ chat 内部 users.id。
@@ -340,6 +390,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       state.messages = []
       seenMessageIds.clear()
       pendingVisibleIds.clear()
+      clearReadQueue()
       state.readReceipts = {}
       oldestMessageId = Number.POSITIVE_INFINITY
       homeLoaded = false
@@ -493,6 +544,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     },
 
     closeSockets: () => {
+      clearReadQueue()
       roomSocket?.close()
       roomSocket = null
       inboxSocket?.close()
@@ -509,21 +561,16 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
         for (const id of messageIds) pendingVisibleIds.add(id)
         return
       }
-      const pending = [...new Set(messageIds)].filter(
-        (id) => !reportedReadIds.has(id) && !mySentMessageIds.has(id)
-          && state.messages.find((message) => message.id === id)?.sender.id !== state.myUserId,
-      )
-      for (const id of messageIds) pendingVisibleIds.delete(id)
-      if (pending.length === 0) return
-      try {
-        await api.reportMessagesRead(room.kind, room.id, pending)
-      } catch {
-        return // 上报失败不伤本地状态；未入 Set，下次可见即自动重试
+      const roomKey = roomKeyString(room)
+      if (queuedReadRoom !== null && queuedReadRoom !== roomKey) clearReadQueue()
+      queuedReadRoom = roomKey
+      for (const id of new Set(messageIds)) {
+        pendingVisibleIds.delete(id)
+        if (reportedReadIds.has(id) || mySentMessageIds.has(id) || inFlightReadIds.has(id)) continue
+        if (state.messages.find((message) => message.id === id)?.sender.id === state.myUserId) continue
+        queuedReadIds.add(id)
       }
-      for (const id of pending) {
-        reportedReadIds.add(id)
-        mySentMessageIds.add(id) // 服务端不分发本人上报，防御本地重发（无需再试）
-      }
+      if (queuedReadIds.size > 0) scheduleReadFlush()
     },
 
     sendReadReport: (messages) => store.recordVisibleRead(messages.map((m) => m.id)),

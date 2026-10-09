@@ -18,40 +18,18 @@ export async function recordReadReceipts(db, { channelId, userId, messageIds }) 
 		return [];
 	}
 
-	const { results } = await db
-		.prepare(
-			`SELECT id, sender_id FROM messages
-			 WHERE channel_id = ? AND deleted_at IS NULL`,
-		)
-		.bind(Number(channelId))
-		.all();
-	const roomMessageIds = new Set(results.map((row) => Number(row.id)));
-	const senderByMessageId = new Map(results.map((row) => [Number(row.id), Number(row.sender_id)]));
-
-	const newlyRead = [];
-	for (const messageId of uniqueIds) {
-		if (!roomMessageIds.has(messageId)) {
-			continue;
-		}
-		if (senderByMessageId.get(messageId) === Number(userId)) {
-			continue;
-		}
-		const result = await db
-			.prepare(
-				`INSERT OR IGNORE INTO read_receipts (message_id, user_id)
-				 VALUES (?, ?)`,
-			)
-			.bind(messageId, Number(userId))
-			.run();
-		if (Number(result.meta?.changes || 0) > 0) {
-			const row = await db
-				.prepare(`SELECT read_at FROM read_receipts WHERE message_id = ? AND user_id = ?`)
-				.bind(messageId, Number(userId))
-				.first();
-			newlyRead.push({ messageId, readAt: String(row?.read_at || '') });
-		}
-	}
-	return newlyRead;
+	// json_each 只占一个绑定参数，200 条批次仍低于 D1 的 100 参数限制。
+	// 主键定位请求中的消息；一条原子语句过滤权限范围、自读和重复回执，
+	// RETURNING 只返回新插入行，重放不广播，也不逐条往返 D1。
+	const { results } = await db.prepare(
+		`INSERT OR IGNORE INTO read_receipts (message_id, user_id)
+		 SELECT id, ? FROM messages
+		 WHERE id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+		   AND channel_id = ? AND deleted_at IS NULL
+		   AND (sender_id IS NULL OR sender_id != ?)
+		 RETURNING message_id, read_at`,
+	).bind(Number(userId), JSON.stringify(uniqueIds), Number(channelId), Number(userId)).all();
+	return results.map((row) => ({ messageId: Number(row.message_id), readAt: String(row.read_at || '') }));
 }
 
 /**

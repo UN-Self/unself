@@ -24,7 +24,8 @@ export async function markRoomRead(db, { channelId, userId, messageId = null }) 
 			 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
 			 ON CONFLICT(channel_id, user_id) DO UPDATE
 			 SET last_read_message_id = MAX(message_reads.last_read_message_id, excluded.last_read_message_id),
-			     updated_at = CURRENT_TIMESTAMP`,
+			     updated_at = CURRENT_TIMESTAMP
+			 WHERE excluded.last_read_message_id > message_reads.last_read_message_id`,
 		)
 		.bind(Number(channelId), Number(userId), lastReadMessageId)
 		.run();

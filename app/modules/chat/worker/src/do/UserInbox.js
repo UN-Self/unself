@@ -2,10 +2,12 @@
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/do/UserInbox.js（GPL-3.0-only，裁剪版）
 import { isVerifiedInternalRequest, parseVerifiedUserId } from '../verified-identity.js';
 import { durableObjectHealth } from '../maintenance/do-health.ts';
+import { configureHeartbeat } from './heartbeat.js';
 
 export class UserInbox {
   constructor(state) {
     this.state = state;
+    configureHeartbeat(state);
     this.connections = new Set();
 
     for (const socket of this.state.getWebSockets()) {
