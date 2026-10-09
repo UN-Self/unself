@@ -9,7 +9,7 @@ describe('buildNav（#12 双形态共用数据源）', () => {
       { id: 'hello', enabled: true },
       { id: 'chat', enabled: false },
     ])
-    expect(nav.map((n) => n.id)).toEqual(['workspace', 'hello'])
+    expect(nav.map((n) => n.id)).toEqual(['hello'])
   })
 
   it('保持 enabled 模块的传入顺序', () => {
@@ -17,17 +17,17 @@ describe('buildNav（#12 双形态共用数据源）', () => {
       { id: 'b', enabled: true },
       { id: 'a', enabled: true },
     ])
-    expect(nav.map((n) => n.id)).toEqual(['workspace', 'b', 'a'])
+    expect(nav.map((n) => n.id)).toEqual(['b', 'a'])
   })
 
-  it('固定项「工作台」始终在第一位（workspace id）', () => {
-    const nav = buildNav([])
-    expect(nav[0]).toEqual({ id: 'workspace', label: '工作台' })
+  it('没有已添加卡片时隐藏工作台；有卡片时出现在模块前', () => {
+    expect(buildNav([])).toEqual([])
+    expect(buildNav([{ id: 'chat', enabled: true }], true).map(n => n.id)).toEqual(['workspace', 'chat'])
   })
 
   it('icon 字段透传（manifest icon → 渲染器白名单映射）', () => {
     const nav = buildNav([{ id: 'hello', enabled: true, icon: 'inbox' }])
-    expect(nav[1]).toEqual({ id: 'hello', label: 'hello', icon: 'inbox' })
+    expect(nav[0]).toEqual({ id: 'hello', label: 'hello', icon: 'inbox' })
   })
 })
 

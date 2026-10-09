@@ -9,6 +9,7 @@ import { listModules, ModuleRegistrationSchema, registryFrameOrigins, toggleModu
 import { audit } from '../services/audit';
 import { configuredMailSender, deliverNotification } from '../services/notifications';
 import { readSession } from '../session';
+import { profileAvatarUrl } from '../services/avatar-store';
 import { getProfileIdentity } from '../services/users';
 import type { Bindings } from '../index';
 
@@ -72,7 +73,7 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
     const profile = await getProfileIdentity(c.env.CORE_DB, session.uid);
     const issued = await issueModuleToken(
       runtime,
-      { userId: session.uid, moduleId, name: profile?.name ?? session.name, profileRevision: profile?.revision },
+      { userId: session.uid, moduleId, name: profile?.name ?? session.name, profileRevision: profile?.revision, avatarUrl: profile?.avatarKey == null ? undefined : profileAvatarUrl(c.req.url, profile.avatarKey) },
       { issuer: MODULE_TOKEN_ISSUER },
     );
     return c.json(issued);

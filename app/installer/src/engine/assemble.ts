@@ -288,6 +288,7 @@ export function coreWranglerConfig(input: {
       $schema: 'node_modules/wrangler/config-schema.json',
       name: coreName,
       main: 'core-worker.js',
+      ...(config.storage.provider === 'r2' ? { r2_buckets: [{ binding: 'PROFILE_FILES', bucket_name: config.storage.bucket }] } : {}),
       compatibility_date: '2026-09-01',
       compatibility_flags: ['nodejs_compat'],
       // §5.3 单域名路径制：core 与模块全部 zone 路径路由（Workers Routes），不用 Custom Domain。

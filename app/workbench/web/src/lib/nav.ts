@@ -20,16 +20,16 @@ export interface NavItem {
   icon?: string
 }
 
-/** 壳内固定导航项，永远排最前（对应「工作台」，非模块）。 */
+/** 壳内固定导航项，有已添加的可用卡片时排最前（对应「工作台」，非模块）。 */
 const WORKSPACE_ITEM: NavItem = { id: 'workspace', label: '工作台' }
 
 /**
- * 由注册表模块清单生成导航数据：最前固定「工作台」，后接 enabled 模块项。
+ * 由注册表模块清单生成导航数据：存在已添加的可用卡片时展示「工作台」，后接 enabled 模块项。
  * 停用模块 = 从数据源消失（成员视角，§5.5 启停语义）。
  */
-export function buildNav(modules: ModuleMeta[]): NavItem[] {
+export function buildNav(modules: ModuleMeta[], hasWorkspaceCards = false): NavItem[] {
   return [
-    WORKSPACE_ITEM,
+    ...(hasWorkspaceCards ? [WORKSPACE_ITEM] : []),
     ...modules
       .filter((m) => m.enabled)
       .map((m) => ({ id: m.id, label: m.id, icon: m.icon })),

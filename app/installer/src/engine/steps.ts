@@ -633,6 +633,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       { type: 'd1', name: 'CORE_DB', id: dbIds.core },
       { type: 'd1', name: 'MODULES_DB', id: dbIds.modules },
       { type: 'assets', name: 'ASSETS' },
+      ...(config.storage.provider === 'r2' ? [{ type: 'r2_bucket', name: 'PROFILE_FILES', bucket_name: config.storage.bucket }] : []),
       ...Object.entries(coreVars).map(([k, v]) => ({ type: 'plain_text', name: k, text: v })),
     ],
     compatibilityDate: '2026-09-01',

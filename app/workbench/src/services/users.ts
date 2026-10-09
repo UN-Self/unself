@@ -58,10 +58,10 @@ export async function getDisplayName(db: D1Database, userId: string): Promise<st
   return (await getProfileIdentity(db, userId))?.name ?? null;
 }
 
-export async function getProfileIdentity(db: D1Database, userId: string): Promise<{ name: string; revision: number } | null> {
-  const row = await db.prepare('SELECT display_name, profile_revision FROM users WHERE id = ? AND status = ?')
-    .bind(userId, 'active').first<{ display_name: string | null; profile_revision: number }>();
-  return row ? { name: row.display_name ?? '', revision: row.profile_revision } : null;
+export async function getProfileIdentity(db: D1Database, userId: string): Promise<{ name: string; revision: number; avatarKey: string | null } | null> {
+  const row = await db.prepare('SELECT display_name, profile_revision, avatar_key FROM users WHERE id = ? AND status = ?')
+    .bind(userId, 'active').first<{ display_name: string | null; profile_revision: number; avatar_key: string | null }>();
+  return row ? { name: row.display_name ?? '', revision: row.profile_revision, avatarKey: row.avatar_key } : null;
 }
 
 /** 当前用户修改自己的昵称。 */

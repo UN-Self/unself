@@ -1039,6 +1039,7 @@ describe('邀请域 HTTP（#18）', () => {
       '0007_invite_identity_normalization.sql',
       '0008_module_notify_type.sql', // #243：module_notify 通知类型（notify 词真实现的数据行）
       '0009_profile_revision.sql',
+      '0010_profile_avatar.sql',
     ]);
 
     const sqlite = new DatabaseSync(':memory:');

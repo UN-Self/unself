@@ -321,7 +321,8 @@ describe('OIDC 登录路由', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       authenticated: true,
-      user: { id: 'u_admin', name: '管理', issuer: ISSUER, sub: 'a-1', role: 'admin' },
+      user: { id: 'u_admin', name: '管理', issuer: ISSUER, sub: 'a-1', role: 'admin', avatarUrl: '' },
+      avatarUploadEnabled: false,
       // #168：成员能力字段（本用例无 mail 行 → 轴关、无门户地址）。
       mailEnabled: false,
       mailPortalUrl: null,
@@ -345,6 +346,7 @@ describe('OIDC 登录路由', () => {
       'status',
       'created_at',
       'profile_revision',
+      'avatar_key',
     ]);
     const e = { ...oidcEnv(baseEnv), JWT_PRIVATE_KEY: pair.privateKeyPem };
 

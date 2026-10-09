@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/data/users.js（GPL-3.0-only，裁剪版）
-import { publicFileUrl } from "../utils.js";
+import { userAvatarUrl } from "../profile-avatar.js";
 import { activeUserSql, projectUserBan } from "../user-status.js";
 
 function mapUserSummary(row) {
@@ -8,13 +8,13 @@ function mapUserSummary(row) {
 		id: Number(row.id),
 		username: row.username,
 		displayName: row.display_name,
-		avatarUrl: row.avatar_key ? publicFileUrl(row.avatar_key) : "",
+		avatarUrl: userAvatarUrl(row.core_avatar_url, row.avatar_key),
 	};
 }
 
 export async function getUserProfile(db, userId) {
 	const { results } = await db.prepare(
-		`SELECT id, username, display_name, avatar_key, bio
+		`SELECT id, username, display_name, core_avatar_url, avatar_key, bio
 		 FROM users WHERE id = ? AND deleted_at IS NULL AND ${activeUserSql()} LIMIT 1`,
 	).bind(userId).all();
 	const row = results[0];
@@ -61,7 +61,7 @@ export async function isUserActiveById(db, userId) {
 export async function listActiveUsers(db, excludeUserId) {
 	const { results } = await db
 		.prepare(
-			`SELECT id, username, display_name, avatar_key
+			`SELECT id, username, display_name, core_avatar_url, avatar_key
 			 FROM users
 			 WHERE deleted_at IS NULL
 				   AND ${activeUserSql()}
@@ -76,7 +76,7 @@ export async function listActiveUsers(db, excludeUserId) {
 export async function listContacts(db) {
 	const { results } = await db
 		.prepare(
-			`SELECT id, username, display_name, avatar_key
+			`SELECT id, username, display_name, core_avatar_url, avatar_key
 			 FROM users
 			 WHERE deleted_at IS NULL
 			   AND ${activeUserSql()}
@@ -89,7 +89,7 @@ export async function listContacts(db) {
 export async function listAdminUsers(db) {
 	const { results } = await db
 		.prepare(
-			`SELECT id, username, display_name, avatar_key, is_disabled, disabled_until, created_at
+			`SELECT id, username, display_name, core_avatar_url, avatar_key, is_disabled, disabled_until, created_at
 			 FROM users
 			 WHERE deleted_at IS NULL
 			 ORDER BY created_at DESC`,

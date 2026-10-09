@@ -27,6 +27,7 @@ export interface IssuedModuleToken {
     exp: number;
     name?: string;
     profile_revision?: number;
+    avatar_url?: string;
   };
 }
 
@@ -39,6 +40,7 @@ export interface TokenRequestContext {
   /** 会话展示名（写进 claims.name，模块身份行直接用；§2 契约）。 */
   name?: string;
   profileRevision?: number;
+  avatarUrl?: string;
 }
 
 /**
@@ -70,6 +72,7 @@ export async function issueModuleToken(
   if (ctx.profileRevision !== undefined) {
     payload.profile_revision = ctx.profileRevision;
   }
+  if (ctx.avatarUrl !== undefined) payload.avatar_url = ctx.avatarUrl;
   const token = await new SignJWT(payload)
     .setProtectedHeader({ alg: 'ES256', kid: runtime.kid })
     .sign(runtime.signingKey);

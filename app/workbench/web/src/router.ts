@@ -21,6 +21,7 @@ import { installAuthGuard } from './lib/guarded-fetch'
 
 const routes: RouteRecordRaw[] = [
   { path: '/', component: App },
+  { path: '/settings', component: () => import('./SettingsView.vue') },
   { path: '/login', component: LoginView },
   { path: '/invite/:token', component: InviteView },
   { path: '/activate/:token', component: ActivateView },

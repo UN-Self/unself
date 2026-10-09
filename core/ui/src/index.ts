@@ -30,3 +30,5 @@ export { default as UStepProgress } from './step-progress.vue';
 export type { StepSegment } from './step-progress-types';
 export { liftFadeVariants, panelVariants, popVariants, prefersReducedMotion, motionAvailable, resetMotionCache } from './motion';
 export type { TokenVariants } from './motion';
+
+export { default as UAvatar } from './avatar.vue'

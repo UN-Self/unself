@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/data/channels.js（GPL-3.0-only，裁剪版）
+import { userAvatarUrl } from "../profile-avatar.js";
 import { publicFileUrl } from "../utils.js";
 
 function mapVisibleChannel(row) {
@@ -122,7 +123,7 @@ export async function listAdminChannels(db, { includeAvatar = true } = {}) {
 export async function listChannelMembers(db, channelId) {
 	const { results } = await db
 		.prepare(
-			`SELECT cm.user_id, cm.role, cm.joined_at, u.username, u.display_name, u.avatar_key
+			`SELECT cm.user_id, cm.role, cm.joined_at, u.username, u.display_name, u.core_avatar_url, u.avatar_key
 			 FROM channel_members cm
 			 JOIN users u ON u.id = cm.user_id
 			 WHERE cm.channel_id = ? AND u.deleted_at IS NULL
@@ -134,7 +135,7 @@ export async function listChannelMembers(db, channelId) {
 		id: Number(row.user_id),
 		username: row.username,
 		displayName: row.display_name,
-		avatarUrl: row.avatar_key ? publicFileUrl(row.avatar_key) : "",
+		avatarUrl: userAvatarUrl(row.core_avatar_url, row.avatar_key),
 		role: row.role,
 		joinedAt: row.joined_at,
 	}));

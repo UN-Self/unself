@@ -44,7 +44,7 @@ export async function authMiddleware(c, next) {
     username: ensured.user.username,
     displayName: ensured.user.displayName,
     bio: '',
-    avatarUrl: ''
+    avatarUrl: ensured.user.avatarUrl
   };
   c.set('session', session);
   await next();
