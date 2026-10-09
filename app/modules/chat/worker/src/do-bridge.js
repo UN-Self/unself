@@ -51,7 +51,7 @@ export function forwardRoomConnection({ env, request, kind, roomId, principal })
 }
 
 export function forwardInboxConnection({ env, request, principal }) {
-	// 收件箱 DO 不接触 JWT，只信入口 Worker 已验签后注入的用户头。
+	// 入口 Worker 注入身份头，收件箱 DO 仍用 URL token 做连接与续期复核。
 	// 以原始 Request 为基底重写身份头，保留 WebSocket upgrade 元数据。
 	const forwarded = new Request(request.url, request);
 	const headers = createVerifiedPrincipalHeaders(forwarded.headers, principal);
