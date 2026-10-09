@@ -9,7 +9,7 @@ import GroupDetails from './components/GroupDetails.vue'
 import { createChatApi, type ChatApi } from './lib/api'
 import { attachInboxSocket, createChatStore, roomKeyString } from './lib/chat-store'
 import { createMockChatApi } from './lib/mock-api'
-import { createChatSession, userIdFromToken } from './lib/session'
+import { createChatSession } from './lib/session'
 import { createChatStorage } from './lib/storage'
 import type { ChannelMember, Message, RoomKind, UserSummary } from './lib/types'
 
@@ -48,11 +48,9 @@ const store = createChatStore({
   storage,
   // #229：工厂内延迟求值（不再同步拍快照）。live：握手后 claims.sub 可用；
   // mock：主角 id 直接可用。chat 侧 id 由工厂经 contacts 解析（core:<sub> → id）。
-  myUserId: () => {
-    const id = userIdFromToken((token) => session.sdk.decodeContext(token), session.getToken())
-    if (id) return id
-    return MODE === 'mock' ? (chatApi as ReturnType<typeof createMockChatApi>).world.me.id : 0
-  },
+  myUserId: () => MODE === 'mock'
+    ? (chatApi as ReturnType<typeof createMockChatApi>).world.me.id
+    : session.getUserId(),
   getToken: () => session.getToken(),
 })
 storeRef = store

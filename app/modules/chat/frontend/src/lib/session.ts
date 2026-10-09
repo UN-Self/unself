@@ -20,8 +20,8 @@ export interface ChatSession {
   sdk: ModuleSDK
   /** 当前生效 token（续期后自动换新）；未握手完成时为 null。 */
   getToken(): string | null
-  /** 当前登录用户 id（claims.sub；未握手 = 0）。 */
-  getUserId(): number
+  /** 当前登录用户的 Core 身份（claims.sub；未握手为空字符串）。 */
+  getUserId(): string
   /** 握手完成（首次 token 到达）resolve；超时 reject 人话错误。 */
   handshake(timeoutMs?: number): Promise<void>
   /** 停止续期循环（卸载时）。 */
@@ -43,14 +43,14 @@ export interface CreateChatSessionOptions {
 /** 握手默认超时：与壳模块加载异常规范同量级（15s）。 */
 export const HANDSHAKE_TIMEOUT_MS = 15_000
 
-/** 从 token 解出当前用户 id（claims.sub 是核心内部稳定用户 id，数字形态；坏值 0）。 */
-export function userIdFromToken(decode: (token: string) => { sub: string }, token: string | null): number {
-  if (!token) return 0
+/** Core 身份是不透明字符串；不得转为数字或与 Chat 内部 id 直接比较。 */
+export function userIdFromToken(decode: (token: string) => { sub: string }, token: string | null): string {
+  if (!token) return ''
   try {
-    const id = Number(decode(token).sub)
-    return Number.isFinite(id) ? id : 0
+    const subject = decode(token).sub
+    return typeof subject === 'string' && subject.trim() ? subject : ''
   } catch {
-    return 0
+    return ''
   }
 }
 
@@ -63,20 +63,14 @@ export function createChatSession(options: CreateChatSessionOptions = {}): ChatS
   const sdk = createModuleSDK({ moduleId, coreOrigin })
 
   let latestToken: string | null = null
-  let latestUserId = 0
+  let latestUserId = ''
   let waiter: ((token: string) => void) | null = null
   const onRenewed = options.onTokenRenewed
   let firstAdopted = false
 
   const adopt = (token: string): void => {
     latestToken = token
-    try {
-      const claims = sdk.decodeContext(token)
-      const id = Number(claims.sub)
-      latestUserId = Number.isFinite(id) ? id : 0
-    } catch {
-      latestUserId = 0
-    }
+    latestUserId = userIdFromToken((value) => sdk.decodeContext(value), token)
     // #220：首个 token = 握手成功（handshake resolve）；之后的每次 adopt 都是续期换新 → 通知回调
     if (firstAdopted) onRenewed?.(token)
     firstAdopted = true

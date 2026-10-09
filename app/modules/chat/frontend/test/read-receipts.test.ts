@@ -432,13 +432,15 @@ describe('本人身份解析（#229：coreUserId × contacts 双源，迟到就�
     })
     await store.openRoom({ kind: 'public', id: 1 }, 'general')
     await flushPromises()
-    // 病灶：身份 0 → 连本人消息 id 1 也上报了（服务端 #229 兜底拦截）
-    expect(postSpy.mock.calls[0]?.[2]).toContain(1)
+    // 身份未就绪时暂存，避免把本人消息误报为已读。
+    expect(postSpy).not.toHaveBeenCalled()
 
     // 修复面：身份晚到（sub=1，同构世界）→ App 调 refreshMyUserId
     currentCore = 1
     store.refreshMyUserId()
     expect(store.state.myUserId).toBe(1)
+    await flushPromises()
+    expect(postSpy.mock.calls.flatMap((call) => call[2])).not.toContain(1)
 
     // 补判验证：本人迟到消息（WS 帧）→ 走 mine 分支：去重登记不触发上报；
     // 他人新消息照常帧内自动上报

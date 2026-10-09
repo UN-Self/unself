@@ -73,7 +73,7 @@ describe('createChatSession（#218 SDK 握手）', () => {
     fake.dispatch({ type: 'token', token: makeToken() })
     await pending
     expect(session.getToken()).not.toBeNull()
-    expect(session.getUserId()).toBe(42)
+    expect(session.getUserId()).toBe('42')
     session.dispose()
   })
 
@@ -95,17 +95,19 @@ describe('createChatSession（#218 SDK 握手）', () => {
     const session = createChatSession()
 
     const pending = session.handshake()
-    const firstToken = makeToken()
+    const firstToken = makeToken({ sub: 'u_alice' })
     fake.dispatch({ type: 'token', token: firstToken })
     await pending
     expect(session.getToken()).toBe(firstToken)
+    expect(session.getUserId()).toBe('u_alice')
 
     // 10 分钟 token：480s 后 SDK 重发 ready 续期 → 壳回发新 token → 内存 token 换新
     vi.advanceTimersByTime(480_000)
     expect(fake.postMessage).toHaveBeenCalledWith({ type: 'ready' }, CORE_ORIGIN)
-    const renewedToken = makeToken({ iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 600 })
+    const renewedToken = makeToken({ sub: 'u_alice', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 600 })
     fake.dispatch({ type: 'token', token: renewedToken })
     expect(session.getToken()).toBe(renewedToken)
+    expect(session.getUserId()).toBe('u_alice')
 
     // 凭证只存内存：localStorage 全量扫一遍不得含任何 JWT 形态字符串
     const storage = (globalThis as { localStorage?: Storage }).localStorage
@@ -137,7 +139,7 @@ describe('createChatSession（#218 SDK 握手）', () => {
     fake.dispatch({ type: 'token', token: shellToken }, SHELL)
     await pending
     expect(session.getToken()).toBe(shellToken)
-    expect(session.getUserId()).toBe(42)
+    expect(session.getUserId()).toBe('42')
     // 出站 ready 也发向壳 origin
     expect(fake.postMessage).toHaveBeenCalledWith({ type: 'ready' }, SHELL)
     session.dispose()
@@ -161,13 +163,14 @@ describe('createChatSession（#218 SDK 握手）', () => {
 })
 
 describe('userIdFromToken', () => {
-  it('从 claims.sub 解出数字 id；坏 token / null 回 0', () => {
+  it('从 claims.sub 保留不透明字符串身份；坏 token / null 回空字符串', () => {
     const decode = (token: string): { sub: string } => {
       const payload = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString()) as { sub: string }
       return { sub: payload.sub }
     }
-    expect(userIdFromToken(decode, makeToken({ sub: '7' }))).toBe(7)
-    expect(userIdFromToken(decode, 'garbage')).toBe(0)
-    expect(userIdFromToken(decode, null)).toBe(0)
+    expect(userIdFromToken(decode, makeToken({ sub: '7' }))).toBe('7')
+    expect(userIdFromToken(decode, makeToken({ sub: 'u_alice' }))).toBe('u_alice')
+    expect(userIdFromToken(decode, 'garbage')).toBe('')
+    expect(userIdFromToken(decode, null)).toBe('')
   })
 })
