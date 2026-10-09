@@ -116,11 +116,11 @@ const fileAttachment = computed(() => {
 
         <VoiceBubble v-if="message.attachment && (message.attachment.kind === 'voice' || message.attachment.kind === 'audio')" :attachment="message.attachment" />
 
-        <div v-else-if="fileAttachment" class="bubble-file" data-test="bubble-file">
+        <a v-else-if="fileAttachment" class="bubble-file" data-test="bubble-file" :href="fileAttachment.url" :download="fileAttachment.name" target="_blank" rel="noopener">
           <Paperclip :size="14" aria-hidden="true" />
           <span class="bubble-file-name">{{ fileAttachment.name }}</span>
           <span class="bubble-file-meta">{{ Math.max(1, Math.round((fileAttachment.size || 0) / 1024)) }} KB</span>
-        </div>
+        </a>
       </UMessageBubble>
 
       <!-- #220 已读回执标签（mine 尾部；DM=已读 ✓✓，群聊=已读 n/m）；点击开名单浮层（父层渲染） -->
