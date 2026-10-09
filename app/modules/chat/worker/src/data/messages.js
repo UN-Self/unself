@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/data/messages.js（GPL-3.0-only，裁剪版）
+import { userAvatarUrl } from "../profile-avatar.js";
 import { decryptMessageContent, encryptMessageContent } from "../encryption.js";
 import { pickAttachment, publicFileUrl } from "../utils.js";
 import { normalizeMentionUserIds } from "./mentions.js";
@@ -54,9 +55,7 @@ function mapReplySender(row) {
 		displayName: isExternal ? row.reply_external_sender_name : row.reply_sender_display_name,
 		avatarUrl: isExternal
 			? row.reply_external_sender_avatar_url || ""
-			: row.reply_sender_avatar_key
-				? publicFileUrl(row.reply_sender_avatar_key)
-				: "",
+			: userAvatarUrl(row.reply_core_avatar_url, row.reply_sender_avatar_key),
 		source: isExternal ? row.reply_source : "edgechat",
 	};
 }
@@ -82,9 +81,7 @@ export function mapMessage(row, content = row.content, replyTo = null) {
 				displayName: isExternal ? row.external_sender_name : row.sender_display_name,
 				avatarUrl: isExternal
 					? row.external_sender_avatar_url || ""
-					: row.sender_avatar_key
-						? publicFileUrl(row.sender_avatar_key)
-						: "",
+					: userAvatarUrl(row.sender_core_avatar_url, row.sender_avatar_key),
 				source: isExternal ? row.source : "edgechat",
 			},
 			attachment: mapAttachment(row),
@@ -159,7 +156,7 @@ const MESSAGE_SELECT = `SELECT
 		  m.source_attachment_id, m.source_attachment_unique_id, m.client_message_id,
 			  m.mention_user_ids, m.reply_to_message_id, m.reply_to_sender_id, m.created_at,
 		  u.id AS sender_id, u.username AS sender_username,
-		  u.display_name AS sender_display_name, u.avatar_key AS sender_avatar_key,
+		  u.display_name AS sender_display_name, u.avatar_key AS sender_avatar_key, u.core_avatar_url AS sender_core_avatar_url,
 		  reply.id AS reply_message_id, reply.content AS reply_content,
 		  reply.deleted_at AS reply_deleted_at,
 		  reply.attachment_key AS reply_attachment_key,
@@ -176,7 +173,7 @@ const MESSAGE_SELECT = `SELECT
 		  reply_user.id AS reply_sender_id,
 		  reply_user.username AS reply_sender_username,
 		  reply_user.display_name AS reply_sender_display_name,
-		  reply_user.avatar_key AS reply_sender_avatar_key,
+		  reply_user.avatar_key AS reply_sender_avatar_key, reply_user.core_avatar_url AS reply_core_avatar_url,
 	  COALESCE((
 	    SELECT json_group_array(json_object(
 	      'userId', mentioned.id,

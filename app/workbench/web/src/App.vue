@@ -1,16 +1,16 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, onMounted, ref, type ComponentPublicInstance } from 'vue'
-import { LogOut, LayoutDashboard, KeyRound, Pencil, ShieldCheck, User, X } from 'lucide-vue-next'
+import { computed, onMounted, ref } from 'vue'
+import { LogOut, LayoutDashboard, KeyRound, Settings, ShieldCheck, User } from 'lucide-vue-next'
 import { RouterLink } from 'vue-router'
-import { UButton, UErrorCard, USkeleton } from '@unself/ui'
+import { UAvatar, UButton, UErrorCard, USkeleton } from '@unself/ui'
 
 import ModuleHost from './ModuleHost.vue'
 import NotificationBell from './NotificationBell.vue'
 import { resolveLanding } from './lib/landing'
 import { buildNav, isHostView, type NavItem } from './lib/nav'
 import { fetchEnabledModules, type ApiError, type RegistryModule } from './lib/registry-api'
-import { fetchMe, logout, updateMyName } from './lib/session-api'
+import { fetchMe, logout, type SessionUser } from './lib/session-api'
 import { moduleInitial, resolveModuleIcon } from './lib/module-icon'
 import { useLayerFocus } from './lib/use-layer-focus'
 
@@ -33,47 +33,7 @@ type LoadPhase = 'checking-session' | 'loading-modules' | 'ready' | 'error' | 'e
 const phase = ref<LoadPhase>('checking-session')
 const loadError = ref<ApiError | null>(null)
 const modules = ref<RegistryModule[]>([])
-const user = ref<{ id: string; name: string; role?: string } | null>(null)
-const profileOpen = ref(false)
-const profileName = ref('')
-const profileSaving = ref(false)
-const profileError = ref('')
-const profileDialog = ref<HTMLElement | null>(null)
-const meTab = ref<HTMLElement | null>(null)
-const profileFromSheet = ref(false)
-const { onKeydown: onProfileKeydown } = useLayerFocus(
-  profileOpen,
-  () => profileDialog.value,
-  () => profileFromSheet.value ? meTab.value : null,
-)
-
-function setMeTab(element: Element | ComponentPublicInstance | null) {
-  meTab.value = (element as HTMLElement | null)
-}
-
-function openProfile() {
-  profileName.value = user.value?.name ?? ''
-  profileError.value = ''
-  profileFromSheet.value = sheetOpen.value
-  sheetOpen.value = false
-  profileOpen.value = true
-}
-
-async function saveProfile() {
-  if (profileSaving.value) return
-  profileSaving.value = true
-  profileError.value = ''
-  try {
-    const name = await updateMyName(profileName.value)
-    if (user.value) user.value.name = name
-    profileOpen.value = false
-    hostReload.value += 1
-  } catch (error) {
-    profileError.value = (error as Error).message
-  } finally {
-    profileSaving.value = false
-  }
-}
+const user = ref<SessionUser | null>(null)
 
 /**
  * 邮件轴能力（#168）：只信 /api/me 的 mailEnabled，未开轴不渲染入口（成员功能，位置同管理台）。
@@ -140,7 +100,7 @@ onMounted(async () => {
     window.location.assign(`/login?next=${encodeURIComponent(next)}`)
     return
   }
-  user.value = { id: me.user.id, name: me.user.name, role: me.user.role }
+  user.value = me.user
   mailEnabled.value = me.mailEnabled
 
   // ② 拉注册表 + ③ 落地（可重试）
@@ -238,12 +198,12 @@ function onTabClick(item: NavItem) {
         </RouterLink>
         <div class="shell-user-row">
           <div class="shell-user">
-            <span class="shell-user-avatar" aria-hidden="true">{{ user?.name?.charAt(0) ?? '?' }}</span>
+            <UAvatar :name="user?.name ?? ''" :src="user?.avatarUrl" size="sm" />
             <span class="shell-user-name" data-test="user-name">{{ user?.name ?? '…' }}</span>
           </div>
-          <button type="button" class="shell-profile-edit" aria-label="修改昵称" title="修改昵称" @click="openProfile">
-            <Pencil :size="16" aria-hidden="true" />
-          </button>
+          <RouterLink to="/settings" class="shell-profile-edit" aria-label="个人设置" title="个人设置">
+            <Settings :size="16" aria-hidden="true" />
+          </RouterLink>
           <button type="button" class="shell-logout" data-test="logout" aria-label="退出登录" @click="onLogout">
             <LogOut :size="16" aria-hidden="true" />
             退出
@@ -307,7 +267,6 @@ function onTabClick(item: NavItem) {
         type="button"
         class="shell-tab"
         :data-test="item.id === ME_TAB.id ? 'me-tab' : 'module-tab'"
-        :ref="item.id === ME_TAB.id ? setMeTab : undefined"
         :class="{ 'shell-tab-active': selectedId === item.id }"
         :aria-current="selectedId === item.id ? 'page' : undefined"
         :aria-haspopup="item.id === ME_TAB.id ? 'dialog' : undefined"
@@ -335,13 +294,13 @@ function onTabClick(item: NavItem) {
       >
         <div class="shell-sheet-handle" aria-hidden="true" />
         <div class="shell-sheet-user">
-          <span class="shell-user-avatar" aria-hidden="true">{{ user?.name?.charAt(0) ?? '?' }}</span>
+          <UAvatar :name="user?.name ?? ''" :src="user?.avatarUrl" size="sm" />
           <span class="shell-sheet-username">{{ user?.name ?? '…' }}</span>
         </div>
-        <UButton class="shell-sheet-profile" @click="openProfile">
-          <Pencil :size="16" aria-hidden="true" />
-          修改昵称
-        </UButton>
+        <RouterLink to="/settings" class="shell-sheet-profile" @click="sheetOpen = false">
+          <Settings :size="16" aria-hidden="true" />
+          个人设置
+        </RouterLink>
         <!-- 应用密码入口（#168）：手机同页可进说明页；点击先收起动作单 -->
         <RouterLink
           v-if="mailEnabled"
@@ -368,20 +327,7 @@ function onTabClick(item: NavItem) {
         </UButton>
       </section>
     </div>
-    <div v-if="profileOpen" class="profile-backdrop" @click="profileOpen = false">
-      <form ref="profileDialog" class="profile-dialog" role="dialog" aria-modal="true" aria-label="修改昵称" tabindex="-1" @keydown="onProfileKeydown" @click.stop @submit.prevent="saveProfile">
-        <div class="profile-heading">
-          <strong>修改昵称</strong>
-          <button type="button" class="shell-profile-edit" aria-label="关闭" title="关闭" @click="profileOpen = false">
-            <X :size="18" aria-hidden="true" />
-          </button>
-        </div>
-        <label for="profile-name">昵称</label>
-        <input id="profile-name" v-model="profileName" autofocus maxlength="80" required autocomplete="nickname" />
-        <p v-if="profileError" class="profile-error" role="alert">{{ profileError }}</p>
-        <UButton type="submit" :disabled="profileSaving || !profileName.trim()">{{ profileSaving ? '保存中…' : '保存' }}</UButton>
-      </form>
-    </div>
+
   </div>
 </template>
 
@@ -583,37 +529,8 @@ function onTabClick(item: NavItem) {
 }
 .shell-profile-edit:hover { background: var(--unself-color-surface-hover); }
 .shell-profile-edit:focus-visible { outline: var(--unself-focus-ring); }
-.profile-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: grid;
-  place-items: center;
-  padding: var(--unself-space-4);
-  background: var(--unself-color-scrim);
-}
-.profile-dialog {
-  display: grid;
-  gap: var(--unself-space-3);
-  width: min(100%, 360px);
-  padding: var(--unself-space-5);
-  border: 1px solid var(--unself-color-border);
-  border-radius: var(--unself-radius-md);
-  background: var(--unself-color-surface);
-  color: var(--unself-color-text);
-}
-.profile-heading { display: flex; align-items: center; justify-content: space-between; }
-.profile-dialog label { font-size: var(--unself-font-size-sm); }
-.profile-dialog input {
-  width: 100%;
-  min-width: 0;
-  padding: var(--unself-space-2);
-  border: 1px solid var(--unself-color-border);
-  border-radius: var(--unself-radius-md);
-  background: var(--unself-color-bg);
-  color: var(--unself-color-text);
-}
-.profile-error { margin: 0; color: var(--unself-color-danger); }
+.shell-sheet-profile { display: flex; align-items: center; gap: var(--unself-space-2); padding: var(--unself-space-3); color: var(--unself-color-text); border-radius: var(--unself-radius-md); }
+.shell-sheet-profile:focus-visible { outline: var(--unself-focus-ring); }
 
 /* ---------- 主区 ---------- */
 .shell-main {

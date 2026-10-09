@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/data/dm-queries.js（GPL-3.0-only，裁剪版）
-import { publicFileUrl } from "../utils.js";
+import { userAvatarUrl } from "../profile-avatar.js";
 
 function mapUserDm(row) {
 	return {
@@ -14,7 +14,7 @@ function mapUserDm(row) {
 			id: Number(row.other_user_id),
 			username: row.other_username,
 			displayName: row.other_display_name,
-			avatarUrl: row.other_avatar_key ? publicFileUrl(row.other_avatar_key) : "",
+			avatarUrl: userAvatarUrl(row.other_core_avatar_url, row.other_avatar_key),
 		},
 		isBlockedByMe: Boolean(row.blocked_by_me),
 	};
@@ -40,6 +40,7 @@ export async function listUserDms(db, userId) {
 			   other.username AS other_username,
 			   other.display_name AS other_display_name,
 			   other.avatar_key AS other_avatar_key,
+			   other.core_avatar_url AS other_core_avatar_url,
 			   EXISTS(SELECT 1 FROM user_blocks ub WHERE ub.blocker_id = ? AND ub.blocked_id = other.id) AS blocked_by_me,
 			   (SELECT MAX(m.created_at) FROM messages m WHERE m.channel_id = c.id AND m.deleted_at IS NULL) AS last_message_at,
 				   (SELECT COUNT(*) FROM messages m

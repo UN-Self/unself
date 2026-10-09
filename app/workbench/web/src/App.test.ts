@@ -5,7 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import App from './App.vue'
-import { fetchMe, logout, updateMyName } from './lib/session-api'
+import { fetchMe, logout } from './lib/session-api'
 import { fetchEnabledModules } from './lib/registry-api'
 import { fetchModuleToken } from './lib/token-api'
 import { HANDSHAKE_TIMEOUT_MS } from './lib/use-module-frame'
@@ -57,7 +57,6 @@ vi.mock('./lib/session-api', () => ({
   }),
   loginUrl: (next?: string) => `/api/auth/login${next ? `?next=${encodeURIComponent(next)}` : ''}`,
   logout: vi.fn().mockResolvedValue(undefined),
-  updateMyName: vi.fn().mockResolvedValue('新昵称'),
 }))
 
 vi.mock('./lib/registry-api', async (importOriginal) => {
@@ -68,23 +67,17 @@ vi.mock('./lib/registry-api', async (importOriginal) => {
   }
 })
 
-describe('Core 昵称编辑', () => {
-  it('保存后更新工作台昵称并重挂当前模块', async () => {
-    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '旧昵称' }))
+describe('个人设置入口', () => {
+  it('普通成员从侧栏进入设置，没有卡片时不显示工作台导航', async () => {
+    vi.mocked(fetchMe).mockResolvedValue(meOk({ id: 'u1', name: '成员', role: 'user' }))
     vi.mocked(fetchEnabledModules).mockResolvedValue([MODULE])
-    vi.mocked(updateMyName).mockResolvedValue('新昵称')
     const wrapper = await mountApp()
     await settle()
-    const oldFrame = wrapper.find('iframe').element
-
-    await wrapper.find('[aria-label="修改昵称"]').trigger('click')
-    await wrapper.find('#profile-name').setValue('新昵称')
-    await wrapper.find('.profile-dialog').trigger('submit')
-    await settle()
-
-    expect(updateMyName).toHaveBeenCalledWith('新昵称')
-    expect(wrapper.find('[data-test="user-name"]').text()).toBe('新昵称')
-    expect(wrapper.find('iframe').element).not.toBe(oldFrame)
+    expect(wrapper.findAll('.shell-nav-label').map(n => n.text())).toEqual(['hello'])
+    expect(wrapper.findAll('[data-test="module-tab"] .shell-tab-label').map(n => n.text())).toEqual(['hello'])
+    await wrapper.find('aside a[href="/settings"]').trigger('click')
+    await flushPromises()
+    expect(currentPath()).toBe('/settings')
     wrapper.unmount()
   })
 })
@@ -132,6 +125,7 @@ async function mountApp(attach = false) {
     routes: [
       { path: '/', component: App },
       { path: '/admin/:page?', component: { template: '<div />' } },
+      { path: '/settings', component: { template: '<div />' } },
       { path: '/app-password', component: { template: '<div />' } },
     ],
   })
@@ -357,25 +351,14 @@ describe('App.vue 退出登录行为', () => {
     wrapper.unmount()
   })
 
-  it('手机端从动作单打开昵称弹窗后，关闭时焦点回到仍存在的「我的」标签', async () => {
+  it('手机端从「我的」进入个人设置，动作单关闭', async () => {
     const wrapper = await mountAs(SHORT_NAME, true)
-    const meTab = wrapper.findAll('.shell-tab').find((b) => b.text() === '我的')!
-    ;(meTab.element as HTMLElement).focus()
-    await meTab.trigger('click')
+    await wrapper.find('[data-test="me-tab"]').trigger('click')
     await flushPromises()
-
-    const profileButton = wrapper.find('.shell-sheet-profile')
-    ;(profileButton.element as HTMLElement).focus()
-    expect(document.activeElement).toBe(profileButton.element)
-    await profileButton.trigger('click')
+    await wrapper.find('.shell-sheet a[href="/settings"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.profile-dialog').exists()).toBe(true)
+    expect(currentPath()).toBe('/settings')
     expect(wrapper.find('[data-test="me-sheet"]').exists()).toBe(false)
-
-    await wrapper.find('.profile-dialog [aria-label="关闭"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.profile-dialog').exists()).toBe(false)
-    expect(document.activeElement).toBe(meTab.element)
     wrapper.unmount()
   })
 })

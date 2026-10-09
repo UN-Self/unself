@@ -3,6 +3,8 @@
 // users.username UNIQUE 是建档幂等第一锚点（core 身份走 'core:' 命名空间，与上游本地注册用户名天然隔离）；
 // core_identities 是决策 #12「issuer+sub → 内部数字 id 唯一映射」的显式落库（schema-baseline.sql #217 增补）。
 
+import { userAvatarUrl } from './profile-avatar.js';
+
 /** core 身份在 chat 侧的确定性用户名（UNIQUE 冲突即幂等锚点）。 */
 export function coreUsername(claims) {
   return `core:${claims.sub}`;
@@ -19,14 +21,14 @@ export async function jitEnsureUser(db, claims) {
   const username = coreUsername(claims);
   const displayName = typeof claims.name === 'string' && claims.name.trim() ? claims.name.trim() : null;
 
-  db.prepare(
+  await db.prepare(
     `INSERT OR IGNORE INTO users (username, display_name, password_hash, password_salt)
      VALUES (?, coalesce(?, 'member-' || ?), '', '')`
   )
     .bind(username, displayName, claims.sub)
     .run();
 
-  db.prepare(
+  await db.prepare(
     `INSERT OR IGNORE INTO core_identities (issuer, sub, user_id)
      SELECT ?, ?, id FROM users WHERE username = ?`
   )
@@ -35,7 +37,7 @@ export async function jitEnsureUser(db, claims) {
 
   const found = await db
     .prepare(
-      `SELECT id, username, display_name, core_profile_revision, is_disabled, disabled_until, deleted_at
+      `SELECT id, username, display_name, core_profile_revision, core_avatar_url, avatar_key, is_disabled, disabled_until, deleted_at
        FROM users
        WHERE username = ?
        LIMIT 1`
@@ -59,19 +61,21 @@ export async function jitEnsureUser(db, claims) {
   const revision = claims.profile_revision;
   if (displayName && Number.isSafeInteger(revision) && revision >= 0 && revision > Number(user.core_profile_revision)) {
     const updated = await db.prepare(
-      'UPDATE users SET display_name = ?, core_profile_revision = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND core_profile_revision < ?'
-    ).bind(displayName, revision, user.id, revision).run();
+      'UPDATE users SET display_name = ?, core_avatar_url = COALESCE(?, core_avatar_url), core_profile_revision = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND core_profile_revision < ?'
+    ).bind(displayName, typeof claims.avatar_url === 'string' ? claims.avatar_url : null, revision, user.id, revision).run();
     if (updated.meta.changes) {
       user.display_name = displayName;
+      if (typeof claims.avatar_url === 'string') user.core_avatar_url = claims.avatar_url;
       user.core_profile_revision = revision;
     } else {
       // Another request may have committed a newer Core profile after the initial read.
       // Re-read so this request never returns the stale value it observed before the race.
       const current = await db.prepare(
-        'SELECT display_name, core_profile_revision FROM users WHERE id = ?'
+        'SELECT display_name, core_profile_revision, core_avatar_url FROM users WHERE id = ?'
       ).bind(user.id).first();
       if (current) {
         user.display_name = current.display_name;
+        user.core_avatar_url = current.core_avatar_url;
         user.core_profile_revision = current.core_profile_revision;
       }
     }
@@ -82,7 +86,8 @@ export async function jitEnsureUser(db, claims) {
     user: {
       id: Number(user.id),
       username: user.username,
-      displayName: String(user.display_name || '')
+      displayName: String(user.display_name || ''),
+      avatarUrl: userAvatarUrl(user.core_avatar_url, user.avatar_key)
     }
   };
 }
@@ -94,7 +99,7 @@ export async function jitEnsureUser(db, claims) {
 export async function jitResolveUser(db, claims) {
   const found = await db
     .prepare(
-      `SELECT u.id, u.username, u.display_name, u.is_disabled, u.disabled_until, u.deleted_at
+      `SELECT u.id, u.username, u.display_name, u.core_avatar_url, u.avatar_key, u.is_disabled, u.disabled_until, u.deleted_at
        FROM core_identities ci
        JOIN users u ON u.id = ci.user_id
        WHERE ci.issuer = ? AND ci.sub = ?
@@ -118,7 +123,8 @@ export async function jitResolveUser(db, claims) {
     user: {
       id: Number(user.id),
       username: user.username,
-      displayName: String(user.display_name || '')
+      displayName: String(user.display_name || ''),
+      avatarUrl: userAvatarUrl(user.core_avatar_url, user.avatar_key)
     }
   };
 }

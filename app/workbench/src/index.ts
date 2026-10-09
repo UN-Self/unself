@@ -12,6 +12,8 @@ import { registerMemberRoutes } from './routes/members';
 import { registerModuleApiRoutes } from './routes/module-api';
 import { registerModuleRoutes } from './routes/modules';
 import { registerNotificationRoutes } from './routes/notifications';
+import { registerAvatarRoutes } from './routes/avatar';
+import type { AvatarStore } from './services/avatar-store';
 import { registerProfileRoutes } from './routes/profile';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerMailTestRoutes } from './routes/mail-test';
@@ -23,6 +25,7 @@ export { getSigningRuntime } from './keys';
 
 export interface Bindings {
   CORE_DB: D1Database;
+  PROFILE_FILES?: R2Bucket;
   MODULES_DB: D1Database;
   /** 实例签名私钥（PKCS8 PEM）；由部署/首启流程写入 wrangler secret（#14/#16）。 */
   JWT_PRIVATE_KEY?: string;
@@ -34,6 +37,7 @@ export interface Bindings {
 }
 
 export interface CoreApiDependencies {
+  createAvatarStore?: (env: Bindings) => AvatarStore | null;
   createMailProvisioner?: CreateMailProvisioner;
   /** SMTP 是外部边界：单测注入假 sender 断言开通邮件，缺省 = 真 SMTP 装配（#18）。 */
   createMailSender?: CreateMailSender;
@@ -61,6 +65,8 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   // /api/activate/*、/api/oidc/test-connection、/api/setup/* 的 token 门禁端点。
   // /api/modules（成员侧启用清单）现状匿名可读，维持既有公开读口径；签发端点单独挂。
   app.use('/api/me', requireActiveMember());
+  app.use('/api/me/*', requireActiveMember());
+  app.use('/api/avatars/*', requireActiveMember());
   app.use('/api/notifications/*', requireActiveMember());
   app.use('/api/modules/:id/token', requireActiveMember());
   app.use('/api/setup/activate', requireActiveMember());
@@ -70,7 +76,8 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
 
   app.get('/api/health', (c) => c.json({ ok: true, service: 'workbench' }));
 
-  registerProfileRoutes(app);
+  registerProfileRoutes(app, dependencies);
+  registerAvatarRoutes(app, dependencies);
 
   // ---------------------------------------------------------------------------
   // 路由域挂载（一域一文件；组合根只做组装，不写业务）

@@ -101,6 +101,8 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
       fetchJwks: async () => FIXED_JWKS,
     });
+    const coreUpload = fake.state.uploads.find((u) => u.worker === 'unself-workbench');
+    expect((coreUpload!.metadata as { bindings: unknown[] }).bindings).toContainEqual({ type: 'r2_bucket', name: 'PROFILE_FILES', bucket_name: 'unself-storage' });
     const chatUpload = fake.state.uploads.find((u) => u.worker === 'unself-module-chat');
     expect(chatUpload).toBeDefined();
     const meta = chatUpload!.metadata as {

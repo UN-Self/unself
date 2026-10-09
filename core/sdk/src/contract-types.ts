@@ -108,4 +108,5 @@ export interface ModuleTokenClaims {
   name?: string;
   /** Core 资料的单调修订号。 */
   profile_revision?: number;
+  avatar_url?: string;
 }

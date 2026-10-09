@@ -14,6 +14,7 @@ export interface SessionUser {
   name: string
   issuer: string
   sub: string
+  avatarUrl?: string
   role?: string
 }
 
@@ -22,6 +23,7 @@ export type MeResult =
       authenticated: true
       user: SessionUser
       /** 邮件轴是否开启（#168）：成员可见能力，决定工作台入口与说明页落地。 */
+      avatarUploadEnabled?: boolean
       mailEnabled: boolean
       /** 服务端解析好的邮件门户地址（#168）：portalUrl 优先、domain 推导兜底；缺 → null。 */
       mailPortalUrl: string | null
@@ -34,6 +36,7 @@ export async function fetchMe(): Promise<MeResult> {
     const body = await request<{
       authenticated: boolean
       user?: SessionUser
+      avatarUploadEnabled?: boolean
       mailEnabled?: boolean
       mailPortalUrl?: string | null
     }>('/api/me')
@@ -41,6 +44,7 @@ export async function fetchMe(): Promise<MeResult> {
       return {
         authenticated: true,
         user: body.user,
+        avatarUploadEnabled: body.avatarUploadEnabled === true,
         // 老后端/缺字段 → 按无邮件能力处理（入口不显示，不抛错）。
         mailEnabled: body.mailEnabled === true,
         mailPortalUrl: typeof body.mailPortalUrl === 'string' ? body.mailPortalUrl : null,
@@ -80,4 +84,15 @@ export function loginUrl(next?: string): string {
     return '/api/auth/login'
   }
   return `/api/auth/login?next=${encodeURIComponent(next)}`
+}
+
+/** 资料写入走 Core；文件请求体不经过 JSON 编码。 */
+export async function uploadMyAvatar(file: File): Promise<string> {
+  const result = await request<{ avatarUrl: string }>('/api/me/avatar', {
+    method: 'PUT', headers: { 'content-type': file.type }, body: file,
+  })
+  return result.avatarUrl
+}
+export async function removeMyAvatar(): Promise<string> {
+  return (await request<{ avatarUrl: string }>('/api/me/avatar', { method: 'DELETE' })).avatarUrl
 }

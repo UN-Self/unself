@@ -37,6 +37,7 @@ describe('coreWranglerConfig（③生成的部署配置）', () => {
     expect(assets.not_found_handling).toBe('single-page-application');
     expect(assets.run_worker_first).toBe(true);
     expect(cfg.routes).toEqual([{ pattern: 'team.example.com/*', zone_name: 'example.com' }]);
+    expect(cfg.r2_buckets).toEqual([{ binding: 'PROFILE_FILES', bucket_name: 'unself-storage' }]);
   });
 
   it('domain 空 → 无 routes（workers.dev 回退）', () => {

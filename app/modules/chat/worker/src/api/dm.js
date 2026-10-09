@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/api/dm.js（GPL-3.0-only，裁剪版）
+import { userAvatarUrl } from '../profile-avatar.js';
 import { ensureDmChannel } from '../data/dm-provisioning.js';
 import { listAdminDms, listUserDms } from '../data/dm-queries.js';
 import { getUserBlockStatus } from '../data/user-blocks.ts';
@@ -23,7 +24,7 @@ export function registerDmRoutes(app) {
     }
 
     const targetUser = await c.env.DB.prepare(
-      `SELECT id, username, display_name, avatar_key
+      `SELECT id, username, display_name, core_avatar_url, avatar_key
        FROM users
        WHERE id = ?
          AND ${activeUserSql()}
@@ -50,9 +51,7 @@ export function registerDmRoutes(app) {
           id: Number(targetUser.results[0].id),
           username: targetUser.results[0].username,
           displayName: targetUser.results[0].display_name,
-          avatarUrl: targetUser.results[0].avatar_key
-            ? `/files/${encodeURIComponent(targetUser.results[0].avatar_key)}`
-            : ''
+          avatarUrl: userAvatarUrl(targetUser.results[0].core_avatar_url, targetUser.results[0].avatar_key)
         },
         isBlockedByMe: blockStatus.blockedByMe
       }
