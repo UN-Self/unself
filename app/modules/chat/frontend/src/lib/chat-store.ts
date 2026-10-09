@@ -67,7 +67,7 @@ export interface ChatStore {
    * 与 chat 消息 sender.id（chat 内部 users.id）分属两个身份空间，禁直接比较。
    * chat 侧本人判定一律走 myUserId（core:sub → chat id 映射，见下）。
    */
-  coreUserId: number
+  coreUserId: string | number
   /** 本人 chat 内部 id（#229）：由 coreUserId 经 contacts（username=core:<sub>）解析；
    * 未握手/联系人未就绪时为 0（不误判），载入或续期后自动重算。
    */
@@ -124,7 +124,7 @@ export interface ChatStoreInternals {
   contacts: UserSummary[]
   realtimeStatus: 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error'
   /** core 用户 id（#229：仅 mock 主角判定；勿与 sender.id 比较——身份空间不同）。 */
-  coreUserId: number
+  coreUserId: string | number
   /** 本人 chat 内部 id（core:sub → contacts 解析；未就绪=0）。 */
   myUserId: number
   readReceipts: Record<number, ReadReceiptsSummary>
@@ -133,8 +133,8 @@ export interface ChatStoreInternals {
 export interface CreateChatStoreOptions {
   api: ChatApi
   storage: ChatStorage
-  /** 当前 core 用户 id（握手 token claims.sub 解出，或 mock 注入）。#229 起仅为 mock 主角判定/身份空间源。 */
-  myUserId: () => number
+  /** Core claims.sub；live 是字符串（如 u_…），mock 可继续使用数字身份。 */
+  myUserId: () => string | number
   /** 已就绪 token（socket 建连用）。 */
   getToken: () => string | null
 }
@@ -160,7 +160,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     dmsState: 'loading',
     contacts: [],
     realtimeStatus: 'idle',
-    coreUserId: 0,
+    coreUserId: '',
     myUserId: 0,
     readReceipts: {},
   })
@@ -178,6 +178,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
   const reportedReadIds = new Set<number>()
   /** 本人发出的消息 id（上报跳过——发件人恒已读，不计回执）。 */
   const mySentMessageIds = new Set<number>()
+  const pendingVisibleIds = new Set<number>()
 
   /**
    * #229 本人身份解析：claims.sub（core id）→ chat 内部 users.id。
@@ -188,13 +189,12 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     const coreId = coreUserId()
     if (!coreId) return 0
     const contacts = state.contacts
-    // 联系人未载入（含测试替身/mock 早期）：身份空间视为同构，直接透出 core id（旧行为兼容）；
-    // 若世界里有 core: 命名空间（live JIT 用户），必须精确映射，禁止同构假设
-    if (contacts.length === 0) return coreId
-    if (contacts.some((u) => u.username.startsWith('core:'))) {
+    // Live Core 身份必须通过 contacts 精确映射。数字 mock 身份独立保留；
+    // 不将字符串 "7" 借用成 Chat 用户 7（联系人未加载时也不得误判）。
+    if (typeof coreId === 'string' || contacts.some((u) => u.username.startsWith('core:'))) {
       return contacts.find((u) => u.username === `core:${coreId}`)?.id ?? 0
     }
-    // mock 世界（无 core: 命名空间）：身份空间同构，按 id 对上
+    if (contacts.length === 0) return coreId
     return contacts.find((u) => u.id === coreId)?.id ?? 0
   }
 
@@ -209,6 +209,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     for (const message of state.messages) {
       if (message.sender.id === state.myUserId) mySentMessageIds.add(message.id)
     }
+    if (next && pendingVisibleIds.size) void store.recordVisibleRead([...pendingVisibleIds])
   }
 
   const rememberMessage = (message: Message): boolean => {
@@ -217,10 +218,16 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     return true
   }
 
-  /** 记录单条消息的回执摘要（#220）：有则覆盖，无则不动（旧格式兼容）。 */
+  /** 合并回执摘要，避免迟到的历史/发送回包覆盖较新的实时已读。 */
   const rememberReceipts = (message: Message): void => {
     if (!message.readReceipts) return
-    state.readReceipts[message.id] = message.readReceipts
+    const existing = state.readReceipts[message.id]
+    const byUser = new Map((existing?.readBy ?? []).map((receipt) => [receipt.userId, receipt]))
+    for (const receipt of message.readReceipts.readBy) byUser.set(receipt.userId, receipt)
+    state.readReceipts[message.id] = {
+      count: Math.max(existing?.count ?? 0, message.readReceipts.count, byUser.size),
+      readBy: [...byUser.values()],
+    }
   }
 
   /** 逐条合并他人已读（#220）：已读过该消息的用户不重复计数/不重复名单。 */
@@ -249,6 +256,9 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
   }
 
   const handleMessage = (message: Message): void => {
+    rememberReceipts(message)
+    // REST/WS 新消息可能不带摘要；仅在没有更早回执时初始化为未读。
+    state.readReceipts[message.id] ??= { count: 0, readBy: [] }
     if (!rememberMessage(message)) return
     if (message.sender.id === state.myUserId) mySentMessageIds.add(message.id)
     state.messages.push(message)
@@ -329,6 +339,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       state.roomName = displayName
       state.messages = []
       seenMessageIds.clear()
+      pendingVisibleIds.clear()
       state.readReceipts = {}
       oldestMessageId = Number.POSITIVE_INFINITY
       homeLoaded = false
@@ -451,7 +462,6 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
           // handleMessage 按 id 去重，REST 回包后到会被 seenMessageIds 挡住，零重复；
           // 旧实现只登记不入列 → 回显先到时本人气泡不上屏（回执到了气泡却没到）
           handleMessage(message)
-          rememberReceipts(message)
           return
         }
         handleMessage(message)
@@ -495,9 +505,15 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     recordVisibleRead: async (messageIds) => {
       const room = state.currentRoom
       if (!room || messageIds.length === 0) return
-      const pending = messageIds.filter(
-        (id) => !reportedReadIds.has(id) && !mySentMessageIds.has(id),
+      if (!state.myUserId) {
+        for (const id of messageIds) pendingVisibleIds.add(id)
+        return
+      }
+      const pending = [...new Set(messageIds)].filter(
+        (id) => !reportedReadIds.has(id) && !mySentMessageIds.has(id)
+          && state.messages.find((message) => message.id === id)?.sender.id !== state.myUserId,
       )
+      for (const id of messageIds) pendingVisibleIds.delete(id)
       if (pending.length === 0) return
       try {
         await api.reportMessagesRead(room.kind, room.id, pending)
