@@ -51,6 +51,28 @@ export function liveApiBase(pathname: string): string {
   return `${liveModuleMount(pathname)}/api`
 }
 
+/** Worker 返回的文件路径以模块根为基准；壳挂载时补上 /m/<module> 前缀。 */
+export function moduleFileUrl(pathname: string, url: string): string {
+  if (!url.startsWith('/files/')) return url
+  return `${liveModuleMount(pathname)}${url}`
+}
+
+function normalizeAttachment(pathname: string, attachment: Attachment | null): Attachment | null {
+  if (!attachment) return null
+  return { ...attachment, url: moduleFileUrl(pathname, attachment.url) }
+}
+
+function normalizeMessage(pathname: string, message: Message): Message {
+  return { ...message, attachment: normalizeAttachment(pathname, message.attachment) }
+}
+
+function normalizeSocketFrame(pathname: string, frame: Record<string, unknown>): Record<string, unknown> {
+  if (frame.type === 'message' && frame.message && typeof frame.message === 'object') {
+    return { ...frame, message: normalizeMessage(pathname, frame.message as Message) }
+  }
+  return frame
+}
+
 /** Bearer 头装配；token 未就绪时显式失败（不发无凭证请求）。 */
 export function authHeaders(token: string | null): Record<string, string> {
   if (!token) {
@@ -179,7 +201,8 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
         headers: authHeaders(token),
         body,
       })
-      return (await response.json()) as { file: Attachment }
+      const result = (await response.json()) as { file: Attachment }
+      return { file: { ...result.file, url: moduleFileUrl(globalThis.location.pathname, result.file.url) } }
     })
   const openRoomSocket =
     options.openRoomSocket ??
@@ -200,7 +223,7 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
         // onMessage 契约恒收对象（与 mock 实现同参，store 按对象判型）；
         // 非 JSON 或非对象帧（心跳/二进制等）静默丢弃，不污染上层状态机
         const frame = parseSocketFrame(event.data)
-        if (frame !== undefined) connection.onMessage(frame)
+        if (frame !== undefined) connection.onMessage(normalizeSocketFrame(globalThis.location.pathname, frame))
       })
       return {
         close() {
@@ -229,7 +252,7 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
       socket.addEventListener('error', () => connection.onStatus('error'))
       socket.addEventListener('message', (event) => {
         const frame = parseSocketFrame(event.data)
-        if (frame !== undefined) connection.onMessage(frame)
+        if (frame !== undefined) connection.onMessage(normalizeSocketFrame(globalThis.location.pathname, frame))
       })
       return { close() { socket?.close() }, send(text: string) { if (socket?.readyState === WebSocket.OPEN) socket.send(text) } }
       },
@@ -251,16 +274,33 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
     })
 
   return {
-    listChannels: () => get<{ channels: Channel[] }>('/channels'),
-    listContacts: () => get<{ users: UserSummary[] }>('/contacts'),
-    listDms: () => get<{ dms: Dm[] }>('/dm'),
-    openDm: (userId) => postJson<OpenDmResult>('/dm/open', { userId }),
+    listChannels: async () => {
+      const result = await get<{ channels: Channel[] }>('/channels')
+      return result
+    },
+    listContacts: async () => {
+      const result = await get<{ users: UserSummary[] }>('/contacts')
+      return { users: result.users.map((user) => ({ ...user, avatarUrl: moduleFileUrl(globalThis.location.pathname, user.avatarUrl) })) }
+    },
+    listDms: async () => {
+      const result = await get<{ dms: Dm[] }>('/dm')
+      return { dms: result.dms.map((dm) => ({ ...dm, otherUser: { ...dm.otherUser, avatarUrl: moduleFileUrl(globalThis.location.pathname, dm.otherUser.avatarUrl) } })) }
+    },
+    openDm: async (userId) => {
+      const result = await postJson<OpenDmResult>('/dm/open', { userId })
+      return { dm: { ...result.dm, otherUser: { ...result.dm.otherUser, avatarUrl: moduleFileUrl(globalThis.location.pathname, result.dm.otherUser.avatarUrl) } } }
+    },
     joinChannel: (channelId) => postJson<{ ok: true }>(`/channels/${channelId}/join`, {}),
     createChannel: (input) => postJson<{ channel: Channel }>('/channels', input),
-    listChannelMembers: (channelId) => get<{ members: ChannelMember[] }>(`/channels/${channelId}/members`),
+    listChannelMembers: async (channelId) => {
+      const result = await get<{ members: ChannelMember[] }>(`/channels/${channelId}/members`)
+      return { members: result.members.map((member) => ({ ...member, avatarUrl: moduleFileUrl(globalThis.location.pathname, member.avatarUrl) })) }
+    },
     inviteChannelMembers: (channelId, userIds) => postJson<{ members: ChannelMember[] }>(`/channels/${channelId}/invite`, { userIds }),
-    getMessages: (kind, roomId, before) =>
-      get<MessagesPage>(`/messages${query({ kind, roomId, before: before ?? undefined })}`),
+    getMessages: async (kind, roomId, before) => {
+      const result = await get<MessagesPage>(`/messages${query({ kind, roomId, before: before ?? undefined })}`)
+      return { ...result, messages: result.messages.map((message) => normalizeMessage(globalThis.location.pathname, message)) }
+    },
     // #220 已读上报走 HTTP（决策：回执批量/幂等语义在 REST 端点闭环，socket 只收广播）
     reportMessagesRead: async (kind, roomId, messageIds) => {
       const deduped = [...new Set(messageIds)]
@@ -277,7 +317,7 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
           attachment: input.attachment ?? null,
           mentionUserIds: input.mentionUserIds ?? [],
         }),
-      }),
+      }).then((result) => ({ ...result, message: normalizeMessage(globalThis.location.pathname, result.message) })),
     uploadFile,
     openRoomSocket,
     openInboxSocket,

@@ -603,13 +603,13 @@ export function attachInboxSocket(
   store: ChatStore,
   api: ChatApi,
   getToken: () => string | null,
-): { close(): void } | null {
+): { close(): void; send?(text: string): void } | null {
   const token = getToken()
   if (!token) return null
   return openInbox(api, token, store)
 }
 
-function openInbox(api: ChatApi, token: string, store: ChatStore): { close(): void } {
+function openInbox(api: ChatApi, token: string, store: ChatStore): { close(): void; send?(text: string): void } {
   return api.openInboxSocket({
     token,
     onStatus: () => {},

@@ -28,11 +28,12 @@ const storage = createChatStorage()
 
 // 先建占位引用（装配顺序：session 回调 → store；见下方接线）
 let storeRef: ReturnType<typeof createChatStore> | null = null
-let inboxHandle: { close(): void } | null = null
+let inboxHandle: { close(): void; send?(text: string): void } | null = null
 const session = createChatSession({
   // #220/#225 live 接线：静默续期拿到新 token → 房间 socket 发 token_refresh 控制帧换绑
   onTokenRenewed: (token) => {
     storeRef?.refreshSocketToken(token)
+    inboxHandle?.send?.(JSON.stringify({ type: 'token_refresh', token }))
     // #229：续期换新不影响 sub，但保险起见同步身份（token 过渡期保持 mine 判定连续）
     storeRef?.refreshMyUserId()
   },

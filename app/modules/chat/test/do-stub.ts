@@ -60,7 +60,7 @@ export function installRoomDo(env: Record<string, unknown>): void {
     }),
   };
 
-  const inbox = new UserInbox(makeDoState());
+  const inbox = new UserInbox(makeDoState(), env);
   env.USER_INBOX = {
     idFromName: (_name: string) => 'inbox',
     get: () => ({
