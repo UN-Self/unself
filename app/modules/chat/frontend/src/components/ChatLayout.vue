@@ -5,7 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import MessageList from './MessageList.vue'
 import RoomList from './RoomList.vue'
-import { UButton, USkeleton } from '@unself/ui'
+import { UButton, UMessageAvatar, USkeleton } from '@unself/ui'
 import { NARROW_MAX_PX, type MediaQueryLike } from '../lib/viewport'
 import type { Channel, Dm, Message, RoomKind, UserSummary } from '../lib/types'
 
@@ -165,7 +165,7 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
               role="menuitem"
               @click="emit('open-dm', contact.id); newMessageOpen = false"
             >
-              <span class="chat-contact-avatar">{{ (contact.displayName || contact.username).slice(0, 1) }}</span>
+              <UMessageAvatar :src="contact.avatarUrl" :name="contact.displayName || contact.username" />
               {{ contact.displayName || contact.username }}
             </button>
             <button type="button" role="menuitem" @click="groupOpen = true">
@@ -241,7 +241,7 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
         <p class="chat-field-label">选择成员</p>
         <div class="chat-member-picker">
           <button v-for="contact in filteredContacts" :key="contact.id" type="button" class="chat-member-option" :class="{ selected: selectedMemberIds.includes(contact.id) }" @click="toggleMember(contact.id)">
-            <span class="chat-contact-avatar">{{ (contact.displayName || contact.username).slice(0, 1) }}</span>
+            <UMessageAvatar :src="contact.avatarUrl" :name="contact.displayName || contact.username" />
             <span>{{ contact.displayName || contact.username }}</span>
             <span class="chat-check" aria-hidden="true">{{ selectedMemberIds.includes(contact.id) ? '✓' : '' }}</span>
           </button>

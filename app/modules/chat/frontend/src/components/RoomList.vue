@@ -3,7 +3,7 @@
 import { Hash, Lock, MessageCircle } from 'lucide-vue-next'
 import { computed } from 'vue'
 
-import { USkeleton } from '@unself/ui'
+import { UMessageAvatar, USkeleton } from '@unself/ui'
 import type { Channel, Dm, RoomKind } from '../lib/types'
 
 /**
@@ -98,9 +98,7 @@ function lastActivity(value: string | null): string {
               :aria-current="isActive('dm', dm.id) ? 'true' : undefined"
               @click="emit('select', { kind: 'dm', id: dm.id })"
             >
-              <span class="rooms-icon rooms-icon-dm" aria-hidden="true">
-                {{ (dm.otherUser.displayName || dm.name).slice(0, 1) }}
-              </span>
+              <UMessageAvatar :src="dm.otherUser.avatarUrl" :name="dm.otherUser.displayName || dm.name" />
               <span class="rooms-item-copy"><span class="rooms-item-name">{{ dm.otherUser.displayName || dm.name }}</span><small>{{ dm.lastMessagePreview || '暂无消息' }}</small></span>
               <span v-if="dm.lastMessageAt" class="rooms-time">{{ lastActivity(dm.lastMessageAt) }}</span>
               <span v-if="dm.unreadCount > 0" class="rooms-badge" data-test="unread-badge">

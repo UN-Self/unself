@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { UserPlus, X } from 'lucide-vue-next'
-import { UButton } from '@unself/ui'
+import { UButton, UMessageAvatar } from '@unself/ui'
 import type { ChannelMember, UserSummary } from '../lib/types'
 
 const props = defineProps<{
@@ -41,7 +41,7 @@ function invite(): void {
       </header>
       <div class="group-list">
         <div v-for="member in members" :key="member.id" class="group-person">
-          <span class="group-avatar">{{ member.displayName.slice(0, 1) }}</span>
+          <UMessageAvatar :src="member.avatarUrl" :name="member.displayName" />
           <span>{{ member.displayName }}</span>
           <small v-if="member.role === 'owner'">群主</small>
         </div>
@@ -51,7 +51,7 @@ function invite(): void {
         <input v-model="query" aria-label="搜索可邀请成员" placeholder="搜索联系人" />
         <div class="group-list">
           <button v-for="contact in available" :key="contact.id" type="button" class="group-person group-choice" :aria-pressed="selected.includes(contact.id)" @click="toggle(contact.id)">
-            <span class="group-avatar">{{ contact.displayName.slice(0, 1) }}</span>
+            <UMessageAvatar :src="contact.avatarUrl" :name="contact.displayName" />
             <span>{{ contact.displayName }}</span>
             <span class="group-check">{{ selected.includes(contact.id) ? '✓' : '' }}</span>
           </button>
