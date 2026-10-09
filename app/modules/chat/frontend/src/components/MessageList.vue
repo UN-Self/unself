@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import MessageBubble from './MessageBubble.vue'
+import MessageRail from './MessageRail.vue'
 import { USkeleton } from '@unself/ui'
 import { formatDayLabel } from '../lib/message-time'
-import { nearBottom, nearTop, scrollToBottom } from '../lib/scroll'
+import { nearTop } from '../lib/scroll'
+import { useMessageScroll } from '../lib/use-message-scroll'
 import type { Message, ReadReceiptsSummary } from '../lib/types'
 
 /**
@@ -17,6 +19,7 @@ import type { Message, ReadReceiptsSummary } from '../lib/types'
  */
 export interface MessageListProps {
   messages: Message[]
+  roomKey?: string
   /** 当前登录者 id（mine 判定）。 */
   currentUserId: number
   /** 更早历史加载中（滚轮上翻触发）。 */
@@ -32,6 +35,7 @@ export interface MessageListProps {
 }
 
 const props = withDefaults(defineProps<MessageListProps>(), {
+  roomKey: '',
   isDm: false,
   audienceSize: 0,
   readReceipts: () => ({}),
@@ -48,6 +52,10 @@ const emit = defineEmits<{
 }>()
 
 const scroller = ref<HTMLElement | null>(null)
+const content = ref<HTMLElement | null>(null)
+const { following, overflowing, activeId, updatePosition, select, latest } = useMessageScroll(
+  scroller, content, () => props.roomKey, () => props.messages.map((message) => message.id),
+)
 
 /** 滚动锁：加载触发后到新批次到达前不再重复触发。 */
 let loadArmed = true
@@ -55,6 +63,7 @@ let loadArmed = true
 function onScroll(): void {
   const el = scroller.value
   if (el === null) return
+  updatePosition()
   if (loadArmed && nearTop(el) && !props.loadingEarlier && !props.noEarlier) {
     loadArmed = false
     emit('load-earlier')
@@ -66,22 +75,6 @@ watch(
   () => props.loadingEarlier,
   (loading) => {
     if (!loading) loadArmed = true
-  },
-)
-
-/** 新消息到达：原本贴底才自动跟随；离底浏览历史时不拽人。 */
-watch(
-  () => props.messages.length,
-  async (len, prev) => {
-    if (prev === undefined) return
-    if (len <= prev) return
-    const el = scroller.value
-    if (el === null) return
-    if (nearBottom(el)) {
-      await nextTick()
-      const after = scroller.value
-      if (after !== null) scrollToBottom(after)
-    }
   },
 )
 
@@ -162,48 +155,55 @@ function onShowReceipts(message: Message): void {
 </script>
 
 <template>
-  <div
-    ref="scroller"
-    class="stream"
-    data-test="message-stream"
-    aria-label="消息流"
-    @scroll.passive="onScroll"
-  >
-    <div class="stream-content">
-      <div v-if="loadingEarlier" class="stream-state" data-test="loading-earlier">
-        <USkeleton :lines="2" />
-      </div>
-      <div v-else-if="noEarlier && messages.length" class="stream-state" data-test="no-earlier">
-        <span class="stream-hint">没有更早的消息了</span>
-      </div>
+  <div class="stream-shell">
+    <div
+      ref="scroller"
+      class="stream"
+      data-test="message-stream"
+      aria-label="消息流"
+      @scroll.passive="onScroll"
+    >
+      <div ref="content" class="stream-content">
+        <div v-if="loadingEarlier" class="stream-state" data-test="loading-earlier">
+          <USkeleton :lines="2" />
+        </div>
+        <div v-else-if="noEarlier && messages.length" class="stream-state" data-test="no-earlier">
+          <span class="stream-hint">没有更早的消息了</span>
+        </div>
 
-      <div v-if="!messages.length" class="stream-empty" data-test="stream-empty">
-        <USkeleton :lines="skeletonLines" />
-      </div>
+        <div v-if="!messages.length" class="stream-empty" data-test="stream-empty">
+          <USkeleton :lines="skeletonLines" />
+        </div>
 
-      <template v-for="section in sections" :key="section.label">
-        <div class="stream-day" data-test="day-divider">{{ section.label }}</div>
-        <template v-for="message in section.messages" :key="message.id">
-          <MessageBubble
-            :ref="(el) => observeBubbleEl(el, message.id, message.sender.id)"
-            :message="message"
-            :mine="message.sender.id === currentUserId"
-            :is-dm="isDm"
-            :audience-size="audienceSize"
-            :read-summary="readReceipts?.[message.id] ?? null"
-            @show-receipts="onShowReceipts"
-          />
+        <template v-for="section in sections" :key="section.label">
+          <div class="stream-day" data-test="day-divider">{{ section.label }}</div>
+          <template v-for="message in section.messages" :key="message.id">
+            <MessageBubble
+              :data-message-id="message.id"
+              :ref="(el) => observeBubbleEl(el, message.id, message.sender.id)"
+              :message="message"
+              :mine="message.sender.id === currentUserId"
+              :is-dm="isDm"
+              :audience-size="audienceSize"
+              :read-summary="readReceipts?.[message.id] ?? null"
+              @show-receipts="onShowReceipts"
+            />
+          </template>
         </template>
-      </template>
+      </div>
     </div>
+    <MessageRail v-if="overflowing && messages.length" :messages="messages" :active-id="activeId" :following="following" @select="select" @latest="latest()" />
   </div>
 </template>
 
 <style scoped>
+.stream-shell { position: relative; flex: 1; min-height: 0; }
 .stream {
   flex: 1;
   min-height: 0;
+  height: 100%;
   overflow-y: auto;
+  overflow-anchor: none;
   display: flex;
   flex-direction: column;
   background: var(--unself-color-surface);
@@ -211,13 +211,14 @@ function onShowReceipts(message: Message): void {
 }
 .stream-content {
   display: flex;
+  flex-shrink: 0;
   flex-direction: column;
   gap: var(--unself-space-2);
   width: min(100%, 800px);
   min-height: 100%;
   box-sizing: border-box;
   margin: 0 auto;
-  padding: var(--unself-space-5) var(--unself-space-4);
+  padding: var(--unself-space-5) calc(var(--unself-space-8) + var(--unself-space-4)) var(--unself-space-5) var(--unself-space-4);
 }
 .stream-content > :first-child { margin-top: auto; }
 .stream-state {
