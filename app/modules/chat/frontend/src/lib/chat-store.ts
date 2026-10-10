@@ -11,6 +11,7 @@
  * - 发送走 REST 幂等端点（clientMessageId 去重回显），socket 只收广播不承担提交。
  */
 import { reactive } from 'vue'
+import { reconcileDeletedMessage } from './message-deletion'
 import type {
   Channel,
   Dm,
@@ -176,6 +177,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
   let homeLoaded = false
   /** 已见消息 id（WS 广播 vs REST 回包 去重）。 */
   const seenMessageIds = new Set<number>()
+  const deletedMessageIds = new Set<number>()
   /** 已成功上报已读的消息 id（#220 幂等去重：同消息在会话内只报一次）。 */
   const reportedReadIds = new Set<number>()
   /** 本人发出的消息 id（上报跳过——发件人恒已读，不计回执）。 */
@@ -270,6 +272,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
 
   /** 合并回执摘要，避免迟到的历史/发送回包覆盖较新的实时已读。 */
   const rememberReceipts = (message: Message): void => {
+    if (message.deleted || deletedMessageIds.has(message.id)) return
     if (!message.readReceipts) return
     const existing = state.readReceipts[message.id]
     const byUser = new Map((existing?.readBy ?? []).map((receipt) => [receipt.userId, receipt]))
@@ -282,6 +285,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
 
   /** 逐条合并他人已读（#220）：已读过该消息的用户不重复计数/不重复名单。 */
   const applyReceiptFromUser = (messageId: number, userId: number, readAt: string): void => {
+    if (deletedMessageIds.has(messageId)) return
     const summary = state.readReceipts[messageId]
     if (summary && summary.readBy.some((r) => r.userId === userId)) return
     if (summary) {
@@ -306,9 +310,10 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
   }
 
   const handleMessage = (message: Message): void => {
+    message = reconcileDeletedMessage(message, deletedMessageIds)
     rememberReceipts(message)
     // REST/WS 新消息可能不带摘要；仅在没有更早回执时初始化为未读。
-    state.readReceipts[message.id] ??= { count: 0, readBy: [] }
+    if (!message.deleted) state.readReceipts[message.id] ??= { count: 0, readBy: [] }
     if (!rememberMessage(message)) return
     if (message.sender.id === state.myUserId) mySentMessageIds.add(message.id)
     state.messages.push(message)
@@ -317,7 +322,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       const entry = findRoomList(room)
       if (entry) {
         entry.lastMessageAt = message.createdAt
-        entry.lastMessagePreview = message.content.trim() || (message.attachment?.kind === 'voice' ? '[语音]' : message.attachment ? `[附件] ${message.attachment.name}` : '')
+        entry.lastMessagePreview = message.deleted ? '消息已撤回' : message.content.trim() || (message.attachment?.kind === 'voice' ? '[语音]' : message.attachment ? `[附件] ${message.attachment.name}` : '')
       }
     }
     oldestMessageId = Math.min(oldestMessageId, message.id)
@@ -389,6 +394,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       state.roomName = displayName
       state.messages = []
       seenMessageIds.clear()
+      deletedMessageIds.clear()
       pendingVisibleIds.clear()
       clearReadQueue()
       state.readReceipts = {}
@@ -403,6 +409,8 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
         const page: MessagesPage = await api.getMessages(room.kind, room.id)
         // 焦点已切走的迟到回包：丢弃（防串房）
         if (state.currentRoom && roomKeyString(state.currentRoom) === roomKeyString(room)) {
+          for (const message of page.messages) if (message.deleted) deletedMessageIds.add(message.id)
+          page.messages = page.messages.map((message) => reconcileDeletedMessage(message, deletedMessageIds))
           for (const message of page.messages) {
             rememberMessage(message)
             rememberReceipts(message)
@@ -457,7 +465,8 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       try {
         const page = await api.getMessages(room.kind, room.id, before)
         if (state.currentRoom && roomKeyString(state.currentRoom) === roomKeyString(room)) {
-          const fresh = page.messages.filter((m) => rememberMessage(m))
+          for (const message of page.messages) if (message.deleted) deletedMessageIds.add(message.id)
+          const fresh = page.messages.map((message) => reconcileDeletedMessage(message, deletedMessageIds)).filter((m) => rememberMessage(m))
           for (const message of fresh) rememberReceipts(message)
           state.messages.unshift(...fresh)
           if (fresh.length) oldestMessageId = Math.min(oldestMessageId, ...fresh.map((m) => m.id))
@@ -497,6 +506,20 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     },
 
     receiveRoomFrame: (frame) => {
+      if (frame.type === 'message_deleted') {
+        const id = Number(frame.messageId)
+        if (!Number.isInteger(id) || id <= 0) return
+        deletedMessageIds.add(id)
+        queuedReadIds.delete(id)
+        pendingVisibleIds.delete(id)
+        for (const message of state.messages) Object.assign(message, reconcileDeletedMessage(message, deletedMessageIds))
+        delete state.readReceipts[id]
+        if (state.messages.at(-1)?.id === id && state.currentRoom) {
+          const entry = findRoomList(state.currentRoom)
+          if (entry) entry.lastMessagePreview = '消息已撤回'
+        }
+        return
+      }
       if (frame.type === 'ready') {
         state.realtimeStatus = 'open'
         return
@@ -566,6 +589,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       queuedReadRoom = roomKey
       for (const id of new Set(messageIds)) {
         pendingVisibleIds.delete(id)
+        if (deletedMessageIds.has(id)) continue
         if (reportedReadIds.has(id) || mySentMessageIds.has(id) || inFlightReadIds.has(id)) continue
         if (state.messages.find((message) => message.id === id)?.sender.id === state.myUserId) continue
         queuedReadIds.add(id)
