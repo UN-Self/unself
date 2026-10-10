@@ -121,6 +121,7 @@ export interface Message {
   source: string
   sender: MessageSender
   attachment: Attachment | null
+  deleted?: boolean
   /** 幂等发送的客户端 id（回显去重键，上游 clientMessageId）。 */
   clientMessageId?: string
   replyToMessageId?: number
@@ -185,7 +186,13 @@ export interface WsReadReceiptsFrame {
   messageIds: number[]
 }
 
-export type RoomFrame = WsReadyFrame | WsMessageFrame | WsErrorFrame | WsReadReceiptsFrame
+export interface WsMessageDeletedFrame {
+  protocolVersion: 1
+  type: 'message_deleted'
+  messageId: number
+}
+
+export type RoomFrame = WsReadyFrame | WsMessageFrame | WsErrorFrame | WsReadReceiptsFrame | WsMessageDeletedFrame
 export type InboxFrame = { protocolVersion: 1; type: 'ready' } | WsRoomMessageNotice
 
 /** WS 连接状态。 */

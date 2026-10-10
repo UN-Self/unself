@@ -21,7 +21,7 @@ const items = computed(() => {
     return {
       id: message.id,
       sender: message.sender.displayName || message.sender.username,
-      preview: message.content.trim().replace(/\s+/g, ' ').slice(0, 80)
+      preview: message.deleted ? '消息已撤回' : message.content.trim().replace(/\s+/g, ' ').slice(0, 80)
         || (message.attachment?.kind === 'voice' ? '[语音]' : message.attachment?.name || '[消息]'),
     }
   })
