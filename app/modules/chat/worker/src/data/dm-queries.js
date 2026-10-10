@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/data/dm-queries.js（GPL-3.0-only，裁剪版）
-<<<<<<< ours
 import { publicFileUrl } from "../utils.js";
 import { messagePreview } from './message-preview.js';
 import { userAvatarUrl } from "../profile-avatar.js";
@@ -39,6 +38,7 @@ export async function listUserDms(db, userId, env) {
 		.prepare(
 			`SELECT
 			   c.id, c.dm_key,
+			   latest.created_at AS last_message_at,
 			   latest.id AS last_message_id, latest.content AS last_message_content,
 			   latest.sender_id AS last_message_sender_id, latest.sender_kind AS last_message_sender_kind,
 			   latest.source AS last_message_source, latest.external_sender_id AS last_message_external_sender_id,
@@ -51,7 +51,6 @@ export async function listUserDms(db, userId, env) {
 			   other.avatar_key AS other_avatar_key,
 			   other.core_avatar_url AS other_core_avatar_url,
 			   EXISTS(SELECT 1 FROM user_blocks ub WHERE ub.blocker_id = ? AND ub.blocked_id = other.id) AS blocked_by_me,
-			   (SELECT MAX(m.created_at) FROM messages m WHERE m.channel_id = c.id AND m.deleted_at IS NULL) AS last_message_at,
 				   (SELECT COUNT(*) FROM messages m
 				    WHERE m.channel_id = c.id AND m.deleted_at IS NULL
 				      AND (m.sender_id IS NULL OR m.sender_id != ?)

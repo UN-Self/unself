@@ -50,6 +50,7 @@ export async function listVisibleChannels(db, userId, env) {
 				`SELECT
 				   c.id, c.name, c.description, c.avatar_key, c.kind,
 				   latest.id AS last_message_id, latest.content AS last_message_content,
+				   latest.created_at AS last_message_at,
 				   latest.sender_id AS last_message_sender_id, latest.sender_kind AS last_message_sender_kind,
 				   latest.source AS last_message_source, latest.external_sender_id AS last_message_external_sender_id,
 				   latest.attachment_key AS last_message_attachment_key,
@@ -61,7 +62,6 @@ export async function listVisibleChannels(db, userId, env) {
 			   COALESCE((SELECT cm.role FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ? LIMIT 1), '') AS my_role,
 			   EXISTS (SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ? AND cm.role = 'owner') AS can_manage,
 			   (SELECT COUNT(*) FROM channel_members cm WHERE cm.channel_id = c.id) AS member_count,
-			   (SELECT MAX(m.created_at) FROM messages m WHERE m.channel_id = c.id AND m.deleted_at IS NULL) AS last_message_at,
 				   CASE WHEN EXISTS (SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ?)
 				     THEN (SELECT COUNT(*) FROM messages m
 				           WHERE m.channel_id = c.id AND m.deleted_at IS NULL
