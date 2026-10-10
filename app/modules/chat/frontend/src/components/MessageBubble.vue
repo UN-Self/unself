@@ -57,7 +57,7 @@ const emit = defineEmits<{ /** 点击回执标签：请求父层打开已读名�
 }>()
 
 /** 回执面是否显示：仅 mine 气泡 + 有回执数据（旧格式/缺省不显示）。 */
-const showReceiptTag = computed(() => props.mine && props.readSummary !== null && props.readSummary !== undefined)
+const showReceiptTag = computed(() => !props.message.deleted && props.mine && props.readSummary !== null && props.readSummary !== undefined)
 
 /** DM：读1人即全读 → ✓✓「已读」；未读 → 「未读」（简化口径，无发送中态）。 */
 const dmRead = computed(() => (props.readSummary?.count ?? 0) > 0)
@@ -85,7 +85,7 @@ const fallbackTime = computed(() => {
 /** 文件类附件（无 url 可播/无 kind 标记）显示名 + 大小占位。 */
 const fileAttachment = computed(() => {
   const a = props.message.attachment
-  if (!a || a.kind === 'voice' || a.kind === 'audio') return null
+  if (props.message.deleted || !a || a.kind === 'voice' || a.kind === 'audio') return null
   return a
 })
 </script>
@@ -107,14 +107,14 @@ const fileAttachment = computed(() => {
       </div>
 
       <!-- 引用块：被回复消息摘要 / 已删除提示 -->
-      <div v-if="replyPreview || replyDeleted" class="bubble-reply">
+      <div v-if="!message.deleted && (replyPreview || replyDeleted)" class="bubble-reply">
         <span class="bubble-reply-text">{{ replyDeleted ? '原消息已删除' : replyPreview }}</span>
       </div>
 
       <UMessageBubble class="bubble-body" :variant="mine ? 'solid' : 'soft'">
-        <p class="bubble-text">{{ message.content }}</p>
+        <p class="bubble-text">{{ message.deleted ? '消息已撤回' : message.content }}</p>
 
-        <VoiceBubble v-if="message.attachment && (message.attachment.kind === 'voice' || message.attachment.kind === 'audio')" :attachment="message.attachment" />
+        <VoiceBubble v-if="!message.deleted && message.attachment && (message.attachment.kind === 'voice' || message.attachment.kind === 'audio')" :attachment="message.attachment" />
 
         <a v-else-if="fileAttachment" class="bubble-file" data-test="bubble-file" :href="fileAttachment.url" :download="fileAttachment.name" target="_blank" rel="noopener">
           <Paperclip :size="14" aria-hidden="true" />
