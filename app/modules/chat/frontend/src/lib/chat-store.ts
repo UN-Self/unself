@@ -88,6 +88,7 @@ export interface ChatStore {
   loadOlderMessages(): Promise<void>
   /** 幂等发送：REST 提交（clientMessageId），失败置 sendError 并上抛。 */
   sendMessage(input: SendMessageInput): Promise<void>
+  deleteMessage(messageId: number): Promise<void>
   /** 接收一帧房间消息（live 由 socket 回调驱动；测试直呼注入）。 */
   receiveRoomFrame(frame: RoomFrame): void
   /** 可见性上报（#220）：过滤已上报与本人消息后批量 POST；失败不伤状态，可随下次可见重试。 */
@@ -296,6 +297,12 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     state.readReceipts[messageId] = { count: 1, readBy: [{ userId, username: '', displayName: '', readAt }] }
   }
 
+  const applyCursorFromUser = (messageId: number, userId: number, readAt: string): void => {
+    for (const message of state.messages) {
+      if (message.id <= messageId && message.sender.id !== userId) applyReceiptFromUser(message.id, userId, readAt)
+    }
+  }
+
   const findRoomList = (room: RoomKey): Channel | Dm | null => {
     if (room.kind === 'dm') return state.dms.find((d) => d.id === room.id) ?? null
     return state.channels.find((c) => c.id === room.id) ?? null
@@ -423,8 +430,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
           state.hasMoreHistory = page.messages.length >= HISTORY_PAGE_SIZE
           state.loadingHistory = 'ready'
           clearUnread(room)
-          // 首页就绪即对可见消息做一次已读上报（链路 2 ③；失败静默，滚回可见再触发）
-          void store.recordVisibleRead(page.messages.filter((m) => m.sender.id !== state.myUserId).map((m) => m.id))
+          // 已读只由 MessageList 的真实可见性观察触发；加载历史本身不等于用户读完整页。
         }
       } catch (error) {
         state.loadingHistory = 'error'
@@ -505,6 +511,13 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       }
     },
 
+    deleteMessage: async (messageId) => {
+      const room = state.currentRoom
+      if (!room) return
+      await api.deleteMessage(room.kind, room.id, messageId)
+      store.receiveRoomFrame({ protocolVersion: 1, type: 'message_deleted', messageId })
+    },
+
     receiveRoomFrame: (frame) => {
       if (frame.type === 'message_deleted') {
         const id = Number(frame.messageId)
@@ -548,6 +561,11 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
         if (frame.userId === state.myUserId) return
         if (!state.currentRoom) return
         for (const messageId of frame.messageIds) applyReceiptFromUser(messageId, frame.userId, frame.readAt)
+      }
+      if (frame.type === 'read_cursor') {
+        if (frame.userId === state.myUserId) return
+        if (!state.currentRoom || state.currentRoom.id !== frame.room.id || state.currentRoom.kind !== frame.room.kind) return
+        applyCursorFromUser(frame.messageId, frame.userId, frame.readAt)
       }
     },
 

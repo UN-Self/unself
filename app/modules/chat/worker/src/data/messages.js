@@ -116,6 +116,17 @@ export async function externalSenderExists(db, source, senderId) {
 }
 
 async function mapDecryptedMessage(env, row) {
+	if (row.deleted_at) {
+		return {
+			...mapMessage(row, "", null),
+			deleted: true,
+			attachment: null,
+			mentions: [],
+			mentionUserIds: [],
+			replyTo: undefined,
+			replyToMessageId: undefined,
+		};
+	}
 	const content = await decryptMessageContent(env, row.content, {
 		channelId: row.channel_id,
 		senderId: row.sender_id ?? 0,
@@ -154,7 +165,7 @@ const MESSAGE_SELECT = `SELECT
 		  m.sender_kind, m.external_sender_id, m.external_sender_name,
 		  m.external_sender_avatar_url, m.source, m.source_message_id,
 		  m.source_attachment_id, m.source_attachment_unique_id, m.client_message_id,
-			  m.mention_user_ids, m.reply_to_message_id, m.reply_to_sender_id, m.created_at,
+			  m.mention_user_ids, m.reply_to_message_id, m.reply_to_sender_id, m.created_at, m.deleted_at,
 		  u.id AS sender_id, u.username AS sender_username,
 		  u.display_name AS sender_display_name, u.avatar_key AS sender_avatar_key, u.core_avatar_url AS sender_core_avatar_url,
 		  reply.id AS reply_message_id, reply.content AS reply_content,
@@ -191,7 +202,7 @@ const MESSAGE_SELECT = `SELECT
 export async function getMessageDeletionTarget(db, messageId) {
 	const { results } = await db
 		.prepare(
-			`SELECT m.id, m.channel_id, m.sender_id, m.attachment_key,
+			`SELECT m.id, m.channel_id, m.sender_id, m.attachment_key, m.created_at,
 			        c.kind AS channel_kind
 			 FROM messages m
 			 JOIN channels c ON c.id = m.channel_id
@@ -205,7 +216,7 @@ export async function getMessageDeletionTarget(db, messageId) {
 }
 
 export async function listMessages(env, roomId, before = null, limit = 30) {
-	const filters = ["m.channel_id = ?", "m.deleted_at IS NULL"];
+	const filters = ["m.channel_id = ?"];
 	const binds = [Number(roomId)];
 	if (before) {
 		filters.push("m.id < ?");
@@ -350,18 +361,22 @@ export async function listRoomMessageEvents(env, channelId, afterSequence = 0, l
 	};
 }
 
-export async function softDeleteMessage(db, { channelId, messageId }) {
-	const result = await db
-		.prepare(
+export async function softDeleteMessage(db, { channelId, messageId, actorId, allowAny = false, action = 'recalled', source = 'chat' }) {
+	const [updated, audited] = await db.batch([
+		db.prepare(
 			`UPDATE messages
 			 SET deleted_at = CURRENT_TIMESTAMP
-			 WHERE id = ?
-			   AND channel_id = ?
-			   AND deleted_at IS NULL`,
-		)
-		.bind(Number(messageId), Number(channelId))
-		.run();
-	return Number(result.meta?.changes || 0) > 0;
+			 WHERE id = ? AND channel_id = ? AND deleted_at IS NULL
+			   AND (? = 1 OR (sender_id = ? AND created_at >= datetime('now', '-24 hours')))` ,
+		).bind(Number(messageId), Number(channelId), allowAny ? 1 : 0, Number(actorId)),
+		db.prepare(
+			`INSERT OR IGNORE INTO message_deletion_audit
+			 (message_id, channel_id, actor_user_id, action, source)
+			 SELECT ?, ?, ?, ?, ?
+			 WHERE EXISTS (SELECT 1 FROM messages WHERE id = ? AND channel_id = ? AND deleted_at IS NOT NULL)`,
+		).bind(Number(messageId), Number(channelId), Number(actorId), String(action), String(source), Number(messageId), Number(channelId)),
+	]);
+	return Number(updated.meta?.changes || 0) > 0;
 }
 
 async function persistMessage(env, {

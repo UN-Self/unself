@@ -97,6 +97,15 @@ export function submitRoomReceipts(env, { room, principal, messageIds }) {
   });
 }
 
+/** 已读游标上报：每个用户/会话只推进一个位置，DO 负责在线广播。 */
+export function submitRoomReadCursor(env, { room, principal, messageId }) {
+  return submitClientRoomAction(env, {
+    room,
+    principal,
+    action: { type: 'read_cursor', messageId: Number(messageId) },
+  });
+}
+
 export async function submitExternalRoomMessage(env, payload) {
 	const room = payload.room;
 	return getChannelRoomStub(env, room.kind, room.id).fetch(

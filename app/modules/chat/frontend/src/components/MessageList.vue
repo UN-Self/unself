@@ -32,6 +32,7 @@ export interface MessageListProps {
   audienceSize?: number
   /** 回执摘要唯一真值（store.state.readReceipts；缺省 = 旧格式无回执面）。 */
   readReceipts?: Record<number, ReadReceiptsSummary>
+  canManage?: boolean
 }
 
 const props = withDefaults(defineProps<MessageListProps>(), {
@@ -39,6 +40,7 @@ const props = withDefaults(defineProps<MessageListProps>(), {
   isDm: false,
   audienceSize: 0,
   readReceipts: () => ({}),
+  canManage: false,
   onVisible: undefined,
 })
 
@@ -49,6 +51,7 @@ const emit = defineEmits<{
   'show-receipts': [message: Message]
   /** 他人消息进入视口 → 请求父层批量上报已读（#220，参数 = 本轮新可见的消息 id）。 */
   'visible-read': [messageIds: number[]]
+  delete: [message: Message]
 }>()
 
 const scroller = ref<HTMLElement | null>(null)
@@ -186,7 +189,9 @@ function onShowReceipts(message: Message): void {
               :is-dm="isDm"
               :audience-size="audienceSize"
               :read-summary="readReceipts?.[message.id] ?? null"
+              :can-delete="message.sender.id === currentUserId || canManage"
               @show-receipts="onShowReceipts"
+              @delete="emit('delete', $event)"
             />
           </template>
         </template>

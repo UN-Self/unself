@@ -23,7 +23,8 @@ export const CHAT_TABLES = Object.freeze([
   'message_event_compaction',
   'pending_r2_delete',
   'core_identities',
-  'read_receipts'
+  'read_receipts',
+  'message_deletion_audit'
 ]);
 
 function escapeRegExp(value) {

@@ -162,6 +162,7 @@ function createSummary() {
 		expiredRealtimeTicketsDeleted: 0,
 		expiredMessageEventsDeleted: 0,
 		expiredDeviceSessionsDeleted: 0,
+		deletionAuditDeleted: 0,
 		r2Deleted: 0,
 		r2DeleteFailed: 0,
 		r2DeleteQueued: 0,
@@ -170,6 +171,21 @@ function createSummary() {
 		orphanUploadsDeleted: 0,
 		budget: null,
 	};
+}
+
+async function runDeletionAuditCleanupStep(env, config, summary, budget) {
+	if (!budget.spend({ d1ApiCalls: 1, d1Statements: 1 })) return { progress: false, more: true };
+	const result = await env.DB.prepare(
+		`DELETE FROM message_deletion_audit
+		 WHERE id IN (
+		   SELECT id FROM message_deletion_audit
+		   WHERE created_at < datetime('now', ?)
+		   ORDER BY id ASC LIMIT ?
+		 )`,
+	).bind('-90 day', config.batchSize).run();
+	const deleted = resultChanges(result);
+	summary.deletionAuditDeleted += deleted;
+	return { progress: deleted > 0, more: deleted >= config.batchSize };
 }
 
 function safeErrorMessage(error) {
@@ -616,6 +632,7 @@ export async function runScheduledGc(env) {
 	const siteIconKey = await loadSiteIconGuard(env.DB, config, budget);
 	const steps = [
 		runMobileProtocolCleanupStep,
+		runDeletionAuditCleanupStep,
 		runExpiredMessagesStep,
 		runHardDeleteInvitesStep,
 		runHardDeleteChannelsStep,

@@ -357,9 +357,10 @@ export function createMockChatApi(
     const rows = listRoom(kind, roomId)
     const readAt = new Date().toISOString().slice(0, 19).replace('T', ' ')
     const freshIds: number[] = []
-    for (const id of new Set(messageIds)) {
-      const row = rows.find((m) => m.id === id)
-      if (!row) continue
+    const cursor = Math.max(...new Set(messageIds))
+    for (const row of rows.filter((item) => item.id <= cursor)) {
+      if (row.sender.id === world.me.id) continue
+      const id = row.id
       const summary = row.readReceipts ?? { count: 0, readBy: [] }
       if (summary.readBy.some((r) => r.userId === world.me.id)) continue
       summary.count += 1
@@ -383,6 +384,15 @@ export function createMockChatApi(
         messageIds: freshIds,
       })
     }
+  }
+  api.deleteMessage = async (kind, roomId, messageId) => {
+    const rows = world.messagesByRoom.get(`${kind}:${roomId}`) ?? []
+    const message = rows.find((item) => item.id === messageId)
+    if (!message) throw new Error('消息不存在或已被删除')
+    message.deleted = true
+    message.content = ''
+    message.attachment = null
+    api.lastSocket?.serverPush({ protocolVersion: 1, type: 'message_deleted', messageId })
   }
 
   api.uploadFile = async (file: File) => {

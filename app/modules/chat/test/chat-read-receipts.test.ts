@@ -120,7 +120,7 @@ async function sendMessage(sub: string, name: string, kind: 'public' | 'private'
 async function reportRead(
   token: string,
   body: Record<string, unknown>,
-): Promise<{ status: number; json: { ok?: boolean; receipts?: Array<{ messageId: number; readAt: string }>; lastReadMessageId?: number; error?: string } }> {
+): Promise<{ status: number; json: { ok?: boolean; receipts?: Array<{ messageId: number; readAt: string }>; lastReadMessageId?: number; cursor?: number; changed?: boolean; error?: string } }> {
   const res = await app.request('https://chat.example/api/messages/read', {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -163,8 +163,10 @@ describe('chat 已读回执（#220：上报/幂等/口径/推送/兜底）', () 
     for (const id of ids) db.run('INSERT INTO messages (id, channel_id, sender_id, content) VALUES (?, 1, ?, ?)', id, aliceId, 'batch');
     const first = await reportRead(token, { kind: 'public', roomId: 1, messageIds: ids });
     expect(first.status).toBe(200);
-    expect(first.json.receipts).toHaveLength(200);
-    expect(db.first<{ count: number }>('SELECT COUNT(*) AS count FROM read_receipts WHERE user_id = ?', bobId)?.count).toBe(200);
+    expect(first.json.receipts).toEqual([]);
+    expect(first.json.cursor).toBe(ids.at(-1));
+    expect(db.first<{ count: number }>('SELECT COUNT(*) AS count FROM read_receipts WHERE user_id = ?', bobId)?.count).toBe(0);
+    expect(db.first<{ last_read_message_id: number }>('SELECT last_read_message_id FROM message_reads WHERE channel_id = 1 AND user_id = ?', bobId)?.last_read_message_id).toBe(ids.at(-1));
     db.run("UPDATE message_reads SET updated_at = '2020-01-01 00:00:00' WHERE user_id = ?", bobId);
     const replay = await reportRead(token, { kind: 'public', roomId: 1, messageIds: ids });
     expect(replay.status).toBe(200);
@@ -188,19 +190,11 @@ describe('chat 已读回执（#220：上报/幂等/口径/推送/兜底）', () 
 
     expect(status).toBe(200);
     expect(json.ok).toBe(true);
-    expect(json.receipts).toHaveLength(1);
-    expect(json.receipts![0]!.messageId).toBe(messageId);
-    expect(typeof json.receipts![0]!.readAt).toBe('string');
-    expect(json.receipts![0]!.readAt.length).toBeGreaterThan(0);
-
-    // 行真落库：message_id + user_id 主键行存在（直查真库，不经适配器）
-    const row = db.first<{ message_id: number; user_id: number; read_at: string }>(
-      'SELECT message_id, user_id, read_at FROM read_receipts WHERE message_id = ? AND user_id = ?',
-      messageId,
-      bobId,
-    );
-    expect(row).not.toBeNull();
-    expect(row!.read_at).toBe(json.receipts![0]!.readAt);
+    expect(json.receipts).toEqual([]);
+    expect(json.cursor).toBe(messageId);
+    expect(json.changed).toBe(true);
+    expect(db.first<{ last_read_message_id: number }>('SELECT last_read_message_id FROM message_reads WHERE channel_id = 1 AND user_id = ?', bobId)?.last_read_message_id).toBe(messageId);
+    expect(db.first('SELECT 1 FROM read_receipts WHERE message_id = ? AND user_id = ?', messageId, bobId)).toBeNull();
     void aliceId;
   });
 
@@ -227,13 +221,14 @@ describe('chat 已读回执（#220：上报/幂等/口径/推送/兜底）', () 
 
     const first = await reportRead(bobToken, { kind: 'public', roomId: 1, messageIds: [messageId] });
     expect(first.status).toBe(200);
-    expect(first.json.receipts).toHaveLength(1);
+    expect(first.json.receipts).toEqual([]);
     expect(socket.sent).toHaveLength(1); // 新增>0 → 一帧聚合广播
 
     // 同批重放：零新增行、零事件（验收锚点）
     const replay = await reportRead(bobToken, { kind: 'public', roomId: 1, messageIds: [messageId] });
     expect(replay.status).toBe(200);
-    expect(replay.json.receipts).toHaveLength(0);
+    expect(replay.json.receipts).toEqual([]);
+    expect(replay.json.changed).toBe(false);
     expect(socket.sent).toHaveLength(1); // 第二个 socket（同一连接）收不到第二帧
 
     const rows = db.query<{ n: number }>(
@@ -241,7 +236,7 @@ describe('chat 已读回执（#220：上报/幂等/口径/推送/兜底）', () 
       messageId,
       bobId,
     );
-    expect(rows[0]!.n).toBe(1);
+    expect(rows[0]!.n).toBe(0);
   });
 
   it('负例：未入房成员上报 private 频道 → 403；批 >200 → 413', async () => {
@@ -356,7 +351,7 @@ describe('chat 已读回执（#220：上报/幂等/口径/推送/兜底）', () 
     const bobToken = await makeToken({ sub: 'u_bob', name: '阿鲍' });
     const result = await reportRead(bobToken, { kind: 'private', roomId: privateId, messageIds: [messageId] });
 
-    // 权限面过了（是成员），但消息不属于该频道 → 不落行（recordReadReceipts 房间过滤）
+    // 权限面过了（是成员），但消息不属于该频道 → 游标保持在 0，不产生逐消息回执。
     expect(result.status).toBe(200);
     expect(result.json.receipts).toHaveLength(0);
     const rows = db.query<{ n: number }>(
@@ -365,6 +360,7 @@ describe('chat 已读回执（#220：上报/幂等/口径/推送/兜底）', () 
       bobId,
     );
     expect(rows[0]!.n).toBe(0);
+    expect(db.first<{ last_read_message_id: number }>('SELECT last_read_message_id FROM message_reads WHERE channel_id = ? AND user_id = ?', privateId, bobId)?.last_read_message_id).toBe(0);
   });
 
   describe('DO /receipts 内部路由（真 ChannelRoom + ws-stub）', () => {
@@ -509,9 +505,10 @@ describe('chat 已读回执服务端兜底（#229：发件人自读恒不计）'
     });
     expect(status).toBe(200);
     expect(json.ok).toBe(true);
-    expect(json.receipts).toHaveLength(0); // 自读零新增 → 零广播素材
+    expect(json.receipts).toEqual([]);
+    expect(json.cursor).toBe(messageId);
 
-    // 库里只有「阿鲍后来读」的行；甲的自读行不存在
+    // 游标记录的是会话位置；逐消息回执表不再新增自读行。
     const row = db.first<{ user_id: number }>(
       'SELECT user_id FROM read_receipts WHERE message_id = ? AND user_id = ?',
       messageId,
@@ -537,7 +534,8 @@ describe('chat 已读回执服务端兜底（#229：发件人自读恒不计）'
       messageIds: [myMsg, bobMsg],
     });
     expect(status).toBe(200);
-    expect(json.receipts?.map((r) => r.messageId)).toEqual([bobMsg]); // 只剩鲍勃的
+    expect(json.receipts).toEqual([]);
+    expect(json.cursor).toBe(bobMsg);
 
     const mine = db.first<{ user_id: number }>(
       'SELECT user_id FROM read_receipts WHERE message_id = ? AND user_id = ?',
@@ -545,5 +543,6 @@ describe('chat 已读回执服务端兜底（#229：发件人自读恒不计）'
       aliceId,
     );
     expect(mine).toBeNull();
+    expect(db.first('SELECT user_id FROM read_receipts WHERE message_id = ? AND user_id = ?', bobMsg, aliceId)).toBeNull();
   });
 });

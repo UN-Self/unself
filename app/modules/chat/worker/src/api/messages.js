@@ -3,13 +3,9 @@
 // #220 增补（unself 集成层）：逐条已读回执上报（flows.md 链路 2）；GET 分页每条消息富化 readReceipts。
 import { listMessages } from '../data/messages.js';
 import { getPinnedMessage } from '../data/pins.js';
-import { markRoomRead } from '../data/unread.js';
-import {
-  countReachableRecipients,
-  listReadReceipts,
-  recordReadReceipts
-} from '../data/read-receipts.js';
-import { submitRoomReceipts } from '../do-bridge.js';
+import { advanceRoomReadCursor, listCursorReadReceipts } from '../data/unread.js';
+import { activeUserSql } from '../user-status.js';
+import { submitRoomReadCursor } from '../do-bridge.js';
 import { authorizeRoom, isRoomKind } from '../room-access.js';
 import { errorResponse, sanitizeLimit } from '../utils.js';
 
@@ -21,23 +17,21 @@ const MAX_RECEIPT_BATCH = 200;
  * 口径（#220 定案）：count=该消息已读人数（read_receipts 真实行）；分母=可达收件人
  * （成员∧未删∧active，发件人恒已读不计入分母），每页一条成员基数查询+一条回执 IN 查询，不 N+1。
  */
-async function attachReadReceipts(env, roomId, messages) {
+async function attachReadReceipts(env, roomId, messages, currentUserId) {
   if (messages.length === 0) {
     return [];
   }
-  const senderIds = [...new Set(messages
-    .map((message) => (message.sender?.kind === 'local' ? Number(message.sender.id) : NaN))
-    .filter((id) => Number.isInteger(id) && id > 0))];
-
-  const [receiptsByMessage, memberCount] = await Promise.all([
-    listReadReceipts(env.DB, messages.map((message) => message.id)),
-    countReachableRecipients(env.DB, roomId)
+  const visibleMessages = messages.filter((message) => !message.deleted);
+  const [receiptsByMessage, memberCountResult] = await Promise.all([
+    listCursorReadReceipts(env.DB, roomId, visibleMessages),
+    env.DB.prepare(`SELECT COUNT(*) AS recipient_count FROM channel_members cm JOIN users u ON u.id = cm.user_id WHERE cm.channel_id = ? AND u.deleted_at IS NULL AND ${activeUserSql('u')}`).bind(Number(roomId)).all()
   ]);
+  const memberCount = Number(memberCountResult.results[0]?.recipient_count || 0);
 
   return messages.map((message) => {
     const entry = receiptsByMessage.get(Number(message.id));
     const isOwn = message.sender?.kind === 'local'
-      && senderIds.includes(Number(message.sender.id));
+      && Number(message.sender.id) === Number(currentUserId);
     // 分母=可达收件人（不含发件人自己）；单聊=1，A 发言 B/C 已读 → count=2（非 3）。
     const denominator = Math.max(0, memberCount - (isOwn ? 1 : 0));
     return {
@@ -73,13 +67,8 @@ export function registerMessageRoutes(app) {
       listMessages(c.env, roomId, before, limit),
       getPinnedMessage(c.env, roomId)
     ]);
-    await markRoomRead(c.env.DB, {
-      channelId: roomId,
-      userId: session.userId
-    });
-
-    // #220 补拉定案：分页内联富化（每页一条回执 IN 查询 + 一条成员基数查询，不 N+1）。
-    const enriched = await attachReadReceipts(c.env, roomId, messages);
+    // GET 只加载数据，不推进已读游标；只有客户端可见性上报才改变阅读状态。
+    const enriched = await attachReadReceipts(c.env, roomId, messages, session.userId);
 
     return c.json({
       room: {
@@ -135,53 +124,32 @@ export function registerMessageRoutes(app) {
       ? [...new Set(messageIds.map((id) => Number(id)))]
       : (legacyMessageId !== null ? [legacyMessageId] : []);
 
-    let newlyRead = [];
+    let lastReadMessageId = 0;
+    let changed = false;
     if (ids.length > 0) {
-      // DO 是唯一写者：落行（幂等）+ diff + 聚合广播都在 ChannelRoom /receipts；
-      // HTTP 面不预写，回执行由 DO 落。DO 失败 → 尽力降级到本地直写（广播不可用但不丢上报）。
-      const response = await submitRoomReceipts(c.env, {
+      const cursor = Math.max(...ids);
+      const response = await submitRoomReadCursor(c.env, {
         room: access.room,
         principal: session,
-        messageIds: ids
+        messageId: cursor
       });
       if (response.ok) {
         const body = await response.json().catch(() => null);
-        newlyRead = Array.isArray(body?.receipts)
-          ? body.receipts.map((item) => ({
-              messageId: Number(item.messageId),
-              readAt: String(item.readAt || '')
-            }))
-          : [];
+        lastReadMessageId = Number(body?.lastReadMessageId || cursor);
+        changed = body?.changed === true;
       } else {
-        console.error(JSON.stringify({
-          message: 'read receipt do submit failed',
-          roomId,
-          userId: session.userId,
-          status: response.status
-        }));
-        // 降级：DO 不可达时在 HTTP 面直接落行（无广播；幂等不重不漏）。
-        newlyRead = await recordReadReceipts(c.env.DB, {
-          channelId: roomId,
-          userId: session.userId,
-          messageIds: ids
-        });
+        const result = await advanceRoomReadCursor(c.env.DB, { channelId: roomId, userId: session.userId, messageId: cursor });
+        lastReadMessageId = result.lastReadMessageId;
+        changed = result.changed;
       }
     }
-
-    // 频道级未读游标（上游 message_reads，与新回执表并存不互改）。
-    const lastReadMessageId = await markRoomRead(c.env.DB, {
-      channelId: roomId,
-      userId: session.userId,
-      messageId: ids.length > 0 ? Math.max(...ids) : legacyMessageId
-    });
 
     return c.json({
       ok: true,
       lastReadMessageId,
-      receipts: newlyRead.map((item) => ({
-        messageId: item.messageId,
-        readAt: item.readAt
-      }))
+      cursor: lastReadMessageId,
+      changed,
+      receipts: []
     });
   });
 }

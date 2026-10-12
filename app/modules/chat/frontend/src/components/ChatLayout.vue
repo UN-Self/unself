@@ -33,6 +33,7 @@ export interface ChatLayoutProps {
   audienceSize?: number
   /** 回执摘要唯一真值（#220 store.state.readReceipts；缺省 = 旧格式无回执面）。 */
   readReceipts?: Record<number, import('../lib/types').ReadReceiptsSummary>
+  canManage?: boolean
   /** 会话列表加载失败人话（#221 走查补：错误态替代空态，不再静默吞错）。 */
   loadError?: string | null
   groupError?: string
@@ -45,6 +46,7 @@ const props = withDefaults(defineProps<ChatLayoutProps>(), {
   readReceipts: () => ({}),
   loadError: null,
   groupError: '',
+  canManage: false,
   contacts: () => [],
 })
 
@@ -56,6 +58,7 @@ const emit = defineEmits<{
   'show-receipts': [message: Message]
   /** 他人消息进入视口 → 根层批量上报已读（#220）。 */
   'visible-read': [messageIds: number[]]
+  delete: [message: Message]
   'open-dm': [userId: number]
   'create-group': [input: { name: string; memberUserIds: number[] }]
   'open-group-details': []
@@ -220,9 +223,11 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
         :is-dm="isDm"
         :audience-size="audienceSize"
         :read-receipts="readReceipts"
+        :can-manage="canManage"
         @load-earlier="emit('load-earlier')"
         @show-receipts="emit('show-receipts', $event)"
         @visible-read="emit('visible-read', $event)"
+        @delete="emit('delete', $event)"
       />
 
       <!-- composer 插槽：T4/T5 填充（发送/@/文件/语音入口） -->

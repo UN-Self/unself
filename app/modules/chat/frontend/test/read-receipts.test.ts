@@ -153,7 +153,7 @@ describe('已读名单浮层（#220）', () => {
 })
 
 describe('store 回执状态与上报（#220）', () => {
-  it('openRoom 自动上报首页他人消息（本人消息不报）；mock 世界内存生效', async () => {
+  it('真实可见性上报首页他人消息（本人消息不报）；加载会话本身不推进游标', async () => {
     const api = createMockChatApi()
     const postSpy = vi.spyOn(api, 'reportMessagesRead')
     const store = createChatStore({
@@ -164,6 +164,8 @@ describe('store 回执状态与上报（#220）', () => {
     })
     await store.openRoom({ kind: 'public', id: 1 }, 'general')
     await flushPromises()
+    expect(postSpy).not.toHaveBeenCalled()
+    await store.recordVisibleRead([2, 3, 1])
     // 首页他人消息 = id 3、2（id 1 是我发的，跳过）
     await vi.waitFor(() => expect(postSpy).toHaveBeenCalledTimes(1))
     expect(postSpy.mock.calls[0]?.[2]).toEqual(expect.arrayContaining([2, 3]))
@@ -221,6 +223,29 @@ describe('store 回执状态与上报（#220）', () => {
     store.closeSockets()
   })
 
+  it('read_cursor 帧按游标覆盖较早消息，但不把游标发送者自己的消息算作已读', async () => {
+    const api = createMockChatApi(buildMockWorld())
+    const store = createChatStore({
+      api,
+      storage: createChatStorageInert(),
+      myUserId: () => 1,
+      getToken: () => 'mock-token',
+    })
+    await store.openRoom({ kind: 'public', id: 1 }, 'general')
+    await flushPromises()
+    store.receiveRoomFrame({
+      protocolVersion: 1,
+      type: 'read_cursor',
+      room: { kind: 'public', id: 1 },
+      userId: 2,
+      messageId: 2,
+      readAt: '2026-09-16T10:00:00',
+    })
+    expect(store.state.readReceipts[1]?.readBy.some((receipt) => receipt.userId === 2)).toBe(true)
+    expect(store.state.readReceipts[2]?.readBy.some((receipt) => receipt.userId === 2)).toBe(false)
+    store.closeSockets()
+  })
+
   it('上报失败不影响 store 状态，下次可见可重试（不进已上报集合）', async () => {
     const api = createMockChatApi()
     let failing = true
@@ -235,6 +260,7 @@ describe('store 回执状态与上报（#220）', () => {
     })
     await store.openRoom({ kind: 'public', id: 1 }, 'general')
     await flushPromises()
+    await store.recordVisibleRead([2, 3])
     await vi.waitFor(() => expect(api.reportMessagesRead).toHaveBeenCalledTimes(1))
     expect(store.state.loadingHistory).toBe('ready') // 失败不伤历史状态
 
@@ -259,9 +285,10 @@ describe('store 回执状态与上报（#220）', () => {
 
     await store.openRoom({ kind: 'public', id: 1 }, 'general')
     await flushPromises()
+    await store.recordVisibleRead([3, 2])
     await vi.waitFor(() => expect(api.reportMessagesRead).toHaveBeenCalledTimes(1))
     const firstCalls = vi.mocked(api.reportMessagesRead).mock.calls.length
-    await store.recordVisibleRead([3, 2]) // openRoom 已报过的消息
+    await store.recordVisibleRead([3, 2])
     expect(vi.mocked(api.reportMessagesRead).mock.calls.length).toBe(firstCalls)
     store.closeSockets()
   })
