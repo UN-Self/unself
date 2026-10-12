@@ -30,6 +30,7 @@ export interface MessageBubbleProps {
   audienceSize?: number
   /** 已读回执摘要（#220；缺省不显示回执面——旧格式历史消息兼容）。 */
   readSummary?: ReadReceiptsSummary | null
+  canDelete?: boolean
 }
 
 const props = withDefaults(defineProps<MessageBubbleProps>(), {
@@ -39,6 +40,7 @@ const props = withDefaults(defineProps<MessageBubbleProps>(), {
   isDm: false,
   audienceSize: undefined,
   readSummary: null,
+  canDelete: false,
 })
 
 const HHMM_RE = /(\d{2}:\d{2})/
@@ -54,6 +56,7 @@ const invalidTime = computed(() => timeLabel.value === '')
 
 const emit = defineEmits<{ /** 点击回执标签：请求父层打开已读名单浮层（#220）。 */
   'show-receipts': [message: Message]
+  delete: [message: Message]
 }>()
 
 /** 回执面是否显示：仅 mine 气泡 + 有回执数据（旧格式/缺省不显示）。 */
@@ -139,6 +142,7 @@ const fileAttachment = computed(() => {
           <span class="bubble-receipt-text" data-test="receipt-group">{{ groupReceiptLabel }}</span>
         </template>
       </button>
+      <button v-if="canDelete && !message.deleted" type="button" class="bubble-delete" data-test="message-delete" @click="emit('delete', message)">撤回</button>
     </div>
   </UMessage>
 </template>
@@ -245,4 +249,13 @@ const fileAttachment = computed(() => {
 .bubble-receipt-text {
   font-variant-numeric: tabular-nums;
 }
+.bubble-delete {
+  align-self: flex-end;
+  border: 0;
+  background: transparent;
+  color: var(--unself-color-text-tertiary);
+  font-size: var(--unself-font-size-xs);
+  cursor: pointer;
+}
+.bubble-delete:hover { color: var(--unself-color-danger); }
 </style>

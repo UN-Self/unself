@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -31,16 +31,13 @@ function officialInput(moduleId: 'hello' | 'chat'): Parameters<typeof validateMo
     licenseText: readFileSync(join(REPO_ROOT, 'LICENSE'), 'utf8'),
   };
   if (moduleId === 'chat') {
-    input.migrations = {
-      'chat/0001_baseline.sql': readFileSync(
-        join(REPO_ROOT, 'app', 'modules', 'chat', 'migrations', 'chat', '0001_baseline.sql'),
-        'utf8',
-      ),
-      'chat-shared/0001_baseline.sql': readFileSync(
-        join(REPO_ROOT, 'app', 'modules', 'chat', 'migrations', 'chat-shared', '0001_baseline.sql'),
-        'utf8',
-      ),
-    };
+    input.migrations = {};
+    for (const family of ['chat', 'chat-shared']) {
+      const directory = join(REPO_ROOT, 'app', 'modules', 'chat', 'migrations', family);
+      for (const file of readdirSync(directory).filter((name) => name === '0001_baseline.sql' || name === '0004_message_deletion_audit.sql').sort()) {
+        input.migrations[`${family}/${file}`] = readFileSync(join(directory, file), 'utf8');
+      }
+    }
   }
   return input;
 }
@@ -61,13 +58,13 @@ describe('官方模块迁移到契约 v1 并通过 validate（验收①）', () 
     expect(result.ok).toBe(true);
   });
 
-  it('chat manifest.yaml 过 ModuleManifestSchema（shared+dedicated，tables 18 / tablesShared 18）', () => {
+  it('chat manifest.yaml 过 ModuleManifestSchema（shared+dedicated，tables 19 / tablesShared 19）', () => {
     const text = readFileSync(join(REPO_ROOT, 'app', 'modules', 'chat', 'manifest.yaml'), 'utf8');
     const manifest = ModuleManifestSchema.parse(manifestFromYamlText(text));
     expect(manifest.storage?.accepts).toEqual(['shared', 'dedicated']);
     expect(manifest.storage?.preferred).toBe('dedicated');
-    expect(manifest.tables).toHaveLength(18);
-    expect(manifest.tablesShared).toHaveLength(18);
+    expect(manifest.tables).toHaveLength(19);
+    expect(manifest.tablesShared).toHaveLength(19);
     expect(manifest.tablesShared?.every((t) => t.startsWith('chat_'))).toBe(true);
     expect(manifest.permissions).toEqual(['storage', 'notify']);
   });
@@ -75,11 +72,15 @@ describe('官方模块迁移到契约 v1 并通过 validate（验收①）', () 
   it('chat 通过 validate：tables/tablesShared 与两套迁移实际建表逐一一致（真实文件）', () => {
     const input = officialInput('chat');
     const result = validateModulePackage(input);
-    // 先锚定：两套 baseline 各建 18 张，且 shared 集全部带前缀
-    const dedicatedSql = input.migrations?.['chat/0001_baseline.sql'] ?? '';
-    const sharedSql = input.migrations?.['chat-shared/0001_baseline.sql'] ?? '';
-    expect(tableNamesFromSql(dedicatedSql)).toHaveLength(18);
-    expect(tableNamesFromSql(sharedSql)).toHaveLength(18);
+    // 迁移链全部纳入校验：新表通过独立迁移加入，不能只看 0001 基线。
+    const dedicatedSql = Object.entries(input.migrations ?? {})
+      .filter(([name]) => name.startsWith('chat/'))
+      .map(([, sql]) => sql).join('\n');
+    const sharedSql = Object.entries(input.migrations ?? {})
+      .filter(([name]) => name.startsWith('chat-shared/'))
+      .map(([, sql]) => sql).join('\n');
+    expect(tableNamesFromSql(dedicatedSql)).toHaveLength(19);
+    expect(tableNamesFromSql(sharedSql)).toHaveLength(19);
     expect(tableNamesFromSql(sharedSql).every((t) => t.startsWith('chat_'))).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);

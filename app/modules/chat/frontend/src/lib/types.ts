@@ -186,13 +186,23 @@ export interface WsReadReceiptsFrame {
   messageIds: number[]
 }
 
+/** 会话游标已读推送：接收方可将已知消息中 id≤messageId 的回执一起推导。 */
+export interface WsReadCursorFrame {
+  protocolVersion: 1
+  type: 'read_cursor'
+  room: { id: number; kind: RoomKind }
+  userId: number
+  messageId: number
+  readAt: string
+}
+
 export interface WsMessageDeletedFrame {
   protocolVersion: 1
   type: 'message_deleted'
   messageId: number
 }
 
-export type RoomFrame = WsReadyFrame | WsMessageFrame | WsErrorFrame | WsReadReceiptsFrame | WsMessageDeletedFrame
+export type RoomFrame = WsReadyFrame | WsMessageFrame | WsErrorFrame | WsReadReceiptsFrame | WsReadCursorFrame | WsMessageDeletedFrame
 export type InboxFrame = { protocolVersion: 1; type: 'ready' } | WsRoomMessageNotice
 
 /** WS 连接状态。 */

@@ -62,6 +62,7 @@ describe('真实 Core 身份的私聊回执', () => {
       await f.store.openRoom({ kind: 'dm', id: 15 }, 'Bob')
       await flushPromises()
       expect(f.wrapper.findAll('[aria-label="对方未读"]')).toHaveLength(1)
+      await f.store.recordVisibleRead([11])
       await vi.waitFor(() => expect(f.reports.flat()).toEqual([11]))
       f.receive({ type: 'read_receipts', userId: 8, messageIds: [10], readAt: '2026-10-09T09:01:00Z' })
       await flushPromises()
@@ -93,6 +94,7 @@ describe('真实 Core 身份的私聊回执', () => {
       expect(f.reports).toEqual([])
       await f.store.loadContacts()
       await flushPromises()
+      await f.store.recordVisibleRead([11])
       await vi.waitFor(() => expect(f.reports.flat()).toEqual([11]))
       expect(f.wrapper.find('[aria-label="对方未读"]').exists()).toBe(true)
     } finally { f.store.closeSockets(); f.wrapper.unmount() }

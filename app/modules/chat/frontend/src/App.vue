@@ -170,6 +170,14 @@ function onVisibleRead(messageIds: number[]): void {
   void store.recordVisibleRead(messageIds)
 }
 
+async function onDeleteMessage(message: Message): Promise<void> {
+  try {
+    await store.deleteMessage(message.id)
+  } catch (error) {
+    store.state.sendError = error instanceof Error ? error.message : String(error)
+  }
+}
+
 /** #221 走查补：会话列表加载失败 → 人话提示进列表位（错误态不再吞成空态）。 */
 const roomsError = computed(() => {
   const st = store.state.channelsState === 'error' ? store.state.historyError : ''
@@ -292,6 +300,7 @@ const contextKey = computed(() =>
       :is-dm="isDm"
       :audience-size="audienceSize"
       :read-receipts="store.state.readReceipts"
+      :can-manage="activeRoom?.kind !== 'dm' && (store.state.channels.find((channel) => channel.id === activeRoom?.id)?.canManage ?? false)"
       :load-error="roomsError"
       :group-error="groupCreationError"
       @select="onSelect"
@@ -300,6 +309,7 @@ const contextKey = computed(() =>
       @load-earlier="onLoadEarlier"
       @show-receipts="onShowReceipts"
       @visible-read="onVisibleRead"
+      @delete="onDeleteMessage"
       @create-group="onCreateGroup"
       @open-group-details="onOpenGroupDetails"
     >

@@ -31,7 +31,7 @@ function prepareSql(sql, prefix = PREFIX) {
 }
 
 describe('CHAT_TABLES', () => {
-  it('与 manifest.yaml tables 一一对应（18 个逻辑表名，顺序一致）', () => {
+  it('与 manifest.yaml tables 一一对应（19 个逻辑表名，顺序一致）', () => {
     expect(CHAT_TABLES).toEqual([
       'users',
       'channels',
@@ -50,7 +50,8 @@ describe('CHAT_TABLES', () => {
       'message_event_compaction',
       'pending_r2_delete',
       'core_identities',
-      'read_receipts'
+      'read_receipts',
+      'message_deletion_audit'
     ]);
   });
 });
@@ -72,7 +73,7 @@ describe('applyTablePrefix SQL 重写', () => {
     );
   });
 
-  it('全部 18 个逻辑表名都会被加上前缀', () => {
+  it('全部逻辑表名都会被加上前缀', () => {
     for (const table of CHAT_TABLES) {
       expect(prepareSql(`SELECT * FROM ${table}`)).toBe(
         `SELECT * FROM chat_${table}`

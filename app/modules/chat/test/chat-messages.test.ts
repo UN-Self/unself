@@ -84,6 +84,7 @@ interface Sender {
 interface Message {
   id: number;
   content: string;
+  deleted?: boolean;
   createdAt: string;
   sender: Sender;
 }
@@ -101,6 +102,62 @@ async function listMessages(
 }
 
 describe('chat 消息收发主链路（真库集成）', () => {
+  it('撤回权限与窗口由服务端判定：本人 24 小时内成功，过期失败，群主可移除', async () => {
+    const makeToken = await mintSetup();
+    const ownerToken = await makeToken({ sub: 'u_owner', name: '群主' });
+    await bootstrap(ownerToken);
+    const ownerId = db.first<{ id: number }>('SELECT id FROM users WHERE username = ?', 'core:u_owner')!.id;
+    db.run("UPDATE channel_members SET role = 'owner' WHERE channel_id = 1 AND user_id = ?", ownerId);
+    const memberToken = await makeToken({ sub: 'u_member', name: '成员' });
+    await bootstrap(memberToken);
+
+    const fresh = await postMessage(memberToken, { content: '可撤回' });
+    const freshId = (fresh.json.message as Message).id;
+    const ownDelete = await app.request(`https://chat.example/api/v1/rooms/public/1/messages/${freshId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(ownDelete.status).toBe(200);
+    expect(db.first('SELECT deleted_at FROM messages WHERE id = ?', freshId)?.deleted_at).not.toBeNull();
+    expect(db.first('SELECT action FROM message_deletion_audit WHERE message_id = ?', freshId)?.action).toBe('recalled');
+
+    const old = await postMessage(memberToken, { content: '过期消息' });
+    const oldId = (old.json.message as Message).id;
+    db.run("UPDATE messages SET created_at = datetime('now', '-25 hours') WHERE id = ?", oldId);
+    const expired = await app.request(`https://chat.example/api/v1/rooms/public/1/messages/${oldId}`, {
+      method: 'DELETE', headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(expired.status).toBe(400);
+    expect(db.first('SELECT deleted_at FROM messages WHERE id = ?', oldId)?.deleted_at).toBeNull();
+
+    const removed = await app.request(`https://chat.example/api/v1/rooms/public/1/messages/${oldId}`, {
+      method: 'DELETE', headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(removed.status).toBe(200);
+    expect(db.first('SELECT action FROM message_deletion_audit WHERE message_id = ?', oldId)?.action).toBe('removed');
+
+    const history = await listMessages(ownerToken, '&limit=30');
+    expect(history.messages.find((item) => item.id === freshId)).toMatchObject({
+      id: freshId,
+      deleted: true,
+      content: '',
+    });
+  });
+
+  it('重复撤回与跨房消息不会产生第二条审计或越权删除', async () => {
+    const makeToken = await mintSetup();
+    const ownerToken = await makeToken({ sub: 'u_owner_repeat', name: '群主' });
+    await bootstrap(ownerToken);
+    const memberToken = await makeToken({ sub: 'u_member_repeat', name: '成员' });
+    await bootstrap(memberToken);
+    const sent = await postMessage(memberToken, { content: '一次撤回' });
+    const id = (sent.json.message as Message).id;
+    const first = await app.request(`https://chat.example/api/v1/rooms/public/1/messages/${id}`, { method: 'DELETE', headers: { authorization: `Bearer ${memberToken}` } });
+    expect(first.status).toBe(200);
+    const second = await app.request(`https://chat.example/api/v1/rooms/public/1/messages/${id}`, { method: 'DELETE', headers: { authorization: `Bearer ${memberToken}` } });
+    expect(second.status).toBe(400);
+    expect(db.first<{ n: number }>('SELECT COUNT(*) AS n FROM message_deletion_audit WHERE message_id = ?', id)?.n).toBe(1);
+  });
   it('建档 → bootstrap 保证 general 频道 → 发消息 → 读回内容/发送者真值一致', async () => {
     const makeToken = await mintSetup();
     const token = await makeToken({ sub: 'u_admin', name: '管理员' });

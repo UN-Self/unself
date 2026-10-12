@@ -134,6 +134,7 @@ export interface ChatApi {
     attachment?: Attachment | null
     mentionUserIds?: number[]
   }): Promise<{ created: boolean; message: Message }>
+  deleteMessage(kind: RoomKind, roomId: number, messageId: number): Promise<void>
   uploadFile(file: File): Promise<{ file: Attachment }>
   /** WS 建连回调形态：测试传内存 socket，live 走 URL。返回句柄含可选 send（控制帧上行，#220）。 */
   openRoomSocket(handlers: {
@@ -318,6 +319,10 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
           mentionUserIds: input.mentionUserIds ?? [],
         }),
       }).then((result) => ({ ...result, message: normalizeMessage(globalThis.location.pathname, result.message) })),
+    deleteMessage: (kind, roomId, messageId) =>
+      requestJson(`/v1/rooms/${kind}/${roomId}/messages/${messageId}`, {
+        method: 'DELETE', headers: authHeaders(options.getToken()),
+      }).then(() => undefined),
     uploadFile,
     openRoomSocket,
     openInboxSocket,

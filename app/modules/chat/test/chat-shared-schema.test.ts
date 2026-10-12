@@ -11,7 +11,7 @@
  *   不与被测文件共用同一份常量，避免「拿 fixture 自证 fixture」；
  * - 外键用 DML 反证（指向幻影表时真 D1/SQLite 在写入瞬间才报错，只看 DDL 抓不到）。
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
@@ -28,14 +28,16 @@ const LEGACY_SCHEMA_PATH = fileURLToPath(
 );
 
 /** #310 硬口径：shared 物理表集固定 18 张。 */
-const EXPECTED_TABLE_COUNT = 18;
+const EXPECTED_TABLE_COUNT = 19;
 
 /** shared 物理表名前缀。 */
 const SHARED_PREFIX = 'chat_';
 
 function openSchema(path: string): DatabaseSync {
   const db = new DatabaseSync(':memory:');
-  db.exec(readFileSync(path, 'utf8'));
+  for (const file of readdirSync(path).filter((name) => name === '0001_baseline.sql' || name === '0004_message_deletion_audit.sql').sort()) {
+    db.exec(readFileSync(`${path}/${file}`, 'utf8'));
+  }
   return db;
 }
 
@@ -62,7 +64,7 @@ function foreignKeyTargets(db: DatabaseSync, tables: string[]): Array<{ from: st
 
 describe('chat shared 迁移集（chat_ 前缀基线）', () => {
   it('整份 SQL 可执行，建出 18 张表且全部以 chat_ 开头', () => {
-    const db = openSchema(SHARED_SCHEMA_PATH);
+    const db = openSchema(SHARED_SCHEMA_PATH.replace(/\/0001_baseline\.sql$/, ''));
     const tables = tableNames(db);
     db.close();
 
@@ -71,8 +73,8 @@ describe('chat shared 迁移集（chat_ 前缀基线）', () => {
   });
 
   it('物理表集 = dedicated 基线逻辑表名加 chat_ 前缀（机械派生对照）', () => {
-    const shared = openSchema(SHARED_SCHEMA_PATH);
-    const legacy = openSchema(LEGACY_SCHEMA_PATH);
+    const shared = openSchema(SHARED_SCHEMA_PATH.replace(/\/0001_baseline\.sql$/, ''));
+    const legacy = openSchema(LEGACY_SCHEMA_PATH.replace(/\/0001_baseline\.sql$/, ''));
     const sharedTables = tableNames(shared);
     const legacyTables = tableNames(legacy);
     shared.close();
@@ -86,8 +88,8 @@ describe('chat shared 迁移集（chat_ 前缀基线）', () => {
   });
 
   it('不存在未加前缀的旧表名（逻辑表名不得在 shared 库裸露）', () => {
-    const shared = openSchema(SHARED_SCHEMA_PATH);
-    const legacy = openSchema(LEGACY_SCHEMA_PATH);
+    const shared = openSchema(SHARED_SCHEMA_PATH.replace(/\/0001_baseline\.sql$/, ''));
+    const legacy = openSchema(LEGACY_SCHEMA_PATH.replace(/\/0001_baseline\.sql$/, ''));
     const sharedTables = new Set(tableNames(shared));
     const legacyTables = tableNames(legacy);
     shared.close();
@@ -98,7 +100,7 @@ describe('chat shared 迁移集（chat_ 前缀基线）', () => {
   });
 
   it('所有外键目标都落在 18 张 chat_ 前缀表内，且外键在图内有可达目标', () => {
-    const db = openSchema(SHARED_SCHEMA_PATH);
+    const db = openSchema(SHARED_SCHEMA_PATH.replace(/\/0001_baseline\.sql$/, ''));
     const tables = tableNames(db);
     const tableSet = new Set(tables);
     const edges = foreignKeyTargets(db, tables);
@@ -111,7 +113,7 @@ describe('chat shared 迁移集（chat_ 前缀基线）', () => {
   });
 
   it('外键指向真实前缀表：越界 channel_id 写入被真 SQLite 拒绝', () => {
-    const db = openSchema(SHARED_SCHEMA_PATH);
+    const db = openSchema(SHARED_SCHEMA_PATH.replace(/\/0001_baseline\.sql$/, ''));
     // PRAGMA foreign_keys 在基线文件内已置 ON；此处真写入验证指向的是前缀表而非幻影表。
     // 选 chat_channel_pins：除外键外无 CHECK / 触发器干扰，报错必然来自 FK 解析。
     expect(() =>
@@ -122,7 +124,11 @@ describe('chat shared 迁移集（chat_ 前缀基线）', () => {
 
   it('逐条幂等：同库重复执行整份 SQL 不报错、表集不变', () => {
     const db = new DatabaseSync(':memory:');
-    const sql = readFileSync(SHARED_SCHEMA_PATH, 'utf8');
+    const sql = readdirSync(SHARED_SCHEMA_PATH.replace(/\/0001_baseline\.sql$/, ''))
+      .filter((name) => name === '0001_baseline.sql' || name === '0004_message_deletion_audit.sql')
+      .sort()
+      .map((name) => readFileSync(`${SHARED_SCHEMA_PATH.replace(/\/0001_baseline\.sql$/, '')}/${name}`, 'utf8'))
+      .join('\n');
     db.exec(sql);
     const first = tableNames(db);
     db.exec(sql);

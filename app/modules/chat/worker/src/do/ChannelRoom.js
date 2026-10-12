@@ -13,6 +13,7 @@ import {
 } from '../message-pinning.js';
 import { submitExternalMessage } from '../external-message-submission.js';
 import { recordReadReceipts } from '../data/read-receipts.js';
+import { advanceRoomReadCursor } from '../data/unread.js';
 import { isGroupChannelKind } from '../../../shared/group-channel.ts';
 import { verifyAccessToken } from '../core-auth.js';
 import { jitEnsureUser, jitResolveUser } from '../jit-users.js';
@@ -260,6 +261,28 @@ export class ChannelRoom {
         await this.broadcast(result.packet);
         this.runAttachmentCleanup(result);
         return Response.json({ ok: true, messageId: result.messageId });
+      }
+      if (action?.type === 'read_cursor') {
+        const messageId = Number(action.messageId);
+        if (!Number.isInteger(messageId) || messageId <= 0) {
+          return Response.json({ error: { code: 'invalid_request', message: '消息 ID 无效' } }, { status: 400 });
+        }
+        const cursor = await advanceRoomReadCursor(this.env.DB, {
+          channelId: access.room.id,
+          userId: principal.userId,
+          messageId
+        });
+        if (cursor.changed) {
+          await this.broadcast(JSON.stringify({
+            protocolVersion: 1,
+            type: 'read_cursor',
+            room: { id: Number(access.room.id), kind: access.room.kind },
+            userId: principal.userId,
+            messageId: cursor.lastReadMessageId,
+            readAt: new Date().toISOString()
+          }));
+        }
+        return Response.json({ ok: true, lastReadMessageId: cursor.lastReadMessageId, changed: cursor.changed });
       }
       if (action?.type === 'pin_message') {
         const result = await pinRoomMessage(this.env, meta, action);

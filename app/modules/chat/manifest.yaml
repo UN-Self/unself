@@ -39,6 +39,7 @@ tables:
   - pending_r2_delete
   - core_identities
   - read_receipts
+  - message_deletion_audit
 tablesShared:
   - chat_users
   - chat_channels
@@ -58,3 +59,4 @@ tablesShared:
   - chat_pending_r2_delete
   - chat_core_identities
   - chat_read_receipts
+  - chat_message_deletion_audit
