@@ -528,7 +528,10 @@ export default {
     // 前缀剥除（domain 形态）：仅命中挂载前缀才剥；根挂载（workers.dev）原样。
     const prefixed = PREFIX !== '' && (url.pathname === PREFIX || url.pathname.startsWith(PREFIX + '/'));
     const path = prefixed ? (url.pathname.slice(PREFIX.length) || '/') : url.pathname;
-    const isAsset = !path.startsWith('/api/') && !path.startsWith('/life/') && request.method === 'GET';
+    // /files/ 是模块 Worker 的鉴权附件路由。它看起来像静态资源，但不能交给
+    // ASSETS：ASSETS 不会带上模块的会话校验，也无法从 R2 解密附件。
+    const isDynamic = path.startsWith('/api/') || path.startsWith('/life/') || path.startsWith('/files/');
+    const isAsset = !isDynamic && request.method === 'GET';
     if (isAsset && path !== '/') {
       // 页面以相对路径引用资产（import './sdk/module-sdk.esm.js' → 请求
       // /sdk/... 或 /m/<id>/sdk/...），剥前缀后 = sdk/... 命中部署期静态资产。
