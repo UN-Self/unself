@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/data/messages.js（GPL-3.0-only，裁剪版）
+import { mapDeletionNotice, getDeletionNotice } from "./deletion-notice.js";
+import { blockText, normalizeMessageBlocks } from "../message-blocks.js";
 import { userAvatarUrl } from "../profile-avatar.js";
 import { decryptMessageContent, encryptMessageContent } from "../encryption.js";
 import { pickAttachment, publicFileUrl } from "../utils.js";
@@ -120,6 +122,7 @@ async function mapDecryptedMessage(env, row) {
 		return {
 			...mapMessage(row, "", null),
 			deleted: true,
+			deletion: mapDeletionNotice(row),
 			attachment: null,
 			mentions: [],
 			mentionUserIds: [],
@@ -156,11 +159,17 @@ async function mapDecryptedMessage(env, row) {
 			};
 		}
 	}
-	return mapMessage(row, content, replyTo);
+	const message = mapMessage(row, content, replyTo);
+	if (row.content_blocks) {
+		message.blocks = JSON.parse(await decryptMessageContent(env, row.content_blocks, {
+			channelId: row.channel_id, senderId: row.sender_id ?? 0,
+		}));
+	}
+	return message;
 }
 
 const MESSAGE_SELECT = `SELECT
-		  m.id, m.channel_id, m.content, m.attachment_key, m.attachment_name, m.attachment_type,
+		  m.id, m.channel_id, da.actor_user_id AS deletion_actor_id, du.display_name AS deletion_actor_name, m.content, bp.content_blocks, m.attachment_key, m.attachment_name, m.attachment_type,
 		  m.attachment_size, m.attachment_kind, m.attachment_duration_ms, m.attachment_waveform,
 		  m.sender_kind, m.external_sender_id, m.external_sender_name,
 		  m.external_sender_avatar_url, m.source, m.source_message_id,
@@ -195,6 +204,9 @@ const MESSAGE_SELECT = `SELECT
 	    JOIN users mentioned ON mentioned.id = CAST(mention_ids.value AS INTEGER)
 		 ), '[]') AS mentions_json
 	 FROM messages m
+   LEFT JOIN message_block_payloads bp ON bp.message_id = m.id
+   LEFT JOIN message_deletion_audit da ON da.id = (SELECT id FROM message_deletion_audit WHERE message_id = m.id AND m.deleted_at IS NOT NULL ORDER BY id LIMIT 1)
+   LEFT JOIN users du ON du.id = da.actor_user_id
 	 LEFT JOIN users u ON u.id = m.sender_id
 	 LEFT JOIN messages reply ON reply.id = m.reply_to_message_id
 	 LEFT JOIN users reply_user ON reply_user.id = reply.sender_id`;
@@ -338,6 +350,7 @@ export async function listRoomMessageEvents(env, channelId, afterSequence = 0, l
 				sequence: Number(row.sequence),
 				type: "message_deleted",
 				messageId: Number(row.message_id),
+				deletion: await getDeletionNotice(env.DB, row.message_id),
 				createdAt: row.created_at,
 			});
 			continue;
@@ -385,6 +398,7 @@ async function persistMessage(env, {
 	externalSender = null,
 	content,
 	attachment = null,
+	blocks = null,
 	source = "edgechat",
 	sourceMessageId = null,
 	sourceAttachmentId = null,
@@ -396,6 +410,11 @@ async function persistMessage(env, {
 }) {
 	const isExternal = externalSender !== null;
 	const normalizedSenderId = isExternal ? null : Number(senderId);
+	const cleanBlocks = blocks === null || blocks === undefined ? null : await normalizeMessageBlocks(env.DB, blocks, normalizedSenderId);
+	if (cleanBlocks) {
+		content = blockText(cleanBlocks);
+		attachment = cleanBlocks.find(block => block.type === 'attachment')?.attachment ?? null;
+	}
 	const hasAttachment = attachment !== undefined && attachment !== null;
 	// 外部附件只能从已验证的内部 Bridge 入口进入；本地客户端仍必须通过上传归属校验。
 	const cleanAttachment = pickAttachment(
@@ -427,6 +446,10 @@ async function persistMessage(env, {
 		senderId: normalizedSenderId ?? 0,
 		senderContext: isExternal ? `${source}:${externalId}` : "",
 	});
+	const storedBlocks = cleanBlocks ? await encryptMessageContent(env, JSON.stringify(cleanBlocks), {
+		channelId, senderId: normalizedSenderId ?? 0,
+	}) : null;
+	const attachmentKeys = cleanBlocks ? JSON.stringify(cleanBlocks.filter(block => block.type === 'attachment').map(block => block.attachment.key)) : null;
 	const normalizedClientMessageId = isExternal
 		? null
 		: String(clientMessageId || "").trim() || null;
@@ -474,8 +497,13 @@ async function persistMessage(env, {
 							storedMentionUserIds,
 							normalizedReplyToMessageId,
 							normalizedReplyToSenderId,
+
 						)
 			.run();
+    if (cleanBlocks) {
+      await env.DB.prepare('INSERT INTO message_block_payloads(message_id,content_blocks,attachment_keys) VALUES(?,?,?)')
+        .bind(Number(result.meta.last_row_id), storedBlocks, attachmentKeys).run();
+    }
 		return { message: await getMessageById(env, result.meta.last_row_id), created: true };
 	} catch (error) {
 		if (isR2ObjectUnavailableError(error)) {
@@ -517,6 +545,7 @@ export async function insertMessage(env, {
 	senderId,
 	content,
 	attachment,
+	blocks = null,
 	clientMessageId = null,
 	mentionUserIds = [],
 	replyToMessageId = null,
@@ -527,6 +556,7 @@ export async function insertMessage(env, {
 		senderId,
 		content,
 		attachment,
+		blocks,
 		clientMessageId,
 		mentionUserIds,
 		replyToMessageId,

@@ -48,10 +48,10 @@ describe('#323 撤回事件的前端处理', () => {
   it('撤回事件先到时，迟到的消息与回执不会恢复内容', async () => {
     const { store } = await setup()
     try {
-      store.receiveRoomFrame({ protocolVersion: 1, type: 'message_deleted', messageId: original.id })
+      store.receiveRoomFrame({ protocolVersion: 1, type: 'message_deleted', messageId: original.id, deletion: { actorId: 9, actorName: '群主', action: 'removed' } })
       store.receiveRoomFrame({ protocolVersion: 1, type: 'message', message: original })
       store.receiveRoomFrame({ protocolVersion: 1, type: 'read_receipts', messageId: original.id, messageIds: [original.id], userId: 2, readAt: 'now' })
-      expect(store.state.messages.at(-1)).toMatchObject({ deleted: true, content: '', attachment: null })
+      expect(store.state.messages.at(-1)).toMatchObject({ deleted: true, content: '', attachment: null, deletion: { actorId: 9, actorName: '群主', action: 'removed' } })
       expect(store.state.readReceipts[original.id]).toBeUndefined()
     } finally { store.closeSockets() }
   })
@@ -63,7 +63,8 @@ describe('#323 撤回事件的前端处理', () => {
         mine: true, replyPreview: '旧引用内容', readSummary: original.readReceipts,
       } })
       try {
-        expect(wrapper.text()).toContain('消息已撤回')
+        expect(wrapper.get('[data-test="message-system"]').text()).toBe('Alice 撤回了一条消息')
+        expect(wrapper.find('[data-test="bubble-mine"]').exists()).toBe(false)
         expect(wrapper.text()).not.toContain(original.content)
         expect(wrapper.text()).not.toContain('旧引用内容')
         expect(wrapper.find('a').exists()).toBe(false)
@@ -71,6 +72,15 @@ describe('#323 撤回事件的前端处理', () => {
         expect(wrapper.find('[data-test="bubble-receipt"]').exists()).toBe(false)
       } finally { wrapper.unmount() }
     }
+  })
+
+  it('管理员移除显示实际操作者，不显示用户气泡', () => {
+    const wrapper = mount(MessageBubble, { props: { message: { ...original, deleted: true,
+      deletion: { actorId: 9, actorName: '群主', action: 'removed' } }, mine: false } })
+    expect(wrapper.get('[data-test="message-system"]').text()).toBe('群主 移除了一条消息')
+    expect(wrapper.find('button').exists()).toBe(false)
+    expect(wrapper.find('img').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('侧边导航的预览和无障碍标签只显示撤回占位', () => {

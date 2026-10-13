@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/message-deletion.js（GPL-3.0-only，裁剪版）
+import { getDeletionNotice } from "./data/deletion-notice.js";
 import { cleanupR2Keys } from "./gc.js";
 import { getMessageDeletionTarget, softDeleteMessage } from "./data/messages.js";
 import { authorizeRoom, getChannelMembership } from "./room-access.js";
@@ -64,7 +65,7 @@ export function createMessageDeletion({
 			messageId,
 			actorId,
 			allowAny,
-			action: allowAny || !ownMessage ? "removed" : "recalled",
+			action: ownMessage ? "recalled" : "removed",
 			source: String(payload.source || "chat"),
 		});
 		if (!deleted) {
@@ -77,9 +78,11 @@ export function createMessageDeletion({
 				})
 			: null;
 
+		const deletion = await getDeletionNotice(env.DB, messageId);
 		return {
+			deletion,
 			messageId,
-			packet: JSON.stringify({ protocolVersion: 1, type: "message_deleted", messageId }),
+			packet: JSON.stringify({ protocolVersion: 1, type: "message_deleted", messageId, deletion }),
 			cleanupPromise,
 		};
 	};

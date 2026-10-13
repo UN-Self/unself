@@ -3,7 +3,7 @@
 import { computed, onBeforeUnmount, provide, ref } from 'vue'
 
 import { attachmentLoaderKey, createAttachmentLoader } from './lib/attachment-resource'
-import { createAttachmentSender } from './lib/attachment-sender'
+import { createDocumentSender, type ComposerDocument } from './lib/composer-document'
 
 import ChatLayout from './components/ChatLayout.vue'
 import Composer from './components/Composer.vue'
@@ -228,16 +228,16 @@ async function onSend(text: string, mentionUserIds: number[]): Promise<void> {
   }
 }
 
-const sendAttachment = createAttachmentSender({
+const sendDocument = createDocumentSender({
   getRoomKey: () => store.state.currentRoom ? roomKeyString(store.state.currentRoom) : null,
   upload: (file) => store.uploadFile(file),
   send: (input) => store.sendMessage(input),
 })
 
-async function onSendFile(file: File, content: string, mentionUserIds: number[], signal: AbortSignal): Promise<void> {
+async function onSendDocument(document: ComposerDocument, mentionUserIds: number[], signal: AbortSignal): Promise<void> {
   uploading.value = true
   try {
-    await sendAttachment(file, content, mentionUserIds, signal)
+    await sendDocument(document, mentionUserIds, signal)
     replyTo.value = null
   } finally {
     uploading.value = false
@@ -328,7 +328,7 @@ const contextKey = computed(() =>
           :reply-to="replyTo"
           :contacts="contacts"
           @send="onSend"
-          :submit-file="onSendFile"
+          :submit-document="onSendDocument"
           @send-voice="onSendVoice"
           @cancel-reply="replyTo = null"
         />

@@ -136,6 +136,7 @@ export function registerV1Routes(app) {
         type: 'send',
         clientMessageId: payload.clientMessageId,
 			content: payload.content,
+        blocks: payload.blocks,
 				attachment: payload.attachment || null,
 				mentionUserIds: payload.mentionUserIds || [],
 				replyMessageId: payload.replyMessageId ?? null

@@ -6,8 +6,9 @@ import { UImagePreview } from '@unself/ui'
 import VoiceBubble from './VoiceBubble.vue'
 import { attachmentResourceKey, useAttachmentResource } from '../lib/attachment-resource'
 import type { Attachment } from '../lib/types'
-const props = defineProps<{ attachment: Attachment }>()
-const resource = inject(attachmentResourceKey) ?? useAttachmentResource(() => props.attachment)
+const props = defineProps<{ attachment: Attachment; isolated?: boolean }>()
+const shared = inject(attachmentResourceKey, null)
+const resource = (!props.isolated && shared) || useAttachmentResource(() => props.attachment)
 const { source, loading, failed: requestFailed } = resource
 const failed = ref(false)
 const host = ref<HTMLElement | null>(null)

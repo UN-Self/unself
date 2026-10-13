@@ -2,6 +2,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT } from 'jose';
 
+import { canAccessFile } from '../worker/src/data/uploaded-files.js';
+import { cleanupR2Keys } from '../worker/src/gc.js';
 import { app, setEnv } from './worker-app';
 import { installRoomDo } from './do-stub';
 import {
@@ -134,6 +136,7 @@ describe('chat 消息收发主链路（真库集成）', () => {
       method: 'DELETE', headers: { authorization: `Bearer ${ownerToken}` },
     });
     expect(removed.status).toBe(200);
+    expect(await removed.json()).toMatchObject({ deletion: { actorId: ownerId, actorName: '群主', action: 'removed' } });
     expect(db.first('SELECT action FROM message_deletion_audit WHERE message_id = ?', oldId)?.action).toBe('removed');
 
     const history = await listMessages(ownerToken, '&limit=30');
@@ -141,7 +144,9 @@ describe('chat 消息收发主链路（真库集成）', () => {
       id: freshId,
       deleted: true,
       content: '',
+      deletion: { actorName: '成员', action: 'recalled' },
     });
+    expect(history.messages.find((item) => item.id === oldId)).toMatchObject({ deletion: { actorName: '群主', action: 'removed' } });
   });
 
   it('重复撤回与跨房消息不会产生第二条审计或越权删除', async () => {
@@ -252,5 +257,79 @@ describe('chat 消息收发主链路（真库集成）', () => {
     expect(boot.status).toBe(401);
     const list = await app.request('https://chat.example/api/messages?kind=public&roomId=1');
     expect(list.status).toBe(401);
+  });
+});
+
+
+describe('有序图文消息（真实路由/SQLite/加密）', () => {
+  it('一次发送保留多图顺序，元数据由服务端恢复；重试幂等、全部附件鉴权与撤回清理', async () => {
+    const mint = await mintSetup();
+    const token = await mint();
+    await bootstrap(token);
+    const peer = await mint({ sub: 'peer', name: '同行' });
+    await bootstrap(peer);
+    const senderId = db.first<{ id: number }>("SELECT id FROM users WHERE username='core:u_1'")!.id;
+    const peerId = db.first<{ id: number }>("SELECT id FROM users WHERE username='core:peer'")!.id;
+    const keys = [`${senderId}/a.png`, `${senderId}/b.png`];
+    for (const key of keys) db.run('INSERT INTO uploaded_files(object_key,owner_user_id,filename,content_type,size) VALUES(?,?,?,?,?)', key, senderId, key.split('/')[1], 'image/png', 12);
+    const blocks = [
+      { type: 'text', text: '前文\n' },
+      { type: 'attachment', attachment: { key: keys[0], type: 'text/html', url: 'https://evil.example' } },
+      { type: 'text', text: '中间说明' },
+      { type: 'attachment', attachment: { key: keys[1] } },
+      { type: 'text', text: '\n后文' },
+    ];
+    const clientMessageId = crypto.randomUUID();
+    const sent = await postMessage(token, { blocks, clientMessageId });
+    expect(sent.status).toBe(200);
+    const message = sent.json.message as Record<string, any>;
+    expect(message.blocks).toEqual([
+      blocks[0], { type: 'attachment', attachment: { key: keys[0], name: 'a.png', type: 'image/png', size: 12, url: `/files/${encodeURIComponent(keys[0]!)}` } },
+      blocks[2], { type: 'attachment', attachment: { key: keys[1], name: 'b.png', type: 'image/png', size: 12, url: `/files/${encodeURIComponent(keys[1]!)}` } }, blocks[4],
+    ]);
+    const replay = await postMessage(token, { blocks, clientMessageId });
+    expect(replay.json.created).toBe(false);
+    expect((replay.json.message as Message).id).toBe(message.id);
+    expect(db.first<{ n: number }>('SELECT COUNT(*) AS n FROM message_attachments')?.n).toBe(2);
+    const stored = db.first<{ content_blocks: string }>('SELECT content_blocks FROM message_block_payloads WHERE message_id=?', message.id)!;
+    expect(stored.content_blocks).not.toContain('中间说明');
+    expect((await listMessages(peer, '')).messages.find(m => m.id === message.id)).toMatchObject({ blocks: message.blocks });
+    for (const key of keys) {
+      expect(await canAccessFile(db.d1, key, peerId)).toBe(true);
+      expect(await canAccessFile(db.d1, key, null)).toBe(false);
+    }
+    const deletedKeys: string[] = [];
+    const gcEnv = { ...env, FILES: { delete: async (key: string) => { deletedKeys.push(key); } } };
+    await cleanupR2Keys(gcEnv, keys);
+    expect(deletedKeys).toEqual([]);
+    const response = await app.request(`https://chat.example/api/v1/rooms/public/1/messages/${message.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ deletion: { actorName: '黄一', action: 'recalled' } });
+    const history = (await listMessages(peer, '')).messages.find(m => m.id === message.id) as Record<string, any>;
+    expect(history).toMatchObject({ content: '', attachment: null, deleted: true });
+    expect(history.blocks).toBeUndefined();
+    for (const key of keys) {
+      expect(await canAccessFile(db.d1, key, peerId)).toBe(false);
+      expect(db.first('SELECT object_key FROM pending_r2_delete WHERE object_key=?', key)).not.toBeNull();
+    }
+    await cleanupR2Keys(gcEnv, keys);
+    expect(deletedKeys.sort()).toEqual(keys.sort());
+  });
+
+  it('拒绝他人附件、重复附件、超过数量和文本限制，不留下半条消息', async () => {
+    const mint = await mintSetup();
+    const token = await mint();
+    await bootstrap(token);
+    const token2 = await mint({ sub: 'owner2' });
+    await bootstrap(token2);
+    const owner = db.first<{ id: number }>("SELECT id FROM users WHERE username='core:owner2'")!.id;
+    const key = `${owner}/private.png`;
+    db.run('INSERT INTO uploaded_files(object_key,owner_user_id,filename,content_type,size) VALUES(?,?,?,?,?)', key, owner, 'private.png', 'image/png', 2);
+    const file = { type: 'attachment', attachment: { key } };
+    expect((await postMessage(token, { blocks: [file] })).status).toBe(400);
+    expect((await postMessage(token2, { blocks: [file, file] })).status).toBe(400);
+    expect((await postMessage(token2, { blocks: Array(11).fill(file) })).status).toBe(400);
+    expect((await postMessage(token, { blocks: [{ type: 'text', text: 'x'.repeat(20001) }] })).status).toBe(400);
+    expect(db.first<{ n: number }>('SELECT COUNT(*) AS n FROM messages')?.n).toBe(0);
   });
 });

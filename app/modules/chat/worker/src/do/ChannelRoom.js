@@ -260,7 +260,7 @@ export class ChannelRoom {
         const result = await deleteRoomMessage(this.env, meta, action);
         await this.broadcast(result.packet);
         this.runAttachmentCleanup(result);
-        return Response.json({ ok: true, messageId: result.messageId });
+        return Response.json({ ok: true, messageId: result.messageId, deletion: result.deletion });
       }
       if (action?.type === 'read_cursor') {
         const messageId = Number(action.messageId);
@@ -292,7 +292,7 @@ export class ChannelRoom {
       if (action?.type === 'unpin_message') {
         const result = await unpinRoomMessage(this.env, meta, action);
         await this.broadcast(result.packet);
-        return Response.json({ ok: true, messageId: result.messageId });
+        return Response.json({ ok: true, messageId: result.messageId, deletion: result.deletion });
       }
       return Response.json(
         { error: { code: 'invalid_request', message: '不支持的消息操作' } },

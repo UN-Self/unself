@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import Composer from '../src/components/Composer.vue'
 import { createChatStore } from '../src/lib/chat-store'
@@ -17,95 +17,105 @@ import type { UserSummary } from '../src/lib/types'
  * 不断言内部函数/实现细节。
  */
 
+enableAutoUnmount(afterEach)
+Object.defineProperty(Range.prototype, 'getClientRects', { value: () => [], configurable: true })
+Object.defineProperty(Range.prototype, 'getBoundingClientRect', { value: () => new DOMRect(), configurable: true })
+
 const contacts: UserSummary[] = [
   { id: 1, username: 'core:1', displayName: '走查甲', avatarUrl: '' },
   { id: 2, username: 'core:2', displayName: '走查乙', avatarUrl: '' },
 ]
 
-function mountComposer(props: Record<string, unknown> = {}) {
-  return mount(Composer, { props: { contextKey: 'channel.1', contacts, ...props } })
+async function mountComposer(props: Record<string, unknown> = {}) {
+  const wrapper = mount(Composer, { attachTo: document.body, props: { contextKey: 'channel.1', contacts, ...props } })
+  await flushPromises()
+  return wrapper
 }
 
-function inputOf(wrapper: ReturnType<typeof mountComposer>) {
-  return wrapper.find('[data-test="composer-input"]')
+async function setValue(wrapper: Awaited<ReturnType<typeof mountComposer>>, value: string) {
+  const input = wrapper.get('[data-test="composer-input"]')
+  input.element.textContent = value
+  const range = document.createRange(); range.selectNodeContents(input.element); range.collapse(false)
+  window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(range)
+  await input.trigger('input'); await flushPromises()
+}
+function inputOf(wrapper: Awaited<ReturnType<typeof mountComposer>>) {
+  const input = wrapper.get('[data-test="composer-input"]')
+  return { element: input.element, trigger: input.trigger.bind(input) }
 }
 
-function optionsOf(wrapper: ReturnType<typeof mountComposer>) {
+function optionsOf(wrapper: Awaited<ReturnType<typeof mountComposer>>) {
   return wrapper.findAll('[data-test^="mention-option-"]')
 }
 
 describe('#230 core 身份下的 @ 提及', () => {
   it('@core:2 与 @走查乙（展示名）两种输入都产出 mentionUserIds=[2]', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const input = inputOf(wrapper)
 
-    await input.setValue('@core:2 回执请确认')
+    await setValue(wrapper, '@core:2 回执请确认')
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')?.[0]).toEqual(['@core:2 回执请确认', [2]])
 
-    await input.setValue('@走查乙 回执请确认')
+    await setValue(wrapper, '@走查乙 回执请确认')
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')?.[1]).toEqual(['@走查乙 回执请确认', [2]])
   })
 
   it('@走（非 ASCII）与 @core:2（含冒号）都保留候选浮层；username/displayName 双向匹配', async () => {
-    const wrapper = mountComposer()
-    const input = inputOf(wrapper)
+    const wrapper = await mountComposer()
 
-    await input.setValue('@走')
+    await setValue(wrapper, '@走')
     expect(optionsOf(wrapper).map((option) => option.attributes('data-test'))).toEqual([
       'mention-option-core:1',
       'mention-option-core:2',
     ])
 
-    await input.setValue('@core:2')
+    await setValue(wrapper, '@core:2')
     expect(optionsOf(wrapper).map((option) => option.attributes('data-test'))).toEqual([
       'mention-option-core:2',
     ])
   })
 
   it('删除提及文本后 mentionUserIds 同步移除（回填随文本增删，不是一次性快照）', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const input = inputOf(wrapper)
 
-    await input.setValue('@core:2 在吗')
+    await setValue(wrapper, '@core:2 在吗')
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')?.[0]?.[1]).toEqual([2])
 
-    await input.setValue('在吗')
+    await setValue(wrapper, '在吗')
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')?.[1]?.[1]).toEqual([])
   })
 
   it('@bobby 不误判为 @bob（词边界），@走查乙， 收尾标点仍算提及', async () => {
-    const wrapper = mount(Composer, {
-      props: {
-        contextKey: 'channel.1',
-        contacts: [...contacts, { id: 3, username: 'bob', displayName: 'Bob', avatarUrl: '' }],
-      },
+    const wrapper = await mountComposer({
+      contacts: [...contacts, { id: 3, username: 'bob', displayName: 'Bob', avatarUrl: '' }],
     })
     const input = inputOf(wrapper)
 
-    await input.setValue('@bobby 你好')
+    await setValue(wrapper, '@bobby 你好')
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')?.[0]?.[1]).toEqual([])
 
-    await input.setValue('@走查乙，回执请确认')
+    await setValue(wrapper, '@走查乙，回执请确认')
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')?.[1]?.[1]).toEqual([2])
   })
 
   it('浮层选中插入 @core:2（服务端按 content 含 username 复核提及），随即重解析回同一 id', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const input = inputOf(wrapper)
 
-    await input.setValue('@走查')
+    await setValue(wrapper, '@走查')
     expect(optionsOf(wrapper)).toHaveLength(2)
 
     await optionsOf(wrapper)[1]!.trigger('mousedown')
-    expect((input.element as HTMLTextAreaElement).value).toBe('@core:2 ')
+    expect(input.element.textContent).toBe('@core:2 ')
 
-    await input.setValue('@core:2 麻烦确认')
+    await setValue(wrapper, '@core:2 麻烦确认')
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')?.[0]?.[1]).toEqual([2])
   })
@@ -128,9 +138,9 @@ describe('#230 提及数据面：mock 链路的接收方 @未读投影', () => {
     await store.loadContacts()
 
     // 发送侧：composer 对展示名输入产出 mentionUserIds
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const input = inputOf(wrapper)
-    await input.setValue('@走查乙 看一下')
+    await setValue(wrapper, '@走查乙 看一下')
     await input.trigger('keydown', { key: 'Enter' })
     const [, mentionUserIds] = wrapper.emitted('send')![0]!
     expect(mentionUserIds).toEqual([2])
