@@ -9,22 +9,21 @@ import type { Message, UserSummary } from '../lib/types'
 import { createVoiceRecorder, isVoiceSupported } from '../lib/voice-recorder'
 import type { VoiceRecorder, VoiceRecording } from '../lib/voice-recorder'
 import { formatVoiceDuration } from '../lib/waveform'
+import PendingAttachment from './PendingAttachment.vue'
 import { COMMON_EMOJI } from '../lib/emoji'
 
 /**
  * 消息输入区（#218 C 路）：文本（markdown 语法由渲染端处理）+ @选择器 + 文件
  * 预览 + 语音录制 + 草稿 + 回复条。上传/发送的网络行为归 store（主会话集成），
- * 本组件只产出语义事件。
+ * 本组件管理本地草稿，确认发送后才调用父级的提交接口。
  */
 export interface ComposerProps {
   /** 禁用输入（如未连上房间）。 */
   disabled?: boolean
   /** 发送进行中（父级持有，防双击重发）。 */
   sending?: boolean
-  /** 文件上传进行中（父级传回，驱动进度条）。 */
+  /** 文件上传进行中（父级传回，防止重复提交）。 */
   uploading?: boolean
-  /** 文件上传进度 0-100（父级传回）。 */
-  uploadProgress?: number
   /** 正在回复的消息（非空显示回复条）。 */
   replyTo?: Message | null
   /** 输入区占位文案。 */
@@ -33,13 +32,14 @@ export interface ComposerProps {
   contacts?: UserSummary[]
   /** 草稿与录制复位键（`kind:id`），切换房间时换草稿、停录制。 */
   contextKey: string
+  /** 点击发送后执行；失败须 reject，以保留附件与说明文字。 */
+  submitFile?: (file: File, content: string, mentionUserIds: number[], signal: AbortSignal) => Promise<void>
 }
 
 const props = withDefaults(defineProps<ComposerProps>(), {
   disabled: false,
   sending: false,
   uploading: false,
-  uploadProgress: 0,
   replyTo: null,
   placeholder: '输入消息…',
   contacts: () => [],
@@ -50,8 +50,6 @@ const emit = defineEmits<{
   send: [text: string, mentionUserIds: number[]]
   /** 语音发送：录制产物（file/durationMs/waveform）。 */
   'send-voice': [recording: VoiceRecording]
-  /** 文件发送：选中的文件（上传与消息发送由 store 编排）。 */
-  'send-file': [file: File]
   /** 回复条取消。 */
   'cancel-reply': []
 }>()
@@ -104,7 +102,11 @@ function syncMentionsFromText(value: string): void {
   mentionUserIds.value = [...valid]
 }
 
-const sendable = computed(() => !props.disabled && !props.sending && text.value.trim().length > 0)
+const submittingFile = ref(false)
+const fileError = ref('')
+let fileSubmission: AbortController | null = null
+const busy = computed(() => props.sending || props.uploading || submittingFile.value)
+const sendable = computed(() => !props.disabled && !busy.value && (text.value.trim().length > 0 || pendingFile.value !== null))
 
 function onInput(event: Event): void {
   const value = (event.target as HTMLTextAreaElement).value
@@ -216,11 +218,37 @@ function onKeydown(event: KeyboardEvent): void {
 
 // ---------- 发送 ----------
 
-function sendText(): void {
+async function sendText(): Promise<void> {
   if (!sendable.value || composing.value) return
   if (mentionMenuOpen.value && mentionCandidates.value.length > 0) return
   const trimmed = text.value.trim()
-  emit('send', trimmed, [...mentionUserIds.value])
+  if (pendingFile.value) {
+    const file = pendingFile.value
+    const context = props.contextKey
+    submittingFile.value = true
+    fileSubmission = new AbortController()
+    fileError.value = ''
+    try {
+      if (!props.submitFile) throw new Error('附件发送暂不可用')
+      await props.submitFile(file, trimmed, [...mentionUserIds.value], fileSubmission.signal)
+      if (props.contextKey !== context || pendingFile.value !== file) return
+      pendingFile.value = null
+      clearSentText()
+      return
+    } catch (error) {
+      if (props.contextKey === context) fileError.value = error instanceof Error ? error.message : '发送失败，请重试'
+      return
+    } finally {
+      submittingFile.value = false
+      fileSubmission = null
+    }
+  } else {
+    emit('send', trimmed, [...mentionUserIds.value])
+  }
+  clearSentText()
+}
+
+function clearSentText(): void {
   text.value = ''
   mentionUserIds.value = []
   if (contextRoom.value) clearDraft(contextRoom.value.kind, contextRoom.value.id)
@@ -256,19 +284,16 @@ function onFileChange(event: Event): void {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = '' // 允许重复选择同一文件
-  if (!file) return
+  if (!file || busy.value || props.disabled) return
   pendingFile.value = file
-  emit('send-file', file)
+  fileError.value = ''
+  void nextTick(() => textarea.value?.focus())
 }
 
 function clearPendingFile(): void {
+  if (busy.value) return
   pendingFile.value = null
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${bytes} B`
+  fileError.value = ''
 }
 
 // ---------- 语音录制 ----------
@@ -338,8 +363,10 @@ watch(
   contextRoom,
   (room, previous) => {
   if (previous?.kind === room?.kind && previous?.id === room?.id) return
+  fileSubmission?.abort()
   if (recording.value) cancelRecording()
   pendingFile.value = null
+  fileError.value = ''
   emojiOpen.value = false
   if (room) {
     text.value = loadDraft(room.kind, room.id)
@@ -354,6 +381,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  fileSubmission?.abort()
   if (recording.value) cancelRecording()
 })
 
@@ -383,17 +411,13 @@ const replyPreview = computed(() => {
       </button>
     </div>
 
-    <!-- 文件预览条 -->
-    <div v-if="pendingFile" class="composer-file" data-test="pending-file">
-      <span class="composer-file-name">{{ pendingFile.name }}</span>
-      <span class="composer-file-size">{{ formatFileSize(pendingFile.size) }}</span>
-      <div v-if="uploading" class="composer-progress" role="progressbar" :aria-valuenow="uploadProgress" aria-valuemin="0" aria-valuemax="100">
-        <div class="composer-progress-bar" :style="{ width: `${Math.min(100, Math.max(0, uploadProgress))}%` }" />
-      </div>
-      <button type="button" class="composer-icon-btn" data-test="clear-file" aria-label="移除文件" @click="clearPendingFile">
-        <X :size="16" aria-hidden="true" />
-      </button>
-    </div>
+    <PendingAttachment
+      v-if="pendingFile"
+      :file="pendingFile"
+      :busy="busy"
+      :error="fileError"
+      @remove="clearPendingFile"
+    />
 
     <!-- @选择浮层 -->
     <div v-if="mentionMenuOpen && mentionCandidates.length > 0" class="composer-mentions" data-test="mention-menu" role="listbox" aria-label="提及候选人">
@@ -435,7 +459,7 @@ const replyPreview = computed(() => {
           data-test="emoji-toggle"
           aria-label="插入表情"
           :aria-expanded="emojiOpen"
-          :disabled="disabled || recording"
+          :disabled="disabled || recording || busy"
           @click="emojiOpen = !emojiOpen"
         >
           <Smile :size="18" aria-hidden="true" />
@@ -457,7 +481,7 @@ const replyPreview = computed(() => {
         class="composer-icon-btn"
         data-test="attach-file"
         aria-label="附加文件"
-        :disabled="disabled || recording"
+        :disabled="disabled || recording || busy"
         @click="pickFile"
       >
         <Paperclip :size="18" aria-hidden="true" />
@@ -471,7 +495,7 @@ const replyPreview = computed(() => {
         class="composer-textarea"
         data-test="composer-input"
         :placeholder="placeholder"
-        :disabled="disabled || sending"
+        :disabled="disabled || busy"
         :aria-label="'消息输入'"
         @input="onInput"
         @keydown="onKeydown"
@@ -480,19 +504,19 @@ const replyPreview = computed(() => {
       />
 
       <button
-        v-if="!recording && text.trim().length === 0"
+        v-if="!recording && !pendingFile && text.trim().length === 0"
         type="button"
         class="composer-icon-btn"
         data-test="record-start"
         aria-label="开始录音"
-        :disabled="disabled || recordUnsupported"
+        :disabled="disabled || busy || recordUnsupported"
         :title="recordUnsupported ? '当前浏览器不支持语音录制' : undefined"
         @click="startRecording"
       >
         <Mic :size="18" aria-hidden="true" />
       </button>
       <UButton
-        v-show="text.trim().length > 0"
+        v-show="text.trim().length > 0 || pendingFile"
         variant="primary"
         size="sm"
         type="button"
@@ -651,39 +675,6 @@ const replyPreview = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.composer-file {
-  display: flex;
-  align-items: center;
-  gap: var(--unself-space-2);
-  padding: var(--unself-space-2) var(--unself-space-3);
-  border-bottom: 1px solid var(--unself-color-border);
-  background: var(--unself-color-surface);
-}
-.composer-file-name {
-  font-size: var(--unself-font-size-sm);
-  color: var(--unself-color-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.composer-file-size {
-  font-size: var(--unself-font-size-xs);
-  color: var(--unself-color-text-tertiary);
-  flex-shrink: 0;
-}
-.composer-progress {
-  flex: 1;
-  height: 4px;
-  border-radius: var(--unself-radius-full);
-  background: var(--unself-color-surface-active);
-  overflow: hidden;
-}
-.composer-progress-bar {
-  height: 100%;
-  background: var(--unself-color-primary);
-  border-radius: var(--unself-radius-full);
-  transition: width var(--unself-duration-normal) var(--unself-ease-out);
 }
 .composer-mentions {
   position: absolute;

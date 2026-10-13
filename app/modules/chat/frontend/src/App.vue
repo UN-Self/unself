@@ -3,6 +3,7 @@
 import { computed, onBeforeUnmount, provide, ref } from 'vue'
 
 import { attachmentLoaderKey, createAttachmentLoader } from './lib/attachment-resource'
+import { createAttachmentSender } from './lib/attachment-sender'
 
 import ChatLayout from './components/ChatLayout.vue'
 import Composer from './components/Composer.vue'
@@ -217,7 +218,6 @@ const audienceSize = computed(() => {
 
 const replyTo = ref<Message | null>(null)
 const uploading = ref(false)
-const uploadProgress = ref(0)
 
 async function onSend(text: string, mentionUserIds: number[]): Promise<void> {
   try {
@@ -228,17 +228,19 @@ async function onSend(text: string, mentionUserIds: number[]): Promise<void> {
   }
 }
 
-async function onSendFile(file: File): Promise<void> {
+const sendAttachment = createAttachmentSender({
+  getRoomKey: () => store.state.currentRoom ? roomKeyString(store.state.currentRoom) : null,
+  upload: (file) => store.uploadFile(file),
+  send: (input) => store.sendMessage(input),
+})
+
+async function onSendFile(file: File, content: string, mentionUserIds: number[], signal: AbortSignal): Promise<void> {
   uploading.value = true
-  uploadProgress.value = 8
   try {
-    const attachment = await store.uploadFile(file)
-    if (!attachment) return
-    uploadProgress.value = 100
-    await store.sendMessage({ content: '', attachment })
+    await sendAttachment(file, content, mentionUserIds, signal)
+    replyTo.value = null
   } finally {
     uploading.value = false
-    uploadProgress.value = 0
   }
 }
 
@@ -265,8 +267,6 @@ async function onSendVoice(recording: {
   }
 }
 
-// 上传进度：fetch 无原生上传进度，阶段值（选中 8% → 完成 100%）；
-// 真流式进度（XHR onprogress）归 #216 联调期按需升级。
 
 // ---------- MessageList 分页 ----------
 
@@ -325,11 +325,10 @@ const contextKey = computed(() =>
           :disabled="store.state.realtimeStatus === 'error'"
           :sending="store.state.sending"
           :uploading="uploading"
-          :upload-progress="uploadProgress"
           :reply-to="replyTo"
           :contacts="contacts"
           @send="onSend"
-          @send-file="onSendFile"
+          :submit-file="onSendFile"
           @send-voice="onSendVoice"
           @cancel-reply="replyTo = null"
         />

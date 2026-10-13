@@ -10,7 +10,7 @@ import type { UserSummary } from '../src/lib/types'
 
 /**
  * Composer 行为（#218 C 路）：send 事件、@选择器键盘交互、composition 防误发、
- * 文件选择→send-file、草稿随 contextKey 切换、回复条、语音录制→send-voice。
+ * 文件选择→本地预览→确认发送、草稿随 contextKey 切换、回复条、语音录制→send-voice。
  * 两问检验：改坏发送守卫/提及插入/草稿键/录制清理 → 红；重构模板实现不变 → 绿。
  */
 
@@ -178,32 +178,82 @@ describe('Composer 中文输入法', () => {
 })
 
 describe('Composer 文件', () => {
-  it('选中文件→预览条出现→emit send-file；清除后预览消失', async () => {
-    const wrapper = mountComposer()
-    const file = new File(['hello'], 'report.pdf', { type: 'application/pdf' })
-    const fileInput = wrapper.find('input[type="file"]')
-    Object.defineProperty(fileInput.element, 'files', { value: [file] })
+  async function choose(wrapper: ReturnType<typeof mountComposer>, file: File) {
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+  }
 
-    await fileInput.trigger('change')
-    expect(wrapper.emitted('send-file')?.[0]?.[0]).toBe(file)
-    expect(wrapper.find('[data-test="pending-file"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="pending-file"]').text()).toContain('report.pdf')
-
-    await wrapper.find('[data-test="clear-file"]').trigger('click')
+  it('选择仅本地预览；移除、替换和卸载释放图片，不调用发送', async () => {
+    const createUrl = vi.fn(() => 'blob:preview')
+    const revoke = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { value: createUrl, configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revoke, configurable: true })
+    const submitFile = vi.fn()
+    const wrapper = mountComposer({ submitFile })
+    const file = new File(['image'], 'photo.png', { type: 'image/png' })
+    await choose(wrapper, file)
+    expect(wrapper.get('[data-test="pending-file"] img').attributes('src')).toBe('blob:preview')
+    expect(wrapper.get('[data-test="pending-file"]').text()).toContain('待发送')
+    expect(submitFile).not.toHaveBeenCalled()
+    expect(wrapper.emitted('send-file')).toBeUndefined()
+    await choose(wrapper, new File(['other'], 'other.png', { type: 'image/png' }))
+    expect(revoke).toHaveBeenCalledTimes(1)
+    await wrapper.get('[data-test="clear-file"]').trigger('click')
     expect(wrapper.find('[data-test="pending-file"]').exists()).toBe(false)
+    expect(revoke).toHaveBeenCalledTimes(2)
+    await choose(wrapper, file)
+    wrapper.unmount()
+    expect(revoke).toHaveBeenCalledTimes(3)
+    expect(submitFile).not.toHaveBeenCalled()
   })
 
-  it('uploading 时显示进度条（宽度随 uploadProgress）', async () => {
-    const wrapper = mountComposer()
-    const file = new File(['x'], 'a.bin', { type: 'application/octet-stream' })
-    const fileInput = wrapper.find('input[type="file"]')
-    Object.defineProperty(fileInput.element, 'files', { value: [file] })
-    await fileInput.trigger('change')
+  it('点击发送才提交文件与说明，忙碌时防重复；失败保留并允许 Enter 重试', async () => {
+    let reject!: (error: Error) => void
+    const submitFile = vi.fn().mockImplementationOnce(() => new Promise((_, fail) => { reject = fail }))
+      .mockResolvedValueOnce(undefined)
+    const wrapper = mountComposer({ submitFile })
+    const file = new File(['hello'], 'report.pdf', { type: 'application/pdf' })
+    await choose(wrapper, file)
+    await inputOf(wrapper).setValue('这是报告 @alice ')
+    await inputOf(wrapper).trigger('keydown', { key: 'Escape' })
+    await wrapper.get('[data-test="send"]').trigger('click')
+    expect(submitFile).toHaveBeenCalledWith(file, '这是报告 @alice', [11], expect.any(AbortSignal))
+    expect(wrapper.emitted('send')).toBeUndefined()
+    expect(wrapper.get('[data-test="send"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="clear-file"]').attributes('disabled')).toBeDefined()
+    await inputOf(wrapper).trigger('keydown', { key: 'Enter' })
+    expect(submitFile).toHaveBeenCalledTimes(1)
+    reject(new Error('网络不可用'))
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('网络不可用')
+    expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('这是报告 @alice ')
+    await inputOf(wrapper).trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(submitFile).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-test="pending-file"]').exists()).toBe(false)
+    expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('')
+    wrapper.unmount()
+  })
 
-    await wrapper.setProps({ uploading: true, uploadProgress: 40 })
-    const bar = wrapper.find('[role="progressbar"]')
-    expect(bar.exists()).toBe(true)
-    expect(bar.attributes('aria-valuenow')).toBe('40')
+  it('只选文件也显示发送按钮；切换会话后旧提交完成不会清除新草稿', async () => {
+    let complete!: () => void
+    const submitFile = vi.fn(() => new Promise<void>((resolve) => { complete = resolve }))
+    const wrapper = mountComposer({ submitFile })
+    const file = new File(['x'], 'a.bin')
+    await choose(wrapper, file)
+    expect(wrapper.get('[data-test="send"]').isVisible()).toBe(true)
+    await wrapper.get('[data-test="send"]').trigger('click')
+    vi.useFakeTimers()
+    saveDraft('channel', 2, '新会话草稿')
+    vi.advanceTimersByTime(DRAFT_SAVE_DELAY_MS + 1)
+    vi.useRealTimers()
+    await wrapper.setProps({ contextKey: 'channel.2' })
+    expect(wrapper.find('[data-test="pending-file"]').exists()).toBe(false)
+    complete()
+    await flushPromises()
+    expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('新会话草稿')
+    wrapper.unmount()
   })
 })
 

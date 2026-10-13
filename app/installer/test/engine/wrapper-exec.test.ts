@@ -26,6 +26,7 @@ interface WorkerCall {
   /** body 文本（POST 场景）；无 body 为 null。 */
   body: string | null;
   upgrade?: string | null;
+  authorization?: string | null;
 }
 
 const temps: string[] = [];
@@ -89,7 +90,8 @@ export default {
       body = Buffer.concat(chunks).toString('utf8');
     }
     const upgrade = request.headers.get('upgrade');
-    recorder.workerCalls.push({ pathname: url.pathname, method: request.method, body, ...(upgrade ? { upgrade } : {}) });
+    const authorization = request.headers.get('authorization');
+    recorder.workerCalls.push({ pathname: url.pathname, method: request.method, body, ...(upgrade ? { upgrade } : {}), ...(authorization ? { authorization } : {}) });
     return ${workerResponseExpr};
   },
 };
@@ -225,6 +227,24 @@ describe('prefixStripWrapper 真实执行（资产分支 / 预取 / duplex，T5�
     await w.fetch('/m/hello/life/x');
     expect(w.assetCalls).toHaveLength(0);
     expect(w.workerCalls).toEqual([{ pathname: '/life/x', method: 'GET', body: null }]);
+  });
+
+  it.each(['/m/chat', ''])('附件下载（挂载 %s）交给 Worker 并保留认证头，不能被 ASSETS 吞掉', async (mount) => {
+    const w = await loadWrapper({ moduleId: 'chat', mount, assets: { '/files/24%2Fobject.jpg': 'wrong static file' } });
+    const res = await w.fetch(`${mount}/files/24%2Fobject.jpg`, {
+      headers: { authorization: 'Bearer module-token' },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ worker: true, pathname: '/files/24%2Fobject.jpg' });
+    expect(w.assetCalls).toHaveLength(0);
+    expect(w.workerCalls).toEqual([
+      {
+        pathname: '/files/24%2Fobject.jpg',
+        method: 'GET',
+        body: null,
+        authorization: 'Bearer module-token',
+      },
+    ]);
   });
 });
 
