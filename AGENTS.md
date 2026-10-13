@@ -47,7 +47,8 @@
 - 迁移三坑：D1 无 BEGIN/COMMIT（逐条执行、先 COUNT 后复查）；已应用迁移文件禁改（按**文件名**记账）；多模块共库必须各用独立记账表，否则同名迁移被静默跳过 → docs/deploy.md「升级已有实例」· docs/modules.md
 - 部署：wrangler token ≈2h 过期先 `whoami` 刷新、`--domain=` 必带；Worker 名 0.2.0 起 `<实例名>-workbench`（旧 `-core-api`）删旧建新、D1/R2/KV 名与数据不动；未封箱窗口=接管面，setup token 签发权只在部署者手里（#165） → docs/deploy.md
 - wrangler 定案必须注明版本（4.129.0 起 OAuth 可绑 zone 路由；完整安装 213MB 含 147MB workerd，故装配器不依赖 wrangler——决策 #65）；OAuth scope 清单不能推断权限（「无 R2 scope」实测仍能建桶）→ 权限类结论只能实测 → issue #241
-- CF Workers 出站 TLS 平台不可用（决策 #31）：邮件=后台尽力增强；明文令牌不落库
+- CF Workers 直发邮件曾误判为平台不可用（决策 #31；2026-10-13 复核修正为 `connect()` 参数错位，见 #96）：邮件=后台尽力增强；明文令牌不落库
+- `cloudflare:sockets` `connect(address, options)`：`secureTransport` 属**第二参**、**默认 `off`**；写进 address 会被静默忽略（自写 `sockets.d.ts` 会把错误形状合法化、mock 丢参、node:tls 替身无条件真 TLS——三层同时失明）→ 决策 #96
 - UI 纪律：样式只走 tokens、动效参数从 tokens 取，reduced-motion 降级 → docs/architecture.md
 - **CI 门禁不是「三件套」**：含 `verify-workflows` / `verify-paths`（结构闸门）/ `pnpm verify:tokens` / `check-migrations-upgrade` → 只跑三件套会「本地全绿、CI 红」（#258 实锤；清单见 docs/testing.md）
 - worktree 基座读本地引用：先 `git merge --ff-only origin/main` 再 `herdr worktree create --base`，否则基于陈旧树（#248 实测）；PR 目标非默认分支时 `closes #N` 不自动关 issue，要手动 `gh issue close` 写明合并点（#242/#245/#246/#247 实测）
