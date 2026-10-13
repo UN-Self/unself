@@ -4,8 +4,9 @@ import { computed, provide, ref } from 'vue'
 import { UMessage, UMessageAvatar, UMessageBubble } from '@unself/ui'
 
 import { attachmentResourceKey, useAttachmentResource } from '../lib/attachment-resource'
-import MessageAttachment from './MessageAttachment.vue'
+import MessageContent from './MessageContent.vue'
 import MessageActions from './MessageActions.vue'
+import { deletionLabel } from '../lib/message-deletion'
 import type { Message, ReadReceiptsSummary } from '../lib/types'
 
 /**
@@ -87,11 +88,13 @@ const fallbackTime = computed(() => {
 })
 
 provide(attachmentResourceKey, useAttachmentResource(() => props.message.deleted ? null : props.message.attachment))
-const attachmentView = ref<InstanceType<typeof MessageAttachment> | null>(null)
+const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
 </script>
 
 <template>
+  <p v-if="message.deleted" class="message-system" data-test="message-system">{{ deletionLabel(message) }}</p>
   <UMessage
+    v-else
     :mine="mine"
     class="bubble-row"
     :class="{ 'bubble-row-mine': mine, 'bubble-row-highlight': highlighted }"
@@ -113,8 +116,7 @@ const attachmentView = ref<InstanceType<typeof MessageAttachment> | null>(null)
 
       <MessageActions :message="message" :can-delete="canDelete" @delete="emit('delete', message)" @preview="attachmentView?.preview()">
         <UMessageBubble class="bubble-body" :variant="mine ? 'solid' : 'soft'">
-          <p v-if="message.deleted || message.content" class="bubble-text">{{ message.deleted ? '消息已撤回' : message.content }}</p>
-          <MessageAttachment v-if="!message.deleted && message.attachment" :key="message.attachment.key" ref="attachmentView" :attachment="message.attachment" />
+          <MessageContent ref="attachmentView" :message="message" />
         </UMessageBubble>
       </MessageActions>
 
@@ -139,6 +141,7 @@ const attachmentView = ref<InstanceType<typeof MessageAttachment> | null>(null)
 </template>
 
 <style scoped>
+.message-system { margin: var(--unself-space-3) 0; padding: var(--unself-space-1) var(--unself-space-3); text-align: center; color: var(--unself-color-text-tertiary); font-size: var(--unself-font-size-xs); overflow-wrap: anywhere; }
 .bubble-row { max-width:100%; padding:var(--unself-space-1) 0; }
 .bubble-row-highlight .bubble-main {
   outline: 1px solid var(--unself-color-primary-soft);

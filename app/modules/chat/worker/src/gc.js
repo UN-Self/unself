@@ -30,6 +30,10 @@ export const ORPHAN_UPLOAD_QUERY = `SELECT object_key, created_at
 		  AND messages.deleted_at IS NULL
 	  )
 	  AND NOT EXISTS (
+        SELECT 1 FROM message_attachments ma JOIN messages m ON m.id = ma.message_id
+        WHERE ma.object_key = uploaded_files.object_key AND m.deleted_at IS NULL
+      )
+	  AND NOT EXISTS (
 		SELECT 1 FROM users
 		WHERE users.avatar_key = uploaded_files.object_key
 		  AND users.deleted_at IS NULL
@@ -243,6 +247,9 @@ async function findReferencedKeys(db, keys, siteIconKey, budget) {
 			   SELECT 1 FROM messages
 			   WHERE attachment_key = candidate.object_key AND deleted_at IS NULL
 			 ) OR EXISTS (
+               SELECT 1 FROM message_attachments ma JOIN messages m ON m.id = ma.message_id
+               WHERE ma.object_key = candidate.object_key AND m.deleted_at IS NULL
+             ) OR EXISTS (
 			   SELECT 1 FROM users
 			   WHERE avatar_key = candidate.object_key AND deleted_at IS NULL
 			 ) OR EXISTS (

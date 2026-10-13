@@ -345,6 +345,7 @@ export function createMockChatApi(
         source: 'edgechat',
       },
       attachment: input.attachment ?? null,
+      blocks: input.blocks,
       clientMessageId: input.clientMessageId,
       roomId: input.roomId,
     }
@@ -392,6 +393,7 @@ export function createMockChatApi(
     message.deleted = true
     message.content = ''
     message.attachment = null
+    message.blocks = undefined
     api.lastSocket?.serverPush({ protocolVersion: 1, type: 'message_deleted', messageId })
   }
 

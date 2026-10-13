@@ -118,6 +118,11 @@ export async function fileBelongsToUser(db, key, userId) {
 	return Boolean(results[0]);
 }
 
+/**
+ * @param {any} db
+ * @param {string} key
+ * @param {number|null|undefined} userId
+ */
 export async function canAccessFile(db, key, userId = null) {
 	const cleanKey = String(key || "");
 	if (!cleanKey) return false;
@@ -149,7 +154,10 @@ export async function canAccessFile(db, key, userId = null) {
 			 ) OR EXISTS (
 			   SELECT 1 FROM messages m
 			   JOIN channels c ON c.id = m.channel_id
-			   WHERE m.attachment_key = ?
+			   WHERE m.id IN (
+           SELECT id FROM messages WHERE attachment_key = ?
+           UNION SELECT message_id FROM message_attachments WHERE object_key = ?
+         )
 			     AND m.deleted_at IS NULL AND c.deleted_at IS NULL
 			     AND (c.kind = 'public' OR EXISTS (
 			       SELECT 1 FROM channel_members cm
@@ -157,7 +165,7 @@ export async function canAccessFile(db, key, userId = null) {
 			     ))
 			 ))`,
 		)
-		.bind(cleanKey, cleanKey, Number(userId), cleanKey, Number(userId))
+		.bind(cleanKey, cleanKey, Number(userId), cleanKey, cleanKey, Number(userId))
 		.all();
 	return Boolean(results[0]);
 }

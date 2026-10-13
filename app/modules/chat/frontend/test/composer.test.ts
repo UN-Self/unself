@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { flushPromises } from '@vue/test-utils'
+import { flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -33,6 +33,10 @@ function stubLocalStorage(): void {
 }
 
 stubLocalStorage()
+enableAutoUnmount(afterEach)
+// jsdom provides selection but no layout. ProseMirror only needs these for scrolling the caret.
+Object.defineProperty(Range.prototype, 'getClientRects', { value: () => [], configurable: true })
+Object.defineProperty(Range.prototype, 'getBoundingClientRect', { value: () => new DOMRect(), configurable: true })
 
 const contacts: UserSummary[] = [
   { id: 11, username: 'alice', displayName: 'Alice', avatarUrl: '' },
@@ -40,14 +44,28 @@ const contacts: UserSummary[] = [
   { id: 13, username: 'carol', displayName: 'Carol', avatarUrl: '' },
 ]
 
-function inputOf(wrapper: ReturnType<typeof mountComposer>) {
-  return wrapper.find('[data-test="composer-input"]')
+function inputOf(wrapper: Awaited<ReturnType<typeof mountComposer>>) {
+  const input = wrapper.get('[data-test="composer-input"]')
+  return {
+    element: input.element,
+    trigger: input.trigger.bind(input),
+    async setValue(value: string) {
+      // Browser input mutates the editable DOM; the real ProseMirror observer parses the change.
+      input.element.textContent = value
+      const range = document.createRange()
+      range.selectNodeContents(input.element)
+      range.collapse(false)
+      window.getSelection()?.removeAllRanges()
+      window.getSelection()?.addRange(range)
+      await input.trigger('input')
+      await Promise.resolve()
+    },
+  }
 }
-
-function mountComposer(props: Record<string, unknown> = {}) {
-  return mount(Composer, {
-    props: { contextKey: 'channel.1', contacts, ...props },
-  })
+async function mountComposer(props: Record<string, unknown> = {}) {
+  const wrapper = mount(Composer, { attachTo: document.body, props: { contextKey: 'channel.1', contacts, ...props } })
+  await Promise.resolve()
+  return wrapper
 }
 
 beforeEach(() => {
@@ -58,21 +76,20 @@ beforeEach(() => {
 
 describe('Composer 发送', () => {
   it('打开 emoji 选择器并把 Unicode emoji 插入光标位置', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const input = inputOf(wrapper)
 
     await input.setValue('你好')
-    ;(input.element as HTMLTextAreaElement).setSelectionRange(2, 2)
     await wrapper.get('[data-test="emoji-toggle"]').trigger('click')
     expect(wrapper.find('[data-test="emoji-picker"]').exists()).toBe(true)
     await wrapper.get('[data-test="emoji-picker"] button').trigger('click')
 
-    expect((input.element as HTMLTextAreaElement).value).toBe('你好😀')
+    expect(input.element.textContent).toBe('你好😀')
     expect(wrapper.find('[data-test="emoji-picker"]').exists()).toBe(false)
   })
 
   it('空文本禁用发送；输入后点击发送 emit send(文本, mentionUserIds) 且清空输入', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const send = wrapper.find('[data-test="send"]')
     expect((send.element as HTMLButtonElement).disabled).toBe(true)
 
@@ -82,11 +99,11 @@ describe('Composer 发送', () => {
 
     const emitted = wrapper.emitted('send')
     expect(emitted).toEqual([['你好 世界', []]])
-    expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('')
+    expect(inputOf(wrapper).element.textContent).toBe('')
   })
 
   it('Enter 发送、Shift+Enter 换行（不发送）', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     await inputOf(wrapper).setValue('第一行')
     await inputOf(wrapper).trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')).toHaveLength(1)
@@ -97,7 +114,7 @@ describe('Composer 发送', () => {
   })
 
   it('sending/disabled 状态下 Enter 不发送', async () => {
-    const wrapper = mountComposer({ sending: true })
+    const wrapper = await mountComposer({ sending: true })
     await inputOf(wrapper).setValue('内容')
     await inputOf(wrapper).trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')).toBeUndefined()
@@ -106,7 +123,7 @@ describe('Composer 发送', () => {
 
 describe('Composer @选择器', () => {
   it('@ 触发浮层，键盘 ↓/Enter 插入 @username，send 时带上 mentionUserIds', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const input = inputOf(wrapper)
 
     await input.setValue('嗨 @')
@@ -115,7 +132,7 @@ describe('Composer @选择器', () => {
     await input.trigger('keydown', { key: 'ArrowDown' }) // alice→bob
     await input.trigger('keydown', { key: 'Enter' })
 
-    expect((input.element as HTMLTextAreaElement).value).toBe('嗨 @bob ')
+    expect(input.element.textContent).toBe('嗨 @bob ')
     expect(wrapper.find('[data-test="mention-menu"]').exists()).toBe(false)
 
     await input.setValue('嗨 @bob 顺便 @alice 看看')
@@ -124,7 +141,7 @@ describe('Composer @选择器', () => {
   })
 
   it('@ 前缀过滤候选，点击候选项同样插入', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const input = inputOf(wrapper)
 
     await input.setValue('@c')
@@ -133,11 +150,11 @@ describe('Composer @选择器', () => {
     expect(options[0]?.attributes('data-test')).toBe('mention-option-carol')
 
     await options[0]!.trigger('mousedown')
-    expect((input.element as HTMLTextAreaElement).value).toBe('@carol ')
+    expect(input.element.textContent).toBe('@carol ')
   })
 
   it('Escape 关闭浮层后，Enter 照常发送文本（浮层不再拦截）', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const input = inputOf(wrapper)
     await input.setValue('@')
     await input.trigger('keydown', { key: 'Escape' })
@@ -149,7 +166,7 @@ describe('Composer @选择器', () => {
   })
 
   it('删除 @username 后 mentionUserIds 同步移除', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const input = inputOf(wrapper)
     await input.setValue('@bob 在吗')
     await input.trigger('keydown', { key: 'Enter' })
@@ -163,7 +180,7 @@ describe('Composer @选择器', () => {
 
 describe('Composer 中文输入法', () => {
   it('composition 期间 Enter 不发送，结束后恢复', async () => {
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const input = inputOf(wrapper)
 
     await input.setValue('nihao')
@@ -172,74 +189,73 @@ describe('Composer 中文输入法', () => {
     expect(wrapper.emitted('send')).toBeUndefined()
 
     await input.trigger('compositionend')
+    // ProseMirror suppresses the IME confirmation Enter for a short browser guard window.
+    await new Promise(resolve => setTimeout(resolve, 520))
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')).toHaveLength(1)
   })
 })
 
 describe('Composer 文件', () => {
-  async function choose(wrapper: ReturnType<typeof mountComposer>, file: File) {
+  async function choose(wrapper: Awaited<ReturnType<typeof mountComposer>>, file: File) {
     const input = wrapper.get('input[type="file"]')
     Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
     await input.trigger('change')
   }
 
-  it('选择仅本地预览；移除、替换和卸载释放图片，不调用发送', async () => {
-    const createUrl = vi.fn(() => 'blob:preview')
+  it('图片内联插入且只在本地；文本可穿插，卸载释放图片', async () => {
     const revoke = vi.fn()
-    Object.defineProperty(URL, 'createObjectURL', { value: createUrl, configurable: true })
+    Object.defineProperty(URL, 'createObjectURL', { value: () => 'blob:preview', configurable: true })
     Object.defineProperty(URL, 'revokeObjectURL', { value: revoke, configurable: true })
-    const submitFile = vi.fn()
-    const wrapper = mountComposer({ submitFile })
-    const file = new File(['image'], 'photo.png', { type: 'image/png' })
-    await choose(wrapper, file)
-    expect(wrapper.get('[data-test="pending-file"] img').attributes('src')).toBe('blob:preview')
-    expect(wrapper.get('[data-test="pending-file"]').text()).toContain('待发送')
-    expect(submitFile).not.toHaveBeenCalled()
-    expect(wrapper.emitted('send-file')).toBeUndefined()
-    await choose(wrapper, new File(['other'], 'other.png', { type: 'image/png' }))
+    const submitDocument = vi.fn().mockResolvedValue(undefined)
+    const wrapper = await mountComposer({ submitDocument })
+    await inputOf(wrapper).setValue('前文')
+    await choose(wrapper, new File(['image'], 'photo.png', { type: 'image/png' }))
+    expect(wrapper.get('[data-test="composer-input"] img').attributes('src')).toBe('blob:preview')
+    expect(submitDocument).not.toHaveBeenCalled()
+    await inputOf(wrapper).trigger('paste', { clipboardData: { files: [], getData: () => '后文' } })
+    await wrapper.get('[data-test="send"]').trigger('click')
+    expect(submitDocument.mock.calls[0]![0].parts).toEqual([
+      { type: 'text', text: '前文' }, { type: 'attachment', id: expect.any(String) }, { type: 'text', text: '后文' },
+    ])
+    await flushPromises()
+    expect(wrapper.find('[data-test="composer-input"] img').exists()).toBe(false)
     expect(revoke).toHaveBeenCalledTimes(1)
-    await wrapper.get('[data-test="clear-file"]').trigger('click')
-    expect(wrapper.find('[data-test="pending-file"]').exists()).toBe(false)
-    expect(revoke).toHaveBeenCalledTimes(2)
-    await choose(wrapper, file)
+    await inputOf(wrapper).trigger('keydown', { key: 'z', ctrlKey: true })
+    expect(inputOf(wrapper).element.textContent).toBe('')
+    expect(wrapper.find('[data-attachment-id]').exists()).toBe(false)
+    await choose(wrapper, new File(['image'], 'other.png', { type: 'image/png' }))
     wrapper.unmount()
-    expect(revoke).toHaveBeenCalledTimes(3)
-    expect(submitFile).not.toHaveBeenCalled()
+    expect(revoke).toHaveBeenCalledTimes(2)
   })
 
-  it('点击发送才提交文件与说明，忙碌时防重复；失败保留并允许 Enter 重试', async () => {
+  it('忙碌防重复；失败保留图文并允许 Enter 重试', async () => {
     let reject!: (error: Error) => void
-    const submitFile = vi.fn().mockImplementationOnce(() => new Promise((_, fail) => { reject = fail }))
-      .mockResolvedValueOnce(undefined)
-    const wrapper = mountComposer({ submitFile })
-    const file = new File(['hello'], 'report.pdf', { type: 'application/pdf' })
-    await choose(wrapper, file)
+    const submitDocument = vi.fn().mockImplementationOnce(() => new Promise((_, fail) => { reject = fail })).mockResolvedValueOnce(undefined)
+    const wrapper = await mountComposer({ submitDocument })
     await inputOf(wrapper).setValue('这是报告 @alice ')
-    await inputOf(wrapper).trigger('keydown', { key: 'Escape' })
+    await choose(wrapper, new File(['hello'], 'report.pdf', { type: 'application/pdf' }))
     await wrapper.get('[data-test="send"]').trigger('click')
-    expect(submitFile).toHaveBeenCalledWith(file, '这是报告 @alice', [11], expect.any(AbortSignal))
+    expect(submitDocument.mock.calls[0]![1]).toEqual([11])
     expect(wrapper.emitted('send')).toBeUndefined()
     expect(wrapper.get('[data-test="send"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-test="clear-file"]').attributes('disabled')).toBeDefined()
     await inputOf(wrapper).trigger('keydown', { key: 'Enter' })
-    expect(submitFile).toHaveBeenCalledTimes(1)
+    expect(submitDocument).toHaveBeenCalledTimes(1)
     reject(new Error('网络不可用'))
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('网络不可用')
-    expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('这是报告 @alice ')
+    expect(wrapper.get('[data-test="composer-input"]').text()).toContain('这是报告 @alice')
+    expect(wrapper.find('[data-attachment-id]').exists()).toBe(true)
     await inputOf(wrapper).trigger('keydown', { key: 'Enter' })
     await flushPromises()
-    expect(submitFile).toHaveBeenCalledTimes(2)
-    expect(wrapper.find('[data-test="pending-file"]').exists()).toBe(false)
-    expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('')
-    wrapper.unmount()
+    expect(submitDocument).toHaveBeenCalledTimes(2)
+    expect(inputOf(wrapper).element.textContent).toBe('')
   })
 
   it('只选文件也显示发送按钮；切换会话后旧提交完成不会清除新草稿', async () => {
     let complete!: () => void
-    const submitFile = vi.fn(() => new Promise<void>((resolve) => { complete = resolve }))
-    const wrapper = mountComposer({ submitFile })
+    const submitDocument = vi.fn(() => new Promise<void>((resolve) => { complete = resolve }))
+    const wrapper = await mountComposer({ submitDocument })
     const file = new File(['x'], 'a.bin')
     await choose(wrapper, file)
     expect(wrapper.get('[data-test="send"]').isVisible()).toBe(true)
@@ -249,10 +265,10 @@ describe('Composer 文件', () => {
     vi.advanceTimersByTime(DRAFT_SAVE_DELAY_MS + 1)
     vi.useRealTimers()
     await wrapper.setProps({ contextKey: 'channel.2' })
-    expect(wrapper.find('[data-test="pending-file"]').exists()).toBe(false)
+    expect(wrapper.find('[data-attachment-id]').exists()).toBe(false)
     complete()
     await flushPromises()
-    expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('新会话草稿')
+    expect(inputOf(wrapper).element.textContent).toBe('新会话草稿')
     wrapper.unmount()
   })
 })
@@ -261,16 +277,16 @@ describe('Composer 草稿', () => {
   it('输入经 debounce 落 localStorage，切 contextKey 恢复对应草稿', async () => {
     vi.useFakeTimers()
     try {
-      const wrapper = mountComposer({ contextKey: 'channel.7' })
+      const wrapper = await mountComposer({ contextKey: 'channel.7' })
       await inputOf(wrapper).setValue('未发送的草稿')
       await vi.advanceTimersByTimeAsync(300)
       expect(loadDraft('channel', 7)).toBe('未发送的草稿')
 
       await wrapper.setProps({ contextKey: 'channel.9' })
-      expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('')
+      expect(inputOf(wrapper).element.textContent).toBe('')
 
       await wrapper.setProps({ contextKey: 'channel.7' })
-      expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('未发送的草稿')
+      expect(inputOf(wrapper).element.textContent).toBe('未发送的草稿')
     } finally {
       vi.useRealTimers()
     }
@@ -282,8 +298,8 @@ describe('Composer 草稿', () => {
     try {
       saveDraft('channel', 5, '旧草稿')
       await vi.advanceTimersByTimeAsync(DRAFT_SAVE_DELAY_MS)
-      const wrapper = mountComposer({ contextKey: 'channel.5' })
-      expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('旧草稿')
+      const wrapper = await mountComposer({ contextKey: 'channel.5' })
+      expect(inputOf(wrapper).element.textContent).toBe('旧草稿')
 
       await inputOf(wrapper).trigger('keydown', { key: 'Enter' })
       expect(wrapper.emitted('send')).toHaveLength(1)
@@ -291,7 +307,7 @@ describe('Composer 草稿', () => {
 
       await wrapper.setProps({ contextKey: 'channel.6' })
       await wrapper.setProps({ contextKey: 'channel.5' })
-      expect((inputOf(wrapper).element as HTMLTextAreaElement).value).toBe('')
+      expect(inputOf(wrapper).element.textContent).toBe('')
     } finally {
       vi.useRealTimers()
     }
@@ -300,7 +316,7 @@ describe('Composer 草稿', () => {
 
 describe('Composer 回复条', () => {
   it('replyTo 显示摘要，X 取消 emit cancel-reply', async () => {
-    const wrapper = mountComposer({
+    const wrapper = await mountComposer({
       replyTo: {
         id: 99,
         content: '这是一条特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别特别长的消息',
@@ -357,7 +373,7 @@ function stubVoiceEnv(): void {
   const stream = { getTracks: () => [track] }
   const getUserMedia = vi.fn(async () => stream)
   Object.defineProperty(globalThis, 'navigator', {
-    value: { ...(globalThis.navigator ?? {}), mediaDevices: { getUserMedia } },
+    value: { ...(globalThis.navigator ?? {}), platform: 'Linux', userAgent: 'jsdom', mediaDevices: { getUserMedia } },
     configurable: true,
     writable: true,
   })
@@ -383,7 +399,7 @@ describe('Composer 语音录制', () => {
     vi.restoreAllMocks()
     vi.useRealTimers()
     Object.defineProperty(globalThis, 'navigator', {
-      value: { ...(globalThis.navigator ?? {}), mediaDevices: undefined },
+      value: { ...(globalThis.navigator ?? {}), platform: 'Linux', userAgent: 'jsdom', mediaDevices: undefined },
       configurable: true,
       writable: true,
     })
@@ -392,7 +408,7 @@ describe('Composer 语音录制', () => {
   it('录音中显示计时器，停止→emit send-voice({file,durationMs,waveform 42 桶})', async () => {
     vi.useFakeTimers()
     stubVoiceEnv()
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
 
     const startBtn = wrapper.find('[data-test="record-start"]')
     expect((startBtn.element as HTMLButtonElement).disabled).toBe(false)
@@ -422,7 +438,7 @@ describe('Composer 语音录制', () => {
   it('取消按钮停止录制且不 emit send-voice，tracks 释放', async () => {
     vi.useFakeTimers()
     stubVoiceEnv()
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
 
     await wrapper.find('[data-test="record-start"]').trigger('click')
     await flushPromises()
@@ -436,11 +452,11 @@ describe('Composer 语音录制', () => {
 
   it('不支持环境（无 mediaDevices）麦克风按钮禁用且带 title 提示', async () => {
     Object.defineProperty(globalThis, 'navigator', {
-      value: { ...(globalThis.navigator ?? {}), mediaDevices: undefined },
+      value: { ...(globalThis.navigator ?? {}), platform: 'Linux', userAgent: 'jsdom', mediaDevices: undefined },
       configurable: true,
       writable: true,
     })
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     const mic = wrapper.find('[data-test="record-start"]')
     expect((mic.element as HTMLButtonElement).disabled).toBe(true)
     expect(mic.attributes('title')).toBeTruthy()
@@ -449,7 +465,7 @@ describe('Composer 语音录制', () => {
   it('contextKey 切换时录制复位（不再 emit，录制条消失）', async () => {
     vi.useFakeTimers()
     stubVoiceEnv()
-    const wrapper = mountComposer()
+    const wrapper = await mountComposer()
     await wrapper.find('[data-test="record-start"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-test="recording-bar"]').exists()).toBe(true)

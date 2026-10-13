@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Source: aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d worker/src/message-submission.js（GPL-3.0-only，裁剪版）
+import { blockText } from "./message-blocks.js";
 import { insertMessage, insertMessageIdempotent } from "./data/messages.js";
 import { resolveMessageMentionUserIds } from "./data/mentions.js";
 import { resolveMessageReply } from "./data/replies.js";
@@ -22,6 +23,7 @@ export function createMessageSubmission({
 } = {}) {
 	return async function submitRoomMessage(env, meta, payload) {
 		try {
+			if (payload.blocks != null) payload = { ...payload, content: blockText(payload.blocks) };
 			if (meta.room.kind === "dm") {
 				const blockStatus = await resolveDmBlockStatus(
 					env.DB,
@@ -61,6 +63,7 @@ export function createMessageSubmission({
 				senderId: meta.principal.userId,
 				content: payload.content,
 				attachment: payload.attachment,
+				blocks: payload.blocks,
 				mentionUserIds,
 			};
 			if (reply.messageId) {
@@ -80,6 +83,7 @@ export function createMessageSubmission({
 				packet: JSON.stringify({ protocolVersion: 1, type: "message", message }),
 			};
 		} catch (error) {
+			if (error?.message === "Invalid message blocks") throw new MessageSubmissionError("图文消息格式无效，最多 10 个附件、20000 字符");
 			if (
 				error?.message === "Invalid attachment" ||
 				error?.message === "Attachment is not available"

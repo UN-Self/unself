@@ -16,6 +16,7 @@ import type {
   ChannelMember,
   Dm,
   Message,
+  MessageDeletionNotice,
   MessagesPage,
   OpenDmResult,
   RoomKind,
@@ -63,7 +64,8 @@ function normalizeAttachment(pathname: string, attachment: Attachment | null): A
 }
 
 function normalizeMessage(pathname: string, message: Message): Message {
-  return { ...message, attachment: normalizeAttachment(pathname, message.attachment) }
+  return { ...message, attachment: normalizeAttachment(pathname, message.attachment),
+    blocks: message.blocks?.map(block => block.type === 'attachment' ? { ...block, attachment: normalizeAttachment(pathname, block.attachment)! } : block) }
 }
 
 function normalizeSocketFrame(pathname: string, frame: Record<string, unknown>): Record<string, unknown> {
@@ -132,9 +134,10 @@ export interface ChatApi {
     content: string
     clientMessageId: string
     attachment?: Attachment | null
+    blocks?: Message['blocks']
     mentionUserIds?: number[]
   }): Promise<{ created: boolean; message: Message }>
-  deleteMessage(kind: RoomKind, roomId: number, messageId: number): Promise<void>
+  deleteMessage(kind: RoomKind, roomId: number, messageId: number): Promise<{ deletion?: MessageDeletionNotice } | void>
   uploadFile(file: File): Promise<{ file: Attachment }>
   /** WS 建连回调形态：测试传内存 socket，live 走 URL。返回句柄含可选 send（控制帧上行，#220）。 */
   openRoomSocket(handlers: {
@@ -316,13 +319,14 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
           clientMessageId: input.clientMessageId,
           content: input.content,
           attachment: input.attachment ?? null,
+          blocks: input.blocks,
           mentionUserIds: input.mentionUserIds ?? [],
         }),
       }).then((result) => ({ ...result, message: normalizeMessage(globalThis.location.pathname, result.message) })),
     deleteMessage: (kind, roomId, messageId) =>
       requestJson(`/v1/rooms/${kind}/${roomId}/messages/${messageId}`, {
         method: 'DELETE', headers: authHeaders(options.getToken()),
-      }).then(() => undefined),
+      }),
     uploadFile,
     openRoomSocket,
     openInboxSocket,

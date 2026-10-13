@@ -1,15 +1,15 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Mic, Paperclip, SendHorizontal, Smile, Square, X } from 'lucide-vue-next'
 
 import { clearDraft, loadDraft, saveDraft } from '../lib/draft'
-import { UButton, UCard } from '@unself/ui'
+import { UButton, UCard, URichInput, type RichInputPart } from '@unself/ui'
 import type { Message, UserSummary } from '../lib/types'
 import { createVoiceRecorder, isVoiceSupported } from '../lib/voice-recorder'
 import type { VoiceRecorder, VoiceRecording } from '../lib/voice-recorder'
 import { formatVoiceDuration } from '../lib/waveform'
-import PendingAttachment from './PendingAttachment.vue'
+import type { ComposerDocument } from '../lib/composer-document'
 import { COMMON_EMOJI } from '../lib/emoji'
 
 /**
@@ -33,7 +33,7 @@ export interface ComposerProps {
   /** 草稿与录制复位键（`kind:id`），切换房间时换草稿、停录制。 */
   contextKey: string
   /** 点击发送后执行；失败须 reject，以保留附件与说明文字。 */
-  submitFile?: (file: File, content: string, mentionUserIds: number[], signal: AbortSignal) => Promise<void>
+  submitDocument?: (document: ComposerDocument, mentionUserIds: number[], signal: AbortSignal) => Promise<void>
 }
 
 const props = withDefaults(defineProps<ComposerProps>(), {
@@ -57,7 +57,17 @@ const emit = defineEmits<{
 // ---------- 文本与草稿 ----------
 
 const text = ref('')
-const textarea = ref<HTMLTextAreaElement | null>(null)
+const editor = ref<InstanceType<typeof URichInput> | null>(null)
+const documentParts = ref<RichInputPart[]>([])
+const draftFiles = new Map<string, File>()
+const draftUrls = new Map<string, string>()
+const hasAttachments = computed(() => documentParts.value.some(part => part.type === 'attachment'))
+function releaseFiles(): void {
+  for (const url of draftUrls.values()) URL.revokeObjectURL(url)
+  draftFiles.clear()
+  draftUrls.clear()
+  documentParts.value = []
+}
 const emojiOpen = ref(false)
 
 /** 提及状态：随文本编辑同步增删（本次文本中真实被 @ 的联系人集合）。 */
@@ -106,25 +116,14 @@ const submittingFile = ref(false)
 const fileError = ref('')
 let fileSubmission: AbortController | null = null
 const busy = computed(() => props.sending || props.uploading || submittingFile.value)
-const sendable = computed(() => !props.disabled && !busy.value && (text.value.trim().length > 0 || pendingFile.value !== null))
+const sendable = computed(() => !props.disabled && !busy.value && (text.value.trim().length > 0 || hasAttachments.value))
 
-function onInput(event: Event): void {
-  const value = (event.target as HTMLTextAreaElement).value
+function onDocumentChange(parts: RichInputPart[], value: string, caret: number): void {
+  documentParts.value = parts
   text.value = value
-  syncMentionsFromText(value)
-  updateHeight()
-  if (contextRoom.value) saveDraft(contextRoom.value.kind, contextRoom.value.id, value)
-  const caret = textarea.value?.selectionStart ?? value.length
+  syncMentionsFromText(value.replaceAll('\uFFFC', '\n'))
+  if (contextRoom.value) saveDraft(contextRoom.value.kind, contextRoom.value.id, value.replaceAll('\uFFFC', ''))
   maybeOpenMentionMenu(value, caret)
-}
-
-// 自适应高度：rows=1 起步，最高 6 行（约 132px），超出滚动。
-const MAX_TEXTAREA_HEIGHT_PX = 132
-function updateHeight(): void {
-  const el = textarea.value
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`
 }
 
 // ---------- 中文输入法：composition 期间 Enter 不发送 ----------
@@ -168,23 +167,11 @@ function maybeOpenMentionMenu(value: string, caret: number): void {
 }
 
 function applyMention(contact: UserSummary): void {
-  const el = textarea.value
-  const caret = el?.selectionStart ?? text.value.length
-  const head = text.value.slice(0, mentionTriggerPos.value >= 0 ? mentionTriggerPos.value : caret)
-  const tail = text.value.slice(caret)
-  // 插入 username 而非展示名：worker/src/data/mentions.js 按 content 是否含 `@<username>`
-  // 复核提及，展示名插入会在服务端被过滤掉（#230 取舍与后续项见 PR）。
-  const inserted = `@${contact.username} `
-  text.value = head + inserted + tail
-  const nextCaret = head.length + inserted.length
+  const caret = editor.value?.selection() ?? text.value.length
+  editor.value?.insertText(`@${contact.username} `, mentionTriggerPos.value >= 0 ? mentionTriggerPos.value : caret, caret)
   mentionMenuOpen.value = false
   mentionQuery.value = ''
-  syncMentionsFromText(text.value)
-  void nextTick(() => {
-    el?.focus()
-    el?.setSelectionRange(nextCaret, nextCaret)
-    updateHeight()
-  })
+
 }
 
 /**
@@ -210,7 +197,7 @@ function onKeydown(event: KeyboardEvent): void {
     }
     return
   }
-  if (event.key === 'Enter' && !event.shiftKey && !composing.value) {
+  if (event.key === 'Enter' && !event.shiftKey && !composing.value && !event.isComposing) {
     event.preventDefault()
     sendText()
   }
@@ -222,17 +209,16 @@ async function sendText(): Promise<void> {
   if (!sendable.value || composing.value) return
   if (mentionMenuOpen.value && mentionCandidates.value.length > 0) return
   const trimmed = text.value.trim()
-  if (pendingFile.value) {
-    const file = pendingFile.value
+  if (hasAttachments.value) {
+    const document: ComposerDocument = { parts: documentParts.value.map(part => ({ ...part })), files: new Map(draftFiles) }
     const context = props.contextKey
     submittingFile.value = true
     fileSubmission = new AbortController()
     fileError.value = ''
     try {
-      if (!props.submitFile) throw new Error('附件发送暂不可用')
-      await props.submitFile(file, trimmed, [...mentionUserIds.value], fileSubmission.signal)
-      if (props.contextKey !== context || pendingFile.value !== file) return
-      pendingFile.value = null
+      if (!props.submitDocument) throw new Error('附件发送暂不可用')
+      await props.submitDocument(document, [...mentionUserIds.value], fileSubmission.signal)
+      if (props.contextKey !== context) return
       clearSentText()
       return
     } catch (error) {
@@ -250,50 +236,38 @@ async function sendText(): Promise<void> {
 
 function clearSentText(): void {
   text.value = ''
+  editor.value?.setText('')
+  releaseFiles()
   mentionUserIds.value = []
   if (contextRoom.value) clearDraft(contextRoom.value.kind, contextRoom.value.id)
-  void nextTick(updateHeight)
 }
 
 function insertEmoji(emoji: string): void {
-  const el = textarea.value
-  const start = el?.selectionStart ?? text.value.length
-  const end = el?.selectionEnd ?? start
-  text.value = `${text.value.slice(0, start)}${emoji}${text.value.slice(end)}`
-  syncMentionsFromText(text.value)
+  editor.value?.insertText(emoji)
   emojiOpen.value = false
-  void nextTick(() => {
-    if (!el) return
-    const caret = start + emoji.length
-    el.focus()
-    el.setSelectionRange(caret, caret)
-    updateHeight()
-  })
 }
 
-// ---------- 文件 ----------
-
+// ---------- 本地附件：只有点击发送后才上传 ----------
 const fileInput = ref<HTMLInputElement | null>(null)
-const pendingFile = ref<File | null>(null)
-
-function pickFile(): void {
-  fileInput.value?.click()
-}
-
+function pickFile(): void { fileInput.value?.click() }
 function onFileChange(event: Event): void {
   const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = '' // 允许重复选择同一文件
-  if (!file || busy.value || props.disabled) return
-  pendingFile.value = file
-  fileError.value = ''
-  void nextTick(() => textarea.value?.focus())
+  addFiles(Array.from(input.files ?? []))
+  input.value = ''
 }
-
-function clearPendingFile(): void {
-  if (busy.value) return
-  pendingFile.value = null
+function addFiles(files: File[]): void {
+  if (busy.value || props.disabled) return
+  const count = documentParts.value.filter(part => part.type === 'attachment').length
+  if (count + files.length > 10) { fileError.value = '一条消息最多添加 10 个附件'; return }
   fileError.value = ''
+  for (const file of files) {
+    const id = crypto.randomUUID()
+    const image = file.type.startsWith('image/')
+    const src = image ? URL.createObjectURL(file) : ''
+    draftFiles.set(id, file)
+    if (src) draftUrls.set(id, src)
+    editor.value?.insertAttachment({ id, src, name: file.name, image })
+  }
 }
 
 // ---------- 语音录制 ----------
@@ -365,7 +339,7 @@ watch(
   if (previous?.kind === room?.kind && previous?.id === room?.id) return
   fileSubmission?.abort()
   if (recording.value) cancelRecording()
-  pendingFile.value = null
+  releaseFiles()
   fileError.value = ''
   emojiOpen.value = false
   if (room) {
@@ -375,12 +349,13 @@ watch(
     text.value = ''
     mentionUserIds.value = []
   }
-  void nextTick(updateHeight)
+  editor.value?.setText(text.value)
   },
   { immediate: true },
 )
 
 onBeforeUnmount(() => {
+  releaseFiles()
   fileSubmission?.abort()
   if (recording.value) cancelRecording()
 })
@@ -411,13 +386,7 @@ const replyPreview = computed(() => {
       </button>
     </div>
 
-    <PendingAttachment
-      v-if="pendingFile"
-      :file="pendingFile"
-      :busy="busy"
-      :error="fileError"
-      @remove="clearPendingFile"
-    />
+    <p v-if="fileError" role="alert" class="composer-error">{{ fileError }}</p>
 
     <!-- @选择浮层 -->
     <div v-if="mentionMenuOpen && mentionCandidates.length > 0" class="composer-mentions" data-test="mention-menu" role="listbox" aria-label="提及候选人">
@@ -486,25 +455,22 @@ const replyPreview = computed(() => {
       >
         <Paperclip :size="18" aria-hidden="true" />
       </button>
-      <input ref="fileInput" type="file" class="composer-file-input" aria-hidden="true" tabindex="-1" @change="onFileChange" />
+      <input ref="fileInput" type="file" multiple class="composer-file-input" aria-hidden="true" tabindex="-1" @change="onFileChange" />
 
-      <textarea
-        ref="textarea"
-        v-model="text"
-        rows="1"
-        class="composer-textarea"
-        data-test="composer-input"
+      <URichInput
+        ref="editor"
+        :initial-text="text"
         :placeholder="placeholder"
         :disabled="disabled || busy"
-        :aria-label="'消息输入'"
-        @input="onInput"
+        @change="onDocumentChange"
+        @files="addFiles"
         @keydown="onKeydown"
         @compositionstart="composing = true"
         @compositionend="composing = false"
       />
 
       <button
-        v-if="!recording && !pendingFile && text.trim().length === 0"
+        v-if="!recording && !hasAttachments && text.trim().length === 0"
         type="button"
         class="composer-icon-btn"
         data-test="record-start"
@@ -516,7 +482,7 @@ const replyPreview = computed(() => {
         <Mic :size="18" aria-hidden="true" />
       </button>
       <UButton
-        v-show="text.trim().length > 0 || pendingFile"
+        v-show="text.trim().length > 0 || hasAttachments"
         variant="primary"
         size="sm"
         type="button"
@@ -578,30 +544,7 @@ const replyPreview = computed(() => {
 .composer-emoji-item:focus-visible {
   background: var(--unself-color-surface-hover);
 }
-.composer-textarea {
-  flex: 1;
-  resize: none;
-  border: 1px solid var(--unself-color-border);
-  border-radius: var(--unself-radius-md);
-  min-height: 40px;
-  box-sizing: border-box;
-  background: var(--unself-color-bg);
-  color: var(--unself-color-text);
-  font-size: var(--unself-font-size-base);
-  font-family: inherit;
-  line-height: 1.5;
-  padding: var(--unself-space-2) var(--unself-space-3);
-  overflow-y: auto;
-  transition: border-color var(--unself-duration-fast) var(--unself-ease-out);
-}
-.composer-textarea:focus {
-  outline: var(--unself-focus-ring);
-  outline-offset: 1px;
-}
-.composer-textarea:disabled {
-  background: var(--unself-color-surface);
-  cursor: not-allowed;
-}
+.composer-error { color: var(--unself-color-text-secondary); font-size: var(--unself-font-size-sm); }
 .composer-icon-btn {
   display: inline-flex;
   align-items: center;

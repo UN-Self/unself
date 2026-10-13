@@ -24,7 +24,9 @@ export const CHAT_TABLES = Object.freeze([
   'pending_r2_delete',
   'core_identities',
   'read_receipts',
-  'message_deletion_audit'
+  'message_deletion_audit',
+  'message_block_payloads',
+  'message_attachments'
 ]);
 
 function escapeRegExp(value) {

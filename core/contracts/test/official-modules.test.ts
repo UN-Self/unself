@@ -34,7 +34,7 @@ function officialInput(moduleId: 'hello' | 'chat'): Parameters<typeof validateMo
     input.migrations = {};
     for (const family of ['chat', 'chat-shared']) {
       const directory = join(REPO_ROOT, 'app', 'modules', 'chat', 'migrations', family);
-      for (const file of readdirSync(directory).filter((name) => name === '0001_baseline.sql' || name === '0004_message_deletion_audit.sql').sort()) {
+      for (const file of readdirSync(directory).filter((name) => name === '0001_baseline.sql' || name === '0004_message_deletion_audit.sql' || name === '0005_message_blocks.sql').sort()) {
         input.migrations[`${family}/${file}`] = readFileSync(join(directory, file), 'utf8');
       }
     }
@@ -58,13 +58,13 @@ describe('官方模块迁移到契约 v1 并通过 validate（验收①）', () 
     expect(result.ok).toBe(true);
   });
 
-  it('chat manifest.yaml 过 ModuleManifestSchema（shared+dedicated，tables 19 / tablesShared 19）', () => {
+  it('chat manifest.yaml 过 ModuleManifestSchema（shared+dedicated，tables 20 / tablesShared 20）', () => {
     const text = readFileSync(join(REPO_ROOT, 'app', 'modules', 'chat', 'manifest.yaml'), 'utf8');
     const manifest = ModuleManifestSchema.parse(manifestFromYamlText(text));
     expect(manifest.storage?.accepts).toEqual(['shared', 'dedicated']);
     expect(manifest.storage?.preferred).toBe('dedicated');
-    expect(manifest.tables).toHaveLength(19);
-    expect(manifest.tablesShared).toHaveLength(19);
+    expect(manifest.tables).toHaveLength(21);
+    expect(manifest.tablesShared).toHaveLength(21);
     expect(manifest.tablesShared?.every((t) => t.startsWith('chat_'))).toBe(true);
     expect(manifest.permissions).toEqual(['storage', 'notify']);
   });
@@ -79,8 +79,8 @@ describe('官方模块迁移到契约 v1 并通过 validate（验收①）', () 
     const sharedSql = Object.entries(input.migrations ?? {})
       .filter(([name]) => name.startsWith('chat-shared/'))
       .map(([, sql]) => sql).join('\n');
-    expect(tableNamesFromSql(dedicatedSql)).toHaveLength(19);
-    expect(tableNamesFromSql(sharedSql)).toHaveLength(19);
+    expect(tableNamesFromSql(dedicatedSql)).toHaveLength(21);
+    expect(tableNamesFromSql(sharedSql)).toHaveLength(21);
     expect(tableNamesFromSql(sharedSql).every((t) => t.startsWith('chat_'))).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);

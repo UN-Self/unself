@@ -40,6 +40,8 @@ tables:
   - core_identities
   - read_receipts
   - message_deletion_audit
+  - message_block_payloads
+  - message_attachments
 tablesShared:
   - chat_users
   - chat_channels
@@ -60,3 +62,5 @@ tablesShared:
   - chat_core_identities
   - chat_read_receipts
   - chat_message_deletion_audit
+  - chat_message_block_payloads
+  - chat_message_attachments

@@ -79,6 +79,10 @@ export interface Attachment {
   waveform?: number[]
 }
 
+export interface MessageDeletionNotice { actorId: number; actorName: string; action: 'recalled' | 'removed' }
+
+export type MessageBlock = { type: 'text'; text: string } | { type: 'attachment'; attachment: Attachment }
+
 /** 提及片段（渲染 @ 高亮用；上游 mapMessage.mentions）。 */
 export interface Mention {
   userId: number
@@ -113,6 +117,7 @@ export interface ReadReceiptsSummary {
 
 /** 消息（GET /api/messages 与 WS message 帧共用的形状）。 */
 export interface Message {
+  deletion?: MessageDeletionNotice
   id: number
   content: string
   mentionUserIds: number[]
@@ -121,6 +126,7 @@ export interface Message {
   source: string
   sender: MessageSender
   attachment: Attachment | null
+  blocks?: MessageBlock[]
   deleted?: boolean
   /** 幂等发送的客户端 id（回显去重键，上游 clientMessageId）。 */
   clientMessageId?: string
@@ -199,6 +205,7 @@ export interface WsReadCursorFrame {
 export interface WsMessageDeletedFrame {
   protocolVersion: 1
   type: 'message_deleted'
+  deletion?: MessageDeletionNotice
   messageId: number
 }
 

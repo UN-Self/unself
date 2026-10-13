@@ -21,6 +21,18 @@ function item(label: string) { return [...document.querySelectorAll<HTMLElement>
 afterEach(() => { wrappers.splice(0).forEach((w) => w.unmount()); vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.innerHTML = '' })
 
 describe('消息媒体与菜单交互', () => {
+  it('图文块按原顺序显示，两张图片使用各自资源', async () => {
+    const first = file()
+    const second = { ...file(), key: 'second', name: '第二张.png', url: '/m/chat/files/second' }
+    const wrapper = render({ content: '摘要不重复显示', attachment: first, blocks: [
+      { type: 'text', text: '前文' }, { type: 'attachment', attachment: first },
+      { type: 'text', text: '中间说明' }, { type: 'attachment', attachment: second }, { type: 'text', text: '后文' },
+    ] })
+    await settle()
+    const body = wrapper.get('.message-content')
+    expect([...body.element.children].map(el => el.querySelector('img')?.getAttribute('src') ?? el.textContent)).toEqual(['前文', first.url, '中间说明', second.url, '后文'])
+    expect(wrapper.text()).not.toContain('摘要不重复显示')
+  })
   it('图片直接加载模块路径，点击放大，关闭恢复焦点', async () => {
     const wrapper = render({ attachment: file() })
     const button = wrapper.get('button[aria-label="预览图片：样例.png"]')
