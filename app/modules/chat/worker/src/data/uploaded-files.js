@@ -135,7 +135,8 @@ export async function canAccessFile(db, key, userId = null) {
 		.bind(cleanKey, cleanKey, cleanKey)
 		.all();
 	if (publicRefs.results[0]) return true;
-	if (!Number.isFinite(Number(userId))) return false;
+	// Number(null) 是 0，不能把缺失/无效会话当作可访问公共频道的成员。
+	if (!Number.isSafeInteger(Number(userId)) || Number(userId) <= 0) return false;
 
 	// 发送前允许上传者预览；发送后则按消息所在公开群组或成员关系授权。
 	const { results } = await db
