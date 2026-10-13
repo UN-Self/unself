@@ -13,8 +13,9 @@ const chatEntry = pathToFileURL(createRequire(import.meta.url).resolve('@unself/
 const { default: chatWorker } = await import(chatEntry.href);
 const factoryUrl = new URL('../../test/chat-test-factory.ts', chatEntry);
 const { createChatDb, MemoryKv, TEST_VARS } = await import(factoryUrl.href);
+const { installRoomDo } = await import(new URL('../../test/do-stub.ts', chatEntry).href);
 
-it('装配后的附件链路：真 JWT 上传与解密读取，匿名和其他用户不能读未发送图片', async () => {
+it('装配后的附件链路：真 JWT 上传与解密读取，公开频道消息附件也须登录', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'unself-chat-media-'));
   const db = createChatDb();
   try {
@@ -45,6 +46,7 @@ it('装配后的附件链路：真 JWT 上传与解密读取，匿名和其他�
         },
       },
     };
+    installRoomDo(env);
     const request = (path: string, init?: RequestInit) => wrapper.fetch(new Request(`https://team.example/m/chat${path}`, init), env, {});
     const ownerToken = await sign('media-owner');
     const headers = { authorization: `Bearer ${ownerToken}` };
@@ -63,6 +65,16 @@ it('装配后的附件链路：真 JWT 上传与解密读取，匿名和其他�
     expect(stored.get(file.key)?.bytes).not.toEqual(image);
     expect((await request(file.url)).status).toBe(403);
     expect((await request(file.url, { headers: { authorization: `Bearer ${await sign('media-other')}` } })).status).toBe(403);
+    const sent = await request('/api/v1/rooms/public/1/messages', {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ content: '图片', attachment: file, clientMessageId: crypto.randomUUID() }),
+    });
+    expect(sent.status).toBe(200);
+    const publicReader = await request(file.url, { headers: { authorization: `Bearer ${await sign('media-other')}` } });
+    expect(publicReader.status).toBe(200);
+    expect(new Uint8Array(await publicReader.arrayBuffer())).toEqual(image);
+    expect((await request(file.url)).status).toBe(403);
+    expect((await request(file.url, { headers: { authorization: 'Bearer invalid' } })).status).toBe(403);
     expect(assets).not.toHaveBeenCalled();
   } finally {
     db.close();
