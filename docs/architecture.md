@@ -278,10 +278,15 @@ Stalwart 适配事实（0.16 调研，2026-09-07）：管理接口自 0.16.0 起
 （0.16 默认移除 587 监听）；OIDC sub = 内部账户 id，删号重建才变，禁用不变。
 Stalwart ≥ 0.16.10（JMAP 全合规）为集成前提。
 
-**CF Workers 出站 TLS 平台限制（2026-09-13 定案，证据档案 issue #127）**：Workers 内
-`secureTransport: 'on'` 实际不发 TLS、`startTls()` 死于 workerd#2712、25 端口硬禁——
-对任何 implicit-TLS 服务（含 Gmail 对照）均不可用，与端口/服务器无关。因此 Unself
-服务端发信定位=后台尽力增强（不阻塞审批），必经通道=邀请页三态自助（见 docs/flows.md 链路 1 ⑥）。
+**CF Workers 出站 TLS（2026-10-13 复核修正；原 2026-09-13 定案见决策 #31）**：原结论「Workers 内
+`secureTransport:'on'` 实际不发 TLS、平台层封死直发」系**归因错误**——`secureTransport` 属
+`connect(address, options)` 的**第二参**且默认 `off`，项目自有代码误传在地址参数中
+（`core/adapters/mail-smtp/src/smtp.ts`、`app/workbench/src/routes/mail-test.ts`），实际建的是
+明文 socket，故「TCP 三握后零字节 / 443 明文 400 / 各端口一致 / Gmail 对照」均由该客户端调用
+错误产生，与平台无关。独立探针以官方两参形式实测 465 隐式 TLS 与 587 STARTTLS 均通；
+**25 端口为平台硬禁（不变）**；`startTls()` 报错系对 `off` socket 误调，workerd#2712 为另一形态。
+**修正后适配器级真实环境投递实测尚未完成（issue #127）**，故产品形态不变：服务端发信=后台尽力
+增强（不阻塞审批）、必经通道=邀请页三态自助（docs/flows.md 链路 1 ⑥）。
 
 
 ### 官方模块改编纪律（2026-09-10 拍板）
