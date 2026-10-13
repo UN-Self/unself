@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, provide, ref } from 'vue'
+
+import { attachmentLoaderKey, createAttachmentLoader } from './lib/attachment-resource'
 
 import ChatLayout from './components/ChatLayout.vue'
 import Composer from './components/Composer.vue'
@@ -38,6 +40,8 @@ const session = createChatSession({
     storeRef?.refreshMyUserId()
   },
 })
+
+if (MODE === 'live') provide(attachmentLoaderKey, createAttachmentLoader(() => session.getToken()))
 
 const chatApi: ChatApi =
   MODE === 'live'

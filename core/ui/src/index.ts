@@ -4,7 +4,7 @@
  * @unself/ui 共享基元（PRODUCT_SPEC §6.5「基元内聚」）：
  * 自包含、无外部样式依赖——样式只取设计令牌（tokens.css 的 CSS 自定义属性）。
  * 组件查找序已执行：beUI（React/motion，无 Vue 等价动效可移植）→
- * shadcn-vue（需引入 reka-ui 依赖树）→ 本包手写；Vue 动效通过 @vueuse/motion
+ * shadcn-vue（菜单/预览使用 Reka UI 无样式基元）→ 无对应项才手写；Vue 动效通过 @vueuse/motion
  * 接入，参数统一来自契约令牌，符合 M0 亮色单主题约定。
  */
 
@@ -35,3 +35,6 @@ export { liftFadeVariants, panelVariants, popVariants, prefersReducedMotion, mot
 export type { TokenVariants } from './motion';
 
 export { default as UAvatar } from './avatar.vue'
+export { default as UContextMenu } from './context-menu.vue'
+export type { MenuAction } from './context-menu-types'
+export { default as UImagePreview } from './image-preview.vue'

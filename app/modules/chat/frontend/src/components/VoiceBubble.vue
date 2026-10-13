@@ -19,6 +19,7 @@ const props = defineProps<VoiceBubbleProps>()
 const emit = defineEmits<{
   /** 打开/收起播放器（是否当前语音源），参数为「是否打开」。 */
   toggle: [open: boolean]
+  error: []
 }>()
 
 const open = ref(false)
@@ -79,6 +80,8 @@ function onPause(): void {
       v-if="open"
       class="voice-audio"
       controls
+      preload="none"
+      @error="emit('error')"
       :src="attachment.url"
       data-test="voice-audio"
       @play="onPlay"

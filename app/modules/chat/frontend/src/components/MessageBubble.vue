@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
-import { computed } from 'vue'
-import { Paperclip } from 'lucide-vue-next'
+import { computed, provide, ref } from 'vue'
 import { UMessage, UMessageAvatar, UMessageBubble } from '@unself/ui'
 
-import VoiceBubble from './VoiceBubble.vue'
+import { attachmentResourceKey, useAttachmentResource } from '../lib/attachment-resource'
+import MessageAttachment from './MessageAttachment.vue'
+import MessageActions from './MessageActions.vue'
 import type { Message, ReadReceiptsSummary } from '../lib/types'
 
 /**
  * 单条消息气泡（#218 消息流）：头像/作者/时间/正文/附件。
  * 正文为纯文本渲染（markdown 富文本由 T4 的 composer/markdown 环节统一处理，此处不做 HTML 注入）。
- * 非文本附件（文件）渲染「不可预览」占位 + 原始文件名；语音附件转发 VoiceBubble。
+ * 媒体附件由 MessageAttachment 渲染；操作由 MessageActions 统一管理。
  * #220 已读回执：mine 气泡下缘回执标签（DM=已读✓✓；群聊=已读 n/m），点击发 show-receipts
  * 由父层开名单浮层（本组件不渲染浮层）。
  */
@@ -85,12 +86,8 @@ const fallbackTime = computed(() => {
   return HHMM_RE.exec(props.message.createdAt)?.[1] ?? ''
 })
 
-/** 文件类附件（无 url 可播/无 kind 标记）显示名 + 大小占位。 */
-const fileAttachment = computed(() => {
-  const a = props.message.attachment
-  if (props.message.deleted || !a || a.kind === 'voice' || a.kind === 'audio') return null
-  return a
-})
+provide(attachmentResourceKey, useAttachmentResource(() => props.message.deleted ? null : props.message.attachment))
+const attachmentView = ref<InstanceType<typeof MessageAttachment> | null>(null)
 </script>
 
 <template>
@@ -114,17 +111,12 @@ const fileAttachment = computed(() => {
         <span class="bubble-reply-text">{{ replyDeleted ? '原消息已删除' : replyPreview }}</span>
       </div>
 
-      <UMessageBubble class="bubble-body" :variant="mine ? 'solid' : 'soft'">
-        <p class="bubble-text">{{ message.deleted ? '消息已撤回' : message.content }}</p>
-
-        <VoiceBubble v-if="!message.deleted && message.attachment && (message.attachment.kind === 'voice' || message.attachment.kind === 'audio')" :attachment="message.attachment" />
-
-        <a v-else-if="fileAttachment" class="bubble-file" data-test="bubble-file" :href="fileAttachment.url" :download="fileAttachment.name" target="_blank" rel="noopener">
-          <Paperclip :size="14" aria-hidden="true" />
-          <span class="bubble-file-name">{{ fileAttachment.name }}</span>
-          <span class="bubble-file-meta">{{ Math.max(1, Math.round((fileAttachment.size || 0) / 1024)) }} KB</span>
-        </a>
-      </UMessageBubble>
+      <MessageActions :message="message" :can-delete="canDelete" @delete="emit('delete', message)" @preview="attachmentView?.preview()">
+        <UMessageBubble class="bubble-body" :variant="mine ? 'solid' : 'soft'">
+          <p v-if="message.deleted || message.content" class="bubble-text">{{ message.deleted ? '消息已撤回' : message.content }}</p>
+          <MessageAttachment v-if="!message.deleted && message.attachment" :key="message.attachment.key" ref="attachmentView" :attachment="message.attachment" />
+        </UMessageBubble>
+      </MessageActions>
 
       <!-- #220 已读回执标签（mine 尾部；DM=已读 ✓✓，群聊=已读 n/m）；点击开名单浮层（父层渲染） -->
       <button
@@ -142,7 +134,6 @@ const fileAttachment = computed(() => {
           <span class="bubble-receipt-text" data-test="receipt-group">{{ groupReceiptLabel }}</span>
         </template>
       </button>
-      <button v-if="canDelete && !message.deleted" type="button" class="bubble-delete" data-test="message-delete" @click="emit('delete', message)">撤回</button>
     </div>
   </UMessage>
 </template>
@@ -207,23 +198,6 @@ const fileAttachment = computed(() => {
   font-size: var(--unself-font-size-base);
   line-height: 1.5;
 }
-.bubble-file {
-  display: flex;
-  align-items: center;
-  gap: var(--unself-space-2);
-  font-size: var(--unself-font-size-sm);
-}
-.bubble-file-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.bubble-file-meta {
-  flex-shrink: 0;
-  opacity: 0.7;
-  font-variant-numeric: tabular-nums;
-}
-
 /* #220 已读回执标签：mine 气泡下缘；幽灵按钮（无底色），动效参数全取 tokens */
 .bubble-receipt {
   align-self: flex-end;
@@ -249,13 +223,5 @@ const fileAttachment = computed(() => {
 .bubble-receipt-text {
   font-variant-numeric: tabular-nums;
 }
-.bubble-delete {
-  align-self: flex-end;
-  border: 0;
-  background: transparent;
-  color: var(--unself-color-text-tertiary);
-  font-size: var(--unself-font-size-xs);
-  cursor: pointer;
-}
-.bubble-delete:hover { color: var(--unself-color-danger); }
+.bubble-body:focus-visible { outline:var(--unself-focus-ring); outline-offset:2px; }
 </style>
