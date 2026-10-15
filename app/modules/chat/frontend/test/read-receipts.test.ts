@@ -10,7 +10,7 @@ import type { Message, ReadReceiptsSummary } from '../src/lib/types'
 
 /**
  * 已读回执行为（#220，docs/testing.md 两问检验）：
- * - 气泡回执标签：DM 已读 ✓✓ / 群聊已读 n/m / 全读 / 未读 / 缺省不显示（旧格式兼容）
+ * - 气泡回执标签：DM 已读单勾（#339③）/ 群聊已读 n/m / 全读 / 未读 / 缺省不显示（旧格式兼容）
  * - store：openRoom 记录回执、read_receipts 帧更新（本人帧忽略/重复帧幂等/仅当前房）
  * - 可见性上报：openRoom 自动上报他人消息、去重（重复触发只发一次）、失败不伤状态可重试
  * - mock/api 契约：/messages/read 请求形状、空数组不发请求、getMessages 带回执
@@ -45,20 +45,24 @@ afterEach(() => {
 })
 
 describe('气泡回执标签（#220）', () => {
-  it('DM 已读：显示「已读 ✓✓」，aria 语义=对方已读；未读显示「未读」', () => {
+  it('DM 已读：显示单勾+「已读」（#339③ TG 口径：单勾=已读，双勾另有语义），aria 语义=对方已读；未读显示「未读」无勾', () => {
     const read = mount(MessageBubble, {
       props: { message: baseMessage(), mine: true, isDm: true, audienceSize: 1, readSummary: summary(1, [3]) },
     })
     const tag = read.find('[data-test="bubble-receipt"]')
     expect(tag.exists()).toBe(true)
-    expect(tag.text()).toContain('已读 ✓✓')
+    expect(tag.text()).toContain('已读')
+    expect(tag.text()).not.toContain('✓✓')
+    expect(tag.find('svg').exists()).toBe(true) // Lucide Check 单勾
     expect(tag.attributes('aria-label')).toBe('对方已读')
     read.unmount()
 
     const unread = mount(MessageBubble, {
       props: { message: baseMessage(), mine: true, isDm: true, audienceSize: 1, readSummary: summary(0, []) },
     })
-    expect(unread.find('[data-test="bubble-receipt"]').text()).toContain('未读')
+    const unreadTag = unread.find('[data-test="bubble-receipt"]')
+    expect(unreadTag.text()).toContain('未读')
+    expect(unreadTag.find('svg').exists()).toBe(false)
     unread.unmount()
   })
 
@@ -220,6 +224,82 @@ describe('store 回执状态与上报（#220）', () => {
       messageIds: [3],
     })
     expect(store.state.readReceipts[3]?.count).toBe(baseline + 1)
+    store.closeSockets()
+  })
+
+  // #339⑤ 红灯先行：WS 回执帧只带 userId 不带名字，实时合入的名单行渲染空名，
+  // 观感=已读浮层「没刷新」。约定：实时行从 contacts 现查 displayName 补齐。
+  it('read_receipts 帧实时合入的名单行从 contacts 补齐 displayName（不渲染空名）', async () => {
+    const api = createMockChatApi(buildMockWorld())
+    const store = createChatStore({
+      api,
+      storage: createChatStorageInert(),
+      myUserId: () => 1,
+      getToken: () => 'mock-token',
+    })
+    await store.loadContacts()
+    await store.openRoom({ kind: 'public', id: 1 }, 'general')
+    await flushPromises()
+    store.receiveRoomFrame({
+      protocolVersion: 1,
+      type: 'read_receipts',
+      messageId: 3,
+      userId: 2,
+      readAt: '2026-09-16T10:00:00',
+      messageIds: [3],
+    })
+    const entry = store.state.readReceipts[3]?.readBy.find((r) => r.userId === 2)
+    expect(entry?.displayName).toBe('小林')
+    store.closeSockets()
+  })
+
+  it('read_receipts 帧的 userId 不在 contacts：留空兜底，计数与名单不崩', async () => {
+    const api = createMockChatApi(buildMockWorld())
+    const store = createChatStore({
+      api,
+      storage: createChatStorageInert(),
+      myUserId: () => 1,
+      getToken: () => 'mock-token',
+    })
+    await store.loadContacts()
+    await store.openRoom({ kind: 'public', id: 1 }, 'general')
+    await flushPromises()
+    const baseline = store.state.readReceipts[3]?.count ?? 0
+    store.receiveRoomFrame({
+      protocolVersion: 1,
+      type: 'read_receipts',
+      messageId: 3,
+      userId: 999,
+      readAt: '2026-09-16T10:00:00',
+      messageIds: [3],
+    })
+    const summary = store.state.readReceipts[3]
+    expect(summary?.count).toBe(baseline + 1)
+    expect(summary?.readBy.at(-1)).toMatchObject({ userId: 999, displayName: '' })
+    store.closeSockets()
+  })
+
+  it('帧先于 contacts 到达：实时行曾留空，contacts 载入后回填名字', async () => {
+    const api = createMockChatApi(buildMockWorld())
+    const store = createChatStore({
+      api,
+      storage: createChatStorageInert(),
+      myUserId: () => 1,
+      getToken: () => 'mock-token',
+    })
+    await store.openRoom({ kind: 'public', id: 1 }, 'general')
+    await flushPromises()
+    store.receiveRoomFrame({
+      protocolVersion: 1,
+      type: 'read_receipts',
+      messageId: 3,
+      userId: 2,
+      readAt: '2026-09-16T10:00:00',
+      messageIds: [3],
+    })
+    expect(store.state.readReceipts[3]?.readBy.find((r) => r.userId === 2)?.displayName).toBe('')
+    await store.loadContacts()
+    expect(store.state.readReceipts[3]?.readBy.find((r) => r.userId === 2)).toMatchObject({ displayName: '小林', username: 'xiaolin' })
     store.closeSockets()
   })
 
