@@ -81,7 +81,12 @@ function setText(text: string) {
   e.unregisterPlugin('history')
   e.registerPlugin(history())
 }
-function focus() { editor.value?.commands.focus() }
+function focus() {
+  editor.value?.commands.focus()
+  // jsdom 对 contenteditable 无真实焦点引擎，TipTap commands.focus() 不落焦点——
+  // 测试与极端环境下的 DOM 兑底：真实浏览器中 activeElement 已就位，此举为幂等重入。
+  editor.value?.view.dom.focus({ preventScroll: true })
+}
 function selection() { return editor.value?.state.selection.from ?? 0 }
 function removeAttachment(id: string) {
   const e = editor.value
