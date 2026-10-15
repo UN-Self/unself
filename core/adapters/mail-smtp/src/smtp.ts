@@ -178,7 +178,7 @@ export async function sendMail(
   const connectImpl = connectFn ?? (await import('cloudflare:sockets')).connect;
   let socket: Socket | undefined;
   try {
-    socket = connectImpl({ hostname: config.host, port: config.port, secureTransport: 'on' });
+    socket = connectImpl({ hostname: config.host, port: config.port }, { secureTransport: 'on' });
     await withTimeout(socket.opened, 'connect');
   } catch (cause) {
     if (socket && cause instanceof MailSendError) {

@@ -7,7 +7,7 @@
 import { connect } from 'cloudflare:sockets';
 
 async function smoke(host: string): Promise<string> {
-  const socket = connect({ hostname: host, port: 465, secureTransport: 'on' });
+  const socket = connect({ hostname: host, port: 465 }, { secureTransport: 'on' });
   const reader = socket.readable.getReader();
 
   // 服务器问候语：465 隐式 TLS 下 connect() 成功即已完成 TLS 握手，

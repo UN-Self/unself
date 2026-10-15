@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import type { Socket } from 'cloudflare:sockets';
+import type { Socket, connect as CloudflareConnect } from 'cloudflare:sockets';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,7 +10,43 @@ import { ProbeTimeoutError, probeSenderSmtp, registerMailTestRoutes } from '../s
 import { createSessionToken } from '../src/session';
 import { createCoreDb, type CoreTestDb } from './test-factory';
 
+const smtpSocket = vi.hoisted(() => ({ connect: vi.fn() }));
+vi.mock('cloudflare:sockets', () => smtpSocket);
+
 const URL = 'https://team.example.com/api/admin/mail/test';
+
+/** 外部 SMTP 边界：只在 options 开启 TLS 时发问候，并按客户端命令返回应答。 */
+function implicitTlsProbeServer(authReply = '235 ok') {
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let tls = false;
+  let closed = false;
+  const commands: string[] = [];
+  const replies = ['220 ready', '250 ok', '334 Username', '334 Password', authReply, '250 reset', '221 bye'];
+  const encoder = new TextEncoder();
+  const respond = () => {
+    const reply = replies.shift();
+    if (reply) controller.enqueue(encoder.encode(`${reply}\r\n`));
+  };
+  const socket: Socket = {
+    readable: new ReadableStream<Uint8Array>({ start(value) { controller = value; } }),
+    writable: new WritableStream<Uint8Array>({ write(chunk) {
+      commands.push(new TextDecoder().decode(chunk));
+      if (tls) respond();
+    } }),
+    opened: Promise.resolve(), closed: Promise.resolve(),
+    async close() { closed = true; controller.close(); },
+    startTls() { throw new Error('Implicit TLS server'); },
+  };
+  return {
+    connect: ((_address, options?: import('cloudflare:sockets').SocketOptions) => {
+      tls = options?.secureTransport === 'on';
+      if (tls) respond();
+      return socket;
+    }) satisfies typeof CloudflareConnect,
+    commands: () => commands.join(''),
+    closed: () => closed,
+  };
+}
 
 async function setup(): Promise<{ env: { CORE_DB: D1Database; JWT_PRIVATE_KEY: string }; db: CoreTestDb; cookie: string }> {
   const pair = await generateInstanceKeyPair();
@@ -39,6 +75,45 @@ function counts(db: CoreTestDb): Record<string, number> {
 }
 
 describe('POST /api/admin/mail/test', () => {
+  it.each([false, true])('TLS 边界：真实 SMTP 探测返回接口结果，缺失 TLS=%s', async (dropTls) => {
+    const { env, db, cookie } = await setup();
+    seedMail(db);
+    const before = counts(db);
+    const server = implicitTlsProbeServer();
+    let started!: () => void;
+    const connected = new Promise<void>((resolve) => { started = resolve; });
+    smtpSocket.connect.mockImplementation((address, options) => {
+      const socket = server.connect(address, dropTls ? undefined : options);
+      started();
+      return socket;
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = app({
+        createMailProvisioner: () => ({ testConnection: async () => {} }) as never,
+      }).request(URL, { method: 'POST', headers: { cookie } }, env);
+      await connected;
+      await vi.advanceTimersByTimeAsync(10_000);
+      const response = await pending;
+      expect(response.status).toBe(200);
+      const result = await response.json() as { sender: { ok: boolean; detail: string } };
+      expect(result.sender.ok).toBe(!dropTls);
+      if (dropTls) {
+        expect(result.sender.detail).toContain('服务器问候超过 10s');
+        expect(server.commands()).toBe('');
+      } else {
+        expect(server.commands()).toContain('RSET\r\nQUIT\r\n');
+      }
+      expect(server.commands()).not.toMatch(/MAIL FROM|RCPT TO|DATA/);
+      expect(server.closed()).toBe(true);
+      const after = counts(db);
+      for (const table of ['users', 'invites', 'notifications', 'builtin_credentials']) expect(after[table]).toBe(before[table]);
+    } finally {
+      vi.useRealTimers();
+      smtpSocket.connect.mockReset();
+    }
+  });
+
   it('双轴成功且零业务写入，仅新增一条 mail_tested 审计', async () => {
     const { env, db, cookie } = await setup();
     seedMail(db);
@@ -180,6 +255,36 @@ describe('probeSenderSmtp 分级超时（#150，对齐 #131）', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('TLS 边界：完成隐式 TLS 认证与退出，不投递邮件', async () => {
+    const server = implicitTlsProbeServer();
+    const outcome = probeSenderSmtp(PROBE_CFG, server.connect).catch((error: Error) => error.message);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await outcome).toMatchObject({ ok: true });
+    expect(server.commands()).toContain('AUTH LOGIN\r\n');
+    expect(server.commands()).toContain('RSET\r\nQUIT\r\n');
+    expect(server.commands()).not.toMatch(/MAIL FROM|RCPT TO|DATA/);
+    expect(server.closed()).toBe(true);
+  });
+
+  it('TLS 边界：未启用 TLS 时问候超时，不发送凭据，关闭连接', async () => {
+    const server = implicitTlsProbeServer();
+    const pending = probeSenderSmtp(PROBE_CFG, (address) => server.connect(address));
+    const rejection = expect(pending).rejects.toMatchObject({ name: 'ProbeTimeoutError', message: '连接超时：服务器问候超过 10s 未响应' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+    expect(server.commands()).toBe('');
+    expect(server.closed()).toBe(true);
+  });
+
+  it('TLS 边界：认证拒绝时不提交邮件并关闭连接', async () => {
+    const server = implicitTlsProbeServer('535 Authentication failed');
+    const outcome = probeSenderSmtp(PROBE_CFG, server.connect).catch((error: Error) => error.message);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await outcome).toBe('SMTP 535');
+    expect(server.commands()).not.toMatch(/MAIL FROM|RCPT TO|DATA/);
+    expect(server.closed()).toBe(true);
   });
 
   it.each(TIMEOUT_CASES)('%s → 10s 超时并关闭 socket', async (_label, socketOptions, message) => {

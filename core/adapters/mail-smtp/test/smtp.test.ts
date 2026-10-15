@@ -18,36 +18,47 @@ const MESSAGE = {
   text: '第一行\n第二行带中文与 emoji 🎉',
 };
 
-/** 用真实 Web Streams 造的 socket mock：按脚本下发应答，捕获客户端写入。 */
+/** 既有协议用例也经过 TLS 边界，不再无条件预灌全部服务器应答。 */
 function scriptedSocket(replies: string[]) {
+  return implicitTlsServer(replies);
+}
+
+/** 隐式 TLS 服务：未协商 TLS 不发问候；每次客户端写入才推进下一条应答。 */
+function implicitTlsServer(replies = happyReplies()) {
+  let controller: ReadableStreamDefaultController<Uint8Array>;
+  let tls = false;
+  let nextReply = 0;
+  let closed = false;
   const written: string[] = [];
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(replies.join('\r\n') + '\r\n'));
-      controller.close();
-    },
-  });
-  const writable = new WritableStream<Uint8Array>({
-    write(chunk) {
-      written.push(decoder.decode(chunk));
-    },
-  });
+  const respond = () => {
+    let reply: string | undefined;
+    do {
+      reply = replies[nextReply++];
+      if (reply !== undefined) controller.enqueue(encoder.encode(`${reply}\r\n`));
+    } while (reply?.[3] === '-');
+  };
   const socket = {
-    readable,
-    writable,
+    readable: new ReadableStream<Uint8Array>({ start(value) { controller = value; } }),
+    writable: new WritableStream<Uint8Array>({
+      write(chunk) {
+        written.push(new TextDecoder().decode(chunk));
+        if (tls) respond();
+      },
+    }),
     opened: Promise.resolve(),
     closed: Promise.resolve(),
-    close: async () => {},
-    startTls: () => {
-      throw new Error('单测不走 STARTTLS');
-    },
+    async close() { closed = true; controller.close(); },
+    startTls() { throw new Error('Implicit TLS server'); },
   };
   return {
-    socket,
-    connect: () => socket,
+    connect: ((_address, options?: import('cloudflare:sockets').SocketOptions) => {
+      tls = options?.secureTransport === 'on';
+      if (tls) respond();
+      return socket;
+    }) satisfies import('../src/smtp').Connect,
     written: () => written.join(''),
+    closed: () => closed,
   };
 }
 
@@ -76,6 +87,40 @@ afterEach(() => {
 });
 
 describe('sendMail（465 隐式 TLS）', () => {
+  it('TLS 边界：隐式 TLS 服务完成认证与投递后关闭连接', async () => {
+    const server = implicitTlsServer();
+    const outcome = sendMail(CONFIG, MESSAGE, server.connect).then(() => 'sent', (error: Error) => error.message);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await outcome).toBe('sent');
+    expect(server.written()).toContain(`RCPT TO:<${MESSAGE.to}>\r\nDATA\r\n`);
+    expect(server.written()).toContain(Buffer.from(MESSAGE.text).toString('base64'));
+    expect(server.written()).toContain('QUIT\r\n');
+    expect(server.closed()).toBe(true);
+  });
+
+  it.each(['missing', 'off', 'address'] as const)('TLS 边界：%s 配置未生效时问候超时，不泄露凭据或提交邮件', async (mode) => {
+    const server = implicitTlsServer();
+    const connect: import('../src/smtp').Connect = (address) => mode === 'off'
+      ? server.connect(address, { secureTransport: 'off' })
+      // 绕过静态类型仅用于模拟旧的 JS 调用，运行时 address 多余字段必须无效。
+      : server.connect(mode === 'address' ? Object.assign({}, address, { secureTransport: 'on' }) : address);
+    const pending = sendMail(CONFIG, MESSAGE, connect);
+    const rejection = expect(pending).rejects.toMatchObject({ name: 'MailSendError', stage: 'greeting' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+    expect(server.written()).toBe('');
+    expect(server.closed()).toBe(true);
+  });
+
+  it('TLS 边界：认证失败不提交邮件，并关闭连接', async () => {
+    const server = implicitTlsServer(happyReplies().slice(0, 6).concat('535 Authentication failed'));
+    const outcome = sendMail(CONFIG, MESSAGE, server.connect).then(() => 'sent', (error: Error) => error.message);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await outcome).toContain('SMTP 认证失败（535）');
+    expect(server.written()).not.toContain('MAIL FROM');
+    expect(server.closed()).toBe(true);
+  });
+
   it('连接建立挂起 → 10s 后抛 connect 超时并关闭 socket', async () => {
     let closeCalls = 0;
     const socket = {
