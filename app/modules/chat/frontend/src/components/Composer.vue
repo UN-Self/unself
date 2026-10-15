@@ -240,6 +240,9 @@ function clearSentText(): void {
   releaseFiles()
   mentionUserIds.value = []
   if (contextRoom.value) clearDraft(contextRoom.value.kind, contextRoom.value.id)
+  // #339①：发送期间输入区 disabled（busy）会按 HTML 规范强制失焦——busy 解除后把焦点还给输入区，
+  // 连续聊天零点击。TipTap focus() 自带光标归位（末尾）。
+  editor.value?.focus()
 }
 
 function insertEmoji(emoji: string): void {

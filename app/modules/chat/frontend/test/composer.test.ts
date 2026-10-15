@@ -119,6 +119,23 @@ describe('Composer 发送', () => {
     await inputOf(wrapper).trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')).toBeUndefined()
   })
+
+  // #339① 发送后焦点保持：busy 解除后输入区持焦，连发零点击（用户可见行为，不数 focus 调用）
+  it('发送完成后输入区重新持焦，可连续输入发送', async () => {
+    const wrapper = await mountComposer()
+    const input = inputOf(wrapper)
+    await input.setValue('第一条')
+    await input.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(wrapper.emitted('send')).toHaveLength(1)
+    expect(document.activeElement).toBe(input.element)
+
+    await input.setValue('第二条')
+    await input.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(wrapper.emitted('send')).toHaveLength(2)
+    expect(document.activeElement).toBe(input.element)
+  })
 })
 
 describe('Composer @选择器', () => {
