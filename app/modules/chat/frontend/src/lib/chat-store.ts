@@ -10,7 +10,7 @@
  * - 收件箱 room_message 帧 → 未进房会话累加未读/@未读（在房内则忽略）；
  * - 发送走 REST 幂等端点（clientMessageId 去重回显），socket 只收广播不承担提交。
  */
-import { reactive } from 'vue'
+import { reactive, shallowRef } from 'vue'
 import { reconcileDeletedMessage } from './message-deletion'
 import type {
   Channel,
@@ -75,6 +75,9 @@ export interface ChatStore {
    */
   myUserId: number
 
+  /** #339②：刚发送成功的消息 id（入场动效窗口，enterDone 后移除）。 */
+  justSentIds: { value: number[] }
+
   loadChannels(): Promise<void>
   loadDms(): Promise<void>
   /** 创建或复用与指定成员的私聊，并打开会话。 */
@@ -89,6 +92,8 @@ export interface ChatStore {
   loadOlderMessages(): Promise<void>
   /** 幂等发送：REST 提交（clientMessageId），失败置 sendError 并上抛。 */
   sendMessage(input: SendMessageInput): Promise<void>
+  /** #339②：入场动效播完，清除对应 justSentId（重渲染不重播）。 */
+  enterDone(messageId: number): void
   deleteMessage(messageId: number): Promise<void>
   /** 接收一帧房间消息（live 由 socket 回调驱动；测试直呼注入）。 */
   receiveRoomFrame(frame: RoomFrame): void
@@ -169,6 +174,9 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     myUserId: 0,
     readReceipts: {},
   })
+
+  /** #339②：刚发送成功的消息 id（shallowRef 数组，enterDone 逐个移除）；响应式供 App 传给 MessageList。 */
+  const justSentIds = shallowRef<number[]>([])
 
   /** 房间 socket 句柄（close 必备，send 为可选控制帧上行——#220 token_refresh）。 */
   let roomSocket: { close(): void; send?(text: string): void } | null = null
@@ -286,17 +294,21 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     }
   }
 
+  /** #339⑤：WS 回执帧只带 userId；实时合入的名单行从 contacts 现查补齐名字（查不到留空兜底）。 */
+  const contactOf = (userId: number): UserSummary | undefined => state.contacts.find((u) => u.id === userId)
+
   /** 逐条合并他人已读（#220）：已读过该消息的用户不重复计数/不重复名单。 */
   const applyReceiptFromUser = (messageId: number, userId: number, readAt: string): void => {
     if (deletedMessageIds.has(messageId)) return
     const summary = state.readReceipts[messageId]
     if (summary && summary.readBy.some((r) => r.userId === userId)) return
+    const contact = contactOf(userId)
     if (summary) {
       summary.count += 1
-      summary.readBy.push({ userId, username: '', displayName: '', readAt })
+      summary.readBy.push({ userId, username: contact?.username ?? '', displayName: contact?.displayName ?? '', readAt })
       return
     }
-    state.readReceipts[messageId] = { count: 1, readBy: [{ userId, username: '', displayName: '', readAt }] }
+    state.readReceipts[messageId] = { count: 1, readBy: [{ userId, username: contact?.username ?? '', displayName: contact?.displayName ?? '', readAt }] }
   }
 
   const applyCursorFromUser = (messageId: number, userId: number, readAt: string): void => {
@@ -341,6 +353,9 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     ...state,
 
     state,
+
+    /** #339②：刚发送成功的消息 id（shallowRef 响应式，App 层 .value 传给 MessageList）。 */
+    justSentIds,
 
     loadChannels: async () => {
       state.channelsState = 'loading'
@@ -392,6 +407,17 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     loadContacts: async () => {
       const result = await api.listContacts()
       state.contacts = result.users
+      // #339⑤：回执帧可能早于 contacts 到达（此时查无名字已留空）——载入后回填，不留永久空行
+      for (const summary of Object.values(state.readReceipts)) {
+        for (const receipt of summary.readBy) {
+          if (receipt.displayName) continue
+          const contact = state.contacts.find((u) => u.id === receipt.userId)
+          if (contact) {
+            receipt.username = contact.username
+            receipt.displayName = contact.displayName
+          }
+        }
+      }
       // #229：联系人就绪后重算本人 chat id（core:sub → id 映射此时才可解析）
       refreshMyUserId()
     },
@@ -506,13 +532,22 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
           mentionUserIds: input.mentionUserIds ?? [],
         })
         // created=false = 服务端幂等回显（重试场景）：不重复插入
-        if (result.created) handleMessage(result.message)
+        if (result.created) {
+          handleMessage(result.message)
+          // #339②：刚发送成功的消息播入场动效；enterDone 后移除（重渲染不重播）
+          justSentIds.value.push(result.message.id)
+        }
       } catch (error) {
         state.sendError = error instanceof Error ? error.message : String(error)
         throw error
       } finally {
         state.sending = false
       }
+    },
+
+    /** #339②：入场动效播完（bubble-arrive animationend）后由 MessageList 链上抛，父层转发到 store。 */
+    enterDone: (messageId: number) => {
+      justSentIds.value = justSentIds.value.filter((id) => id !== messageId)
     },
 
     deleteMessage: async (messageId) => {

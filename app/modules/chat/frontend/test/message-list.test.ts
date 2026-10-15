@@ -210,6 +210,34 @@ describe('MessageList（#218）', () => {
     wrapper.unmount()
   })
 
+  // #339② 发送动效：justSentIds 命中的 mine 气泡进入场态；enter-done 上抛；非 mine/非命中不播（重渲染不重播）
+  it('justSentIds 命中 mine 气泡 → 入场态；animationend 上抛 enter-done；清除后不再播', async () => {
+    const wrapper = await mountList({ messages: [msg(1, 2), msg(2, 1)] })
+    const mineRow = () => wrapper.find('[data-test="bubble-mine"]')
+    const theirRow = wrapper.find('[data-test="bubble-theirs"]')
+    expect(mineRow().classes()).not.toContain('bubble-entering')
+
+    await wrapper.setProps({ justSentIds: [2] })
+    expect(mineRow().classes()).toContain('bubble-entering')
+    expect(theirRow.classes()).not.toContain('bubble-entering') // 他人消息永不播发送入场
+
+    // 播完（bubble-arrive 的 animationend）→ 父层清 justSentIds → 态消失且不再触发
+    mineRow().trigger('animationend', { animationName: 'bubble-arrive' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('enter-done')).toEqual([[2]])
+
+    await wrapper.setProps({ justSentIds: [] })
+    expect(mineRow().classes()).not.toContain('bubble-entering')
+    wrapper.unmount()
+  })
+
+  it('发送后发送错误不进入场动效（失败不是「发出去了」）', async () => {
+    const wrapper = await mountList({ messages: [msg(1, 1)] })
+    await wrapper.setProps({ justSentIds: [] })
+    expect(wrapper.find('[data-test="bubble-mine"]').classes()).not.toContain('bubble-entering')
+    wrapper.unmount()
+  })
+
   it('新消息到达且原本贴底 → 容器被滚到底；离底浏览历史 → 不拽人', async () => {
     const wrapper = await mountList({ messages: [msg(1, 2), msg(2, 2)] })
     const el = wrapper.find('[data-test="message-stream"]').element as HTMLElement

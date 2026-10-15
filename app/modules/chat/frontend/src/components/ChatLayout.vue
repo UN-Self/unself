@@ -27,13 +27,15 @@ export interface ChatLayoutProps {
   loadingMessages: boolean
   loadingEarlier: boolean
   noEarlier: boolean
-  /** 当前会话是否私聊（#220：透传给 MessageList/气泡，DM 回执 = 已读 ✓✓）。 */
+  /** 当前会话是否私聊（#220/#339③：透传给 MessageList/气泡，DM 回执 = 已读单勾）。 */
   isDm?: boolean
   /** 可达收件人数（#220 分母：房间成员−发件人；未知传 0，气泡只显示已读数或未读）。 */
   audienceSize?: number
   /** 回执摘要唯一真值（#220 store.state.readReceipts；缺省 = 旧格式无回执面）。 */
   readReceipts?: Record<number, import('../lib/types').ReadReceiptsSummary>
   canManage?: boolean
+  /** #339②：刚发送成功的消息 id（入场动效窗口）；enter-done 后由根层转 store.enterDone 清除。 */
+  justSentIds?: number[]
   /** 会话列表加载失败人话（#221 走查补：错误态替代空态，不再静默吞错）。 */
   loadError?: string | null
   groupError?: string
@@ -58,6 +60,8 @@ const emit = defineEmits<{
   'show-receipts': [message: Message]
   /** 他人消息进入视口 → 根层批量上报已读（#220）。 */
   'visible-read': [messageIds: number[]]
+  /** #339② 入场动效播完 → 根层转 store.enterDone。 */
+  'enter-done': [messageId: number]
   delete: [message: Message]
   'open-dm': [userId: number]
   'create-group': [input: { name: string; memberUserIds: number[] }]
@@ -224,9 +228,11 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
         :audience-size="audienceSize"
         :read-receipts="readReceipts"
         :can-manage="canManage"
+        :just-sent-ids="justSentIds"
         @load-earlier="emit('load-earlier')"
         @show-receipts="emit('show-receipts', $event)"
         @visible-read="emit('visible-read', $event)"
+        @enter-done="emit('enter-done', $event)"
         @delete="emit('delete', $event)"
       />
 

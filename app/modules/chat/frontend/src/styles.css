@@ -35,3 +35,11 @@ body {
     animation: none;
   }
 }
+
+/* #339② 他人消息入场：左缘轻滑入+淡入（与发送方向相反；一次性 animation，无状态机）。
+   数值全取契约 tokens；reduced-motion 由全局降级兜住。 */
+@keyframes bubble-receive {
+  from { opacity: 0; transform: translateX(calc(-1 * var(--unself-space-6))) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+.bubble-row-theirs-enter { animation: bubble-receive var(--unself-duration-normal) var(--unself-ease-out); }

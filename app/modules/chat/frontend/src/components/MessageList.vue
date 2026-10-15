@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { shallowRef, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import MessageBubble from './MessageBubble.vue'
 import MessageRail from './MessageRail.vue'
@@ -26,13 +26,15 @@ export interface MessageListProps {
   loadingEarlier: boolean
   /** 更早没有更多历史。 */
   noEarlier: boolean
-  /** 当前会话是否私聊（#220：DM 回执 = 已读 ✓✓）。 */
+  /** 当前会话是否私聊（#220/#339③：DM 回执 = 已读单勾）。 */
   isDm?: boolean
   /** 可达收件人数（#220 分母：房间成员−发件人；未知传 0，分母面不显示）。 */
   audienceSize?: number
   /** 回执摘要唯一真值（store.state.readReceipts；缺省 = 旧格式无回执面）。 */
   readReceipts?: Record<number, ReadReceiptsSummary>
   canManage?: boolean
+  /** #339② 刚发送成功的消息 id 集：命中且 mine 的气泡播入场动效（吞入→残影→亮起），父层在 animationend 后移除。 */
+  justSentIds?: number[]
 }
 
 const props = withDefaults(defineProps<MessageListProps>(), {
@@ -42,6 +44,7 @@ const props = withDefaults(defineProps<MessageListProps>(), {
   readReceipts: () => ({}),
   canManage: false,
   onVisible: undefined,
+  justSentIds: () => [],
 })
 
 const emit = defineEmits<{
@@ -51,9 +54,19 @@ const emit = defineEmits<{
   'show-receipts': [message: Message]
   /** 他人消息进入视口 → 请求父层批量上报已读（#220，参数 = 本轮新可见的消息 id）。 */
   'visible-read': [messageIds: number[]]
+  /** #339② 入场动效播完 → 父层清除 justSentIds（避免重渲染重播）。 */
+  'enter-done': [messageId: number]
   delete: [message: Message]
 }>()
 
+/** #339②：首渲染时已存在的消息是历史（不播入场）；其后新出现的他人消息才播（左缘滑入）。 */
+const baselineMaxId = shallowRef(0)
+onMounted(() => {
+  baselineMaxId.value = Math.max(0, ...props.messages.map((m) => m.id))
+})
+function isFreshArrival(message: Message): boolean {
+  return message.sender.id !== props.currentUserId && message.id > baselineMaxId.value
+}
 const scroller = ref<HTMLElement | null>(null)
 const content = ref<HTMLElement | null>(null)
 const { following, overflowing, activeId, updatePosition, select, latest } = useMessageScroll(
@@ -190,6 +203,9 @@ function onShowReceipts(message: Message): void {
               :audience-size="audienceSize"
               :read-summary="readReceipts?.[message.id] ?? null"
               :can-delete="message.sender.id === currentUserId || canManage"
+              :entering="props.justSentIds.includes(message.id)"
+              :receiving="isFreshArrival(message)"
+              @enter-done="emit('enter-done', message.id)"
               @show-receipts="onShowReceipts"
               @delete="emit('delete', $event)"
             />

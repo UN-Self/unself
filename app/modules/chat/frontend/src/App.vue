@@ -202,7 +202,7 @@ function closeReceipts(): void {
   receiptsOpen.value = false
 }
 
-/** 当前会话是否私聊（DM 回执 = ✓✓已读 口径）。 */
+/** 当前会话是否私聊（DM 回执 = 单勾已读，#339③ 口径）。 */
 const isDm = computed(() => store.state.currentRoom?.kind === 'dm')
 
 /** 可达收件人数（分母 = 房间成员 − 发件人）：频道取 memberCount−1；DM 恒 1。 */
@@ -305,6 +305,7 @@ const contextKey = computed(() =>
       :audience-size="audienceSize"
       :read-receipts="store.state.readReceipts"
       :can-manage="activeRoom?.kind !== 'dm' && (store.state.channels.find((channel) => channel.id === activeRoom?.id)?.canManage ?? false)"
+      :just-sent-ids="store.justSentIds.value"
       :load-error="roomsError"
       :group-error="groupCreationError"
       @select="onSelect"
@@ -313,6 +314,7 @@ const contextKey = computed(() =>
       @load-earlier="onLoadEarlier"
       @show-receipts="onShowReceipts"
       @visible-read="onVisibleRead"
+      @enter-done="store.enterDone"
       @delete="onDeleteMessage"
       @create-group="onCreateGroup"
       @open-group-details="onOpenGroupDetails"
