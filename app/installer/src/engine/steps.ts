@@ -141,12 +141,29 @@ function storagePlanOf(mod: ModuleRef, declaration?: string): StoragePlan {
   // 用户选定（config 条目 storage.declaration）覆写 manifest 声明后才进 level 判定（#248/#310）。
   const base = mod.resolved.manifest;
   const manifest = declaration
-    ? { ...base, storage: { ...(base.storage ?? { accepts: [] }), declaration: declaration as StorageLevel } }
+    ? { ...base, storage: storageWithDeclaration(base.storage, declaration as StorageLevel) }
     : base;
   return {
     level: storageLevelFor({ manifest, id: mod.id }),
     manifest,
   };
+}
+
+/**
+ * 写进 manifest 的有效 storage 声明（#55）：用户选定（config 条目 `storage.declaration`）覆写
+ * manifest 声明。落点判定（`storagePlanOf`）与注册表快照（步骤⑤）共用这一份——
+ * 两处各写各的兜底会分叉，而分叉出来的兜底一旦被 schema 重建校验就会把契约默认值判成非法。
+ *
+ * manifest **省略** storage 时按契约物化为 `accepts: ['core']`（docs/modules.md §3：省略等价于
+ * 只支持 core，数据经 Core API 代理）。不能兜底成空数组——`accepts` 是模块的授权面，
+ * 空数组与「declaration ∈ accepts」自相矛盾（#336 实障：向导对每个模块都写 declaration，
+ * 省略 storage 的模块被兜底成 `{ accepts: [], declaration: 'core' }`，装配前置校验直接拒绝安装）。
+ */
+function storageWithDeclaration(
+  storage: ModuleManifest['storage'],
+  declaration: StorageLevel,
+): ModuleManifest['storage'] {
+  return { ...(storage ?? { accepts: ['core'] }), declaration };
 }
 
 function storagePlansFor(modules: ModuleRef[], entries: NormalizedModuleEntry[]): Map<string, StoragePlan> {
@@ -1009,7 +1026,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     const configEntry = entries.find((e) => e.id === mod.id);
     const declaration = configEntry?.storage?.declaration;
     const snapshot = declaration
-      ? { ...manifest, storage: { ...(manifest.storage ?? { accepts: [declaration] }), declaration } }
+      ? { ...manifest, storage: storageWithDeclaration(manifest.storage, declaration as StorageLevel) }
       : manifest;
     await coreCp.upsertModule({ id: mod.id, enabled: true, manifest: snapshot });
     rep.log(`upsert ${mod.id}（enabled=1，快照刷新${declaration ? `，落点 ${declaration}` : ''}）`);
