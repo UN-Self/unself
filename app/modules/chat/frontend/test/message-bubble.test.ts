@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import MessageBubble from '../src/components/MessageBubble.vue'
@@ -9,6 +9,19 @@ import type { Message } from '../src/lib/types'
 /**
  * 消息气泡行为（#218）：作者/时间/分侧、引用块、文件附件占位、语音转发。
  */
+
+// #339④ jsdom 未实现 HTMLMediaElement.play()（抛 Not implemented）：垫成可暂停的哑实现，
+// 垫片前 preserve 原型避免跨文件污染；afterEach 统一还原。
+const realPlay = HTMLMediaElement.prototype.play
+const realPause = HTMLMediaElement.prototype.pause
+beforeEach(() => {
+  HTMLMediaElement.prototype.play = vi.fn(function (this: HTMLMediaElement) { return Promise.resolve() })
+  HTMLMediaElement.prototype.pause = vi.fn(function (this: HTMLMediaElement) {})
+})
+afterEach(() => {
+  HTMLMediaElement.prototype.play = realPlay
+  HTMLMediaElement.prototype.pause = realPause
+})
 
 const baseMessage = (over: Partial<Message> = {}): Message => ({
   id: 11,
@@ -110,7 +123,7 @@ describe('VoiceBubble（#218）', () => {
     wrapper.unmount()
   })
 
-  it('无波形 → 退化等高占位条；点击气泡展开播放器（audio 出现），再点收起', async () => {
+  it('无波形 → 退化等高占位条；点击即播（audio 出现），再点暂停/继续，播放器常驻不收起（#339④）', async () => {
     const wrapper = mount(VoiceBubble, {
       props: {
         attachment: { key: 'k', name: 'v', type: 'audio/webm', size: 1, url: '/v/1', kind: 'voice', durationMs: 0 },
@@ -119,13 +132,27 @@ describe('VoiceBubble（#218）', () => {
     expect(wrapper.find('[data-test="voice-audio"]').exists()).toBe(false)
     expect(wrapper.findAll('.voice-bar').length).toBeGreaterThan(0)
 
+    // 首点：打开并立即起播（jsdom 无媒体引擎，断言 DOM 面：audio 在场 + aria 转播放语义）
     await wrapper.find('button').trigger('click')
+    await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-test="voice-audio"]').exists()).toBe(true)
     expect(wrapper.emitted('toggle')?.[0]).toEqual([true])
+    expect(wrapper.find('button').attributes('aria-label')).toBe('继续播放语音')
 
+    // 模拟 media 起播事件 → 播放态图标/aria 随动
+    await wrapper.find('[data-test="voice-audio"]').trigger('play')
+    expect(wrapper.find('button').attributes('aria-label')).toBe('暂停语音')
+
+    // 再点：暂停（不收起）；暂停事件后面回「继续」语义；audio 仍在
     await wrapper.find('button').trigger('click')
-    expect(wrapper.find('[data-test="voice-audio"]').exists()).toBe(false)
-    expect(wrapper.emitted('toggle')?.[1]).toEqual([false])
+    await wrapper.find('[data-test="voice-audio"]').trigger('pause')
+    expect(wrapper.find('[data-test="voice-audio"]').exists()).toBe(true)
+    expect(wrapper.find('button').attributes('aria-label')).toBe('继续播放语音')
+
+    // 三点：继续（不收起，audio 仍在）
+    await wrapper.find('button').trigger('click')
+    expect(wrapper.find('[data-test="voice-audio"]').exists()).toBe(true)
+    expect(wrapper.emitted('toggle')).toHaveLength(1) // toggle 仅首次打开发一次
     wrapper.unmount()
   })
 })
