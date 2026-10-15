@@ -2,7 +2,7 @@
 /**
  * 管理端「测试连接」（#117，评审🔴③-2 收敛）：POST /api/admin/mail/test 双轴探测。
  * - provisioner 轴：注入的替身实现 testConnection → 直接调；否则直连 Stalwart JMAP 查域名（只读，不建号）。
- * - sender 轴：注入的替身实现 testConnection → 直接调；否则裸 TCP SMTP（EHLO→AUTH LOGIN→RSET→QUIT，不投递）。
+ * - sender 轴：注入的替身实现 testConnection → 直接调；否则隐式 TLS SMTP（EHLO→AUTH LOGIN→RSET→QUIT，不投递）。
  * - 结果只回 { ok, detail } 人话；任何异常折叠进对应轴的失败文案，绝不裸 500。
  * - 超时（#150，对齐 #131 口径）：sender 轴 connect/问候/每步应答/写各 10s，
  *   provisioner 轴整步 10s；超时释放 socket 并折叠成该轴人话，绝不挂死。
@@ -126,7 +126,7 @@ async function probeProvisionerJmap(cfg: Record<string, unknown>): Promise<Resul
   }
 }
 
-/** sender 轴真探测：裸 TCP SMTP——EHLO → AUTH LOGIN → RSET → QUIT，不投递邮件。 */
+/** sender 轴真探测：隐式 TLS SMTP——EHLO → AUTH LOGIN → RSET → QUIT，不投递邮件。 */
 export async function probeSenderSmtp(
   cfg: Record<string, unknown>,
   connectFn?: SenderSocketConnect,
@@ -140,7 +140,7 @@ export async function probeSenderSmtp(
     return { ok: false, detail: '请先保存完整的 SMTP host、port、用户名、密码与发件地址配置' };
   }
   const connectImpl = connectFn ?? (await import('cloudflare:sockets')).connect;
-  const socket = connectImpl({ hostname: host, port, secureTransport: 'on' });
+  const socket = connectImpl({ hostname: host, port }, { secureTransport: 'on' });
   try {
     await withTimeout(() => socket.opened, '连接');
   } catch (error) {

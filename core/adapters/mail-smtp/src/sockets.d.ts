@@ -5,6 +5,16 @@
 // 冒烟走 wrangler dev 由 workerd 解析）。避免整包 @cloudflare/workers-types
 // 与 web 标准 lib 冲突（同 app/workbench 口径：包内自定义边界类型）。
 declare module 'cloudflare:sockets' {
+  export interface SocketAddress {
+    hostname: string;
+    port: number;
+  }
+
+  export interface SocketOptions {
+    secureTransport?: 'off' | 'on' | 'starttls';
+    allowHalfOpen?: boolean;
+  }
+
   export interface Socket {
     readonly readable: ReadableStream<Uint8Array>;
     readonly writable: WritableStream<Uint8Array>;
@@ -15,7 +25,7 @@ declare module 'cloudflare:sockets' {
   }
 
   export function connect(
-    address: { hostname: string; port: number; secureTransport?: 'off' | 'startTLS' | 'on' },
-    options?: { allowHalfOpen?: boolean },
+    address: string | SocketAddress,
+    options?: SocketOptions,
   ): Socket;
 }
