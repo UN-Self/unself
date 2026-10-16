@@ -25,7 +25,7 @@ const emit = defineEmits<{
   error: []
 }>()
 
-const open = ref(true) // #339④ 播放器常驻：直接显示完整播放器，不收起（点击气泡=播放/暂停）
+const open = ref(true) // issue 339 播放器常驻，不收起（点击气泡=播放/暂停）
 const playing = ref(false)
 const audioEl = ref<HTMLAudioElement | null>(null)
 
