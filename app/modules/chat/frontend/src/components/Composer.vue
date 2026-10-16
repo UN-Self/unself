@@ -352,7 +352,7 @@ watch(busy, (now, was) => {
   if (!was && now) {
     swallowing.value = true
     if (swallowTimer) clearTimeout(swallowTimer)
-    swallowTimer = setTimeout(() => { swallowing.value = false }, 220)
+    swallowTimer = setTimeout(() => { swallowing.value = false }, 260)
   }
 })
 onBeforeUnmount(() => { if (swallowTimer) clearTimeout(swallowTimer) })
@@ -703,7 +703,7 @@ const replyPreview = computed(() => {
   animation: composer-swallow var(--unself-duration-fast) var(--unself-ease-out);
 }
 @keyframes composer-swallow {
-  30% { opacity: 0.55; transform: scale(0.96) translateY(var(--unself-motion-lift-y)); }
+  30% { opacity: 0.35; transform: scale(0.92) translateY(var(--unself-motion-lift-y)); }
   100% { opacity: 1; transform: none; }
 }
 </style>

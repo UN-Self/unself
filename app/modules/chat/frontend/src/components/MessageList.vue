@@ -283,7 +283,7 @@ function onShowReceipts(message: Message): void {
 }
 
 /* #339② 中段残影（定案「弧线回归」）：justSentIds 非空期间，消息流右缘一道淡影自下而上掠过
-   （起点=composer 方向，终点=流顶方向；钟形透明峰 0.18 比气泡残影更淡——只是「一道印象」）。
+   （起点=composer 方向，终点=流顶方向；钟形透明峰 0.30（与气泡残影同峰））。
    位移/时长/缓动全 tokens；透明度峰为定案值。reduced-motion 全局降级。 */
 .stream-sweep::after {
   content: '';
@@ -301,7 +301,7 @@ function onShowReceipts(message: Message): void {
 }
 @keyframes stream-sweep {
   0% { transform: translateY(30%) scale(0.7); opacity: 0; }
-  35% { opacity: 0.18; }
+  35% { opacity: 0.3; }
   100% { transform: translateY(-120%) scale(0.5); opacity: 0; }
 }
 </style>
