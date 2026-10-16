@@ -257,10 +257,8 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
 }
 .bubble-body:focus-visible { outline:var(--unself-focus-ring); outline-offset:2px; }
 
-/* #339② 入场动效（发送）：三段一气呵成 ——
-   ① 吞入：气泡本体微缩淡入
-   ② 残影：伪元素淡影贴右缘掠过（透明度峰 0.30 为定案值；opacity 非时长不属令牌纪律管辖）
-   ③ 亮起：本体归位（收尾于同一 keyframes）
+/* #339② 入场动效（发送）：气泡本体微缩淡入→归位（吞入+亮起两段，backwards 消首帧闪）。
+   原第三段紫色残影（bubble-ghost 伪元素）已按部署者要求整体移除。
    时长/缓动/位移/缩放全部契约 tokens；reduced-motion 由 styles.css 全局 animation 降级兑底。 */
 .bubble-row.bubble-entering {
   /* backwards：挂类首帧前就应用 from 态（opacity 0），消除动画应用时序差的首帧闪 */
@@ -271,24 +269,5 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
   60% { opacity: 1; }
   to { opacity: 1; transform: none; }
 }
-.bubble-row.bubble-entering .bubble-body {
-  position: relative;
-}
-.bubble-row.bubble-entering .bubble-body::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  /* 静态态必须 opacity:0：动画结束后伪元素回到静态值，非 0 会永久盖住气泡（真机实锤）。
-     动画期间由 keyframes 拉到 0.3 峰值，结束自然回落 0。 */
-  opacity: 0;
-  background: var(--unself-color-primary);
-  animation: bubble-ghost var(--unself-duration-slow) var(--unself-ease-out) backwards;
-}
-@keyframes bubble-ghost {
-  0% { opacity: 0; transform: translate(var(--unself-space-6), var(--unself-motion-lift-y)) scale(var(--unself-motion-press-scale)); }
-  35% { opacity: 0.3; }
-  100% { opacity: 0; transform: none; }
-}
+/* 紫色残影段（bubble-ghost 伪元素）已按部署者要求整体移除：主题色闪层观感干扰大于动效增益。 */
 </style>
