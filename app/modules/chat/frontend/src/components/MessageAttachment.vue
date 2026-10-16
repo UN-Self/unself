@@ -15,7 +15,12 @@ const host = ref<HTMLElement | null>(null)
 const imageButton = ref<HTMLButtonElement | null>(null)
 let observer: IntersectionObserver | null = null
 onMounted(() => {
-  if (!mediaType.value.startsWith('image/')) return
+  // #339④：语音/音频也自动加载（#339 实施定案：音频文件小，加载合并进展示意图，
+  // 不再要求用户点「加载播放器」）——可见即加载，同图片口径。
+  const isAudio = mediaType.value.startsWith('audio/') || props.attachment.kind === 'voice' || props.attachment.kind === 'audio'
+  const isImage = mediaType.value.startsWith('image/')
+  if (!isImage && !isAudio) return
+  if (!isImage && isAudio) { void resource.load(); return }
   if (typeof IntersectionObserver !== 'function') { void resource.load(); return }
   observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) { observer?.disconnect(); void resource.load() }
@@ -48,7 +53,7 @@ defineExpose({ preview })
     <video v-else-if="source && !failed && mediaType.startsWith('video/')" :src="source" :aria-label="attachment.name" controls playsinline preload="none" @error="failed = true" />
     <VoiceBubble v-else-if="source && !failed && attachment.kind === 'voice'" :attachment="{ ...attachment, url: source }" @error="failed = true" />
     <audio v-else-if="source && !failed && (mediaType.startsWith('audio/') || attachment.kind === 'audio')" :src="source" :aria-label="attachment.name" controls preload="none" @error="failed = true" />
-    <button v-if="!source && !loading && !requestFailed && (mediaType.startsWith('video/') || mediaType.startsWith('audio/') || attachment.kind)" class="attachment-load" type="button" @click="resource.load()">加载播放器</button>
+    <button v-if="!source && !loading && !requestFailed && (mediaType.startsWith('video/'))" class="attachment-load" type="button" @click="resource.load()">加载播放器</button>
     <span v-if="loading" role="status">正在加载附件…</span>
     <button v-if="requestFailed" class="attachment-load" type="button" @click="resource.load()">加载失败，点击重试</button>
     <p v-if="failed" role="status" class="attachment-error">无法预览，可下载后查看</p>

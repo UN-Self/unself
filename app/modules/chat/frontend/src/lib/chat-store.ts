@@ -534,8 +534,9 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
         // created=false = 服务端幂等回显（重试场景）：不重复插入
         if (result.created) {
           handleMessage(result.message)
-          // #339②：刚发送成功的消息播入场动效；enterDone 后移除（重渲染不重播）
-          justSentIds.value.push(result.message.id)
+          // #339②：刚发送成功的消息播入场动效；enterDone 后移除（重渲染不重播）。
+          // shallowRef 必须整体换数组：push 原地改不触发 App 层响应（真机实测踩坑）。
+          justSentIds.value = [...justSentIds.value, result.message.id]
         }
       } catch (error) {
         state.sendError = error instanceof Error ? error.message : String(error)

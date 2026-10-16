@@ -11,6 +11,27 @@ import { createChatStorage } from '../src/lib/storage'
  * - 会话列表 → 打开房间 → 历史就绪 → 幂等发送 → WS 广播回显去重 → 未读投影
  * - 语音/文件附件经 uploadFile → attachment → 发送 → 到达对端
  */
+// #339② 发送动效状态机（真链路）：sendMessage 成功→justSentIds 含新消息；enterDone 清除。
+// 用真 store（非 setProps）盖住「shallowRef push 不触发响应」的断点——断言不可变更新语义。
+describe('#339② justSentIds 状态机', () => {
+  it('sendMessage 成功后记录新消息 id；enterDone 后清除', async () => {
+    const api = createMockChatApi(buildMockWorld())
+    const store = createChatStore({
+      api,
+      storage: createChatStorage({ getItem: () => null, setItem() {}, removeItem() {} }),
+      myUserId: () => api.world.me.id,
+      getToken: () => 'mock-token',
+    })
+    await store.openRoom({ kind: 'public', id: 1 }, 'general')
+    expect(store.justSentIds.value).toEqual([])
+    await store.sendMessage({ content: '动效验证', mentionUserIds: [] })
+    const last = store.state.messages.at(-1)!
+    expect(store.justSentIds.value).toEqual([last.id])
+    store.enterDone(last.id)
+    expect(store.justSentIds.value).toEqual([])
+  })
+})
+
 describe('mock 全链路：列表 → 房间 → 发送/接收（WS）→ 附件', () => {
   it('选择联系人创建私聊后，store 打开新会话', async () => {
     const api = createMockChatApi()
