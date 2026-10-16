@@ -263,7 +263,8 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
    ③ 亮起：本体归位（收尾于同一 keyframes）
    时长/缓动/位移/缩放全部契约 tokens；reduced-motion 由 styles.css 全局 animation 降级兑底。 */
 .bubble-row.bubble-entering {
-  animation: bubble-arrive var(--unself-duration-slow) var(--unself-ease-out);
+  /* backwards：挂类首帧前就应用 from 态（opacity 0），消除动画应用时序差的首帧闪 */
+  animation: bubble-arrive var(--unself-duration-slow) var(--unself-ease-out) backwards;
 }
 @keyframes bubble-arrive {
   from { opacity: 0; transform: translateY(var(--unself-motion-lift-y)) scale(var(--unself-motion-press-scale)); }
@@ -283,7 +284,7 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
      动画期间由 keyframes 拉到 0.3 峰值，结束自然回落 0。 */
   opacity: 0;
   background: var(--unself-color-primary);
-  animation: bubble-ghost var(--unself-duration-slow) var(--unself-ease-out);
+  animation: bubble-ghost var(--unself-duration-slow) var(--unself-ease-out) backwards;
 }
 @keyframes bubble-ghost {
   0% { opacity: 0; transform: translate(var(--unself-space-6), var(--unself-motion-lift-y)) scale(var(--unself-motion-press-scale)); }
