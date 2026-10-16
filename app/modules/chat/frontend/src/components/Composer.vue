@@ -336,6 +336,14 @@ const contextRoom = computed<{ kind: string; id: number } | null>(() => {
   return Number.isNaN(id) ? null : { kind, id }
 })
 
+// #339①：发送期间输入区 disabled（busy）会按 HTML 规范强制失焦——busy 解除后把焦点还给输入区，
+// 连续聊天零点击。父层 sending 置位发生在 emit('send') 之后（子组件同步 return 前还看不到），
+// 单在 sendText 里 refocus 会被随后的 disable 抢走——所以监听 busy 下降沿（覆盖所有 busy 转换）。
+// TipTap focus() 自带光标归位（末尾）；jsdom 下 view.dom.focus 兑底。
+watch(busy, (now, was) => {
+  if (was && !now) editor.value?.focus()
+})
+
 watch(
   contextRoom,
   (room, previous) => {

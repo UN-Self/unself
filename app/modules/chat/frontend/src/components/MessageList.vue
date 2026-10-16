@@ -67,6 +67,21 @@ onMounted(() => {
 function isFreshArrival(message: Message): boolean {
   return message.sender.id !== props.currentUserId && message.id > baselineMaxId.value
 }
+// #339② 兑底：reduced-motion 下 animation 被全局禁用，animationend 永不 fire → enter-done
+// 不回抛 → justSentIds 泄漏。slowing 800ms（> duration-slow 400ms）仍未见清除则按 animationend 已到
+// 处理（父层照常清除）。正常路径 animationend 先到，watch 清理定时器无副作用。
+let enterFallbackTimer: ReturnType<typeof setTimeout> | null = null
+watch(() => props.justSentIds, (now, prev) => {
+  if (prev && now.length > 0 && now.length === prev.length && now.every((id, i) => id === prev[i])) return
+  if (enterFallbackTimer) clearTimeout(enterFallbackTimer)
+  if (now.length > 0) {
+    enterFallbackTimer = setTimeout(() => {
+      for (const id of props.justSentIds) emit('enter-done', id)
+    }, 800)
+  }
+}, { deep: true })
+onBeforeUnmount(() => { if (enterFallbackTimer) clearTimeout(enterFallbackTimer) })
+
 const scroller = ref<HTMLElement | null>(null)
 const content = ref<HTMLElement | null>(null)
 const { following, overflowing, activeId, updatePosition, select, latest } = useMessageScroll(

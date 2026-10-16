@@ -120,21 +120,27 @@ describe('Composer 发送', () => {
     expect(wrapper.emitted('send')).toBeUndefined()
   })
 
-  // #339① 发送后焦点保持：busy 解除后输入区持焦，连发零点击（用户可见行为，不数 focus 调用）
-  it('发送完成后输入区重新持焦，可连续输入发送', async () => {
+  // #339① 发送后焦点保持：真实时序=emit 后父层才置 sending → busy 上升沿失焦；解除后必须还焦点。
+  it('busy 解除（sending false→true→false）后输入区重新持焦，可连续输入发送', async () => {
     const wrapper = await mountComposer()
     const input = inputOf(wrapper)
     await input.setValue('第一条')
     await input.trigger('keydown', { key: 'Enter' })
-    await flushPromises()
     expect(wrapper.emitted('send')).toHaveLength(1)
+    // 父层置 sending=true 再解除（真实浏览器中 disabled 上升沿会夺焦；jsdom 不模拟，
+    // 故不断言夺焦，只断言用户可见行为：busy 解除后焦点必须在输入区）
+    await wrapper.setProps({ sending: true })
+    await wrapper.setProps({ sending: false })
     expect(document.activeElement).toBe(input.element)
 
+    // 第二轮连发零点击
     await input.setValue('第二条')
     await input.trigger('keydown', { key: 'Enter' })
-    await flushPromises()
     expect(wrapper.emitted('send')).toHaveLength(2)
+    await wrapper.setProps({ sending: true })
+    await wrapper.setProps({ sending: false })
     expect(document.activeElement).toBe(input.element)
+    wrapper.unmount()
   })
 })
 

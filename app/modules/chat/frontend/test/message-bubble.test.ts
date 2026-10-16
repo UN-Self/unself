@@ -123,36 +123,27 @@ describe('VoiceBubble（#218）', () => {
     wrapper.unmount()
   })
 
-  it('无波形 → 退化等高占位条；点击即播（audio 出现），再点暂停/继续，播放器常驻不收起（#339④）', async () => {
+  it('播放器常驻（#339④）：默认展开 audio 在场；点气泡=播放/暂停切换，不收起', async () => {
     const wrapper = mount(VoiceBubble, {
       props: {
         attachment: { key: 'k', name: 'v', type: 'audio/webm', size: 1, url: '/v/1', kind: 'voice', durationMs: 0 },
       },
     })
-    expect(wrapper.find('[data-test="voice-audio"]').exists()).toBe(false)
+    // 默认展开：audio 直接在场（零点击可见）
     expect(wrapper.findAll('.voice-bar').length).toBeGreaterThan(0)
+    const audio = () => wrapper.find('[data-test="voice-audio"]')
+    expect(audio().exists()).toBe(true)
 
-    // 首点：打开并立即起播（jsdom 无媒体引擎，断言 DOM 面：audio 在场 + aria 转播放语义）
-    await wrapper.find('button').trigger('click')
-    await wrapper.vm.$nextTick()
-    expect(wrapper.find('[data-test="voice-audio"]').exists()).toBe(true)
-    expect(wrapper.emitted('toggle')?.[0]).toEqual([true])
+    // 点气泡 = 播放/暂停切换：play/pause 事件驱动 aria 与图标
     expect(wrapper.find('button').attributes('aria-label')).toBe('继续播放语音')
-
-    // 模拟 media 起播事件 → 播放态图标/aria 随动
-    await wrapper.find('[data-test="voice-audio"]').trigger('play')
+    await audio().trigger('play')
     expect(wrapper.find('button').attributes('aria-label')).toBe('暂停语音')
-
-    // 再点：暂停（不收起）；暂停事件后面回「继续」语义；audio 仍在
-    await wrapper.find('button').trigger('click')
-    await wrapper.find('[data-test="voice-audio"]').trigger('pause')
-    expect(wrapper.find('[data-test="voice-audio"]').exists()).toBe(true)
+    await audio().trigger('pause')
     expect(wrapper.find('button').attributes('aria-label')).toBe('继续播放语音')
 
-    // 三点：继续（不收起，audio 仍在）
+    // 再点：audio 常驻不收起
     await wrapper.find('button').trigger('click')
-    expect(wrapper.find('[data-test="voice-audio"]').exists()).toBe(true)
-    expect(wrapper.emitted('toggle')).toHaveLength(1) // toggle 仅首次打开发一次
+    expect(audio().exists()).toBe(true)
     wrapper.unmount()
   })
 })

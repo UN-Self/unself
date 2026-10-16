@@ -11,8 +11,8 @@ import type { Attachment } from '../lib/types'
  * 波形条高度出附件 waveform 采样（0-100），无采样时退化为等高占位条；
  * 播放态由 <audio> 事件驱动（父级换源后自动停摆），组件零计时器。
  *
- * #339④：点击气泡 = 打开播放器并立即播放（不再有「展开→再点播放」两步）；
- * 再点 = 暂停/继续（播放器常驻不收起）；播放态图标随动（AudioLines/Play/Pause）。
+ * #339④（真机走查修订）：播放器常驻在场（默认展开，加载完成即可见），零点击即可用；
+ * 点气泡 = 播放/暂停切换；播放态图标随动（AudioLines/Play/Pause）。
  */
 export interface VoiceBubbleProps {
   attachment: Attachment
@@ -20,12 +20,12 @@ export interface VoiceBubbleProps {
 
 const props = defineProps<VoiceBubbleProps>()
 const emit = defineEmits<{
-  /** 打开播放器（是否当前语音源）；不再收起，仅首次打开时发。保留事件面供父层扩展互斥。 */
+  /** 保留事件面（父层可扩展互斥）；#339④ 起常驻展开，不再由开关触发。 */
   toggle: [open: boolean]
   error: []
 }>()
 
-const open = ref(false)
+const open = ref(true) // #339④ 播放器常驻：直接显示完整播放器，不收起（点击气泡=播放/暂停）
 const playing = ref(false)
 const audioEl = ref<HTMLAudioElement | null>(null)
 
@@ -39,16 +39,9 @@ const fallbackLevels = [40, 55, 35, 60, 45, 50, 38, 58, 42, 52] as const
 const durationLabel = computed(() => formatVoiceDuration(props.attachment.durationMs ?? 0))
 
 async function onToggle(): Promise<void> {
-  if (!open.value) {
-    open.value = true
-    emit('toggle', true)
-    // 一点即播：audio 挂载后立即起播；jsdom 无媒体引擎，play() 缺失/被拒时静默（测试断言 DOM 面不断言出声）
-    await nextTick()
-    void audioEl.value?.play().catch(() => {})
-    return
-  }
-  // 已打开：暂停/继续切换（播放器常驻，不收起）
-  const el = audioEl.value
+  // #339④：播放器常驻在场，点击=播放/暂停切换（无展开/收起分支）。
+  // 挂载后首次点击时 audio 可能尚未就绪，play() 被拒/缺失时静默（测试断言 DOM 面不断言出声）。
+  const el = audioEl.value ?? (await nextTick(), audioEl.value)
   if (!el) return
   if (el.paused) void el.play().catch(() => {})
   else el.pause()
@@ -95,7 +88,7 @@ function onPause(): void {
       <span class="voice-duration">{{ durationLabel }}</span>
     </button>
 
-    <!-- #339④：首次点击后常驻挂载（不再收起）；一点即播由 onToggle 驱动 -->
+    <!-- #339④：播放器常驻在场（默认展开，不收起）；点气泡=播放/暂停 -->
     <audio
       v-if="open"
       ref="audioEl"

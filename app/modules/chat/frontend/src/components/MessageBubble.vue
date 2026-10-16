@@ -279,6 +279,9 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
+  /* 静态态必须 opacity:0：动画结束后伪元素回到静态值，非 0 会永久盖住气泡（真机实锤）。
+     动画期间由 keyframes 拉到 0.3 峰值，结束自然回落 0。 */
+  opacity: 0;
   background: var(--unself-color-primary);
   animation: bubble-ghost var(--unself-duration-slow) var(--unself-ease-out);
 }
