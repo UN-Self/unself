@@ -344,6 +344,19 @@ watch(busy, (now, was) => {
   if (was && !now) editor.value?.focus()
 })
 
+// #339② 吞入段：发送瞬间（busy 上升沿）composer 本体「吞下」消息——快速缩小淡出一瞬
+// （150ms=duration-fast），随后类自动摘除回弹。真实浏览器才有观感；reduced-motion 全局禁用。
+const swallowing = ref(false)
+let swallowTimer: ReturnType<typeof setTimeout> | null = null
+watch(busy, (now, was) => {
+  if (!was && now) {
+    swallowing.value = true
+    if (swallowTimer) clearTimeout(swallowTimer)
+    swallowTimer = setTimeout(() => { swallowing.value = false }, 220)
+  }
+})
+onBeforeUnmount(() => { if (swallowTimer) clearTimeout(swallowTimer) })
+
 watch(
   contextRoom,
   (room, previous) => {
@@ -382,7 +395,7 @@ const replyPreview = computed(() => {
 </script>
 
 <template>
-  <div class="composer" data-test="composer">
+  <div class="composer" :class="{ 'composer-swallow': swallowing }" data-test="composer">
     <!-- 回复条 -->
     <div v-if="replyTo" class="composer-reply" data-test="reply-bar">
       <span class="composer-reply-text" data-test="reply-preview">{{ replyPreview }}</span>
@@ -682,5 +695,15 @@ const replyPreview = computed(() => {
   font-variant-numeric: tabular-nums;
   font-size: var(--unself-font-size-sm);
   color: var(--unself-color-danger);
+}
+
+/* #339② 吞入段：发送瞬间 composer 把消息「吞」进去——快速缩淡一瞬后回弹（不是消失：
+   只到 0.96/半透明，不影响连续输入的可用性）。时长/缩放出契约 tokens。 */
+.composer-swallow {
+  animation: composer-swallow var(--unself-duration-fast) var(--unself-ease-out);
+}
+@keyframes composer-swallow {
+  30% { opacity: 0.55; transform: scale(0.96) translateY(var(--unself-motion-lift-y)); }
+  100% { opacity: 1; transform: none; }
 }
 </style>

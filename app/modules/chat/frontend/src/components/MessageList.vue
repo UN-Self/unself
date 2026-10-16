@@ -191,6 +191,7 @@ function onShowReceipts(message: Message): void {
       ref="scroller"
       class="stream"
       data-test="message-stream"
+      :class="{ 'stream-sweep': props.justSentIds.length > 0 }"
       aria-label="消息流"
       @scroll.passive="onScroll"
     >
@@ -279,5 +280,28 @@ function onShowReceipts(message: Message): void {
   background: var(--unself-color-surface);
   border-radius: var(--unself-radius-full);
   padding: 2px var(--unself-space-3);
+}
+
+/* #339② 中段残影（定案「弧线回归」）：justSentIds 非空期间，消息流右缘一道淡影自下而上掠过
+   （起点=composer 方向，终点=流顶方向；钟形透明峰 0.18 比气泡残影更淡——只是「一道印象」）。
+   位移/时长/缓动全 tokens；透明度峰为定案值。reduced-motion 全局降级。 */
+.stream-sweep::after {
+  content: '';
+  position: absolute;
+  right: var(--unself-space-2);
+  bottom: 0;
+  width: 56px;
+  height: 38%;
+  border-radius: var(--unself-radius-lg, 12px);
+  background: var(--unself-color-primary);
+  opacity: 0;
+  pointer-events: none;
+  filter: blur(6px);
+  animation: stream-sweep var(--unself-duration-slow) var(--unself-ease-out);
+}
+@keyframes stream-sweep {
+  0% { transform: translateY(30%) scale(0.7); opacity: 0; }
+  35% { opacity: 0.18; }
+  100% { transform: translateY(-120%) scale(0.5); opacity: 0; }
 }
 </style>
