@@ -69,7 +69,6 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   app.use('/api/avatars/*', requireActiveMember());
   app.use('/api/notifications/*', requireActiveMember());
   app.use('/api/modules/:id/token', requireActiveMember());
-  app.use('/api/setup/activate', requireActiveMember());
   // #165：`/api/admin/*` 一律过 adminGuard——公开 setup-token 签发口已删，不再有豁免路径。
   // adminGuard 内部用同一个 authenticateActiveMember 判定登录态，只在其上叠加角色位。
   app.use('/api/admin/*', requireAdmin());

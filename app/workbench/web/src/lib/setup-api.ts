@@ -4,11 +4,10 @@
  * setup 向导 API 客户端（#10）：
  * - GET /api/setup/status：实例是否已激活 / token 是否有效（路由守卫用）
  * - POST /api/setup/oidc-config：三字段配置落库（只验 token 不消费，可重复提交改填）
- * - POST /api/setup/activate：消费 token → 首个管理员 + 永久封死（无 body，配置已先落库）
  * - POST /api/oidc/test-connection：服务端代理探测 OIDC Provider（#44，避开浏览器直连 CORS）
  * - GET /api/auth/login：整页跳转 OIDC（密码永远发生在 IdP 页面，§6.5）
  *
- * 直线流程（#55）：提交配置落库 → 整页跳登录 → 回来自动提权成首个管理员 → 进工作台。
+ * 初始化（#332）：提交配置落库 → 创建本地管理员并封箱 → 普通 OIDC 登录进工作台。
  * 后端契约见 app/workbench（#5/#55）。异常三层透传（§6.5）：
  * 成员/部署者只见人话 + request id，技术详情折叠。
  * 传输/错误构造统一走 lib/api-client（#142）：本文件只留端点函数、人话映射与域类型。
@@ -34,12 +33,6 @@ export function getSetupStatus(token?: string): Promise<SetupStatus> {
   return request<SetupStatus>(`/api/setup/status${query}`, undefined, { messagePolicy: humanize })
 }
 
-/** 激活结果（POST /api/setup/activate）。 */
-export interface ActivateResult {
-  ok: boolean
-  user: { id: string; name: string; role: string }
-}
-
 /** 向导录入的 OIDC 连接配置（camelCase，与后端契约一致）；scope 缺省服务端回退。 */
 export interface OidcSetup {
   issuer: string
@@ -50,7 +43,7 @@ export interface OidcSetup {
 
 /**
  * POST /api/setup/oidc-config：三字段（issuer/clientId/clientSecret）落库；
- * 只验 token 不消费，可重复提交改填。成功返回整页登录地址（next 已带回 token）。
+ * 只验 token 不消费，可重复提交改填。成功返回普通登录地址，建号成功后才能跳转。
  * body 严格三字段，不带 scope（契约无此字段）。
  */
 export function saveOidcConfig(
@@ -70,16 +63,6 @@ export function saveOidcConfig(
     },
     { messagePolicy: humanize },
   )
-}
-
-/**
- * POST /api/setup/activate：消费 token → 首个管理员 + 永久封死（直线流程收尾）。
- * 不再携带 body（配置由 oidc-config 先行落库）；无会话 401 由调用方经 /api/me 预判。
- */
-export function activateSetup(token: string): Promise<ActivateResult> {
-  return request<ActivateResult>(`/api/setup/activate?token=${encodeURIComponent(token)}`, {
-    method: 'POST',
-  }, { messagePolicy: humanize })
 }
 
 /** 服务端错误 → 人话（§6.5：不暴露堆栈/内部错误码）。 */

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { activateSetup, saveOidcConfig, testOidcConnection } from './setup-api'
+import { saveOidcConfig, testOidcConnection } from './setup-api'
 
 /** 默认 fetch 桩：测试中任何未经 mock 的请求都视为失败（不允许真实网络）。 */
 let baseFetchMock: ReturnType<typeof vi.fn>
@@ -48,7 +48,7 @@ describe('saveOidcConfig（POST /api/setup/oidc-config）', () => {
         status: 200,
         body: {
           ok: true,
-          loginUrl: 'https://idp.example.com/api/auth/login?next=%2Fsetup%3Ftoken%3Dtok-1',
+          loginUrl: 'https://team.example.com/api/auth/login',
         },
       }),
     )
@@ -62,7 +62,7 @@ describe('saveOidcConfig（POST /api/setup/oidc-config）', () => {
 
     expect(result).toEqual({
       ok: true,
-      loginUrl: 'https://idp.example.com/api/auth/login?next=%2Fsetup%3Ftoken%3Dtok-1',
+      loginUrl: 'https://team.example.com/api/auth/login',
     })
     const [url, init] = callArgs(fetchMock)
     expect(String(url)).toBe('/api/setup/oidc-config?token=tok-1')
@@ -93,26 +93,6 @@ describe('saveOidcConfig（POST /api/setup/oidc-config）', () => {
     await expect(
       saveOidcConfig('tok-1', { issuer: 'https://idp.example.com', clientId: 'c1', clientSecret: 's' }),
     ).rejects.toMatchObject({ status: 403, message: expect.stringContaining('无效或已被使用') })
-  })
-})
-
-describe('activateSetup（POST /api/setup/activate）', () => {
-  it('POST 无 body，token 进 query，成功返回首个管理员', async () => {
-    const fetchMock = mockFetchOnce(
-      jsonResponse({
-        ok: true,
-        status: 200,
-        body: { ok: true, user: { id: 'u1', name: '管理员', role: 'admin' } },
-      }),
-    )
-
-    const result = await activateSetup('tok-1')
-
-    expect(result).toEqual({ ok: true, user: { id: 'u1', name: '管理员', role: 'admin' } })
-    const [url, init] = callArgs(fetchMock)
-    expect(String(url)).toBe('/api/setup/activate?token=tok-1')
-    expect(init?.method).toBe('POST')
-    expect(init?.body).toBeUndefined()
   })
 })
 
