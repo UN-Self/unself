@@ -21,7 +21,6 @@ vi.mock('vue-router', () => ({
 vi.mock('./lib/setup-api', () => ({
   testOidcConnection: vi.fn(),
   saveOidcConfig: vi.fn(),
-  activateSetup: vi.fn(),
 }))
 
 vi.mock('./lib/builtin-auth-api', () => ({
@@ -32,11 +31,12 @@ vi.mock('./lib/builtin-auth-api', () => ({
 }))
 
 const TEST_ISSUER = 'https://idp.example.com'
+const assign = vi.fn()
 
 beforeEach(() => {
-  vi.clearAllMocks()
-  // /api/me 预探：不可登录 → autoActivateIfAuthed 早退，不干扰本页行为
+  vi.resetAllMocks()
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false }) as Response))
+  vi.stubGlobal('location', { ...window.location, assign })
 })
 
 afterEach(() => {
@@ -61,6 +61,181 @@ async function fillForm(wrapper: VueWrapper) {
   await wrapper.find('input[name="client_id"]').setValue('client-1')
   await wrapper.find('input[name="client_secret"]').setValue('secret-1')
 }
+
+async function fillAdminForm(wrapper: VueWrapper, password2 = 'password123') {
+  await wrapper.find('input[name="username"]').setValue('boss')
+  await wrapper.find('input[name="password"]').setValue('password123')
+  await wrapper.find('input[name="password_confirm"]').setValue(password2)
+}
+
+async function prepareOidc(wrapper: VueWrapper) {
+  vi.mocked(testOidcConnection).mockResolvedValue({ ok: true, issuer: TEST_ISSUER, warnings: [] })
+  await fillForm(wrapper)
+  await clickTest(wrapper)
+  await settle()
+}
+
+describe('SetupView 初始化边界（#332）', () => {
+  it('已有普通会话打开页面：提示主动选择，不自动写入、提权或跳转', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true }) as Response))
+    const wrapper = mount(SetupView)
+    await settle()
+
+    expect(createBuiltinAdmin).not.toHaveBeenCalled()
+    expect(saveOidcConfig).not.toHaveBeenCalled()
+    expect(routerReplace).not.toHaveBeenCalled()
+    expect(assign).not.toHaveBeenCalled()
+    expect(wrapper.find('[role="status"]').text()).toContain('已有登录会话')
+    expect(vi.mocked(fetch).mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true)
+    expect(wrapper.find('details').attributes('open')).toBeUndefined()
+  })
+
+  it.each(['username', 'password', 'password_confirm'])(
+    'OIDC 测试成功但本地 %s 为空：红框和字段错误可见，不保存、不建号、不登录',
+    async (field) => {
+      const wrapper = mount(SetupView)
+      await fillAdminForm(wrapper)
+      await wrapper.find(`input[name="${field}"]`).setValue('')
+      await prepareOidc(wrapper)
+      await wrapper.find('details form').trigger('submit')
+      await settle()
+
+      expect(wrapper.findAll('[role="alert"]').some((alert) => alert.text().includes('请先完整填写本地管理员表单。'))).toBe(true)
+      expect(wrapper.find(`input[name="${field}"]`).attributes('aria-invalid')).toBe('true')
+      expect(saveOidcConfig).not.toHaveBeenCalled()
+      expect(createBuiltinAdmin).not.toHaveBeenCalled()
+      expect(assign).not.toHaveBeenCalled()
+    },
+  )
+
+  it('OIDC 测试成功但密码不一致：不能保存；修正后按保存配置、建号、跳转的顺序继续', async () => {
+    const effects: string[] = []
+    vi.mocked(saveOidcConfig).mockImplementation(async () => {
+      effects.push('save')
+      return { ok: true, loginUrl: '/api/auth/login' }
+    })
+    vi.mocked(createBuiltinAdmin).mockImplementation(async () => {
+      effects.push('create')
+      return { ok: true, user: { id: 'admin', name: 'boss', role: 'admin' } }
+    })
+    assign.mockImplementation(() => effects.push('login'))
+    const wrapper = mount(SetupView)
+    await fillAdminForm(wrapper, 'different123')
+    await prepareOidc(wrapper)
+    await wrapper.find('details form').trigger('submit')
+    await settle()
+    expect(effects).toEqual([])
+    expect(wrapper.find('input[name="password_confirm"]').attributes('aria-invalid')).toBe('true')
+
+    await wrapper.find('input[name="password_confirm"]').setValue('password123')
+    await wrapper.find('details form').trigger('submit')
+    await settle()
+    expect(effects).toEqual(['save', 'create', 'login'])
+    expect(createBuiltinAdmin).toHaveBeenCalledWith('tok-92', 'boss', 'password123')
+    expect(assign).toHaveBeenCalledWith('/api/auth/login')
+    expect(loginWithPassword).not.toHaveBeenCalled()
+    expect(routerReplace).not.toHaveBeenCalled()
+  })
+
+  it('OIDC 提交在途：禁用两条路径及输入，重复提交不能插入建号或再次保存', async () => {
+    let finishSave!: (value: { ok: boolean; loginUrl: string }) => void
+    vi.mocked(saveOidcConfig).mockImplementation(() => new Promise((resolve) => { finishSave = resolve }))
+    vi.mocked(createBuiltinAdmin).mockResolvedValue({ ok: true, user: { id: 'admin', name: 'boss', role: 'admin' } })
+    const wrapper = mount(SetupView)
+    await fillAdminForm(wrapper)
+    await prepareOidc(wrapper)
+    await wrapper.find('details form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.findAll('button[type="submit"]').every((button) => button.attributes('disabled') !== undefined)).toBe(true)
+    expect(wrapper.findAll('input').every((input) => input.attributes('disabled') !== undefined)).toBe(true)
+
+    await wrapper.findAll('form')[0]!.trigger('submit')
+    await wrapper.find('details form').trigger('submit')
+    expect(createBuiltinAdmin).not.toHaveBeenCalled()
+    expect(saveOidcConfig).toHaveBeenCalledTimes(1)
+    finishSave({ ok: true, loginUrl: '/api/auth/login' })
+    await settle()
+    expect(createBuiltinAdmin).toHaveBeenCalledTimes(1)
+    expect(assign).toHaveBeenCalledTimes(1)
+  })
+
+  it('本地建号在途：OIDC 和重复本地提交均被阻止', async () => {
+    let finishCreate!: (value: { ok: boolean; user: { id: string; name: string; role: string } }) => void
+    vi.mocked(createBuiltinAdmin).mockImplementation(() => new Promise((resolve) => { finishCreate = resolve }))
+    vi.mocked(loginWithPassword).mockResolvedValue(undefined)
+    const wrapper = mount(SetupView)
+    await fillAdminForm(wrapper)
+    await prepareOidc(wrapper)
+    await wrapper.findAll('form')[0]!.trigger('submit')
+    await flushPromises()
+    await wrapper.findAll('form')[0]!.trigger('submit')
+    await wrapper.find('details form').trigger('submit')
+    expect(saveOidcConfig).not.toHaveBeenCalled()
+    expect(createBuiltinAdmin).toHaveBeenCalledTimes(1)
+    finishCreate({ ok: true, user: { id: 'admin', name: 'boss', role: 'admin' } })
+    await settle()
+    expect(loginWithPassword).toHaveBeenCalledTimes(1)
+    expect(routerReplace).toHaveBeenCalledWith('/')
+  })
+
+  it('配置保存失败：不建号、不跳转，可以重测后重试', async () => {
+    vi.mocked(saveOidcConfig).mockRejectedValue(new Error('配置保存失败'))
+    const wrapper = mount(SetupView)
+    await fillAdminForm(wrapper)
+    await prepareOidc(wrapper)
+    await wrapper.find('details form').trigger('submit')
+    await settle()
+    expect(createBuiltinAdmin).not.toHaveBeenCalled()
+    expect(assign).not.toHaveBeenCalled()
+    expect(wrapper.findAll('[role="alert"]').some((alert) => alert.text().includes('配置保存失败'))).toBe(true)
+    expect(testButton(wrapper)?.attributes('disabled')).toBeUndefined()
+  })
+
+  it('配置已存但建号失败：不跳转；修正账号并重测后可重试', async () => {
+    vi.mocked(saveOidcConfig).mockResolvedValue({ ok: true, loginUrl: '/api/auth/login' })
+    vi.mocked(createBuiltinAdmin).mockRejectedValueOnce(new Error('该用户名已被占用'))
+    const wrapper = mount(SetupView)
+    await fillAdminForm(wrapper)
+    await prepareOidc(wrapper)
+    await wrapper.find('details form').trigger('submit')
+    await settle()
+    expect(assign).not.toHaveBeenCalled()
+    expect(wrapper.findAll('[role="alert"]').some((alert) => alert.text().includes('该用户名已被占用'))).toBe(true)
+
+    await wrapper.find('input[name="username"]').setValue('boss2')
+    vi.mocked(createBuiltinAdmin).mockResolvedValue({ ok: true, user: { id: 'admin', name: 'boss2', role: 'admin' } })
+    await clickTest(wrapper)
+    await settle()
+    await wrapper.find('details form').trigger('submit')
+    await settle()
+    expect(createBuiltinAdmin).toHaveBeenLastCalledWith('tok-92', 'boss2', 'password123')
+    expect(assign).toHaveBeenCalledWith('/api/auth/login')
+  })
+
+  it('本地管理员已创建但登录失败：告知已建号，只重试登录，不能重新建号或切换 OIDC 提交', async () => {
+    vi.mocked(createBuiltinAdmin).mockResolvedValue({ ok: true, user: { id: 'admin', name: 'boss', role: 'admin' } })
+    vi.mocked(loginWithPassword).mockRejectedValueOnce(new Error('网络不可用')).mockResolvedValue(undefined)
+    const wrapper = mount(SetupView)
+    await fillAdminForm(wrapper)
+    await prepareOidc(wrapper)
+    await wrapper.findAll('form')[0]!.trigger('submit')
+    await settle()
+    expect(wrapper.findAll('[role="alert"]').some((alert) => alert.text().includes('管理员账号已创建'))).toBe(true)
+    expect(routerReplace).not.toHaveBeenCalled()
+    await wrapper.findAll('form')[0]!.trigger('submit')
+    await wrapper.find('details form').trigger('submit')
+    expect(createBuiltinAdmin).toHaveBeenCalledTimes(1)
+    expect(saveOidcConfig).not.toHaveBeenCalled()
+
+    const retry = wrapper.findAll('button').find((button) => button.text().includes('使用本地管理员登录'))
+    expect(retry).toBeDefined()
+    await retry!.trigger('click')
+    await settle()
+    expect(createBuiltinAdmin).toHaveBeenCalledTimes(1)
+    expect(loginWithPassword).toHaveBeenCalledTimes(2)
+    expect(routerReplace).toHaveBeenCalledWith('/')
+  })
+})
 
 function testButton(wrapper: VueWrapper) {
   return wrapper.findAll('button').find((b) => b.text().includes('测试连接'))
@@ -173,6 +348,7 @@ describe('SetupView 三态机（#92，OIDC 折叠分支内）', () => {
       Object.assign(new Error('网络不可用，请检查连接后重试'), { status: 0 }),
     )
     const wrapper = mount(SetupView)
+    await fillAdminForm(wrapper)
     await fillForm(wrapper)
     await clickTest(wrapper)
     await settle()
@@ -183,7 +359,7 @@ describe('SetupView 三态机（#92，OIDC 折叠分支内）', () => {
 
     // 提交失败的用户可见结果：错误卡 + 回到「测试连接」（不僵在 loading）
     expect(wrapper.find('[role="alert"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('激活没有成功')
+    expect(wrapper.text()).toContain('OIDC 配置没有完成')
     expect(submitButton(wrapper).exists()).toBe(false)
     expect(testButton(wrapper)).toBeDefined()
     const btn = testButton(wrapper)!
@@ -198,12 +374,6 @@ describe('SetupView 三态机（#92，OIDC 折叠分支内）', () => {
 })
 
 describe('SetupView 内置管理员分支（issue-A）', () => {
-  async function fillAdminForm(wrapper: VueWrapper, password2 = 'password123') {
-    await wrapper.find('input[name="username"]').setValue('boss')
-    await wrapper.find('input[name="password"]').setValue('password123')
-    await wrapper.find('input[name="password_confirm"]').setValue(password2)
-  }
-
   it('默认渲染「设置管理员账号」表单（用户名/密码/重复），无需折叠', async () => {
     const wrapper = mount(SetupView)
     expect(wrapper.find('input[name="username"]').exists()).toBe(true)

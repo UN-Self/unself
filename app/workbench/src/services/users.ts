@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 用户域（users 表）：JIT 建档、展示名推导、角色提升。
+ * 用户域（users 表）：JIT 建档与展示名推导。
  * 只查 users 表，不跨域。
  */
 
@@ -69,14 +69,6 @@ export async function updateDisplayName(db: D1Database, userId: string, name: st
   const result = await db.prepare('UPDATE users SET display_name = ?, profile_revision = profile_revision + 1 WHERE id = ? AND status = ?')
     .bind(name, userId, 'active').run();
   return (result.meta.changes ?? 0) > 0;
-}
-
-/** 把用户提升为管理员（首个管理员诞生，§5.2）。 */
-export async function promoteToAdmin(db: D1Database, userId: string): Promise<void> {
-  await db
-    .prepare('UPDATE users SET role = ? WHERE id = ?')
-    .bind('admin', userId)
-    .run();
 }
 
 /** 取用户角色（/api/me 用）；行不存在时回 'user'（会话存在但档案被删的兜底）。 */

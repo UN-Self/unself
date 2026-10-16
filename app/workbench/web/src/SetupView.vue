@@ -5,7 +5,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { Check, KeyRound, PlugZap, UserPlus } from 'lucide-vue-next'
 import { UButton, UInput, UCard, UErrorCard } from '@unself/ui'
 import {
-  activateSetup,
   saveOidcConfig,
   testOidcConnection,
   type ApiError,
@@ -14,12 +13,12 @@ import { createBuiltinAdmin, loginWithPassword, type AuthError } from './lib/bui
 import { requestOk } from './lib/api-client'
 
 /**
- * setup 向导页（#10，直线流程 #55，§6.5 动线；issue-A 内置身份为默认分支）：
+ * setup 向导页（#332：本地管理员必建，OIDC 为可选登录方式）：
  * - 仅携带部署输出的一次性令牌才可配置；无令牌只提示
  * - 默认分支「设置管理员账号」：用户名+密码+重复 → 建号封箱 → 直接登录进工作台
  *   （SPEC 决策 21：激活即成管理员并直接进工作台）
- * - OIDC 分支收进折叠项：三字段 + 测试连接 + [保存并激活] 整页跳 OIDC →
- *   回来自动提权成首个管理员 → 直接进工作台
+ * - OIDC 折叠分支：校验本地表单 → 保存配置 → 创建本地管理员 → OIDC 普通登录
+ * - 已有会话只作提示，不自动消费 setup token 或提升当前账号权限
  */
 
 const route = useRoute()
@@ -44,6 +43,7 @@ const testing = ref(false)
 const testResult = ref<{ ok: boolean; text: string } | null>(null)
 const activating = ref(false)
 const activateError = ref<ApiError | null>(null)
+const hasSession = ref(false)
 
 // 内置管理员表单（issue-A 默认分支）
 const adminUsername = ref('')
@@ -52,6 +52,11 @@ const adminPasswordConfirm = ref('')
 const adminFieldErrors = ref<{ username?: string; password?: string; passwordConfirm?: string }>({})
 const creatingAdmin = ref(false)
 const adminError = ref('')
+const adminValidationError = ref(false)
+const adminCreated = ref(false)
+const loginError = ref('')
+const submitting = computed(() => creatingAdmin.value || activating.value)
+const submitLocked = computed(() => submitting.value || adminCreated.value)
 
 // #92 三态机：测试通过才显示「保存并激活」（同位置替换，不并排）
 const verified = ref(false)
@@ -64,27 +69,9 @@ watch([issuer, clientId, clientSecret], () => {
   }
 })
 
-onMounted(() => {
-  const t = token.value
-  if (t) void autoActivateIfAuthed(t)
+onMounted(async () => {
+  if (token.value) hasSession.value = await requestOk('/api/me')
 })
-
-/**
- * 直线流程收尾：登录回跳（next=/setup?token=…）后探测会话；
- * 已登录 → 自动提权：成功进工作台，403/409 等失败落错误卡；未登录/网络异常 → 静默停在表单。
- */
-async function autoActivateIfAuthed(t: string) {
-  if (!(await requestOk('/api/me'))) return // 未登录或网络异常：不打扰，用户仍可填写提交
-  activating.value = true
-  try {
-    await activateSetup(t)
-    await router.replace('/')
-  } catch (err) {
-    activateError.value = err as ApiError
-  } finally {
-    activating.value = false
-  }
-}
 
 function validate(): boolean {
   const errors: typeof fieldErrors.value = {}
@@ -102,6 +89,7 @@ function validate(): boolean {
 }
 
 async function onTestConnection() {
+  if (submitLocked.value || testing.value) return
   testResult.value = null
   if (!/^https?:\/\//.test(issuer.value.trim())) {
     fieldErrors.value = { ...fieldErrors.value, issuer: '需要完整的 Issuer 地址（https://…）' }
@@ -130,9 +118,12 @@ async function onTestConnection() {
 }
 
 async function onSaveAndActivate() {
+  if (submitLocked.value) return
   activateError.value = null
-  if (!validate() || !token.value) return
-  // 直线流程（#55）：三字段先落库（oidc-config），不带 scope；成功后整页跳 IdP 登录
+  adminError.value = ''
+  if (!validateAdmin() || !validate() || !token.value || !verified.value) return
+  const username = adminUsername.value.trim()
+  const password = adminPassword.value
   const oidc = {
     issuer: issuer.value.trim(),
     clientId: clientId.value.trim(),
@@ -141,11 +132,16 @@ async function onSaveAndActivate() {
   activating.value = true
   try {
     const result = await saveOidcConfig(token.value, oidc)
-    // 配置已在服务端落库：跳 IdP 登录，next 带回 token，回来自动提权（onMounted）
+    await createBuiltinAdmin(token.value, username, password)
+    adminCreated.value = true
+    // 先建本地管理员并封箱，再发起普通 OIDC 登录；回调不再提权。
     window.location.assign(result.loginUrl)
-    return
   } catch (err) {
-    activateError.value = err as ApiError
+    if (adminCreated.value) {
+      loginError.value = (err as Error).message
+    } else {
+      activateError.value = err as ApiError
+    }
     // 边界语义 2：提交失败（网络/落库）→ 回「测试连接」可重测，不僵在 loading
     verified.value = false
     testResult.value = null
@@ -170,21 +166,43 @@ function validateAdmin(): boolean {
     errors.passwordConfirm = '两次输入的密码不一致'
   }
   adminFieldErrors.value = errors
-  return Object.keys(errors).length === 0
+  adminValidationError.value = Object.keys(errors).length > 0
+  return !adminValidationError.value
 }
 
 /** 内置分支提交：建号封箱 → 直接登录拿会话 → 进工作台。token 随链接一起提交（#165）。 */
 async function onCreateAdmin() {
+  if (submitLocked.value) return
   adminError.value = ''
+  activateError.value = null
   if (!validateAdmin() || !token.value) return
   const username = adminUsername.value.trim()
   creatingAdmin.value = true
   try {
     await createBuiltinAdmin(token.value, username, adminPassword.value)
+    adminCreated.value = true
     await loginWithPassword(username, adminPassword.value)
     await router.replace('/')
   } catch (err) {
-    adminError.value = (err as AuthError).message
+    if (adminCreated.value) {
+      loginError.value = (err as AuthError).message
+    } else {
+      adminError.value = (err as AuthError).message
+    }
+  } finally {
+    creatingAdmin.value = false
+  }
+}
+
+/** 建号已成功时只重试登录，不再提交 setup token。 */
+async function onLoginCreatedAdmin() {
+  if (submitting.value || !adminCreated.value) return
+  creatingAdmin.value = true
+  try {
+    await loginWithPassword(adminUsername.value.trim(), adminPassword.value)
+    await router.replace('/')
+  } catch (err) {
+    loginError.value = (err as AuthError).message
   } finally {
     creatingAdmin.value = false
   }
@@ -208,10 +226,29 @@ async function onCreateAdmin() {
       <h1 class="setup-title">配置你的工作台</h1>
       <p class="setup-desc">设置管理员账号，完成后直接进入工作台。</p>
 
+      <p v-if="hasSession" class="setup-desc" role="status">
+        检测到已有登录会话。请主动创建本地管理员，或展开 OIDC 完成配置；当前账号不会自动成为管理员。
+      </p>
+
+      <UErrorCard
+        v-if="adminValidationError"
+        class="setup-error"
+        title="请先完整填写本地管理员表单。"
+      />
+
+      <UErrorCard
+        v-if="loginError"
+        class="setup-error"
+        title="管理员账号已创建"
+        :message="`${loginError}。请使用刚设置的本地管理员账号登录，无需重复创建。`"
+        retry-label="使用本地管理员登录"
+        @retry="onLoginCreatedAdmin"
+      />
+
       <UErrorCard
         v-if="activateError"
         class="setup-error"
-        title="OIDC 激活没有成功"
+        title="OIDC 配置没有完成"
         :message="activateError.message"
         :request-id="activateError.requestId"
         :detail="activateError.detail"
@@ -220,7 +257,7 @@ async function onCreateAdmin() {
       />
 
       <!-- 内置分支（issue-A 默认）：管理员账号三字段 -->
-      <form class="setup-form" @submit.prevent="onCreateAdmin">
+      <form class="setup-form" novalidate @submit.prevent="onCreateAdmin">
         <div class="setup-branch-head">
           <UserPlus :size="18" aria-hidden="true" class="setup-branch-icon" />
           <span class="setup-branch-title">设置管理员账号</span>
@@ -233,6 +270,7 @@ async function onCreateAdmin() {
           autocomplete="username"
           placeholder="3-32 位字母/数字/_/-"
           required
+          :disabled="submitLocked"
           :error="adminFieldErrors.username ?? false"
           reserve-error-line
         />
@@ -243,6 +281,7 @@ async function onCreateAdmin() {
           name="password"
           autocomplete="new-password"
           required
+          :disabled="submitLocked"
           :error="adminFieldErrors.password ?? false"
           reserve-error-line
         />
@@ -253,10 +292,11 @@ async function onCreateAdmin() {
           name="password_confirm"
           autocomplete="new-password"
           required
+          :disabled="submitLocked"
           :error="adminFieldErrors.passwordConfirm ?? false"
           reserve-error-line
         />
-        <UButton type="submit" size="lg" class="setup-action" :loading="creatingAdmin">
+        <UButton type="submit" size="lg" class="setup-action" :loading="creatingAdmin" :disabled="submitLocked">
           <KeyRound :size="16" aria-hidden="true" />
           创建并进入工作台
         </UButton>
@@ -265,7 +305,7 @@ async function onCreateAdmin() {
       <!-- OIDC 分支收进折叠项（可选增强，SPEC 决策 20） -->
       <details class="setup-oidc-toggle">
         <summary class="setup-oidc-summary">使用外部 OIDC 身份源（可选）</summary>
-        <form class="setup-form" @submit.prevent="onSaveAndActivate">
+        <form class="setup-form" novalidate @submit.prevent="onSaveAndActivate">
         <UInput
           v-model="issuer"
           label="OIDC Issuer 地址"
@@ -274,6 +314,7 @@ async function onCreateAdmin() {
           placeholder="https://idp.example.com"
           autocomplete="url"
           required
+          :disabled="submitLocked"
           :error="fieldErrors.issuer ?? false"
           reserve-error-line
         />
@@ -283,6 +324,7 @@ async function onCreateAdmin() {
           name="client_id"
           autocomplete="off"
           required
+          :disabled="submitLocked"
           :error="fieldErrors.clientId ?? false"
           reserve-error-line
         />
@@ -293,6 +335,7 @@ async function onCreateAdmin() {
           name="client_secret"
           autocomplete="off"
           required
+          :disabled="submitLocked"
           :error="fieldErrors.clientSecret ?? false"
           reserve-error-line
         />
@@ -311,6 +354,7 @@ async function onCreateAdmin() {
                 variant="outline"
                 class="setup-action"
                 :loading="testing"
+                :disabled="submitLocked"
                 @click="onTestConnection"
               >
                 <PlugZap :size="16" aria-hidden="true" />
@@ -323,6 +367,7 @@ async function onCreateAdmin() {
                 size="lg"
                 class="setup-action setup-action-submit"
                 :loading="activating"
+                :disabled="submitLocked"
               >
                 <Check :size="16" aria-hidden="true" class="setup-check-icon" />
                 保存并激活
@@ -338,7 +383,7 @@ async function onCreateAdmin() {
             {{ testResult.text }}
           </p>
         </div>
-        <p class="setup-note">激活需要用工作账号登录；登录页面由你的身份源提供。</p>
+        <p class="setup-note">保存时先创建本地管理员，再前往身份源登录。OIDC 新用户为普通成员。</p>
         </form>
       </details>
     </UCard>

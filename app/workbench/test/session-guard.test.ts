@@ -179,7 +179,7 @@ describe('停用即时生效（验收 1）：既有会话下一次受保护请�
 });
 
 describe('语义矩阵（验收 2）', () => {
-  it('未登录：受保护端点一律 401（成员域、管理域、setup 提权）', async () => {
+  it('未登录：受保护端点一律 401（成员域、管理域）', async () => {
     const app = createApp();
     const { env, db } = await envFor();
     seedHello(db);
@@ -190,8 +190,6 @@ describe('语义矩阵（验收 2）', () => {
       expect([method, path, res.status]).toEqual([method, path, 401]);
       expect(await res.json()).toEqual({ error: 'authentication required' });
     }
-    // setup 提权：未登录先 401（不消费一次性 token 的判断留给有会话的请求）
-    expect((await call(app, env, 'POST', '/api/setup/activate?token=whatever')).status).toBe(401);
   });
 
   it('非管理员：成员域 200、管理域一律 403（admin required）', async () => {
