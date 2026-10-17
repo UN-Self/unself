@@ -2,13 +2,11 @@
 
 /**
  * setup 向导 API 客户端（#10）：
- * - GET /api/setup/status：实例是否已激活 / token 是否有效（路由守卫用）
+ * - GET /api/setup/status：实例是否已初始化 / token 是否有效（路由守卫用）
  * - POST /api/setup/oidc-config：三字段配置落库（只验 token 不消费，可重复提交改填）
- * - POST /api/setup/activate：消费 token → 首个管理员 + 永久封死（无 body，配置已先落库）
  * - POST /api/oidc/test-connection：服务端代理探测 OIDC Provider（#44，避开浏览器直连 CORS）
- * - GET /api/auth/login：整页跳转 OIDC（密码永远发生在 IdP 页面，§6.5）
  *
- * 直线流程（#55）：提交配置落库 → 整页跳登录 → 回来自动提权成首个管理员 → 进工作台。
+ * 初始化（#332）：OIDC 只保存配置；创建本地管理员并封箱由独立提交完成。
  * 后端契约见 app/workbench（#5/#55）。异常三层透传（§6.5）：
  * 成员/部署者只见人话 + request id，技术详情折叠。
  * 传输/错误构造统一走 lib/api-client（#142）：本文件只留端点函数、人话映射与域类型。
@@ -23,21 +21,15 @@ type OidcTestBody = { ok?: boolean; issuer?: string; warnings?: unknown; error?:
 
 /** setup 状态（GET /api/setup/status）。 */
 export interface SetupStatus {
-  /** 实例是否已完成激活。 */
+  /** 实例是否已完成初始化。 */
   done: boolean
-  /** 未激活时：URL 上的 token 是否仍可用。 */
+  /** 未初始化时：URL 上的 token 是否仍可用。 */
   tokenValid?: boolean
 }
 
 export function getSetupStatus(token?: string): Promise<SetupStatus> {
   const query = token ? `?token=${encodeURIComponent(token)}` : ''
   return request<SetupStatus>(`/api/setup/status${query}`, undefined, { messagePolicy: humanize })
-}
-
-/** 激活结果（POST /api/setup/activate）。 */
-export interface ActivateResult {
-  ok: boolean
-  user: { id: string; name: string; role: string }
 }
 
 /** 向导录入的 OIDC 连接配置（camelCase，与后端契约一致）；scope 缺省服务端回退。 */
@@ -50,7 +42,7 @@ export interface OidcSetup {
 
 /**
  * POST /api/setup/oidc-config：三字段（issuer/clientId/clientSecret）落库；
- * 只验 token 不消费，可重复提交改填。成功返回整页登录地址（next 已带回 token）。
+ * 只验 token 不消费，可重复提交改填。响应保留普通登录地址；向导保存后留在本页。
  * body 严格三字段，不带 scope（契约无此字段）。
  */
 export function saveOidcConfig(
@@ -72,27 +64,15 @@ export function saveOidcConfig(
   )
 }
 
-/**
- * POST /api/setup/activate：消费 token → 首个管理员 + 永久封死（直线流程收尾）。
- * 不再携带 body（配置由 oidc-config 先行落库）；无会话 401 由调用方经 /api/me 预判。
- */
-export function activateSetup(token: string): Promise<ActivateResult> {
-  return request<ActivateResult>(`/api/setup/activate?token=${encodeURIComponent(token)}`, {
-    method: 'POST',
-  }, { messagePolicy: humanize })
-}
-
 /** 服务端错误 → 人话（§6.5：不暴露堆栈/内部错误码）。 */
 function humanize(status: number, serverMessage?: string): string {
   switch (status) {
     case 0:
       return '网络不可用，请检查连接后重试'
     case 400:
-      return '链接不完整：请使用部署输出里的完整激活链接'
-    case 401:
-      return '需要先登录工作账号才能完成激活'
+      return '链接不完整：请使用部署输出里的完整初始化链接'
     case 403:
-      return '激活链接无效或已被使用，请向部署者要新的链接'
+      return '初始化链接无效或已被使用，请向部署者要新的链接'
     case 409:
       return '实例已完成配置，setup 页面已关闭'
     case 503:

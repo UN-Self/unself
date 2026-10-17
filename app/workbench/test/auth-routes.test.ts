@@ -119,6 +119,78 @@ function oidcEnv(base: Record<string, unknown>): Record<string, unknown> {
 }
 
 describe('OIDC 登录路由', () => {
+  it('#332 setup：保存配置 → 创建本地管理员 → 真实授权回调仅登录普通成员，原会话不提权', async () => {
+    const { generateInstanceKeyPair } = await import('../src/keys');
+    const { createSessionToken } = await import('../src/session');
+    const pair = await generateInstanceKeyPair();
+    const { e: baseEnv, db } = env();
+    const e = { ...baseEnv, JWT_PRIVATE_KEY: pair.privateKeyPem };
+    db.run("INSERT INTO setup_tokens (token) VALUES ('setup-332')");
+    db.run("INSERT INTO users (id, issuer, sub, display_name, role) VALUES ('u_old', 'https://old-idp', 'old', '原会话', 'user')");
+    const oldCookie = `unself_session=${await createSessionToken(
+      { uid: 'u_old', iss: 'https://old-idp', sub: 'old', name: '原会话' }, pair.privateKeyPem,
+    )}`;
+    const saved = await app.request('https://team.example.com/api/setup/oidc-config?token=setup-332', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: oldCookie },
+      body: JSON.stringify({ issuer: ISSUER, clientId: 'unself-dev', clientSecret: 'dev-secret' }),
+    }, e);
+    expect(saved.status).toBe(200);
+    const { loginUrl } = await saved.json() as { loginUrl: string };
+    expect(db.first('SELECT used_at FROM setup_tokens WHERE token = ?', 'setup-332')).toEqual({ used_at: null });
+    expect(db.query('SELECT * FROM builtin_credentials')).toEqual([]);
+
+    const created = await app.request('https://team.example.com/api/setup/builtin-admin?token=setup-332', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: oldCookie },
+      body: JSON.stringify({ username: 'boss', salt: 'AAAAAAAAAAAAAAAAAAAAAA==', proof: `${'A'.repeat(43)}=` }),
+    }, e);
+    expect(created.status).toBe(201);
+    const { user: admin } = await created.json() as { user: { id: string } };
+    expect(db.first('SELECT issuer, role FROM users WHERE id = ?', admin.id)).toEqual({ issuer: 'builtin', role: 'admin' });
+    expect(db.first('SELECT user_id, username FROM builtin_credentials WHERE user_id = ?', admin.id)).toEqual({ user_id: admin.id, username: 'boss' });
+    expect(db.first("SELECT value FROM instance_config WHERE key = 'setup_done'")).toEqual({ value: '1' });
+    const consumed = db.first('SELECT used_at, used_by FROM setup_tokens WHERE token = ?', 'setup-332');
+    expect(consumed).toMatchObject({ used_at: expect.any(String), used_by: admin.id });
+
+    const restoreLogin = installFakeIdp('unused');
+    let flowCookie: string;
+    let flow: { state: string; nonce: string };
+    try {
+      const login = await app.request(loginUrl, { headers: { cookie: oldCookie } }, e);
+      expect(login.status).toBe(302);
+      const authorization = new URL(login.headers.get('location')!);
+      expect(authorization.origin).toBe(ISSUER);
+      expect(authorization.searchParams.get('client_id')).toBe('unself-dev');
+      flowCookie = login.headers.get('set-cookie')!.split(';')[0]!;
+      flow = JSON.parse(decodeURIComponent(flowCookie.replace('unself_oidc_flow=', '')));
+    } finally {
+      restoreLogin();
+    }
+    const restoreCallback = installFakeIdp(await issueIdToken(flow.nonce, 'setup-member'));
+    try {
+      const callback = await app.request(
+        `https://team.example.com/api/auth/callback?code=setup-code&state=${encodeURIComponent(flow.state)}`,
+        { headers: { cookie: `${oldCookie}; ${flowCookie}` } }, e,
+      );
+      expect(callback.status).toBe(302);
+      expect(callback.headers.get('location')).toBe('/');
+      const member = db.first<{ id: string; role: string }>('SELECT id, role FROM users WHERE issuer = ? AND sub = ?', ISSUER, 'setup-member');
+      expect(member).toMatchObject({ role: 'user' });
+      const cookies = (callback.headers as unknown as { getSetCookie(): string[] }).getSetCookie();
+      const sessionCookie = cookies.find((cookie) => cookie.startsWith('unself_session='))!.split(';')[0]!;
+      const me = await app.request('https://team.example.com/api/me', { headers: { cookie: sessionCookie } }, e);
+      expect(me.status).toBe(200);
+      expect(await me.json()).toMatchObject({ user: { id: member!.id, role: 'user' } });
+      expect(db.first('SELECT role FROM users WHERE id = ?', 'u_old')).toEqual({ role: 'user' });
+      expect(db.query("SELECT id FROM users WHERE role = 'admin'")).toEqual([{ id: admin.id }]);
+      expect(db.query('SELECT user_id FROM builtin_credentials')).toEqual([{ user_id: admin.id }]);
+      expect(db.first('SELECT used_at, used_by FROM setup_tokens WHERE token = ?', 'setup-332')).toEqual(consumed);
+    } finally {
+      restoreCallback();
+    }
+  });
+
   it('未配置 OIDC 时 /api/auth/login 回 503', async () => {
     const { e } = env();
     const res = await app.request('/api/auth/login', { method: 'GET' }, e);

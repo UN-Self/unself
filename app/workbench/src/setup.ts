@@ -8,8 +8,8 @@
 
 /** 消费一次性 token：单条 UPDATE 原子完成（WHERE used_at IS NULL + meta.changes 判定），
  *  并发双激活只有一次能命中（changes=1），另一次 changes=0 → false。
- *  used_by（#49 验收项 5 / #171）：activate 记 session.uid（被提权的用户），
- *  builtin-admin 记新建 admin 的 uid；与 used_at 同一条 UPDATE 落库，不留半条取证状态。 */
+ *  used_by（#171）：builtin-admin 记新建 admin 的 uid；
+ *  与 used_at 同一条 UPDATE 落库，不留半条取证状态。 */
 export async function consumeSetupToken(db: D1Database, token: string, usedBy: string): Promise<boolean> {
   const result = await db
     .prepare("UPDATE setup_tokens SET used_at = datetime('now'), used_by = ? WHERE token = ? AND used_at IS NULL")

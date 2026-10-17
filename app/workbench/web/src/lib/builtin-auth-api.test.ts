@@ -66,7 +66,18 @@ describe('createBuiltinAdmin（POST /api/setup/builtin-admin，#165 带 token）
 
     await expect(createBuiltinAdmin('tok-1', 'boss', 'password123')).rejects.toMatchObject({
       status: 403,
-      message: '激活链接无效或已被使用，请向部署者要新的链接',
+      message: '初始化链接无效或已被使用，请向部署者要新的链接',
+    })
+  })
+
+  it('409（已封箱）→ 中文提示，不透传服务端英文', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ ok: false, status: 409, body: { error: 'setup already completed; sealed forever' } }),
+    )
+
+    await expect(createBuiltinAdmin('tok-1', 'boss', 'password123')).rejects.toMatchObject({
+      status: 409,
+      message: '实例已完成配置，setup 页面已关闭',
     })
   })
 

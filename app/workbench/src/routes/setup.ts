@@ -2,12 +2,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 
-import { readSession } from '../session';
 import { consumeSetupToken, isSetupTokenValid, releaseSetupToken } from '../setup';
 import { audit } from '../services/audit';
 import { isSetupDone, markSetupDone, persistOidcConfig } from '../services/instance-config';
 import { buildStoredCredential } from '../services/passwords';
-import { promoteToAdmin } from '../services/users';
 import type { Bindings } from '../index';
 
 /** 向导 OIDC 字段（oidc-config 端点）：三件必填，scope 可选（M0 不采集，发现文档过滤）。 */
@@ -46,9 +44,9 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
   });
 
   /**
-   * 向导 OIDC 字段落库（#55 直线流程第一步）：
+   * 向导 OIDC 字段落库（#332：可选支线，只保存配置）：
    * - 门禁：setup 未封箱 + token 有效（未消费）——只验不消费（可重复提交改填）；
-   * - 动作：持久化向导 OIDC 字段 → 返回 loginUrl（next 带回 setup 页）。
+   * - 动作：持久化向导 OIDC 字段；保留 loginUrl 响应，向导不据此跳转。
    * 落库前置：不然「登录依赖配置、配置依赖激活后写入」鸡生蛋（登录器由表配置才可通）。
    */
   app.post('/api/setup/oidc-config', async (c) => {
@@ -72,38 +70,7 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
       await audit(db, 'system', 'oidc_config_stored');
     }
     const loginUrl = new URL('/api/auth/login', c.req.url);
-    loginUrl.searchParams.set('next', `/setup?token=${encodeURIComponent(token)}`);
     return c.json({ ok: true, loginUrl: loginUrl.toString() });
-  });
-
-  /**
-   * 激活（#55 直线流程第三步）：已登录会话 + 一次性 token（此处消费，used_by = session.uid，#171）→
-   * 提权 admin + 封箱 + 审计。旧「无会话 401→loginUrl」路径已删（死锁根源）；
-   * 登录在 oidc-config 落库后发起，本端点不再接受 OIDC body。
-   * 已激活后一律拒绝（§6.5：已激活后访问 /setup 一律重定向，页面不复存在）。
-   */
-  app.post('/api/setup/activate', async (c) => {
-    const db = c.env.CORE_DB;
-    if (await isSetupDone(db)) {
-      return c.json({ error: 'setup already completed; sealed forever' }, 409);
-    }
-    const token = c.req.query('token') ?? c.req.header('x-setup-token');
-    if (!token) {
-      return c.json({ error: 'missing setup token' }, 400);
-    }
-    const session = await readSession(c);
-    if (!session) {
-      // 无会话：纯 401（已登录是提权前提；loginUrl 路径已删，#55）
-      return c.json({ error: 'authentication required' }, 401);
-    }
-    const consumed = await consumeSetupToken(db, token, session.uid);
-    if (!consumed) {
-      return c.json({ error: 'invalid or already-used setup token' }, 403);
-    }
-    await promoteToAdmin(db, session.uid);
-    await markSetupDone(db);
-    await audit(db, session.uid, 'setup_activated', session.uid);
-    return c.json({ ok: true, user: { id: session.uid, name: session.name, role: 'admin' } });
   });
 
   /**
@@ -111,7 +78,7 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
    * username+password → 建 admin（role=admin、status=active）+ 凭证行（batch 原子）
    * → 置 setup_done 封箱 → 审计。
    * 门禁（#165）：setup 未封箱 + 一次性 setup token（query `token` 或 `x-setup-token`，
-   * 取法/校验同 activate；未给或无效/已用一律 403）。
+   * 未给或无效/已用一律 403）。
    * 消费（#171）：开户前先原子预占 token（used_by 预写待落库的 uid）——并发第二请求
    * 在建号之前就 changes=0 → 403，严格保证「同一 token 只出一个 admin」；
    * 预占后若硬闸撞 UNIQUE（并发同名），归还 token 再回 409（可换名重试）。
