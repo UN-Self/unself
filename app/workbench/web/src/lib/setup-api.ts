@@ -2,12 +2,11 @@
 
 /**
  * setup 向导 API 客户端（#10）：
- * - GET /api/setup/status：实例是否已激活 / token 是否有效（路由守卫用）
+ * - GET /api/setup/status：实例是否已初始化 / token 是否有效（路由守卫用）
  * - POST /api/setup/oidc-config：三字段配置落库（只验 token 不消费，可重复提交改填）
  * - POST /api/oidc/test-connection：服务端代理探测 OIDC Provider（#44，避开浏览器直连 CORS）
- * - GET /api/auth/login：整页跳转 OIDC（密码永远发生在 IdP 页面，§6.5）
  *
- * 初始化（#332）：提交配置落库 → 创建本地管理员并封箱 → 普通 OIDC 登录进工作台。
+ * 初始化（#332）：OIDC 只保存配置；创建本地管理员并封箱由独立提交完成。
  * 后端契约见 app/workbench（#5/#55）。异常三层透传（§6.5）：
  * 成员/部署者只见人话 + request id，技术详情折叠。
  * 传输/错误构造统一走 lib/api-client（#142）：本文件只留端点函数、人话映射与域类型。
@@ -22,9 +21,9 @@ type OidcTestBody = { ok?: boolean; issuer?: string; warnings?: unknown; error?:
 
 /** setup 状态（GET /api/setup/status）。 */
 export interface SetupStatus {
-  /** 实例是否已完成激活。 */
+  /** 实例是否已完成初始化。 */
   done: boolean
-  /** 未激活时：URL 上的 token 是否仍可用。 */
+  /** 未初始化时：URL 上的 token 是否仍可用。 */
   tokenValid?: boolean
 }
 
@@ -43,7 +42,7 @@ export interface OidcSetup {
 
 /**
  * POST /api/setup/oidc-config：三字段（issuer/clientId/clientSecret）落库；
- * 只验 token 不消费，可重复提交改填。成功返回普通登录地址，建号成功后才能跳转。
+ * 只验 token 不消费，可重复提交改填。响应保留普通登录地址；向导保存后留在本页。
  * body 严格三字段，不带 scope（契约无此字段）。
  */
 export function saveOidcConfig(
@@ -71,11 +70,9 @@ function humanize(status: number, serverMessage?: string): string {
     case 0:
       return '网络不可用，请检查连接后重试'
     case 400:
-      return '链接不完整：请使用部署输出里的完整激活链接'
-    case 401:
-      return '需要先登录工作账号才能完成激活'
+      return '链接不完整：请使用部署输出里的完整初始化链接'
     case 403:
-      return '激活链接无效或已被使用，请向部署者要新的链接'
+      return '初始化链接无效或已被使用，请向部署者要新的链接'
     case 409:
       return '实例已完成配置，setup 页面已关闭'
     case 503:

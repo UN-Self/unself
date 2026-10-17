@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Check, KeyRound, PlugZap, UserPlus } from 'lucide-vue-next'
 import { UButton, UInput, UCard, UErrorCard } from '@unself/ui'
@@ -10,15 +10,13 @@ import {
   type ApiError,
 } from './lib/setup-api'
 import { createBuiltinAdmin, loginWithPassword, type AuthError } from './lib/builtin-auth-api'
-import { requestOk } from './lib/api-client'
 
 /**
  * setup 向导页（#332：本地管理员必建，OIDC 为可选登录方式）：
  * - 仅携带部署输出的一次性令牌才可配置；无令牌只提示
  * - 默认分支「设置管理员账号」：用户名+密码+重复 → 建号封箱 → 直接登录进工作台
- *   （SPEC 决策 21：激活即成管理员并直接进工作台）
- * - OIDC 折叠分支：校验本地表单 → 保存配置 → 创建本地管理员 → OIDC 普通登录
- * - 已有会话只作提示，不自动消费 setup token 或提升当前账号权限
+ * - OIDC 折叠分支：测试连接 → 保存配置，留在本页继续设置管理员
+ * - 打开页面不自动消费 setup token 或提升当前账号权限
  */
 
 const route = useRoute()
@@ -31,7 +29,7 @@ const token = computed(() => {
   return typeof raw === 'string' && raw.length > 0 ? raw : null
 })
 
-// #83：激活态由守卫决断（已完成 → 重定向离场），本页只按 token 分派文案
+// #83：初始化状态由守卫决断（已完成 → 重定向离场），本页只按 token 分派文案
 const phase = ref<Phase>(token.value ? 'ready' : 'no-token')
 
 // 表单三字段（§6.5）
@@ -41,9 +39,8 @@ const clientSecret = ref('')
 const fieldErrors = ref<{ issuer?: string; clientId?: string; clientSecret?: string }>({})
 const testing = ref(false)
 const testResult = ref<{ ok: boolean; text: string } | null>(null)
-const activating = ref(false)
-const activateError = ref<ApiError | null>(null)
-const hasSession = ref(false)
+const savingOidc = ref(false)
+const oidcSaveError = ref<ApiError | null>(null)
 
 // 内置管理员表单（issue-A 默认分支）
 const adminUsername = ref('')
@@ -52,13 +49,12 @@ const adminPasswordConfirm = ref('')
 const adminFieldErrors = ref<{ username?: string; password?: string; passwordConfirm?: string }>({})
 const creatingAdmin = ref(false)
 const adminError = ref('')
-const adminValidationError = ref(false)
 const adminCreated = ref(false)
 const loginError = ref('')
-const submitting = computed(() => creatingAdmin.value || activating.value)
+const submitting = computed(() => creatingAdmin.value || savingOidc.value)
 const submitLocked = computed(() => submitting.value || adminCreated.value)
 
-// #92 三态机：测试通过才显示「保存并激活」（同位置替换，不并排）
+// #92 三态机：测试通过才显示「保存配置」（同位置替换，不并排）
 const verified = ref(false)
 
 // 边界语义 1：测试通过后改任意字段 → 测试结果失效 → 按钮回「测试连接」
@@ -67,10 +63,6 @@ watch([issuer, clientId, clientSecret], () => {
     verified.value = false
     testResult.value = null
   }
-})
-
-onMounted(async () => {
-  if (token.value) hasSession.value = await requestOk('/api/me')
 })
 
 function validate(): boolean {
@@ -103,7 +95,7 @@ async function onTestConnection() {
   testing.value = true
   const result = await testOidcConnection(tested.issuer)
   testing.value = false
-  // 竞态面（边界语义 1）：测试在途时用户改任意字段 → 结果作废，不回「保存并激活」
+  // 竞态面（边界语义 1）：测试在途时用户改任意字段 → 结果作废，不回「保存配置」
   if (
     issuer.value.trim() !== tested.issuer ||
     clientId.value.trim() !== tested.clientId ||
@@ -117,36 +109,26 @@ async function onTestConnection() {
     : { ok: false, text: result.reason }
 }
 
-async function onSaveAndActivate() {
+async function onSaveOidcConfig() {
   if (submitLocked.value) return
-  activateError.value = null
-  adminError.value = ''
-  if (!validateAdmin() || !validate() || !token.value || !verified.value) return
-  const username = adminUsername.value.trim()
-  const password = adminPassword.value
+  oidcSaveError.value = null
+  if (!validate() || !token.value || !verified.value) return
   const oidc = {
     issuer: issuer.value.trim(),
     clientId: clientId.value.trim(),
     clientSecret: clientSecret.value,
   }
-  activating.value = true
+  savingOidc.value = true
   try {
-    const result = await saveOidcConfig(token.value, oidc)
-    await createBuiltinAdmin(token.value, username, password)
-    adminCreated.value = true
-    // 先建本地管理员并封箱，再发起普通 OIDC 登录；回调不再提权。
-    window.location.assign(result.loginUrl)
+    await saveOidcConfig(token.value, oidc)
+    testResult.value = { ok: true, text: 'OIDC 配置已保存' }
   } catch (err) {
-    if (adminCreated.value) {
-      loginError.value = (err as Error).message
-    } else {
-      activateError.value = err as ApiError
-    }
+    oidcSaveError.value = err as ApiError
     // 边界语义 2：提交失败（网络/落库）→ 回「测试连接」可重测，不僵在 loading
     verified.value = false
     testResult.value = null
   } finally {
-    activating.value = false
+    savingOidc.value = false
   }
 }
 
@@ -166,15 +148,13 @@ function validateAdmin(): boolean {
     errors.passwordConfirm = '两次输入的密码不一致'
   }
   adminFieldErrors.value = errors
-  adminValidationError.value = Object.keys(errors).length > 0
-  return !adminValidationError.value
+  return Object.keys(errors).length === 0
 }
 
 /** 内置分支提交：建号封箱 → 直接登录拿会话 → 进工作台。token 随链接一起提交（#165）。 */
 async function onCreateAdmin() {
   if (submitLocked.value) return
   adminError.value = ''
-  activateError.value = null
   if (!validateAdmin() || !token.value) return
   const username = adminUsername.value.trim()
   creatingAdmin.value = true
@@ -214,9 +194,9 @@ async function onLoginCreatedAdmin() {
     <UCard v-if="phase === 'no-token'" padding="lg" class="setup-card">
       <div class="setup-tokenless">
         <KeyRound :size="28" aria-hidden="true" class="setup-tokenless-icon" />
-        <h1 class="setup-title">需要激活链接</h1>
+        <h1 class="setup-title">需要初始化链接</h1>
         <p class="setup-desc">
-          本页面仅能通过部署时输出的激活链接访问。请向部署者索取一次性激活链接
+          本页面仅能通过部署时输出的初始化链接访问。请向部署者索取一次性初始化链接
           （形如 <code>/setup?token=…</code>），打开后即可完成实例配置。
         </p>
       </div>
@@ -224,20 +204,10 @@ async function onLoginCreatedAdmin() {
 
     <UCard v-else padding="lg" class="setup-card">
       <h1 class="setup-title">配置你的工作台</h1>
-      <p class="setup-desc">设置管理员账号，完成后直接进入工作台。</p>
-
-      <p v-if="hasSession" class="setup-desc" role="status">
-        检测到已有登录会话。请主动创建本地管理员，或展开 OIDC 完成配置；当前账号不会自动成为管理员。
-      </p>
-
-      <UErrorCard
-        v-if="adminValidationError"
-        class="setup-error"
-        title="请先完整填写本地管理员表单。"
-      />
 
       <UErrorCard
         v-if="loginError"
+        data-testid="admin-login-error"
         class="setup-error"
         title="管理员账号已创建"
         :message="`${loginError}。请使用刚设置的本地管理员账号登录，无需重复创建。`"
@@ -246,18 +216,16 @@ async function onLoginCreatedAdmin() {
       />
 
       <UErrorCard
-        v-if="activateError"
+        v-if="oidcSaveError"
         class="setup-error"
         title="OIDC 配置没有完成"
-        :message="activateError.message"
-        :request-id="activateError.requestId"
-        :detail="activateError.detail"
-        retry-label="重试"
-        @retry="onSaveAndActivate"
+        :message="oidcSaveError.message"
+        :request-id="oidcSaveError.requestId"
+        :detail="oidcSaveError.detail"
       />
 
       <!-- 内置分支（issue-A 默认）：管理员账号三字段 -->
-      <form class="setup-form" novalidate @submit.prevent="onCreateAdmin">
+      <form class="setup-form" data-testid="admin-form" novalidate @submit.prevent="onCreateAdmin">
         <div class="setup-branch-head">
           <UserPlus :size="18" aria-hidden="true" class="setup-branch-icon" />
           <span class="setup-branch-title">设置管理员账号</span>
@@ -304,8 +272,8 @@ async function onLoginCreatedAdmin() {
 
       <!-- OIDC 分支收进折叠项（可选增强，SPEC 决策 20） -->
       <details class="setup-oidc-toggle">
-        <summary class="setup-oidc-summary">使用外部 OIDC 身份源（可选）</summary>
-        <form class="setup-form" novalidate @submit.prevent="onSaveAndActivate">
+        <summary class="setup-oidc-summary">OIDC（可选）</summary>
+        <form class="setup-form" data-testid="oidc-form" novalidate @submit.prevent="onSaveOidcConfig">
         <UInput
           v-model="issuer"
           label="OIDC Issuer 地址"
@@ -340,17 +308,14 @@ async function onLoginCreatedAdmin() {
           reserve-error-line
         />
 
-        <!-- #95 按钮合规收口：单按钮三态机（#92）同位置互斥 + beUI 弹簧换位动效；
-             两态按钮同宽 width:100% 居中，测试结果文字移到按钮下方居中。
-             换位动效照抄 beUI StatefulButton（SPRING_SWAP 弹簧 + 图标弹性缩放滑入 +
-             outline→primary 颜色随两态换位平滑过渡），参数见 <style> 注释；
-             保留三态机语义（改字段回退/提交失败回退/竞态守卫，#93 已验收）。 -->
+        <!-- #92：测试连接与保存配置同位置互斥；两态均为次要操作。 -->
         <div class="setup-test">
           <div class="setup-test-stage">
             <Transition name="setup-swap" mode="out-in">
               <UButton
                 v-if="!verified"
                 key="setup-test-connection"
+                data-testid="oidc-test"
                 variant="outline"
                 class="setup-action"
                 :loading="testing"
@@ -362,15 +327,17 @@ async function onLoginCreatedAdmin() {
               </UButton>
               <UButton
                 v-else
-                key="setup-save-activate"
+                key="setup-save-config"
+                data-testid="oidc-save"
                 type="submit"
+                variant="outline"
                 size="lg"
-                class="setup-action setup-action-submit"
-                :loading="activating"
+                class="setup-action"
+                :loading="savingOidc"
                 :disabled="submitLocked"
               >
                 <Check :size="16" aria-hidden="true" class="setup-check-icon" />
-                保存并激活
+                保存配置
               </UButton>
             </Transition>
           </div>
@@ -383,7 +350,6 @@ async function onLoginCreatedAdmin() {
             {{ testResult.text }}
           </p>
         </div>
-        <p class="setup-note">保存时先创建本地管理员，再前往身份源登录。OIDC 新用户为普通成员。</p>
         </form>
       </details>
     </UCard>
@@ -524,45 +490,8 @@ async function onLoginCreatedAdmin() {
   transform: translateY(-14px);
 }
 /*
- * outline→primary 平滑变色（#95 克制版）：换位瞬间底色互滑——
- * 提交按钮从 outline 底色（--color-bg）弹入 primary；反向回退时对称滑回。
- * 时长/缓动同 SPRING_SWAP；keyframe 动画不依赖选择器优先级，不侵入 UButton 契约层。
- */
-.setup-swap-enter-active.setup-action-submit {
-  animation: setup-swap-to-primary var(--unself-duration-normal) linear(
-    0, 0.035 4%, 0.117 8%, 0.221 12%, 0.331 16%, 0.438 20%, 0.536 24%,
-    0.622 28%, 0.696 32%, 0.759 36%, 0.811 40%, 0.853 44%, 0.886 48%,
-    0.913 52%, 0.934 56%, 0.951 60%, 0.964 64%, 0.973 68%, 0.981 72%,
-    0.986 76%, 0.99 80%, 0.993 84%, 0.995 88%, 0.997 92%, 0.998 96%, 1
-  ) both;
-}
-.setup-swap-enter-active:not(.setup-action-submit) {
-  animation: setup-swap-to-outline var(--unself-duration-normal) linear(
-    0, 0.035 4%, 0.117 8%, 0.221 12%, 0.331 16%, 0.438 20%, 0.536 24%,
-    0.622 28%, 0.696 32%, 0.759 36%, 0.811 40%, 0.853 44%, 0.886 48%,
-    0.913 52%, 0.934 56%, 0.951 60%, 0.964 64%, 0.973 68%, 0.981 72%,
-    0.986 76%, 0.99 80%, 0.993 84%, 0.995 88%, 0.997 92%, 0.998 96%, 1
-  ) both;
-}
-@keyframes setup-swap-to-primary {
-  from {
-    background-color: var(--unself-color-bg);
-  }
-  to {
-    background-color: var(--unself-color-primary);
-  }
-}
-@keyframes setup-swap-to-outline {
-  from {
-    background-color: var(--unself-color-primary);
-  }
-  to {
-    background-color: var(--unself-color-bg);
-  }
-}
-/*
  * 图标弹性缩放滑入（照抄 beUI ICON_VARIANTS：scale 0.7→1 + 淡入），
- * 弹簧参数同 SPRING_SWAP；「保存并激活」挂载时 Check 弹性出现。
+ * 弹簧参数同 SPRING_SWAP；「保存配置」挂载时 Check 弹性出现。
  * prefers-reduced-motion：动效全部退化为纯淡入（beUI useReducedMotion 同语义）。
  */
 .setup-check-icon {
@@ -595,15 +524,5 @@ async function onLoginCreatedAdmin() {
   .setup-check-icon {
     animation: none;
   }
-  .setup-swap-enter-active.setup-action-submit,
-  .setup-swap-enter-active:not(.setup-action-submit) {
-    animation: none;
-  }
-}
-.setup-note {
-  margin: 0;
-  font-size: var(--unself-font-size-xs);
-  color: var(--unself-color-text-tertiary);
-  text-align: center;
 }
 </style>

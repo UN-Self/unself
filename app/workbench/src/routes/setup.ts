@@ -44,9 +44,9 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
   });
 
   /**
-   * 向导 OIDC 字段落库（#332：先存配置，再创建本地管理员，最后普通 OIDC 登录）：
+   * 向导 OIDC 字段落库（#332：可选支线，只保存配置）：
    * - 门禁：setup 未封箱 + token 有效（未消费）——只验不消费（可重复提交改填）；
-   * - 动作：持久化向导 OIDC 字段 → 返回普通 loginUrl；建号成功后由页面跳转。
+   * - 动作：持久化向导 OIDC 字段；保留 loginUrl 响应，向导不据此跳转。
    * 落库前置：不然「登录依赖配置、配置依赖激活后写入」鸡生蛋（登录器由表配置才可通）。
    */
   app.post('/api/setup/oidc-config', async (c) => {
