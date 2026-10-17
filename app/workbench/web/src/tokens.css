@@ -13,6 +13,12 @@
  * 无人使用该映射（tailwindcss() 插件仍在 vite 流程，扫描不受影响）。
  */
 
+@property --unself-page-turn-progress {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
 :root {
   /* 色彩：暖纸底 + 卡面白 + 靠蓝主色（#307） */
   --unself-color-bg: #faf9f7;
@@ -69,6 +75,14 @@
   --unself-duration-normal: 250ms;
   --unself-duration-slow: 400ms;
   --unself-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --unself-ease-page-turn: cubic-bezier(0.4, 0, 0.2, 1);
+  /* 内部翻页进度：注册为可插值的数值，折线与页背共享进度。 */
+  --unself-page-turn-progress: 0;
+  --unself-page-fold-size: calc(var(--unself-space-8) * 4);
+  /* 内部布局测量值由翻页容器覆盖；初值只用于挂载前的布局。 */
+  --unself-page-width: calc(var(--unself-space-8) * 16);
+  --unself-page-height: calc(var(--unself-space-8) * 16);
+  --unself-page-fold-distance: var(--unself-page-fold-size);
   --unself-ease-spring: linear(0, 0.035 4%, 0.117 8%, 0.221 12%, 0.331 16%, 0.438 20%, 0.536 24%, 0.622 28%, 0.696 32%, 0.759 36%, 0.811 40%, 0.853 44%, 0.886 48%, 0.913 52%, 0.934 56%, 0.951 60%, 0.964 64%, 0.973 68%, 0.981 72%, 0.986 76%, 0.99 80%, 0.993 84%, 0.995 88%, 0.997 92%, 0.998 96%, 1);
   --unself-motion-press-scale: 0.93;
   --unself-motion-lift-y: 2px;

@@ -12,6 +12,7 @@ export { UI_VERSION } from './version';
 export { default as UButton } from './button.vue';
 export { default as UInput } from './input.vue';
 export { default as UCard } from './card.vue';
+export { default as UFlipCard } from './flip-card.vue';
 export { default as UMessage } from './message.vue';
 export { default as UMessageAvatar } from './message-avatar.vue';
 export { default as UMessageBubble } from './message-bubble.vue';
