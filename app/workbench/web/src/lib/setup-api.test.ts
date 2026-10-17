@@ -87,6 +87,14 @@ describe('saveOidcConfig（POST /api/setup/oidc-config）', () => {
     expect(String(url)).toBe('/api/setup/oidc-config?token=tok%201%2Fx')
   })
 
+  it('已封箱时映射中文错误，不透传服务端英文', async () => {
+    mockFetchOnce(jsonResponse({ ok: false, status: 409, body: { error: 'setup already completed; sealed forever' } }))
+
+    await expect(
+      saveOidcConfig('tok-1', { issuer: 'https://idp.example.com', clientId: 'c1', clientSecret: 's' }),
+    ).rejects.toMatchObject({ status: 409, message: '实例已完成配置，setup 页面已关闭' })
+  })
+
   it('非 200 抛 ApiError（人话 + 状态码）', async () => {
     mockFetchOnce(jsonResponse({ ok: false, status: 403, body: { error: 'invalid or already-used setup token' } }))
 

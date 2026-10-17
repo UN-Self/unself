@@ -70,10 +70,13 @@ export async function createBuiltinAdmin(
   )
 }
 
-/** 内置开通错误人话（#165）：403 = token 门（缺失/无效/已用）→ 链接问题（禁用英文服务端文案）；
- *  其余沿用默认策略（后端中文人话优先），与 setup-api.humanize 同口径。 */
+/** 内置开通错误人话：token 拒绝与已封箱转中文；用户名占用等错误保留服务端人话。 */
 function humanizeSetupToken(status: number, serverMessage?: string): string {
-  return status === 403 ? '激活链接无效或已被使用，请向部署者要新的链接' : preferServerMessage(status, serverMessage)
+  if (status === 403) return '初始化链接无效或已被使用，请向部署者要新的链接'
+  if (status === 409 && serverMessage === 'setup already completed; sealed forever') {
+    return '实例已完成配置，setup 页面已关闭'
+  }
+  return preferServerMessage(status, serverMessage)
 }
 
 /** POST /api/admin/members/:id/reset-password：管理员设新密码（仅内置用户；盐新生成）。 */
