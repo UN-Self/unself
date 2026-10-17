@@ -62,18 +62,21 @@ async function settle() {
 }
 
 async function fillOidc(wrapper: VueWrapper) {
+  await editBranch(wrapper, 'oidc')
   await wrapper.get('input[name="issuer"]').setValue(ISSUER)
   await wrapper.get('input[name="client_id"]').setValue('client-1')
   await wrapper.get('input[name="client_secret"]').setValue('secret-1')
 }
 
 async function fillAdmin(wrapper: VueWrapper, confirmation = 'password123') {
+  await editBranch(wrapper, 'admin')
   await wrapper.get('input[name="username"]').setValue('boss')
   await wrapper.get('input[name="password"]').setValue('password123')
   await wrapper.get('input[name="password_confirm"]').setValue(confirmation)
 }
 
 async function testConnection(wrapper: VueWrapper) {
+  await editBranch(wrapper, 'oidc')
   await wrapper.get('[data-testid="oidc-test"]').trigger('click')
   await settle()
 }
@@ -84,7 +87,14 @@ async function prepareOidc(wrapper: VueWrapper) {
 }
 
 async function submit(wrapper: VueWrapper, branch: 'admin' | 'oidc') {
+  await editBranch(wrapper, branch)
   await wrapper.get(`[data-testid="${branch}-form"]`).trigger('submit')
+  await settle()
+}
+
+/** 通过可见的翻页入口切到目标页；已在目标页时那一下点击无副作用（两侧翻页函数各自带当前页/提交中判断）。 */
+async function editBranch(wrapper: VueWrapper, branch: 'admin' | 'oidc') {
+  await wrapper.get(`[data-testid="${branch === 'oidc' ? 'open-oidc' : 'return-admin'}"]`).trigger('click')
   await settle()
 }
 
@@ -208,6 +218,70 @@ describe('SetupView 初始化边界（#332）', () => {
     await vi.waitFor(() => expect(routerReplace).toHaveBeenCalledWith('/'))
     expect(requests(CREATE)).toHaveLength(1)
     expect(requests(LOGIN)).toHaveLength(2)
+  })
+})
+
+describe('SetupView 卡片翻页动线', () => {
+  it('翻页与手动返回保留两份输入，切换本身不发起写请求', async () => {
+    const wrapper = mount(SetupView)
+    await fillAdmin(wrapper)
+    await fillOidc(wrapper)
+    await editBranch(wrapper, 'admin')
+    expect((wrapper.get('input[name="username"]').element as HTMLInputElement).value).toBe('boss')
+    expect((wrapper.get('input[name="password"]').element as HTMLInputElement).value).toBe('password123')
+    await editBranch(wrapper, 'oidc')
+    expect((wrapper.get('input[name="issuer"]').element as HTMLInputElement).value).toBe(ISSUER)
+    expect((wrapper.get('input[name="client_secret"]').element as HTMLInputElement).value).toBe('secret-1')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('打开时焦点进入 OIDC，Escape 返回折角入口；无效创建聚焦首个错误字段', async () => {
+    const wrapper = mount(SetupView, { attachTo: document.body })
+    try {
+      await editBranch(wrapper, 'oidc')
+      expect(document.activeElement).toBe(wrapper.get('input[name="issuer"]').element)
+      await wrapper.get('input[name="issuer"]').trigger('keydown', { key: 'Escape' })
+      await settle()
+      expect(document.activeElement).toBe(wrapper.get('[data-testid="open-oidc"]').element)
+      await wrapper.get('[data-testid="create-admin"]').trigger('click')
+      await settle()
+      expect(document.activeElement).toBe(wrapper.get('input[name="username"]').element)
+      expectNoCompletion()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('OIDC 页不能略过保存直接创建；保存后翻页回、聚焦创建，再点击才完成初始化', async () => {
+    const wrapper = mount(SetupView, { attachTo: document.body })
+    try {
+      await fillAdmin(wrapper)
+      await prepareOidc(wrapper)
+      await wrapper.get('[data-testid="create-admin"]').trigger('click')
+      await settle()
+      expectNoCompletion()
+      await wrapper.get('[data-testid="oidc-save"]').trigger('click')
+      await settle()
+      expect(requests(SAVE)).toHaveLength(1)
+      expectNoCompletion()
+      expect(document.activeElement).toBe(wrapper.get('[data-testid="create-admin"]').element)
+      await wrapper.get('[data-testid="create-admin"]').trigger('click')
+      await vi.waitFor(() => expect(routerReplace).toHaveBeenCalledWith('/'))
+      expect(requests(CREATE)).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('返回后隐藏的 OIDC 表单不会发起保存；重新翻页到 OIDC 页可保存', async () => {
+    const wrapper = mount(SetupView)
+    await prepareOidc(wrapper)
+    await editBranch(wrapper, 'admin')
+    await wrapper.get('[data-testid="oidc-form"]').trigger('submit')
+    await settle()
+    expect(requests(SAVE)).toHaveLength(0)
+    await submit(wrapper, 'oidc')
+    expect(requests(SAVE)).toHaveLength(1)
   })
 })
 
