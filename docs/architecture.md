@@ -28,7 +28,8 @@
                 可选外部 STUN / TURN / SFU
 
    文件：可选 S3 / R2 / MinIO
-   部署：Cloudflare 交互式装配器 CLI（正式路径，一键为路线图），Docker 作为替代和扩展
+   部署双路径（#97，2026-10-18）：云路径 = installer 专用且扩展；自管路径 =
+   Docker/混搭全自管，壳内 URL 接入（#98），installer 非必须
 ```
 
 
@@ -201,6 +202,15 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 
 **Docker 等价**：同一份 `unself.config.jsonc`；`mode: docker` 的模块由安装器渲染 compose + 反代片段（Caddy/nginx）+ 初始化迁移容器，core 自身也可落在 Docker。DO 平替与真落地属下一阶段。
 
+**部署双路径与落点双形态（#97–#100，2026-10-18；展开见 issue #343）**：
+
+- **双路径并列，不分主备**：① 云路径 = installer 专用且持续扩展（向导新增：core 数据库连接串输入框——自托管落点问 PG，CF 默认 D1；模块屏落点选择 runtimes 驱动；存储四级内联选择；S3 统一桶或模块自备）；未来多云（Vercel/EdgeOne）= installer 新 target。② 自管路径 = docker/混搭全自管：compose/env/容器用户自管，installer 非必须，壳内填 URL 接入（#98：发现 → 认证 → registry upsert 即安装成功；壳永不经手模块密钥）。CF 凭证细化 #165：运行时进程不**持久持有**凭证；安装会话内用户提供 token → core 发 REST API → 用后即焚。
+- **core 存储三实现（#99）**：SqlExecutor 接口（ControlPlaneExecutor 形状）下 D1 / node:sqlite / PostgreSQL 三实现；迁移按方言分文件（`000N_*.pg.sql`），`?`→`$n` 在 driver 内改写，schema 用可移植子集；registry 增列 `mode` / `entry` / `storage_level`（用户实际选择，非 manifest 快照）。
+- **落点双形态（#100，修订 #13）**：同域路径制（单机默认）与子域名制（分布式推荐，同一根域名子域 + 一张泛域名证书）并存，同一 entry 契约的两种取值；跨域安全靠 #63/#73 既有设计（postMessage token / Bearer / frame-ancestors / 按 origin CORS），不靠同域——第一方同域是优化不是依赖。
+- **生命周期 v2 留位（#101）**：预留 `restore(bundle)`（搬落点需要 export 的逆操作），本期不改契约。
+- **一切模块可替代（#102）**：不存在终态的「CF 专属模块」；DO 依赖是当前实现的事实而非承诺，realtime 平替（自建 WebSocket hub + 模块自有库）立项；官方模块验收标准含「至少两种 runtimes 可跑」。
+- workerd 容器若作为 Docker 过渡形态，单独立项评估，不在默认路径。
+
 **已知缺口**：setup 向导录入的 OIDC client secret 存于 core D1（无字段级加密），审计记录读取行为；字段级加密为远期选项。
 
 
@@ -228,7 +238,8 @@ unself-todo-1.2.0.tgz
 ├─ migrations/       可选：表前缀命名的迁移（仅 shared/dedicated 模式需要）
 ├─ config.schema     可选：配置页字段声明（schema 驱动，安装器渲染）
 ├─ theme.json        可选：模块自己皮肤（默认跟随实例主题）
-├─ docker/           可选：runtime=docker 时的镜像声明 / 端口 / 健康检查
+├─ docker/           可选：镜像/端口/健康检查声明；#98 起降级为参考文档（用户自管
+│                    compose 的示例，供复制；壳不消费，机器契约见发现端点）
 └─ LICENSE / NOTICE  许可证随包走（GPL 类必须自带）
 ```
 
