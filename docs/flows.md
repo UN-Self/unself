@@ -23,11 +23,29 @@ npx @unself/installer
        → module-token 握手 → 主题通道 → 模块存储走 Core API 代理
 ```
 
+**自管路径（#97，2026-10-18）：installer 非必须**——
+
+```text
+docker run unself（启动参数只两个：core DB 连接串 D1/sqlite/PG + 监听地址）
+  └─ 浏览器打开实例 → setup 深链 → 管理员账号 → 壳即产品入口
+       └─ 壳内装模块（#98 统一接入协议 = connect）：
+            ① 填 entry URL → 发现（GET /manifest + /api/health，校验与包声明一致）
+            ② 认证（首次 token 握手成功）
+            ③ registry upsert = 安装成功；成员侧栏 ≤1 分钟自现
+       └─ 模块运行时归用户自管：compose 用户写、env 用户管、容器用户起；
+          壳永不经手模块密钥；复杂度=自由度的代价
+```
+
+CF 落点在安装会话内提供凭证、core 发 REST API、用后即焚（#97 对 #165 的细化：不持久持有）。
+
 **未封箱窗口 = 接管面（#165）**：setup token 的签发权只在部署者手里；实例未封箱前，拿到 deep link 的人就是接管者。
 
-**模块增删（免重装）**：`unself module add <来源>` / 向导③「安装串」增装；`unself module remove <id>` 卸载（撤路由 → 删 Worker → 按 `manifest.tables` 清单删表 → 清记账 → 注册表移除，决策 #270），卸到库里无残留表。
+**模块增删升级双轨（#97/#99，2026-10-18）**：平台与模块是彼此独立的变更单元——
 
-**升级**：`npx @unself/installer@latest deploy` 幂等重跑；数据原地保留（迁移只增不改），资源名不变。
+- 平台轨：`npx @unself/installer@latest deploy` 幂等重跑，只换 core（模块原地不动、registry 数据不动）
+- 模块轨：装/升/卸不触 core 产物——registry upsert 是模块上线的唯一定义（#98）；
+  `unself module add <来源>` / 向导③「安装串」增装；`unself module remove <id>` 卸载（撤路由 → 删 Worker → 按 `manifest.tables` 清单删表 → 清记账 → 注册表移除，决策 #270），卸到库里无残留表；壳内「检查更新」零凭证（registry + npm 查询）
+- 数据原地保留（迁移只增不改），资源名不变
 
 ## 链路 1：新人入职（2026-09-10 修订：双门·注册矩阵·门型表）
 
