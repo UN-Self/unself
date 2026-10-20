@@ -11,6 +11,7 @@ import UCard from './card.vue'
  * 翻页 = 该值从折角尺寸插值到「页宽 + 页高」（`--unself-page-turn-progress` 0→1）。
  * 页宽高由容器实测（ResizeObserver）写进 `--unself-page-width/height`，折线按实测尺寸算；
  * 页背只画几何、不放文字，故不存在镜像问题；折角交互区固定 `--unself-page-fold-size` 见方，不随动画位移。
+ * 仅注入契约令牌时仍可独立使用；壳的翻页令牌可覆盖组件默认值。
  * 动效参数全部取自 tokens，`prefers-reduced-motion: reduce` 下翻页退化为瞬切。
  */
 withDefaults(defineProps<{ flipped?: boolean }>(), { flipped: false })
@@ -71,6 +72,15 @@ onBeforeUnmount(() => observer?.disconnect())
   </UCard>
 </template>
 
+<style>
+/* 数值插值注册随组件加载，独立消费方无需引入壳样式。 */
+@property --unself-page-turn-progress {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+</style>
+
 <style scoped>
 .u-flip-book {
   /* 固定卡片轮廓，斜向翻出的纸页不撑出横向滚动条。 */
@@ -82,8 +92,15 @@ onBeforeUnmount(() => observer?.disconnect())
   display: grid;
   --unself-page-turn-progress: 0;
   /* 0 就已经反折了一个页角；同一距离同时驱动前页缺口与反折页背。 */
-  --unself-page-fold-distance: calc(var(--unself-page-fold-size) + var(--unself-page-turn-progress) * (var(--unself-page-width) + var(--unself-page-height) - var(--unself-page-fold-size)));
-  transition: --unself-page-turn-progress calc(var(--unself-duration-slow) + var(--unself-duration-normal)) var(--unself-ease-page-turn);
+  --unself-page-fold-distance: calc(
+    var(--unself-page-fold-size, calc(var(--unself-space-8) * 4)) +
+    var(--unself-page-turn-progress) * (
+      var(--unself-page-width, calc(var(--unself-space-8) * 16)) +
+      var(--unself-page-height, calc(var(--unself-space-8) * 16)) -
+      var(--unself-page-fold-size, calc(var(--unself-space-8) * 4))
+    )
+  );
+  transition: --unself-page-turn-progress calc(var(--unself-duration-slow) + var(--unself-duration-normal)) var(--unself-ease-page-turn, var(--unself-ease-out));
 }
 .u-flip-book-open .u-flip-pages {
   --unself-page-turn-progress: 1;
@@ -96,10 +113,10 @@ onBeforeUnmount(() => observer?.disconnect())
   z-index: 1;
   /* 折线 x - y = 页宽 - 反折距离；裁切与页背始终共用这条线。 */
   clip-path: polygon(
-    0 clamp(0px, calc(var(--unself-page-fold-distance) - var(--unself-page-width)), 100%),
-    clamp(0px, calc(100% - var(--unself-page-fold-distance)), 100%) clamp(0px, calc(var(--unself-page-fold-distance) - var(--unself-page-width)), 100%),
-    clamp(0px, calc(100% + var(--unself-page-height) - var(--unself-page-fold-distance)), 100%) clamp(0px, var(--unself-page-fold-distance), 100%),
-    clamp(0px, calc(100% + var(--unself-page-height) - var(--unself-page-fold-distance)), 100%) 100%,
+    0 clamp(0px, calc(var(--unself-page-fold-distance) - var(--unself-page-width, calc(var(--unself-space-8) * 16))), 100%),
+    clamp(0px, calc(100% - var(--unself-page-fold-distance)), 100%) clamp(0px, calc(var(--unself-page-fold-distance) - var(--unself-page-width, calc(var(--unself-space-8) * 16))), 100%),
+    clamp(0px, calc(100% + var(--unself-page-height, calc(var(--unself-space-8) * 16)) - var(--unself-page-fold-distance)), 100%) clamp(0px, var(--unself-page-fold-distance), 100%),
+    clamp(0px, calc(100% + var(--unself-page-height, calc(var(--unself-space-8) * 16)) - var(--unself-page-fold-distance)), 100%) 100%,
     0 100%
   );
 }
@@ -145,8 +162,8 @@ onBeforeUnmount(() => observer?.disconnect())
   position: absolute;
   top: 0;
   right: 0;
-  width: var(--unself-page-fold-size);
-  height: var(--unself-page-fold-size);
+  width: var(--unself-page-fold-size, calc(var(--unself-space-8) * 4));
+  height: var(--unself-page-fold-size, calc(var(--unself-space-8) * 4));
   z-index: 3;
   /* 透明交互区；可见标识属于真实后页，翻页过程中始终留在原位。 */
 }
