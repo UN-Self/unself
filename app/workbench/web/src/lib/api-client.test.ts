@@ -80,21 +80,21 @@ describe('request（统一出口：凭证/解析/错误形状）', () => {
     await expect(request('/api/x')).rejects.toMatchObject({ status: 500, message: '请求失败（500）' })
   })
 
-  it('x-request-id → err.requestId；body.detail → err.detail', async () => {
+  it('服务端 requestId、detail、code 均随错误透传', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
         jsonResponse({
           ok: false,
           status: 409,
-          body: { detail: '邮箱前缀已被占用' },
+          body: { detail: '邮箱前缀已被占用', code: 'username_taken' },
           requestId: 'req-7',
         }),
       ),
     )
 
     const err = await request('/api/x').catch((e) => e)
-    expect(err).toMatchObject({ status: 409, requestId: 'req-7', detail: '邮箱前缀已被占用' })
+    expect(err).toMatchObject({ status: 409, requestId: 'req-7', detail: '邮箱前缀已被占用', code: 'username_taken' })
   })
 
   it('网络异常 → status 0 + 网络不可用人话', async () => {
@@ -117,6 +117,20 @@ describe('request（统一出口：凭证/解析/错误形状）', () => {
     await expect(
       request('/api/x', undefined, { messagePolicy: statusOnlyMessage }),
     ).rejects.toMatchObject({ status: 502, message: '请求失败（502）' })
+  })
+
+  it('messagePolicy 可按稳定错误码生成人话，后端改文案不影响判别', async () => {
+    baseFetchMock.mockResolvedValueOnce(jsonResponse({
+      ok: false,
+      status: 409,
+      body: { error: '任意新文案', code: 'setup_sealed' },
+    }))
+
+    await expect(request('/api/x', undefined, {
+      messagePolicy: (status, message, code) => status === 409 && code === 'setup_sealed'
+        ? '初始化已关闭'
+        : preferServerMessage(status, message),
+    })).rejects.toMatchObject({ status: 409, code: 'setup_sealed', message: '初始化已关闭' })
   })
 
   it('2xx 但 body 非 JSON → 解析为 null（不抛）', async () => {
@@ -143,12 +157,13 @@ describe('send（无 body 解析路径：POST 动作类）', () => {
   it('非 2xx 抛 ApiError（error 字段优先）', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => jsonResponse({ ok: false, status: 409, body: { error: '该成员无内置登录' } })),
+      vi.fn(async () => jsonResponse({ ok: false, status: 409, body: { error: '该成员无内置登录', code: 'no_builtin_login' } })),
     )
 
     await expect(send('/api/x', { method: 'POST' })).rejects.toMatchObject({
       status: 409,
       message: '该成员无内置登录',
+      code: 'no_builtin_login',
     })
   })
 
@@ -190,6 +205,23 @@ describe('错误形状公共件', () => {
     const err = makeApiError(500, '请求失败（500）', 'req-1', 'detail-text')
     expect(err).toBeInstanceOf(Error)
     expect(err).toMatchObject({ status: 500, message: '请求失败（500）', requestId: 'req-1', detail: 'detail-text' })
+  })
+
+  it('makeApiError 保留可选稳定错误码', () => {
+    const err = makeApiError(409, '初始化已关闭', 'req-1', undefined, 'setup_sealed')
+    expect(err).toMatchObject({ status: 409, message: '初始化已关闭', requestId: 'req-1', code: 'setup_sealed' })
+  })
+
+  it.each([['request', request], ['send', send]] as const)('%s：忽略非字符串错误码，不影响原错误提示', async (_name, call) => {
+    baseFetchMock.mockResolvedValueOnce(jsonResponse({
+      ok: false,
+      status: 409,
+      body: { error: '保留原始提示', code: 42 },
+    }))
+
+    const err = await call('/api/x').catch((error: unknown) => error)
+    expect(err).toMatchObject({ status: 409, message: '保留原始提示' })
+    expect(err).not.toHaveProperty('code')
   })
 
   it('preferServerMessage：后端 error trim 优先，空值回请求失败', () => {

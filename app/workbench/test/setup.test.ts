@@ -294,6 +294,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
       env,
     );
     expect(builtin.status).toBe(409);
+    expect(await builtin.json()).toMatchObject({ code: 'setup_sealed', error: expect.any(String) });
     const oidc = await app.request(
       `https://team.example.com/api/setup/oidc-config?token=${token}`,
       {
@@ -304,6 +305,7 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
       env,
     );
     expect(oidc.status).toBe(409);
+    expect(await oidc.json()).toMatchObject({ code: 'setup_sealed', error: expect.any(String) });
     const activate = await app.request(
       `https://team.example.com/api/setup/activate?token=${token}`,
       { method: 'POST', headers: { cookie } },

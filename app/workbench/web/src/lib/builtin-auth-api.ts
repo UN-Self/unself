@@ -71,9 +71,12 @@ export async function createBuiltinAdmin(
 }
 
 /** 内置开通错误人话：token 拒绝与已封箱转中文；用户名占用等错误保留服务端人话。 */
-function humanizeSetupToken(status: number, serverMessage?: string): string {
+function humanizeSetupToken(status: number, serverMessage?: string, code?: string): string {
   if (status === 403) return '初始化链接无效或已被使用，请向部署者要新的链接'
-  if (status === 409 && serverMessage === 'setup already completed; sealed forever') {
+  // 无机器码时才兼容旧实例文案；其他错误码不能被相似文案误判为封箱。
+  const legacySealed = code === undefined && typeof serverMessage === 'string'
+    && serverMessage.trim().startsWith('setup already completed')
+  if (status === 409 && (code === 'setup_sealed' || legacySealed)) {
     return '实例已完成配置，setup 页面已关闭'
   }
   return preferServerMessage(status, serverMessage)
