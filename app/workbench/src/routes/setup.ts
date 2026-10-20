@@ -52,7 +52,7 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
   app.post('/api/setup/oidc-config', async (c) => {
     const db = c.env.CORE_DB;
     if (await isSetupDone(db)) {
-      return c.json({ error: 'setup already completed; sealed forever' }, 409);
+      return c.json({ error: 'setup already completed; sealed forever', code: 'setup_sealed' }, 409);
     }
     const token = c.req.query('token') ?? c.req.header('x-setup-token');
     if (!token) {
@@ -86,7 +86,7 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
   app.post('/api/setup/builtin-admin', async (c) => {
     const db = c.env.CORE_DB;
     if (await isSetupDone(db)) {
-      return c.json({ error: 'setup already completed; sealed forever' }, 409);
+      return c.json({ error: 'setup already completed; sealed forever', code: 'setup_sealed' }, 409);
     }
     const token = c.req.query('token') ?? c.req.header('x-setup-token');
     if (!token) {

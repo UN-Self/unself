@@ -23,15 +23,16 @@ export interface ApiError extends Error {
   requestId?: string
   /** 服务端技术详情（JSON body 的 detail 字段），折叠展示用。 */
   detail?: string
-  /** 可选稳定错误码（后端契约演进预留；当前无人写入）。 */
+  /** 服务端可选稳定错误码（JSON body 的 code 字段，独立于展示文案）。 */
   code?: string
 }
 
-export function makeApiError(status: number, message: string, requestId?: string, detail?: string): ApiError {
+export function makeApiError(status: number, message: string, requestId?: string, detail?: string, code?: string): ApiError {
   const err = new Error(message) as ApiError
   err.status = status
   err.requestId = requestId
   err.detail = detail
+  if (code !== undefined) err.code = code
   return err
 }
 
@@ -51,8 +52,8 @@ export const NETWORK_UNAVAILABLE = '网络不可用，请检查连接后重试'
 
 /** 传给 request 的解析/错误构造配置（与历史实现逐一对齐）。 */
 export interface ClientOptions {
-  /** 默认：后端 error 字段优先，退化 `请求失败（<status>）`。 */
-  messagePolicy?: (status: number, serverMessage?: string) => string
+  /** 默认：后端 error 字段优先；域策略可结合稳定 code 判别，兼容仅按状态/文案判断的调用方。 */
+  messagePolicy?: (status: number, serverMessage?: string, code?: string) => string
 }
 
 /**
@@ -68,9 +69,10 @@ export async function request<T = unknown>(url: string, init?: RequestInit, opti
   }
   const requestId = res.headers.get('x-request-id') ?? undefined
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string; detail?: string } | null
+    const body = (await res.json().catch(() => null)) as { error?: string; detail?: string; code?: unknown } | null
+    const code = typeof body?.code === 'string' ? body.code : undefined
     const policy = options?.messagePolicy ?? preferServerMessage
-    throw makeApiError(res.status, policy(res.status, body?.error), requestId, body?.detail)
+    throw makeApiError(res.status, policy(res.status, body?.error, code), requestId, body?.detail, code)
   }
   return ((await res.json().catch(() => null)) ?? null) as T
 }
@@ -85,8 +87,9 @@ export async function send(url: string, init?: RequestInit): Promise<void> {
   }
   const requestId = res.headers.get('x-request-id') ?? undefined
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string; detail?: string } | null
-    throw makeApiError(res.status, preferServerMessage(res.status, body?.error), requestId, body?.detail)
+    const body = (await res.json().catch(() => null)) as { error?: string; detail?: string; code?: unknown } | null
+    const code = typeof body?.code === 'string' ? body.code : undefined
+    throw makeApiError(res.status, preferServerMessage(res.status, body?.error), requestId, body?.detail, code)
   }
 }
 
