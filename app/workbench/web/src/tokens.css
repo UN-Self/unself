@@ -13,12 +13,6 @@
  * 无人使用该映射（tailwindcss() 插件仍在 vite 流程，扫描不受影响）。
  */
 
-@property --unself-page-turn-progress {
-  syntax: '<number>';
-  inherits: true;
-  initial-value: 0;
-}
-
 :root {
   /* 色彩：暖纸底 + 卡面白 + 靠蓝主色（#307） */
   --unself-color-bg: #faf9f7;
@@ -76,7 +70,7 @@
   --unself-duration-slow: 400ms;
   --unself-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --unself-ease-page-turn: cubic-bezier(0.4, 0, 0.2, 1);
-  /* 内部翻页进度：注册为可插值的数值，折线与页背共享进度。 */
+  /* 内部翻页进度：数值插值注册由 UFlipCard 自带，折线与页背共享进度。 */
   --unself-page-turn-progress: 0;
   --unself-page-fold-size: calc(var(--unself-space-8) * 4);
   /* 内部布局测量值由翻页容器覆盖；初值只用于挂载前的布局。 */
