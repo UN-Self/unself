@@ -56,7 +56,16 @@ async function fixture(): Promise<ResendFixture> {
     "INSERT INTO invite_activations (token_hash, invite_token_hash, email, expires_at) VALUES (?, 'i1', 'm@example.com', datetime('now', '+1 day'))",
     oldTokenHash,
   );
-  db.run("INSERT INTO instance_config (key, value) VALUES ('mail', '{}')");
+  // #340：完整实例 = mail_stalwart 行在场且 enabled:true（开户轴），sender 才走开户+激活链路。
+  db.run(
+    "INSERT INTO instance_config (key, value) VALUES ('mail_stalwart', ?)",
+    JSON.stringify({ enabled: true, baseUrl: 'https://mail.example.com', apiKey: 'k', domain: 'example.com' }),
+  );
+  // #340：发信轴吃 mail_smtp 段；启用中（enabled:true + 字段齐全）→ sender 才会装配。
+  db.run(
+    "INSERT INTO instance_config (key, value) VALUES ('mail_smtp', ?)",
+    JSON.stringify({ enabled: true, host: 'smtp.example.com', port: 465, username: 'u', password: 'p', from: 'no-reply@example.com' }),
+  );
   const admin = await createSessionToken(
     { uid: 'u1', iss: 'x', sub: 'u1', name: '管理员' },
     pair.privateKeyPem,

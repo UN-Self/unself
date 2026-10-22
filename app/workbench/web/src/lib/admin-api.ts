@@ -5,7 +5,10 @@
  * - GET /api/admin/members + disable/enable（#49）
  * - GET /api/admin/modules + POST toggle（#49，含停用模块全量）
  * - GET /api/admin/audit-log（#17 新端点，倒序 LIMIT 200）
- * - GET/PUT /api/admin/settings（#17 新端点，敏感值服务端脱敏）
+ * - 设置域（#340 分域）：GET /api/admin/settings 回 { oidc, stalwart, smtp }；
+ *   PUT 各段独立（/api/admin/settings 只收 oidc，mail-stalwart / mail-smtp 各碰各键）；
+ *   测试连接候选化（POST mail-stalwart/test、mail-smtp/test，发表单草稿不落库）。
+ *   敏感值服务端脱敏（GET 恒 '***'）。
  *
  * 错误约定：后端已有守卫与校验，前端不重复防御——失败抛 ApiError 给页面渲染错误卡。
  * request-id 透传（§6.5 三层错误透传）。
@@ -85,7 +88,8 @@ export function fetchAuditLog(): Promise<AuditEntry[]> {
 }
 
 // ---------------------------------------------------------------------------
-// 设置域（#17 新端点；敏感值 GET 恒 '***'，PUT '***'/空串 = 不修改）
+// 设置域（#340 分域：OIDC / 邮箱管理 Stalwart / 通知发信 SMTP 三段独立；
+// 敏感值 GET 恒 '***'，PUT '***'/空串 = 不修改）
 // ---------------------------------------------------------------------------
 
 /** 已配置密钥的固定占位符（与后端 MASK 一致）。 */
@@ -98,39 +102,64 @@ export interface OidcSettings {
   scope: string
 }
 
-export interface MailSettings {
-  /** 邮件轴总开关（缺 enabled 的老数据后端视为 true，GET 恒回 boolean）。 */
+export interface StalwartSettings {
+  /** 邮箱管理开关（D5 fail-closed：装配只认 enabled === true；GET 恒回 boolean）。 */
   enabled: boolean
   baseUrl: string
   apiKey: string
   domain: string
-  host: string
-  port: number | ''
-  username: string
-  password: string
-  from: string
   /** 应用密码说明页跳转目标（#168 展示用；#184 起可在设置页直接填）。空 = 后端按 domain 推导 https://mail.<domain>。 */
   portalUrl: string
 }
 
-export interface InstanceSettings {
-  oidc: OidcSettings
-  mail: MailSettings
+export interface SmtpSettings {
+  /** 通知发信开关（D5 fail-closed：装配只认 enabled === true；GET 恒回 boolean）。 */
+  enabled: boolean
+  host: string
+  /** 端口正整数；'' = 未配置/非法（后端合并语义：空 = 不修改）。 */
+  port: number | ''
+  username: string
+  password: string
+  from: string
 }
 
-/** PUT body：字段可选；值为 '' / '***' / 缺省都表示不修改；mail.enabled 可单独下发。 */
-export type SettingsUpdate = {
-  oidc?: Partial<{ [K in keyof OidcSettings]: string }>
-  mail?: Partial<{ [K in keyof OidcSettings]: string }> & Partial<{ [K in keyof MailSettings]: string | number | '' | boolean }>
+/** GET /api/admin/settings 的对外形状（#340 三段分域，与 core routes/settings.ts InstanceSettings 对齐）。 */
+export interface InstanceSettings {
+  oidc: OidcSettings
+  stalwart: StalwartSettings
+  smtp: SmtpSettings
 }
+
+/** PUT body：各段独立；字段可选，值为 '' / '***' / 缺省都表示不修改；enabled 随保存一起落库（#159 表单语义）。 */
+export type OidcSettingsUpdate = Partial<{ [K in keyof OidcSettings]: string }>
+export type StalwartSettingsUpdate = Partial<{ [K in keyof StalwartSettings]: StalwartSettings[K] }>
+export type SmtpSettingsUpdate = Partial<{ [K in keyof SmtpSettings]: SmtpSettings[K] }>
 
 export function fetchSettings(): Promise<InstanceSettings> {
   return request<InstanceSettings>('/api/admin/settings', undefined, { messagePolicy: statusOnlyMessage })
 }
 
-export function saveSettings(update: SettingsUpdate): Promise<{ ok: boolean }> {
-
+/** 编辑 OIDC 登录段：只发 { oidc }，不再夹带任何邮件字段（#340）。 */
+export function saveOidcSettings(update: OidcSettingsUpdate): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>('/api/admin/settings', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ oidc: update }),
+  }, { messagePolicy: statusOnlyMessage })
+}
+
+/** 编辑邮箱管理（Stalwart 开户）段：整键读-改-写只碰 mail_stalwart；D5 校验失败后端回 400 + 人话 detail。 */
+export function saveStalwartSettings(update: StalwartSettingsUpdate): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>('/api/admin/settings/mail-stalwart', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(update),
+  }, { messagePolicy: statusOnlyMessage })
+}
+
+/** 编辑通知发信（SMTP）段：整键读-改-写只碰 mail_smtp；D5 校验失败后端回 400 + 人话 detail。 */
+export function saveSmtpSettings(update: SmtpSettingsUpdate): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>('/api/admin/settings/mail-smtp', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(update),
@@ -183,8 +212,46 @@ export function rejectInvite(id: string): Promise<{ status: string }> {
   }, { messagePolicy: statusOnlyMessage })
 }
 
-export interface MailTestResult { ok: boolean; detail: string }
-export function testMailConnection(): Promise<{ provisioner: MailTestResult; sender: MailTestResult }> { return request("/api/admin/mail/test", { method: "POST" }, { messagePolicy: statusOnlyMessage }) }
+/** 单轴测试结果：ok + 人话 detail（结果卡直显，不含任何密钥明文）。 */
+export interface MailTestResult {
+  ok: boolean
+  detail: string
+}
+
+/** 邮箱管理（Stalwart）候选草稿：设置页当前表单值，密钥留空/'***' 由后端回退已存值。 */
+export interface StalwartTestDraft {
+  baseUrl?: string
+  apiKey?: string
+  domain?: string
+}
+
+/** 通知发信（SMTP）候选草稿：同上。 */
+export interface SmtpTestDraft {
+  host?: string
+  /** 端口草稿是输入框原始字符串，后端按正整数解析。 */
+  port?: string
+  username?: string
+  password?: string
+  from?: string
+}
+
+/** 测试邮箱管理（Stalwart 开户）候选草稿：只用于本次探测，绝不落库。 */
+export function testStalwartConnection(draft: StalwartTestDraft): Promise<MailTestResult> {
+  return request<MailTestResult>('/api/admin/mail-stalwart/test', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(draft),
+  }, { messagePolicy: statusOnlyMessage })
+}
+
+/** 测试通知发信（SMTP）候选草稿：同上。 */
+export function testSmtpConnection(draft: SmtpTestDraft): Promise<MailTestResult> {
+  return request<MailTestResult>('/api/admin/mail-smtp/test', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(draft),
+  }, { messagePolicy: statusOnlyMessage })
+}
 
 export function resendMemberActivation(id: string): Promise<unknown> {
   return request(`/api/admin/members/${encodeURIComponent(id)}/resend-activation`, { method: 'POST' }, { messagePolicy: statusOnlyMessage })

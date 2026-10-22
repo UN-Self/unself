@@ -71,8 +71,13 @@ async function envFor(withMailConfig = false): Promise<InviteEnv> {
   if (withMailConfig) {
     db.run(
       'INSERT INTO instance_config (key, value) VALUES (?, ?)',
-      'mail',
-      JSON.stringify(MAIL_CONFIG),
+      'mail_stalwart',
+      JSON.stringify({ enabled: true, baseUrl: MAIL_CONFIG.baseUrl, apiKey: MAIL_CONFIG.apiKey, domain: MAIL_CONFIG.domain }),
+    );
+    db.run(
+      'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+      'mail_smtp',
+      JSON.stringify({ enabled: true, host: MAIL_CONFIG.host, port: MAIL_CONFIG.port, username: MAIL_CONFIG.username, password: MAIL_CONFIG.password, from: MAIL_CONFIG.from }),
     );
   }
   const adminCookie = `unself_session=${await createSessionToken(
@@ -603,7 +608,8 @@ describe('邀请域 HTTP（#18）', () => {
     });
     const { env, db, adminCookie } = await envFor();
     // 关 ≠ 删行：完整配置都在，只是开关关闭（老数据兼容：行存在 + enabled:false）
-    db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail', JSON.stringify({ ...MAIL_CONFIG, enabled: false }));
+    db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail_stalwart', JSON.stringify({ enabled: false, baseUrl: MAIL_CONFIG.baseUrl, apiKey: MAIL_CONFIG.apiKey, domain: MAIL_CONFIG.domain }));
+    db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail_smtp', JSON.stringify({ enabled: false, host: MAIL_CONFIG.host, port: MAIL_CONFIG.port, username: MAIL_CONFIG.username, password: MAIL_CONFIG.password, from: MAIL_CONFIG.from }));
     const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
 
     // status：pending 态就暴露 mailEnabled:false（isMailEnabled 吃 enabled 轴）
@@ -1040,6 +1046,7 @@ describe('邀请域 HTTP（#18）', () => {
       '0008_module_notify_type.sql', // #243：module_notify 通知类型（notify 词真实现的数据行）
       '0009_profile_revision.sql',
       '0010_profile_avatar.sql',
+      '0011_split_mail_config.sql', // #340：mail 段拆键（含升级路径断言：见 test/migrations.test.ts）
     ]);
 
     const sqlite = new DatabaseSync(':memory:');

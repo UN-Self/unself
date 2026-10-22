@@ -1,4 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+/**
+ * 实例设置域路由测试（#17，#340 分域）：
+ * - GET 三段（oidc/stalwart/smtp）全量形状 + 密钥恒 '***'；
+ * - PUT /api/admin/settings 只收 { oidc }（夹带 mail 键被忽略不落库）；
+ * - PUT /api/admin/settings/mail-stalwart / mail-smtp 整键读-改-写、互不产生对方键；
+ * - D5 fail-closed：enabled 必填恒布尔；enabled:true 必填不全 → 400 拒落库。
+ * 断言打在行为上（HTTP 状态/响应体/库中真实行），不碰内部调用计数。
+ */
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
 
@@ -62,265 +70,235 @@ async function envFor(): Promise<SettingsTestEnv> {
   };
 }
 
+async function getSettings(
+  app: Hono<{ Bindings: Bindings }>,
+  cookie: string,
+  env: SettingsTestEnv['env'],
+): Promise<Response> {
+  return app.request('https://team.example.com/api/admin/settings', { headers: { cookie } }, env);
+}
+
 async function putJson(
   app: Hono<{ Bindings: Bindings }>,
-  body: string,
+  path: string,
+  body: unknown,
   cookie: string,
-  env: { CORE_DB: D1Database; JWT_PRIVATE_KEY: string },
+  env: SettingsTestEnv['env'],
 ): Promise<Response> {
   return app.request(
-    'https://team.example.com/api/admin/settings',
-    { method: 'PUT', headers: { cookie, 'content-type': 'application/json' }, body },
+    `https://team.example.com${path}`,
+    {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    },
     env,
   );
 }
 
-/** 样例库配置：OIDC 四键 + 单条 mail JSON（含两段消费者各自字段）。 */
-function seedSampleConfig(db: CoreTestDb, mail: Record<string, unknown> = {}): void {
+/** 读取库中单个 instance_config 值（JSON 段直读断言）。 */
+function storedValue(db: CoreTestDb, key: string): string | undefined {
+  return db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', key)?.value;
+}
+
+/** 审计 settings_updated 按 target 计数。 */
+function auditCount(db: CoreTestDb, target: string): number {
+  return db.first<{ count: number }>(
+    "SELECT COUNT(*) AS count FROM audit_log WHERE action = 'settings_updated' AND target = ?",
+    target,
+  )!.count;
+}
+
+/** 完整 stalwart 段夹具（enabled 可覆盖）。 */
+const STALWART_FULL = {
+  enabled: true,
+  baseUrl: 'https://mail.example.com',
+  apiKey: 'api-key',
+  domain: 'example.com',
+  portalUrl: 'https://mail.example.com/portal',
+};
+
+/** 完整 smtp 段夹具（enabled 可覆盖）。 */
+const SMTP_FULL = {
+  enabled: true,
+  host: 'smtp.example.com',
+  port: 2525,
+  username: 'mailer',
+  password: 'smtp-pass',
+  from: 'noreply@example.com',
+};
+
+/** 样例库配置：OIDC 四键 + 两条独立 mail 段（#340 分域后路由只读新键）。 */
+function seedSampleConfig(
+  db: CoreTestDb,
+  stalwart: Record<string, unknown> = {},
+  smtp: Record<string, unknown> = {},
+): void {
   db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'oidc_issuer', 'https://idp.example.com');
   db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'oidc_client_id', 'client-1');
   db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'oidc_client_secret', 'super-secret');
   db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'oidc_scope', 'openid profile email');
   db.run(
     'INSERT INTO instance_config (key, value) VALUES (?, ?)',
-    'mail',
-    JSON.stringify({
-      baseUrl: 'https://mail.example.com',
-      apiKey: 'api-key',
-      domain: 'example.com',
-      host: 'smtp.example.com',
-      port: 2525,
-      username: 'mailer',
-      password: 'smtp-pass',
-      from: 'noreply@example.com',
-      portalUrl: 'https://mail.example.com/portal',
-      ...mail,
-    }),
+    'mail_stalwart',
+    JSON.stringify({ ...STALWART_FULL, ...stalwart }),
+  );
+  db.run(
+    'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+    'mail_smtp',
+    JSON.stringify({ ...SMTP_FULL, ...smtp }),
   );
 }
 
 const EMPTY_SETTINGS = {
   oidc: { issuer: '', clientId: '', clientSecret: '', scope: '' },
-  mail: {
-    baseUrl: '',
-    apiKey: '',
-    domain: '',
-    host: '',
-    port: '',
-    username: '',
-    password: '',
-    from: '',
-    // 老数据无 portalUrl 字段 → 缺省空串。
-    portalUrl: '',
-    // 老数据无 enabled 字段（含解析失败的 mail 段）→ 缺省视为开启。
+  stalwart: { enabled: false, baseUrl: '', apiKey: '', domain: '', portalUrl: '' },
+  smtp: { enabled: false, host: '', port: '', username: '', password: '', from: '' },
+};
+
+const FULL_SETTINGS = {
+  oidc: {
+    issuer: 'https://idp.example.com',
+    clientId: 'client-1',
+    clientSecret: '***',
+    scope: 'openid profile email',
+  },
+  stalwart: {
     enabled: true,
+    baseUrl: 'https://mail.example.com',
+    apiKey: '***',
+    domain: 'example.com',
+    portalUrl: 'https://mail.example.com/portal',
+  },
+  smtp: {
+    enabled: true,
+    host: 'smtp.example.com',
+    port: 2525,
+    username: 'mailer',
+    password: '***',
+    from: 'noreply@example.com',
   },
 };
 
-describe('实例设置查看/编辑（#17）', () => {
-  it('管理员 GET 返回两段全量形状并脱敏密钥；未配置时全空串', async () => {
+describe('实例设置查看（#340 三段形状）', () => {
+  it('管理员 GET 返回三段全量形状并脱敏密钥；未配置时全空串且 enabled:false', async () => {
+    const app = settingsApp();
+    const { env, adminCookie } = await envFor();
+    const seeded = await envFor();
+    seedSampleConfig(seeded.db);
+
+    const res = await getSettings(app, seeded.adminCookie, seeded.env);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(FULL_SETTINGS);
+
+    const empty = await getSettings(app, adminCookie, env);
+    expect(empty.status).toBe(200);
+    expect(await empty.json()).toEqual(EMPTY_SETTINGS);
+  });
+
+  it('密钥铁律：GET 恒回 ***；库中真值不受脱敏影响（apiKey 与 smtp password、oidc clientSecret）', async () => {
     const app = settingsApp();
     const { env, db, adminCookie } = await envFor();
     seedSampleConfig(db);
 
-    const res = await app.request(
-      'https://team.example.com/api/admin/settings',
-      { headers: { cookie: adminCookie } },
+    const body = (await (await getSettings(app, adminCookie, env)).json()) as {
+      oidc: { clientSecret: string };
+      stalwart: { apiKey: string };
+      smtp: { password: string };
+    };
+    expect(body.oidc.clientSecret).toBe('***');
+    expect(body.stalwart.apiKey).toBe('***');
+    expect(body.smtp.password).toBe('***');
+    expect(JSON.stringify(body)).not.toContain('super-secret');
+    expect(JSON.stringify(body)).not.toContain('api-key');
+    expect(JSON.stringify(body)).not.toContain('smtp-pass');
+
+    expect(storedValue(db, 'oidc_client_secret')).toBe('super-secret');
+    expect(JSON.parse(storedValue(db, 'mail_stalwart')!)).toMatchObject({ apiKey: 'api-key' });
+    expect(JSON.parse(storedValue(db, 'mail_smtp')!)).toMatchObject({ password: 'smtp-pass' });
+  });
+
+  it('无行/损坏段：该段 enabled:false、其余空串，不 500（stolwart 损坏不影响 smtp 段照常返回）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail_stalwart', '{not json');
+    db.run(
+      'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+      'mail_smtp',
+      JSON.stringify(SMTP_FULL),
+    );
+
+    const res = await getSettings(app, adminCookie, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { stalwart: Record<string, unknown>; smtp: Record<string, unknown> };
+    expect(body.stalwart).toEqual({
+      enabled: false,
+      baseUrl: '',
+      apiKey: '',
+      domain: '',
+      portalUrl: '',
+    });
+    expect(body.smtp.enabled).toBe(true);
+    expect(body.smtp.host).toBe('smtp.example.com');
+  });
+});
+
+describe('PUT /api/admin/settings（只收 oidc，#340 删 mail 键）', () => {
+  it('改 issuer 生效；clientSecret 传 *** 时旧真值不变；审计 target=oidc', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings',
+      { oidc: { issuer: 'https://new-idp.example.com', clientSecret: '***' } },
+      adminCookie,
       env,
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      oidc: {
-        issuer: 'https://idp.example.com',
-        clientId: 'client-1',
-        clientSecret: '***',
-        scope: 'openid profile email',
+    expect(await res.json()).toEqual({ ok: true });
+
+    const body = (await (await getSettings(app, adminCookie, env)).json()) as {
+      oidc: Record<string, unknown>;
+    };
+    expect(body.oidc.issuer).toBe('https://new-idp.example.com');
+    expect(body.oidc.clientSecret).toBe('***');
+    expect(storedValue(db, 'oidc_client_secret')).toBe('super-secret');
+    expect(auditCount(db, 'oidc')).toBe(1);
+  });
+
+  it('body 夹带 mail/stalwart/smtp 键 → 直接忽略，不落库（#340 宽松校验惯例）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    const before = db.query('SELECT key, value FROM instance_config ORDER BY key');
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings',
+      {
+        oidc: { scope: 'openid email' },
+        mail: { host: 'evil.example.com', enabled: true },
+        stalwart: { enabled: true, baseUrl: 'https://evil.example.com', apiKey: 'k', domain: 'evil.com' },
+        smtp: { enabled: true, host: 'evil.example.com', port: 25, username: 'u', password: 'p', from: 'e@x.com' },
       },
-      mail: {
-        baseUrl: 'https://mail.example.com',
-        apiKey: '***',
-        domain: 'example.com',
-        host: 'smtp.example.com',
-        port: 2525,
-        username: 'mailer',
-        password: '***',
-        from: 'noreply@example.com',
-        portalUrl: 'https://mail.example.com/portal',
-        enabled: true,
-      },
-    });
-
-    const empty = await envFor();
-    const emptyRes = await app.request(
-      'https://team.example.com/api/admin/settings',
-      { headers: { cookie: empty.adminCookie } },
-      empty.env,
-    );
-    expect(emptyRes.status).toBe(200);
-    expect(await emptyRes.json()).toEqual(EMPTY_SETTINGS);
-
-    // mail 段 JSON 解析失败 → 按全空对象处理，不 500。
-    const broken = await envFor();
-    broken.db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail', '{not json');
-    const brokenRes = await app.request(
-      'https://team.example.com/api/admin/settings',
-      { headers: { cookie: broken.adminCookie } },
-      broken.env,
-    );
-    expect(brokenRes.status).toBe(200);
-    expect(await brokenRes.json()).toEqual(EMPTY_SETTINGS);
-  });
-
-  it('PUT 改 issuer + host + port 生效；clientSecret 传 *** 时旧真值不变', async () => {
-    const app = settingsApp();
-    const { env, db, adminCookie } = await envFor();
-    seedSampleConfig(db);
-
-    const res = await putJson(
-      app,
-      JSON.stringify({
-        oidc: { issuer: 'https://new-idp.example.com', clientSecret: '***' },
-        mail: { host: 'smtp2.example.com', port: 587 },
-      }),
       adminCookie,
       env,
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
 
-    const settings = (await (
-      await app.request(
-        'https://team.example.com/api/admin/settings',
-        { headers: { cookie: adminCookie } },
-        env,
-      )
-    ).json()) as { oidc: Record<string, unknown>; mail: Record<string, unknown> };
-    expect(settings.oidc.issuer).toBe('https://new-idp.example.com');
-    expect(settings.oidc.clientSecret).toBe('***');
-    expect(settings.mail.host).toBe('smtp2.example.com');
-    expect(settings.mail.port).toBe(587);
-    expect(settings.mail.baseUrl).toBe('https://mail.example.com');
-
-    // 脱敏只是视图：库里 clientSecret 真值仍在。
-    expect(
-      db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'oidc_client_secret'),
-    ).toEqual({ value: 'super-secret' });
-  });
-
-  it('PUT mail 单字段走合并语义，其余 mail 字段保持原值', async () => {
-    const app = settingsApp();
-    const { env, db, adminCookie } = await envFor();
-    seedSampleConfig(db);
-
-    const res = await putJson(
-      app,
-      JSON.stringify({ mail: { apiKey: 'new-key' } }),
-      adminCookie,
-      env,
+    // 只有 oidc_scope 变了：mail 键既不新建也不改写，其余行原样。
+    const after = db.query('SELECT key, value FROM instance_config ORDER BY key');
+    expect(after.filter((row) => String(row.key).startsWith('mail'))).toEqual([]);
+    const changed = after.filter(
+      (row) => !before.some((b) => b.key === row.key && b.value === row.value),
     );
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
-
-    const settings = (await (
-      await app.request(
-        'https://team.example.com/api/admin/settings',
-        { headers: { cookie: adminCookie } },
-        env,
-      )
-    ).json()) as { mail: Record<string, unknown> };
-    expect(settings.mail).toEqual({
-      baseUrl: 'https://mail.example.com',
-      apiKey: '***',
-      domain: 'example.com',
-      host: 'smtp.example.com',
-      port: 2525,
-      username: 'mailer',
-      password: '***',
-      from: 'noreply@example.com',
-      portalUrl: 'https://mail.example.com/portal',
-      enabled: true,
-    });
-
-    // 合并写回只换了 apiKey，库里其余 mail 字段原样。
-    const stored = JSON.parse(
-      db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value,
-    ) as Record<string, unknown>;
-    expect(stored).toEqual({
-      baseUrl: 'https://mail.example.com',
-      apiKey: 'new-key',
-      domain: 'example.com',
-      host: 'smtp.example.com',
-      port: 2525,
-      username: 'mailer',
-      password: 'smtp-pass',
-      from: 'noreply@example.com',
-      portalUrl: 'https://mail.example.com/portal',
-    });
+    expect(changed.map((row) => row.key)).toEqual(['oidc_scope']);
+    expect(auditCount(db, 'oidc')).toBe(1);
   });
 
-  it('PUT portalUrl（#168）：单字段落库合并、GET 原样回传（展示用，非密钥不脱敏）', async () => {
-    const app = settingsApp();
-    const { env, db, adminCookie } = await envFor();
-    seedSampleConfig(db);
-
-    const res = await putJson(
-      app,
-      JSON.stringify({ mail: { portalUrl: 'https://portal.example.com/app-passwords' } }),
-      adminCookie,
-      env,
-    );
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
-
-    const settings = (await (
-      await app.request(
-        'https://team.example.com/api/admin/settings',
-        { headers: { cookie: adminCookie } },
-        env,
-      )
-    ).json()) as { mail: Record<string, unknown> };
-    expect(settings.mail.portalUrl).toBe('https://portal.example.com/app-passwords');
-    // 合并语义未被新字段破坏：其余 mail 字段原样。
-    expect(settings.mail.domain).toBe('example.com');
-
-    const stored = JSON.parse(
-      db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value,
-    ) as Record<string, unknown>;
-    expect(stored.portalUrl).toBe('https://portal.example.com/app-passwords');
-  });
-
-  it('PUT portalUrl 空白串（#184）：清掉覆盖键、回落推导；其余字段原样', async () => {
-    const app = settingsApp();
-    const { env, db, adminCookie } = await envFor();
-    seedSampleConfig(db);
-
-    const res = await putJson(app, JSON.stringify({ mail: { portalUrl: '   ' } }), adminCookie, env);
-    expect(res.status).toBe(200);
-
-    const settings = (await (
-      await app.request(
-        'https://team.example.com/api/admin/settings',
-        { headers: { cookie: adminCookie } },
-        env,
-      )
-    ).json()) as { mail: Record<string, unknown> };
-    // 覆盖被清掉 = 空串（服务端据此回落到 https://mail.<domain> 推导）
-    expect(settings.mail.portalUrl).toBe('');
-    // 合并语义：其余 mail 字段不受影响
-    expect(settings.mail.baseUrl).toBe('https://mail.example.com');
-    expect(settings.mail.domain).toBe('example.com');
-
-    const stored = JSON.parse(
-      db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value,
-    ) as Record<string, unknown>;
-    expect('portalUrl' in stored).toBe(false);
-    // 这次确实改了配置 → 有 audit 行（与「全空串不写库」区分开）
-    expect(
-      db.first<{ count: number }>("SELECT COUNT(*) AS count FROM audit_log WHERE action = 'settings_updated'"),
-    ).toEqual({ count: 1 });
-  });
-
-  it('PUT 空 body / 全空串 / *** → ok 且不写库、无 audit 行', async () => {
+  it('PUT 空 body / {} / 全空串 / *** → ok 且不写库、无审计行', async () => {
     const app = settingsApp();
     const { env, db, adminCookie } = await envFor();
     seedSampleConfig(db);
@@ -334,16 +312,14 @@ describe('实例设置查看/编辑（#17）', () => {
     expect(noBody.status).toBe(200);
     expect(await noBody.json()).toEqual({ ok: true });
 
-    const emptyObject = await putJson(app, '{}', adminCookie, env);
+    const emptyObject = await putJson(app, '/api/admin/settings', '{}', adminCookie, env);
     expect(emptyObject.status).toBe(200);
     expect(await emptyObject.json()).toEqual({ ok: true });
 
     const blanks = await putJson(
       app,
-      JSON.stringify({
-        oidc: { issuer: '', clientId: '', clientSecret: '***', scope: '' },
-        mail: { baseUrl: '', apiKey: '***', host: '', port: '', password: '' },
-      }),
+      '/api/admin/settings',
+      { oidc: { issuer: '', clientId: '', clientSecret: '***', scope: '' } },
       adminCookie,
       env,
     );
@@ -354,38 +330,435 @@ describe('实例设置查看/编辑（#17）', () => {
     expect(db.query('SELECT id FROM audit_log')).toEqual([]);
   });
 
-  it('PUT 非法 body（port 非正整数 / 字段类型错）→ 400 带 detail', async () => {
+  it('PUT 非法 body（oidc 字段类型错）→ 400 带 detail', async () => {
     const app = settingsApp();
     const { env, adminCookie } = await envFor();
+    const badType = await putJson(app, '/api/admin/settings', { oidc: { issuer: 123 } }, adminCookie, env);
+    expect(badType.status).toBe(400);
+    const body = (await badType.json()) as { error: string; detail: string };
+    expect(body.error).toBe('invalid settings');
+    expect(body.detail.length).toBeGreaterThan(0);
+  });
+});
 
-    const badPort = await putJson(app, JSON.stringify({ mail: { port: 'abc' } }), adminCookie, env);
-    expect(badPort.status).toBe(400);
-    const badPortBody = (await badPort.json()) as { error: string; detail: string };
-    expect(badPortBody.error).toBe('invalid settings');
-    expect(typeof badPortBody.detail).toBe('string');
-    expect(badPortBody.detail.length).toBeGreaterThan(0);
+describe('PUT /api/admin/settings/mail-stalwart（#340 分域 + D5）', () => {
+  it('单字段合并：改 apiKey 后库中其余字段原样、真值落库', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
 
-    const badType = await putJson(
+    const res = await putJson(
       app,
-      JSON.stringify({ oidc: { issuer: 123 } }),
+      '/api/admin/settings/mail-stalwart',
+      { enabled: true, apiKey: 'new-key' },
       adminCookie,
       env,
     );
-    expect(badType.status).toBe(400);
-    expect(((await badType.json()) as { error: string }).error).toBe('invalid settings');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    expect(JSON.parse(storedValue(db, 'mail_stalwart')!)).toEqual({
+      enabled: true,
+      baseUrl: 'https://mail.example.com',
+      apiKey: 'new-key',
+      domain: 'example.com',
+      portalUrl: 'https://mail.example.com/portal',
+    });
+    // 审计 target 分域。
+    expect(auditCount(db, 'mail-stalwart')).toBe(1);
+    expect(auditCount(db, 'oidc')).toBe(0);
   });
 
-  it('无会话 401、普通成员 403（GET 与 PUT 一致）', async () => {
+  it('PUT 只碰本键：成功后 instance_config 无 mail_smtp 行变化（两键互不产生）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+    const smtpBefore = storedValue(db, 'mail_smtp');
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: true, domain: 'new.example.com' },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(storedValue(db, 'mail_smtp')).toBe(smtpBefore);
+  });
+
+  it('D5：enabled 缺失（非布尔）→ 400 拒落库', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+    const before = db.query('SELECT key, value FROM instance_config ORDER BY key');
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { baseUrl: 'https://mail.example.com' },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('invalid settings');
+    expect(db.query('SELECT key, value FROM instance_config ORDER BY key')).toEqual(before);
+  });
+
+  it('D5：enabled:true 缺 baseUrl → 400 带 detail 列缺失项，库中无新写入', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    const before = db.query('SELECT key, value FROM instance_config ORDER BY key');
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: true, apiKey: 'k', domain: 'example.com' },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; detail: string };
+    expect(body.error).toBe('invalid settings');
+    expect(body.detail).toContain('开启邮箱管理需先配置');
+    expect(body.detail).toContain('Stalwart 地址');
+    // 拒落库：全表无任何新行（mail_stalwart 无行）。
+    expect(db.query('SELECT key, value FROM instance_config ORDER BY key')).toEqual(before);
+  });
+
+  it('D5 脏数据：库里 baseUrl 是数字（非字符串）→ enabled:true 仍 400（类型按字段定，不按当前值猜）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    db.run(
+      'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+      'mail_stalwart',
+      JSON.stringify({ baseUrl: 123, apiKey: 'k', domain: 'example.com' }),
+    );
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: true },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { detail: string }).detail).toContain('Stalwart 地址');
+  });
+
+  it('D5：库里已有 apiKey（新值传 ***）时 enabled:true 也算已配 → 200 落库', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    // 先存完整配置但开关关着：开启时密钥只传 ***，D5 用合并段（库里真值）判定已配。
+    seedSampleConfig(db, { enabled: false });
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: true, apiKey: '***' },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(JSON.parse(storedValue(db, 'mail_stalwart')!)).toMatchObject({ enabled: true, apiKey: 'api-key' });
+  });
+
+  it('D5 负面语义：enabled:false 半配置 → 200 落库（false + 已填字段照存）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: false, baseUrl: 'https://mail.example.com' },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(JSON.parse(storedValue(db, 'mail_stalwart')!)).toEqual({
+      enabled: false,
+      baseUrl: 'https://mail.example.com',
+    });
+  });
+
+  it('#99 空保存不建段：无行 + {enabled:false} → 200 幂等、库中无行、无审计', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: false },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    // 段本不存在且只要求关闭 = 默认状态（#99「空保存幂等不建段」）：不凭空造行、不写审计。
+    expect(storedValue(db, 'mail_stalwart')).toBeUndefined();
+    expect(auditCount(db, 'mail-stalwart')).toBe(0);
+  });
+
+  it('开关语义：关→开不丢配置；关状态下改字段保持 false；无变化不写审计', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    // 关：字段照存，密钥真值不被清也不被 MASK 覆盖。
+    const off = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: false },
+      adminCookie,
+      env,
+    );
+    expect(off.status).toBe(200);
+    expect(JSON.parse(storedValue(db, 'mail_stalwart')!)).toEqual({ ...STALWART_FULL, enabled: false });
+
+    // GET：enabled:false，密钥仍回 MASK。
+    const body = (await (await getSettings(app, adminCookie, env)).json()) as {
+      stalwart: Record<string, unknown>;
+    };
+    expect(body.stalwart).toEqual({
+      enabled: false,
+      baseUrl: 'https://mail.example.com',
+      apiKey: '***',
+      domain: 'example.com',
+      portalUrl: 'https://mail.example.com/portal',
+    });
+
+    // 关着改字段：enabled:false 保持、字段生效。
+    const keepOff = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: false, baseUrl: 'https://mail2.example.com' },
+      adminCookie,
+      env,
+    );
+    expect(keepOff.status).toBe(200);
+    expect(JSON.parse(storedValue(db, 'mail_stalwart')!)).toMatchObject({
+      enabled: false,
+      baseUrl: 'https://mail2.example.com',
+    });
+
+    // 再开：配置值仍在。
+    const on = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: true },
+      adminCookie,
+      env,
+    );
+    expect(on.status).toBe(200);
+    expect(JSON.parse(storedValue(db, 'mail_stalwart')!)).toMatchObject({
+      enabled: true,
+      apiKey: 'api-key',
+    });
+  });
+
+  it('幂等：无变化的重复 PUT → 不写库不写审计（翻开关后原样重发）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db, { enabled: false }); // 完整配置但开关关着
+
+    const first = await putJson(app, '/api/admin/settings/mail-stalwart', { enabled: true }, adminCookie, env);
+    expect(first.status).toBe(200);
+    expect(auditCount(db, 'mail-stalwart')).toBe(1);
+
+    const second = await putJson(app, '/api/admin/settings/mail-stalwart', { enabled: true }, adminCookie, env);
+    expect(second.status).toBe(200);
+    // enabled:true 已是现状、无字段变更 → 不写库不写审计。
+    expect(auditCount(db, 'mail-stalwart')).toBe(1);
+  });
+
+  it('portalUrl（#168/#184）：非空覆盖、空白清掉覆盖键回落推导、GET 原样回传', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    const set = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: true, portalUrl: 'https://portal.example.com/app-passwords' },
+      adminCookie,
+      env,
+    );
+    expect(set.status).toBe(200);
+    expect(JSON.parse(storedValue(db, 'mail_stalwart')!)).toMatchObject({
+      portalUrl: 'https://portal.example.com/app-passwords',
+    });
+
+    const clear = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: true, portalUrl: '   ' },
+      adminCookie,
+      env,
+    );
+    expect(clear.status).toBe(200);
+    expect('portalUrl' in JSON.parse(storedValue(db, 'mail_stalwart')!)).toBe(false);
+    // 清空确实改了配置 → 有审计行。
+    expect(auditCount(db, 'mail-stalwart')).toBe(2);
+  });
+});
+
+describe('PUT /api/admin/settings/mail-smtp（#340 分域 + D5）', () => {
+  it('改 host/port 生效；port 只收正整数；审计 target=mail-smtp', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: true, host: 'smtp2.example.com', port: 587 },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    const body = (await (await getSettings(app, adminCookie, env)).json()) as {
+      smtp: Record<string, unknown>;
+      stalwart: Record<string, unknown>;
+    };
+    expect(body.smtp).toEqual({
+      enabled: true,
+      host: 'smtp2.example.com',
+      port: 587,
+      username: 'mailer',
+      password: '***',
+      from: 'noreply@example.com',
+    });
+    expect(JSON.parse(storedValue(db, 'mail_smtp')!)).toMatchObject({
+      host: 'smtp2.example.com',
+      port: 587,
+      password: 'smtp-pass',
+    });
+    expect(auditCount(db, 'mail-smtp')).toBe(1);
+  });
+
+  it('PUT 只碰本键：PUT mail-smtp 成功后 instance_config 无 mail_stalwart 行（两键互不产生）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: true, host: 'smtp.example.com', port: 587, username: 'u', password: 'p', from: 'n@x.com' },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(storedValue(db, 'mail_smtp')).toBeDefined();
+    expect(storedValue(db, 'mail_stalwart')).toBeUndefined();
+  });
+
+  it('D5：enabled:true 必填不全 → 400 detail 列缺失项且拒落库；*** 算已配', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    // 库里 password 已存，传 *** 视同已配 → 200。
+    const maskedOk = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: true, host: 'smtp.example.com', port: 587, username: 'mailer', password: '***', from: 'noreply@example.com' },
+      adminCookie,
+      env,
+    );
+    expect(maskedOk.status).toBe(200);
+
+    // 干净库：缺 username/password/from → 400 列出全部缺失项，库中无行。
+    const fresh = await envFor();
+    const bad = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: true, host: 'smtp.example.com', port: 587 },
+      fresh.adminCookie,
+      fresh.env,
+    );
+    expect(bad.status).toBe(400);
+    const body = (await bad.json()) as { error: string; detail: string };
+    expect(body.error).toBe('invalid settings');
+    expect(body.detail).toContain('开启通知发信需先配置');
+    expect(body.detail).toContain('用户名');
+    expect(body.detail).toContain('密码');
+    expect(body.detail).toContain('发件地址');
+    expect(fresh.db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail_smtp')).toBeNull();
+  });
+
+  it('D5 负面语义：enabled:false 半配置 → 200 落库（false + 已填字段照存）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: false, host: 'smtp.example.com' },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(JSON.parse(storedValue(db, 'mail_smtp')!)).toEqual({
+      enabled: false,
+      host: 'smtp.example.com',
+    });
+  });
+
+  it('#99 空保存不建段：无行 + {enabled:false} → 200 幂等、库中无行、无审计', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: false },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(storedValue(db, 'mail_smtp')).toBeUndefined();
+    expect(auditCount(db, 'mail-smtp')).toBe(0);
+  });
+
+  it('非法 body（port 非正整数 / enabled 非布尔）→ 400 带 detail', async () => {
+    const app = settingsApp();
+    const { env, adminCookie } = await envFor();
+
+    const badPort = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: true, port: 'abc' },
+      adminCookie,
+      env,
+    );
+    expect(badPort.status).toBe(400);
+    expect(((await badPort.json()) as { error: string }).error).toBe('invalid settings');
+
+    const badEnabled = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: 'yes' },
+      adminCookie,
+      env,
+    );
+    expect(badEnabled.status).toBe(400);
+    expect(((await badEnabled.json()) as { error: string }).error).toBe('invalid settings');
+  });
+});
+
+describe('权限（GET 与 PUT 一致）', () => {
+  it('无会话 401、普通成员 403', async () => {
     const app = settingsApp();
     const { env, memberCookie } = await envFor();
 
     const anonGet = await app.request('https://team.example.com/api/admin/settings', {}, env);
     expect(anonGet.status).toBe(401);
-    const anonPut = await app.request(
-      'https://team.example.com/api/admin/settings',
-      { method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{}' },
-      env,
-    );
+    const anonPut = await putJson(app, '/api/admin/settings/mail-smtp', { enabled: true }, '', env);
     expect(anonPut.status).toBe(401);
 
     const memberGet = await app.request(
@@ -394,85 +767,13 @@ describe('实例设置查看/编辑（#17）', () => {
       env,
     );
     expect(memberGet.status).toBe(403);
-    const memberPut = await putJson(app, JSON.stringify({ mail: { host: 'x' } }), memberCookie, env);
+    const memberPut = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: true },
+      memberCookie,
+      env,
+    );
     expect(memberPut.status).toBe(403);
-  });
-
-  it('邮件轴开关（enabled）：提供即写、不提供保持，关开不丢配置、MASK 语义不变', async () => {
-    const app = settingsApp();
-    const { env, db, adminCookie } = await envFor();
-    seedSampleConfig(db);
-
-    // 关：只带 enabled:false → 库 JSON = 原字段 + enabled:false，apiKey/password 真值不被清也不被 MASK 覆盖
-    const off = await putJson(app, JSON.stringify({ mail: { enabled: false } }), adminCookie, env);
-    expect(off.status).toBe(200);
-    expect(await off.json()).toEqual({ ok: true });
-    expect(JSON.parse(db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value)).toEqual({
-      baseUrl: 'https://mail.example.com',
-      apiKey: 'api-key',
-      domain: 'example.com',
-      host: 'smtp.example.com',
-      port: 2525,
-      username: 'mailer',
-      password: 'smtp-pass',
-      from: 'noreply@example.com',
-      portalUrl: 'https://mail.example.com/portal',
-      enabled: false,
-    });
-
-    // GET：enabled:false，密钥仍回 MASK（开关不影响脱敏视图）
-    const read = await app.request(
-      'https://team.example.com/api/admin/settings',
-      { headers: { cookie: adminCookie } },
-      env,
-    );
-    expect(read.status).toBe(200);
-    expect(((await read.json()) as { mail: Record<string, unknown> }).mail).toEqual({
-      baseUrl: 'https://mail.example.com',
-      apiKey: '***',
-      domain: 'example.com',
-      host: 'smtp.example.com',
-      port: 2525,
-      username: 'mailer',
-      password: '***',
-      from: 'noreply@example.com',
-      portalUrl: 'https://mail.example.com/portal',
-      enabled: false,
-    });
-
-    // 开关关闭状态下改其它字段（不提供 enabled）→ enabled:false 保持、开关语义不受 MASK 空串约定干扰
-    const keepOff = await putJson(app, JSON.stringify({ mail: { host: 'smtp3.example.com' } }), adminCookie, env);
-    expect(keepOff.status).toBe(200);
-    const kept = JSON.parse(db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value) as Record<string, unknown>;
-    expect(kept.enabled).toBe(false);
-    expect(kept.host).toBe('smtp3.example.com');
-
-    // 再开：enabled:true → 恢复开启，配置值仍在
-    const on = await putJson(app, JSON.stringify({ mail: { enabled: true } }), adminCookie, env);
-    expect(on.status).toBe(200);
-    const restored = JSON.parse(db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value) as Record<string, unknown>;
-    expect(restored.enabled).toBe(true);
-    expect(restored.apiKey).toBe('api-key');
-    expect(restored.password).toBe('smtp-pass');
-  });
-
-  it('老数据兼容：直接种 enabled:false 的 mail 行 → GET 回 enabled:false', async () => {
-    const app = settingsApp();
-    const { env, db, adminCookie } = await envFor();
-    seedSampleConfig(db, { enabled: false });
-
-    const res = await app.request(
-      'https://team.example.com/api/admin/settings',
-      { headers: { cookie: adminCookie } },
-      env,
-    );
-    expect(res.status).toBe(200);
-    expect(((await res.json()) as { mail: Record<string, unknown> }).mail).toMatchObject({ enabled: false });
-    // 开关关着，库里真值仍在（关 ≠ 删行/清值）
-    expect(JSON.parse(db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', 'mail')!.value)).toMatchObject({
-      apiKey: 'api-key',
-      password: 'smtp-pass',
-      enabled: false,
-    });
   });
 });
