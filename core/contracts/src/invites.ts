@@ -15,14 +15,17 @@ export const InvitePublicStatusSchema = z.enum(['pending', 'approved', 'activate
 export type InvitePublicStatus = z.infer<typeof InvitePublicStatusSchema>;
 
 /**
- * `GET /api/invite/:token/status` 响应（#149）：三态 + 实例能力开关。
- * mailEnabled = isMailEnabled 口径（#157 开关轴并入后）：
- * instance_config 存在 mail 段且 enabled !== false（缺字段老数据视为开启，生产零迁移）；
- * 无段或开关关 = 弱化实例：邀请页不渲染邮箱字段、批准即激活（无开户动作）。
+ * `GET /api/invite/:token/status` 响应（#149/#340）：三态 + 实例能力双旗。
+ * mailEnabled = 开户轴（isMailEnabled 口径）：mail_stalwart 段 enabled === true；
+ * smtpEnabled = 发信轴（isSmtpEnabled 口径，#340）：mail_smtp 段 enabled === true。
+ * 两旗均 fail-closed（缺段/非 true 即 false）。消费口径（决策 #98）：
+ * emailPrefix 必填 ⟷ mailEnabled；personalEmail 必填 ⟷ mailEnabled || smtpEnabled
+ * （SMTP 结果邮件收件人 + OIDC 首登消费邀请/通知归属的身份锚）。
  */
 export const InviteStatusResponseSchema = z.object({
   status: InvitePublicStatusSchema,
   mailEnabled: z.boolean(),
+  smtpEnabled: z.boolean(),
 });
 
 export type InviteStatusResponse = z.infer<typeof InviteStatusResponseSchema>;

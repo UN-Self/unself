@@ -7,7 +7,7 @@
  * - 旧 `mail` 键是 0010 及之前的历史遗存，0011 迁移已拆键；本文件零读取旧键
  *   （D2 回滚兼容：旧行保留在库，但任何读路径都不再碰它）。
  * - `enabled` 恒为显式布尔，缺省关（D5 fail-closed，反转旧 `!== false` 的缺省开）。
- *   段落存在即意味着 0011/设置路由已写入完整字段，装配口不再查字段完整性；
+ *   段落存在即意味着 0011/设置路由已写入字段，装配口只判 enabled、不查字段完整性；
  *   残缺段（手工改库/回滚遗留）由防御读取兜底：不装配、不抛错。
  * - 解析语义照搬原 members.ts 的 parseMailSection（唯一副本迁到这里）：
  *   非 null 原型的非数组对象才通过，损坏/类型不符 → {}（弱化实例不 500）。
@@ -124,6 +124,16 @@ export async function readMailAccess(
  */
 export async function isMailEnabled(db: D1Database): Promise<boolean> {
   return (await readMailAccess(db)).enabled;
+}
+
+/**
+ * 发信轴能力开关（#340 决策 #98）：mail_smtp 段 enabled === true。
+ * fail-closed 与开户轴同口径（缺段/残缺段一律关）。消费点：
+ * 邀请表单 personalEmail 必填判定（任一轴开即必填——SMTP 结果邮件收件人 +
+ * OIDC 首登消费邀请的身份锚）与 /api/invite/:token/status 双旗响应。
+ */
+export async function isSmtpEnabled(db: D1Database): Promise<boolean> {
+  return (await readSmtpSection(db)).enabled === true;
 }
 
 /**

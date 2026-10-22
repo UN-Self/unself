@@ -36,7 +36,7 @@ import {
   type Invite,
 } from '../services/invites';
 import { configuredMailProvisioner, isMailEnabled } from '../services/members';
-import { configuredMailSender } from '../services/notifications';
+import { configuredMailSender, isSmtpEnabled } from '../services/notifications';
 import { deliverNotificationInBackground } from '../services/notification-background';
 import { readSession } from '../session';
 
@@ -46,23 +46,24 @@ const CREATE_INVITE_SCHEMA = z.object({
 });
 
 /**
- * 公开填表 body（按实例形态条件化，#149）：公共部分 displayName 必填；内置注册（issue-A）
- * username/salt/proof 可选、username 与 proof 必须同时有或同时无。
- * mailEnabled=true：emailPrefix 必填（不含 @ 与空白）且 personalEmail 必须是合法地址（与原全局 schema 逐字一致）；
- * mailEnabled=false：两字段可省（可省，带了值也接受——弱化实例无开户动作，批准即激活）。
+ * 公开填表 body（按能力轴条件化，#149 → #340 决策 #98）：公共部分 displayName 必填；
+ * 内置注册（issue-A）username/salt/proof 可选、username 与 proof 必须同时有或同时无。
+ * emailPrefix 必填 ⟷ 开户轴（stalwartOn，回答「开什么工作邮箱」）；
+ * personalEmail 必填 ⟷ 任一轴开（anyOn：SMTP 结果邮件收件人 + OIDC 首登消费邀请的身份锚）。
+ * 双轴关：两字段可省（可省，带了值也接受——批准即激活，站内+邀请页反馈兜底）。
  */
-function applicationSchema(mailEnabled: boolean) {
+function applicationSchema(stalwartOn: boolean, anyOn: boolean) {
   return z
     .object({
       displayName: z.string().trim().min(1),
-      emailPrefix: mailEnabled
+      emailPrefix: stalwartOn
         ? z
             .string()
             .trim()
             .min(1)
             .regex(/^[^@\s]+$/, '邮箱前缀不能包含 @ 或空白')
         : z.string().trim().optional(),
-      personalEmail: mailEnabled ? z.string().trim().email() : z.string().trim().optional(),
+      personalEmail: anyOn ? z.string().trim().email() : z.string().trim().optional(),
       username: z.string().trim().regex(/^[a-zA-Z0-9_-]{3,32}$/, '用户名需为 3-32 位字母/数字/_/-').optional(),
       salt: z.string().regex(/^[A-Za-z0-9+/]{22}==$/, '凭据格式不正确').optional(),
       proof: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, '凭据格式不正确').optional(),
@@ -167,10 +168,13 @@ export function registerInviteRoutes(
     if (!invite) {
       return c.json({ error: '邀请链接无效' }, 404);
     }
-    // 能力开关一次算好，三态响应统一携带（前端据此决定表单字段与三态文案）
-    const mailEnabled = await isMailEnabled(c.env.CORE_DB);
+    // 能力开关一次算好，三态响应统一携带（前端据此决定表单字段与三态文案；#340 双旗）
+    const [mailEnabled, smtpEnabled] = await Promise.all([
+      isMailEnabled(c.env.CORE_DB),
+      isSmtpEnabled(c.env.CORE_DB),
+    ]);
     if (invite.status === 'pending') {
-      const body: InviteStatusResponse = { status: 'pending', mailEnabled };
+      const body: InviteStatusResponse = { status: 'pending', mailEnabled, smtpEnabled };
       return c.json(body);
     }
     if (invite.status === 'expired' || invite.status === 'rejected') {
@@ -179,12 +183,12 @@ export function registerInviteRoutes(
       return c.json({ error: '邀请链接已失效，请联系管理员' }, 410);
     }
     if (invite.status === 'consumed') {
-      const body: InviteStatusResponse = { status: 'activated', mailEnabled };
+      const body: InviteStatusResponse = { status: 'activated', mailEnabled, smtpEnabled };
       return c.json(body);
     }
     const activation = await findInviteActivationForInvite(c.env.CORE_DB, invite.token_hash);
     const activated = !activation || activation.used_at !== null;
-    const body: InviteStatusResponse = { status: activated ? 'activated' : 'approved', mailEnabled };
+    const body: InviteStatusResponse = { status: activated ? 'activated' : 'approved', mailEnabled, smtpEnabled };
     return c.json(body);
   });
 
@@ -230,15 +234,20 @@ export function registerInviteRoutes(
   /** 公开提交：落申请三字段（内置注册时另带用户名/密码）后广播 active 管理员（站内，不发邮件）。 */
   app.post('/api/invite/:token', async (c) => {
     const raw: unknown = await c.req.json().catch(() => null);
-    // 先判实例形态再校验：mail 段有无决定 emailPrefix/personalEmail 是否必填（#149）
-    const mailEnabled = await isMailEnabled(c.env.CORE_DB);
-    const parsed = applicationSchema(mailEnabled).safeParse(raw ?? {});
+    // 先判实例形态再校验（#149 → #340 决策 #98）：字段必填按轴——
+    // 前缀 ⟷ 开户轴；个人邮箱 ⟷ 任一轴开（SMTP 发通知 / JIT 消费邀请都靠它）
+    const stalwartOn = await isMailEnabled(c.env.CORE_DB);
+    const smtpOn = await isSmtpEnabled(c.env.CORE_DB);
+    const parsed = applicationSchema(stalwartOn, stalwartOn || smtpOn).safeParse(raw ?? {});
     if (!parsed.success) {
+      const errorText = stalwartOn
+        ? '请填写显示名、邮箱前缀和个人邮箱（邮箱需为有效地址）'
+        : smtpOn
+          ? '请填写显示名和个人邮箱（邮箱需为有效地址）'
+          : '请填写显示名';
       return c.json(
         {
-          error: mailEnabled
-            ? '请填写显示名、邮箱前缀和个人邮箱（邮箱需为有效地址）'
-            : '请填写显示名',
+          error: errorText,
           detail: z.prettifyError(parsed.error),
         },
         400,
@@ -332,16 +341,23 @@ async function approveInvite(
   }
   const sender = await configuredMailSender(db, dependencies.createMailSender);
 
-  // OIDC JIT 路径：未填表无法批准，守卫按实例形态（#149）：有邮件=看邮箱前缀；
-  // 无邮件=看 displayName（无邮件实例表单不再采集邮箱前缀，OIDC+无邮件（无内置凭证）
-  // 若仍按前缀判定将永 409，批准成死路；有邮件实例行为不变）。
-  const mailEnabled = await isMailEnabled(db);
+  // OIDC JIT 路径：未填表无法批准，守卫按能力轴（#149 → #340 决策 #98）：
+  // 开户轴开 = 查邮箱前缀（开户入参）；发信轴开 = 查个人邮箱（结果邮件要有收件人）；
+  // 双轴关 = 查 displayName（表单不采集邮箱，OIDC+双关若按前缀判定将永 409，批准成死路）。
+  const stalwartOn = await isMailEnabled(db);
+  const smtpOn = await isSmtpEnabled(db);
   const creds = await getInviteCredentials(db, id);
-  if (!creds && (mailEnabled ? invite.email_prefix.length === 0 : invite.display_name.length === 0)) {
+  const missingPrefix = stalwartOn && invite.email_prefix.length === 0;
+  const missingPersonalEmail = smtpOn && invite.personal_email.length === 0;
+  if (!creds && (missingPrefix || missingPersonalEmail || (!stalwartOn && !smtpOn && invite.display_name.length === 0))) {
     return c.json(
       {
         error: 'invite not filled',
-        detail: mailEnabled ? '该申请尚未填写完成（缺少邮箱前缀），无法批准' : '该申请尚未填写完成，无法批准',
+        detail: missingPrefix
+          ? '该申请尚未填写完成（缺少邮箱前缀），无法批准'
+          : missingPersonalEmail
+            ? '该申请尚未填写完成（缺少个人邮箱），无法批准'
+            : '该申请尚未填写完成，无法批准',
       },
       409,
     );
