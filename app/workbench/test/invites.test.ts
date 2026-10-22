@@ -565,7 +565,7 @@ describe('邀请域 HTTP（#18）', () => {
     // status 端点：弱化实例暴露 mailEnabled:false，pending 态也带
     const status = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(status.status).toBe(200);
-    expect(await status.json()).toEqual({ status: 'pending', mailEnabled: false });
+    expect(await status.json()).toEqual({ status: 'pending', mailEnabled: false, smtpEnabled: false });
 
     // 站内通知 payload：可省字段归空串
     const notification = db.first<{ payload: string }>(
@@ -596,7 +596,7 @@ describe('邀请域 HTTP（#18）', () => {
     // 批准后 status 端点：无激活行（弱化实例批准即激活）→ activated + mailEnabled:false
     const activatedStatus = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(activatedStatus.status).toBe(200);
-    expect(await activatedStatus.json()).toEqual({ status: 'activated', mailEnabled: false });
+    expect(await activatedStatus.json()).toEqual({ status: 'activated', mailEnabled: false, smtpEnabled: false });
   });
 
   it('邮件轴开关关闭（mail 行在场但 enabled:false）：status mailEnabled:false，填表只带 displayName 即 200，批准即激活且不开户（provisioner 未被构建）', async () => {
@@ -615,7 +615,7 @@ describe('邀请域 HTTP（#18）', () => {
     // status：pending 态就暴露 mailEnabled:false（isMailEnabled 吃 enabled 轴）
     const status = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(status.status).toBe(200);
-    expect(await status.json()).toEqual({ status: 'pending', mailEnabled: false });
+    expect(await status.json()).toEqual({ status: 'pending', mailEnabled: false, smtpEnabled: false });
 
     // 弱化实例表单：只提交 displayName（+可选内置凭证）即 200，不再要求邮箱字段
     const applied = await app.request(
@@ -649,7 +649,138 @@ describe('邀请域 HTTP（#18）', () => {
     // 批准后 status：无激活行 → activated + mailEnabled:false
     const activatedStatus = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(activatedStatus.status).toBe(200);
-    expect(await activatedStatus.json()).toEqual({ status: 'activated', mailEnabled: false });
+    expect(await activatedStatus.json()).toEqual({ status: 'activated', mailEnabled: false, smtpEnabled: false });
+  });
+
+  describe('#340 双轴拆分（SMTP-only：关×开）', () => {
+    /** 仅 SMTP 段启用（开户轴无行）：矩阵「关×开」。 */
+    async function envForSmtpOnly(): Promise<InviteEnv> {
+      const fx = await envFor();
+      fx.db.run(
+        'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+        'mail_smtp',
+        JSON.stringify({ enabled: true, host: MAIL_CONFIG.host, port: MAIL_CONFIG.port, username: MAIL_CONFIG.username, password: MAIL_CONFIG.password, from: MAIL_CONFIG.from }),
+      );
+      return fx;
+    }
+
+    it('status 双旗：关×开 → {mailEnabled:false, smtpEnabled:true}；双关 → 双 false', async () => {
+      const app = createApp();
+      const smtpOnly = await envForSmtpOnly();
+      const { token } = await createInviteVia(app, smtpOnly.env, smtpOnly.adminCookie);
+      const on = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, smtpOnly.env);
+      expect(on.status).toBe(200);
+      expect(await on.json()).toEqual({ status: 'pending', mailEnabled: false, smtpEnabled: true });
+
+      const appOff = createApp();
+      const off = await envFor();
+      const { token: tokOff } = await createInviteVia(appOff, off.env, off.adminCookie);
+      const bothOff = await appOff.request(`https://team.example.com/api/invite/${tokOff}/status`, {}, off.env);
+      expect(await bothOff.json()).toEqual({ status: 'pending', mailEnabled: false, smtpEnabled: false });
+    });
+
+    it('关×开 填表：displayName + personalEmail 即 200（前缀可省）；缺 personalEmail → 400 且文案指向个人邮箱', async () => {
+      const app = createApp({
+        createMailProvisioner: () => {
+          throw new Error('mail provisioner must stay unconstructed');
+        },
+      });
+      const { env, db, adminCookie } = await envForSmtpOnly();
+      const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+
+      const applied = await app.request(
+        `https://team.example.com/api/invite/${token}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ displayName: '新人', personalEmail: 'new@personal.example' }),
+        },
+        env,
+      );
+      expect(applied.status).toBe(200);
+      // 前缀可省：落空串；个人邮箱照落（后续发信/JIT 消费的身份锚）
+      expect(
+        db.first('SELECT email_prefix, personal_email FROM invites WHERE token_hash = ?', tokenHash),
+      ).toEqual({ email_prefix: '', personal_email: 'new@personal.example' });
+
+      // 缺个人邮箱 → 400，文案明确指向个人邮箱（不是旧的「请填写显示名」）
+      const { token: tok2 } = await createInviteVia(app, env, adminCookie);
+      const missing = await app.request(
+        `https://team.example.com/api/invite/${tok2}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ displayName: '新人' }),
+        },
+        env,
+      );
+      expect(missing.status).toBe(400);
+      expect(((await missing.json()) as { error: string }).error).toContain('个人邮箱');
+    });
+
+    it('关×开 全链：提交（免前缀）→ 批准不开户 → invite_result 邮件以个人邮箱为收件人；批准后 status 双旗', async () => {
+      const sent: SentMail[] = [];
+      const app = createApp({
+        createMailProvisioner: () => {
+          throw new Error('mail provisioner must stay unconstructed');
+        },
+        createMailSender: () => fakeSender(sent),
+      });
+      const { env, db, adminCookie } = await envForSmtpOnly();
+      const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+
+      const applied = await app.request(
+        `https://team.example.com/api/invite/${token}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ displayName: '新人', personalEmail: 'new@personal.example', username: 'grace', salt: 'AAAAAAAAAAAAAAAAAAAAAA==', proof: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }),
+        },
+        env,
+      );
+      expect(applied.status).toBe(200);
+
+      const approved = await app.request(
+        `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+        { method: 'POST', headers: { cookie: adminCookie } },
+        env,
+      );
+      expect(approved.status).toBe(200);
+      // 不开户：工作邮箱 NULL（开户轴关，provisioner 从未构建）
+      expect(db.first<{ email: string | null }>("SELECT email FROM users WHERE issuer = 'builtin'")).toMatchObject({ email: null });
+      // 结果邮件送达个人邮箱（SMTP-only 矩阵承诺：通过 SMTP 发送通知）
+      expect(sent).toContainEqual(expect.objectContaining({ to: 'new@personal.example', subject: expect.stringContaining('已通过') }));
+
+      const status = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
+      expect(await status.json()).toEqual({ status: 'activated', mailEnabled: false, smtpEnabled: true });
+    });
+
+    it('关×开 审批守卫：OIDC 路径（无凭证）未填个人邮箱 → 409 人话指向个人邮箱', async () => {
+      const app = createApp({
+        createMailProvisioner: () => {
+          throw new Error('mail provisioner must stay unconstructed');
+        },
+      });
+      const { env, adminCookie } = await envForSmtpOnly();
+      const { token, tokenHash } = await createInviteVia(app, env, adminCookie);
+      // 只填显示名（OIDC JIT 路径，无内置凭证）：个人邮箱缺失，批准应被拦
+      await app.request(
+        `https://team.example.com/api/invite/${token}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ displayName: '新人' }),
+        },
+        env,
+      );
+      const approved = await app.request(
+        `https://team.example.com/api/admin/invites/${tokenHash}/approve`,
+        { method: 'POST', headers: { cookie: adminCookie } },
+        env,
+      );
+      expect(approved.status).toBe(409);
+      expect(((await approved.json()) as { detail: string }).detail).toContain('个人邮箱');
+    });
   });
 
   it('#149 完整实例：status 端点暴露 mailEnabled:true，内置路径批准后成员行回填工作邮箱', async () => {
@@ -664,7 +795,7 @@ describe('邀请域 HTTP（#18）', () => {
 
     const status = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(status.status).toBe(200);
-    expect(await status.json()).toEqual({ status: 'pending', mailEnabled: true });
+    expect(await status.json()).toEqual({ status: 'pending', mailEnabled: true, smtpEnabled: true });
 
     expect(
       (

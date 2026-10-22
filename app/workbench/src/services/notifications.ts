@@ -23,7 +23,7 @@ import {
 import { audit } from './audit';
 
 /** 发信口装配已归拢到 mail-config.ts（#340）：按既有 import 路径原样再导出（index.ts / routes 消费不断）。 */
-export { configuredMailSender, type CreateMailSender } from './mail-config';
+export { configuredMailSender, isSmtpEnabled, type CreateMailSender } from './mail-config';
 
 /** 站内/邮件收件人口径：已建档用户 / 待建档受邀邮箱 / 全员广播 / 全体管理员。 */
 export type NotificationRecipient =
