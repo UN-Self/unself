@@ -69,7 +69,8 @@ async function fixture(): Promise<Fixture> {
     'admin@example.com',
     'admin',
   );
-  db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail', JSON.stringify(MAIL_CONFIG));
+  db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail_stalwart', JSON.stringify({ enabled: true, baseUrl: MAIL_CONFIG.baseUrl, apiKey: MAIL_CONFIG.apiKey, domain: MAIL_CONFIG.domain }));
+  db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail_smtp', JSON.stringify({ enabled: true, host: MAIL_CONFIG.host, port: MAIL_CONFIG.port, username: MAIL_CONFIG.username, password: MAIL_CONFIG.password, from: MAIL_CONFIG.from }));
   const adminCookie = `unself_session=${await createSessionToken(
     { uid: 'u_admin', iss: 'https://idp.example.com', sub: 'admin-sub', name: '管理' },
     pair.privateKeyPem,

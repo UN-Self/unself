@@ -115,8 +115,12 @@ describe('#188 S4：account_ready 落库脱敏（批准真链路）', () => {
       }),
     });
     db.run(
-      "INSERT INTO instance_config (key, value) VALUES ('mail', ?)",
-      JSON.stringify(FULL_MAIL_CONFIG),
+      "INSERT INTO instance_config (key, value) VALUES ('mail_stalwart', ?)",
+      JSON.stringify({ enabled: true, baseUrl: FULL_MAIL_CONFIG.baseUrl, apiKey: FULL_MAIL_CONFIG.apiKey, domain: FULL_MAIL_CONFIG.domain }),
+    );
+    db.run(
+      "INSERT INTO instance_config (key, value) VALUES ('mail_smtp', ?)",
+      JSON.stringify({ enabled: true, host: FULL_MAIL_CONFIG.host, port: FULL_MAIL_CONFIG.port, username: FULL_MAIL_CONFIG.username, password: FULL_MAIL_CONFIG.password, from: FULL_MAIL_CONFIG.from }),
     );
 
     // 邀请 → 公开填表（带个人邮箱）→ 管理员批准（完整实例：开号 + 签激活令牌 + 发邮件）
@@ -193,8 +197,8 @@ describe('#167 发信轴吃 mail.enabled（关闭即不装配 sender）', () => 
     const { app, env, db, adminCookie } = await envFor({ createMailSender: factory });
     // 关 ≠ 删行：完整 SMTP 配置在场，只是 enabled:false（设置页开关关闭后的真实落库形状）。
     db.run(
-      "INSERT INTO instance_config (key, value) VALUES ('mail', ?)",
-      JSON.stringify({ ...FULL_MAIL_CONFIG, enabled: false }),
+      "INSERT INTO instance_config (key, value) VALUES ('mail_smtp', ?)",
+      JSON.stringify({ enabled: false, host: FULL_MAIL_CONFIG.host, port: FULL_MAIL_CONFIG.port, username: FULL_MAIL_CONFIG.username, password: FULL_MAIL_CONFIG.password, from: FULL_MAIL_CONFIG.from }),
     );
 
     // 邀请 → 公开填表（弱化实例表单可省邮箱；带上个人邮箱走历史兼容路径）

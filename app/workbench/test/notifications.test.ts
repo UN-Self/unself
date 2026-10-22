@@ -280,18 +280,19 @@ const FULL_MAIL_CONFIG = {
   from: 'noreply@example.com',
 };
 
-describe('configuredMailSender：mail 段装配状态', () => {
+describe('configuredMailSender：mail_smtp 段装配状态', () => {
   it('段缺失/非法 JSON → null；完整段 → 可用发信口；字段不全 → null', async () => {
     const db = createCoreDb();
 
     expect(await configuredMailSender(db.d1)).toBeNull();
 
-    db.run("INSERT INTO instance_config (key, value) VALUES ('mail', ?)", '{ 不是 JSON');
+    db.run("INSERT INTO instance_config (key, value) VALUES ('mail_smtp', ?)", '{ 不是 JSON');
     expect(await configuredMailSender(db.d1)).toBeNull();
 
     db.run(
-      "UPDATE instance_config SET value = ? WHERE key = 'mail'",
+      "UPDATE instance_config SET value = ? WHERE key = 'mail_smtp'",
       JSON.stringify({
+        enabled: true,
         host: 'smtp.example.com',
         port: 465,
         username: 'bot',
@@ -302,17 +303,18 @@ describe('configuredMailSender：mail 段装配状态', () => {
     const sender = await configuredMailSender(db.d1);
     expect(sender?.send).toBeTypeOf('function');
 
+    // #340：残缺但 enabled:true 的防御读取——不装配（字段不全工厂回 null）、不抛错。
     db.run(
-      "UPDATE instance_config SET value = ? WHERE key = 'mail'",
-      JSON.stringify({ host: 'smtp.example.com' }),
+      "UPDATE instance_config SET value = ? WHERE key = 'mail_smtp'",
+      JSON.stringify({ enabled: true, host: 'smtp.example.com' }),
     );
     expect(await configuredMailSender(db.d1)).toBeNull();
   });
 
-  it('#167 mail.enabled=false：字段再全也不装配，工厂零调用', async () => {
+  it('#167 mail_smtp.enabled=false：字段再全也不装配，工厂零调用', async () => {
     const db = createCoreDb();
     db.run(
-      "INSERT INTO instance_config (key, value) VALUES ('mail', ?)",
+      "INSERT INTO instance_config (key, value) VALUES ('mail_smtp', ?)",
       JSON.stringify({ ...FULL_MAIL_CONFIG, enabled: false }),
     );
     const send = vi.fn(async (_message: MailMessage) => {});
@@ -323,29 +325,29 @@ describe('configuredMailSender：mail 段装配状态', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('#167 enabled 缺省（老数据）/ enabled=true：行为不变，照常装配', async () => {
+  it('#340 enabled 显式 true 才装配（enabled 缺失的老形状 = 关，fail-closed）', async () => {
     const db = createCoreDb();
     const factory = vi.fn(() => ({ send: async (_message: MailMessage) => {} }));
     db.run(
-      "INSERT INTO instance_config (key, value) VALUES ('mail', ?)",
+      "INSERT INTO instance_config (key, value) VALUES ('mail_smtp', ?)",
       JSON.stringify(FULL_MAIL_CONFIG),
     );
 
-    expect(await configuredMailSender(db.d1, factory)).not.toBeNull();
-    expect(factory).toHaveBeenCalledTimes(1);
+    expect(await configuredMailSender(db.d1, factory)).toBeNull();
+    expect(factory).not.toHaveBeenCalled();
 
     db.run(
-      "UPDATE instance_config SET value = ? WHERE key = 'mail'",
+      "UPDATE instance_config SET value = ? WHERE key = 'mail_smtp'",
       JSON.stringify({ ...FULL_MAIL_CONFIG, enabled: true }),
     );
     expect(await configuredMailSender(db.d1, factory)).not.toBeNull();
-    expect(factory).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenCalledTimes(1);
   });
 
   it('#167 enabled=false：触发通知 → 邮件渠道 skipped（工厂零调用、站内照写）', async () => {
     const db = createCoreDb();
     db.run(
-      "INSERT INTO instance_config (key, value) VALUES ('mail', ?)",
+      "INSERT INTO instance_config (key, value) VALUES ('mail_smtp', ?)",
       JSON.stringify({ ...FULL_MAIL_CONFIG, enabled: false }),
     );
     const send = vi.fn(async (_message: MailMessage) => {});

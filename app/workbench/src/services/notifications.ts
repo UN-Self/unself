@@ -7,14 +7,13 @@
  *   查不到类型的 type 一律不投递（deliverNotification 返回 null），未来类型只需种一行。
  * - 触发即发、失败落审计、不重试不排队（2026-09-10 拍板）：先写站内再发信，
  *   单封发信失败只落 audit_log，站内通知不受影响，也不补偿重投。
- * - 邮件渠道查 mail 段装配状态，段缺失/不完整即静默降级（与 routes/settings.ts 同口径）。
+ * - 邮件渠道查 mail_smtp 段装配状态（#340 读侧归拢到 mail-config.ts），段缺失/关闭即静默降级。
  * - 弱化实例（无邮件）邀请审批闭环可用：invite_result 对尚未建档的受邀人先按
  *   invited_email 悬挂站内通知，首登建档后由 bindPendingNotifications 归属（#47/#49）。
  * - 落库与邮件渲染分离（#188 S4）：邮件拿完整 payload 渲染，站内 payload 先按
  *   PAYLOAD_SCOPES 脱敏再持久化——一次性激活链接/令牌不进库，只留「链接已生成」标记。
  */
 import {
-  createMailSenderFromConfig,
   renderAccountReady,
   renderInviteResult,
   renderModuleToggled,
@@ -22,7 +21,9 @@ import {
 } from '@unself/mail-smtp';
 
 import { audit } from './audit';
-import { parseMailSection } from './members';
+
+/** 发信口装配已归拢到 mail-config.ts（#340）：按既有 import 路径原样再导出（index.ts / routes 消费不断）。 */
+export { configuredMailSender, type CreateMailSender } from './mail-config';
 
 /** 站内/邮件收件人口径：已建档用户 / 待建档受邀邮箱 / 全员广播 / 全体管理员。 */
 export type NotificationRecipient =
@@ -239,34 +240,6 @@ export async function deliverNotification(
     }
   }
   return { inApp, email: failed ? 'failed' : 'sent' };
-}
-
-/** SMTP 装配注入面（#18 测试口）：外部边界替身只在此层；缺省 = 真 SMTP。 */
-export type CreateMailSender = (mailConfig: Record<string, unknown>) => MailSender | null;
-
-/**
- * 从 instance_config 的 mail 段装配发信口：无段/enabled === false → null（弱化实例静默降级）。
- * 段解析复用 members.ts 的 parseMailSection（唯一副本口径）；#167 起开关轴与
- * isMailEnabled/configuredMailProvisioner 同口径：关闭即不装配 sender，也不碰工厂。
- * 字段不完整由 createMailSenderFromConfig 判定，同样回 null。
- */
-export async function configuredMailSender(
-  db: D1Database,
-  createMailSender: CreateMailSender = createMailSenderFromConfig,
-): Promise<MailSender | null> {
-  const row = await db
-    .prepare("SELECT value FROM instance_config WHERE key = 'mail'")
-    .bind()
-    .first<{ value: string }>();
-  if (!row) {
-    return null;
-  }
-  const section = parseMailSection(row.value);
-  // 开关关闭 = 弱化实例：整个发信轴不装配（老数据无 enabled 字段 → 缺省开启，行为不变）。
-  if (section.enabled === false) {
-    return null;
-  }
-  return createMailSender(section);
 }
 
 /**
