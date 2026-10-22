@@ -40,7 +40,7 @@ vi.mock('./lib/invite-api', () => ({
 beforeEach(() => {
   vi.clearAllMocks()
   document.body.innerHTML = ''
-  vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: true })
+  vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: true, smtpEnabled: true })
 })
 
 afterEach(() => {
@@ -71,7 +71,7 @@ describe('InviteView 公开填表页（#18）', () => {
   it('①加载后提交 → submitInvite 收到三字段 → 进入审批中状态视图', async () => {
     vi.mocked(fetchInvite).mockResolvedValue(EMPTY_INVITE)
     vi.mocked(submitInvite).mockResolvedValue(undefined)
-    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: true })
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: true, smtpEnabled: true })
     const { wrapper } = await mountPage('/invite/tok-1', InviteView)
 
     expect(fetchInvite).toHaveBeenCalledWith('tok-1')
@@ -370,7 +370,7 @@ describe('InviteView 状态化三态（#134）', () => {
   }
 
   it('⑨已提交链接重开 + status=pending → 审批中视图 + 手动刷新按钮；刷新翻到 approved', async () => {
-    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: true })
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: true, smtpEnabled: true })
     const { wrapper } = await mountSubmittedView()
 
     expect(fetchInviteStatus).toHaveBeenCalledWith('tok-1')
@@ -379,7 +379,7 @@ describe('InviteView 状态化三态（#134）', () => {
     expect(wrapper.find('form').exists()).toBe(false)
 
     // 手动刷新：status 翻 approved → 大按钮视图
-    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved', mailEnabled: true })
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved', mailEnabled: true, smtpEnabled: true })
     const refresh = wrapper.find('[data-test="refresh-status"]')
     expect(refresh.exists()).toBe(true)
     await refresh.trigger('click')
@@ -391,7 +391,7 @@ describe('InviteView 状态化三态（#134）', () => {
   })
 
   it('⑩approved 态点大按钮 → claim → 跳转 activationUrl 指向的激活页', async () => {
-    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved', mailEnabled: true })
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved', mailEnabled: true, smtpEnabled: true })
     // 服务端回同源绝对地址（部署常态）；测试里用运行时 origin 拼接
     const activationUrl = `${window.location.origin}/activate/tok-activation`
     vi.mocked(claimInviteActivation).mockResolvedValue({ activationUrl })
@@ -409,8 +409,8 @@ describe('InviteView 状态化三态（#134）', () => {
 
   it('⑩bclaim 409「已激活过」→ 状态刷新把视图带到全部就绪（服务端人话即终态指引）', async () => {
     vi.mocked(fetchInviteStatus)
-      .mockResolvedValueOnce({ status: 'approved', mailEnabled: true })
-      .mockResolvedValue({ status: 'activated', mailEnabled: true })
+      .mockResolvedValueOnce({ status: 'approved', mailEnabled: true, smtpEnabled: true })
+      .mockResolvedValue({ status: 'activated', mailEnabled: true, smtpEnabled: true })
     vi.mocked(claimInviteActivation).mockRejectedValue(
       Object.assign(new Error('已激活过，请直接登录'), { status: 409 }),
     )
@@ -427,7 +427,7 @@ describe('InviteView 状态化三态（#134）', () => {
   })
 
   it('⑪activated 态 → 全部就绪视图 + 去登录按钮跳 /login', async () => {
-    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'activated', mailEnabled: true })
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'activated', mailEnabled: true, smtpEnabled: true })
     const { wrapper, router } = await mountSubmittedView()
 
     expect(wrapper.text()).toContain('全部就绪')
@@ -443,7 +443,7 @@ describe('InviteView 状态化三态（#134）', () => {
   it('⑫轮询口径：pending 5s 后自动重查、approved/activated/错误即停（无死循环）', async () => {
     vi.useFakeTimers()
     try {
-      vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: true })
+      vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: true, smtpEnabled: true })
       const { wrapper } = await mountSubmittedView()
       expect(fetchInviteStatus).toHaveBeenCalledTimes(1)
 
@@ -454,7 +454,7 @@ describe('InviteView 状态化三态（#134）', () => {
       expect(fetchInviteStatus).toHaveBeenCalledTimes(3)
 
       // 翻 approved → 停拍
-      vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved', mailEnabled: true })
+      vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved', mailEnabled: true, smtpEnabled: true })
       await vi.advanceTimersByTimeAsync(5000)
       const callsAfterApproved = vi.mocked(fetchInviteStatus).mock.calls.length
       expect(callsAfterApproved).toBe(4)
@@ -478,7 +478,7 @@ describe('InviteView 无邮件实例（#149 mailEnabled=false）', () => {
   it('⑬无邮件实例表单：无邮箱两字段；提交 body 键集不含 emailPrefix/personalEmail', async () => {
     vi.mocked(fetchInvite).mockResolvedValue(EMPTY_INVITE)
     vi.mocked(submitInvite).mockResolvedValue(undefined)
-    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: false })
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: false, smtpEnabled: false })
     const { wrapper } = await mountPage('/invite/tok-1', InviteView)
 
     // 表单不渲染邮箱字段
@@ -506,7 +506,7 @@ describe('InviteView 无邮件实例（#149 mailEnabled=false）', () => {
 
   it('⑭无邮件实例 approved：批准即激活 →「全部就绪」视图，无设密入口，去登录跳 /login', async () => {
     mockSubmittedLink()
-    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved', mailEnabled: false })
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved', mailEnabled: false, smtpEnabled: false })
     const { wrapper, router } = await mountPage('/invite/tok-1', InviteView)
 
     expect(wrapper.text()).toContain('全部就绪')
@@ -523,7 +523,7 @@ describe('InviteView 无邮件实例（#149 mailEnabled=false）', () => {
 
   it('⑮无邮件实例 activated：同「全部就绪」视图，不出现「邮箱密码已设置完成」', async () => {
     mockSubmittedLink()
-    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'activated', mailEnabled: false })
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'activated', mailEnabled: false, smtpEnabled: false })
     const { wrapper } = await mountPage('/invite/tok-1', InviteView)
 
     expect(wrapper.text()).toContain('全部就绪')
@@ -534,11 +534,123 @@ describe('InviteView 无邮件实例（#149 mailEnabled=false）', () => {
 
   it('⑯无邮件实例 pending：审批中文案不含「设置邮箱密码」承诺', async () => {
     mockSubmittedLink()
-    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: false })
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'pending', mailEnabled: false, smtpEnabled: false })
     const { wrapper } = await mountPage('/invite/tok-1', InviteView)
 
     expect(wrapper.text()).toContain('管理员审批中')
     expect(wrapper.text()).toContain('管理员批准后即可直接登录')
     expect(wrapper.text()).not.toContain('设置邮箱密码')
+  })
+})
+
+describe('InviteView SMTP-only 实例（#340 关×开：mailEnabled=false + smtpEnabled=true）', () => {
+  /** 已提交的链接重开（410）：由 status 响应驱动视图。 */
+  function mockSubmittedLink() {
+    vi.mocked(fetchInvite).mockRejectedValue(
+      Object.assign(new Error('邀请链接已过期或已被使用'), { status: 410 }),
+    )
+  }
+  const SMTP_ONLY_PENDING = { status: 'pending' as const, mailEnabled: false, smtpEnabled: true }
+
+  it('⑰表单按轴采集：渲染个人邮箱、无邮箱前缀框；提交 body 只带 personalEmail 不带 emailPrefix', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue(EMPTY_INVITE)
+    vi.mocked(submitInvite).mockResolvedValue(undefined)
+    vi.mocked(fetchInviteStatus).mockResolvedValue(SMTP_ONLY_PENDING)
+    const { wrapper } = await mountPage('/invite/tok-1', InviteView)
+
+    // 前缀（开户轴）不渲染；个人邮箱（任一轴开即采集）渲染
+    expect(wrapper.find('input[name="email_prefix"]').exists()).toBe(false)
+    expect(wrapper.find('input[name="personal_email"]').exists()).toBe(true)
+
+    await wrapper.find('input[name="display_name"]').setValue('张三')
+    await wrapper.find('input[name="username"]').setValue('zhangsan')
+    await wrapper.find('input[name="password"]').setValue('password123')
+    await wrapper.find('input[name="password_confirm"]').setValue('password123')
+    await wrapper.find('input[name="personal_email"]').setValue('zhangsan@example.net')
+    await wrapper.find('form').trigger('submit')
+    await vi.waitFor(() => expect(submitInvite).toHaveBeenCalled())
+
+    const body = vi.mocked(submitInvite).mock.calls[0]![1] as Record<string, unknown>
+    expect(Object.keys(body)).not.toContain('emailPrefix')
+    expect(body.personalEmail).toBe('zhangsan@example.net')
+    expect(body.displayName).toBe('张三')
+    // 提交后 pending：SMTP-only 文案承诺邮件通知
+    expect(wrapper.text()).toContain('结果将发送到你的个人邮箱')
+    expect(wrapper.text()).not.toContain('设置邮箱密码')
+  })
+
+  it('⑱表单校验：未填个人邮箱不提交且行内报错；填了即可过', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue(EMPTY_INVITE)
+    vi.mocked(submitInvite).mockResolvedValue(undefined)
+    vi.mocked(fetchInviteStatus).mockResolvedValue(SMTP_ONLY_PENDING)
+    const { wrapper } = await mountPage('/invite/tok-1', InviteView)
+
+    await wrapper.find('input[name="display_name"]').setValue('张三')
+    await wrapper.find('input[name="username"]').setValue('zhangsan')
+    await wrapper.find('input[name="password"]').setValue('password123')
+    await wrapper.find('input[name="password_confirm"]').setValue('password123')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(submitInvite).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('请填写个人邮箱')
+  })
+
+  it('⑲approved：批准即激活视图（无设密入口），与双关同分支', async () => {
+    mockSubmittedLink()
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'approved', mailEnabled: false, smtpEnabled: true })
+    const { wrapper } = await mountPage('/invite/tok-1', InviteView)
+
+    expect(wrapper.text()).toContain('全部就绪')
+    expect(wrapper.text()).toContain('账号已激活')
+    expect(wrapper.text()).not.toContain('设置邮箱密码')
+    expect(wrapper.find('[data-test="claim-activation"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="go-login"]').exists()).toBe(true)
+  })
+
+  it('⑳activated：同「全部就绪」，不出现「邮箱密码已设置完成」', async () => {
+    mockSubmittedLink()
+    vi.mocked(fetchInviteStatus).mockResolvedValue({ status: 'activated', mailEnabled: false, smtpEnabled: true })
+    const { wrapper } = await mountPage('/invite/tok-1', InviteView)
+
+    expect(wrapper.text()).toContain('全部就绪')
+    expect(wrapper.text()).not.toContain('邮箱密码已设置完成')
+  })
+})
+
+describe('InviteView Stalwart-only 实例（#340 开×关：mailEnabled=true + smtpEnabled=false）', () => {
+  const STALWART_ONLY_PENDING = { status: 'pending' as const, mailEnabled: true, smtpEnabled: false }
+
+  it('㉑按轴采集：前缀（开户轴）与个人邮箱（任一轴开）都采集；缺个人邮箱不提交（决策 #98 开×关格仍必填）', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue(EMPTY_INVITE)
+    vi.mocked(submitInvite).mockResolvedValue(undefined)
+    vi.mocked(fetchInviteStatus).mockResolvedValue(STALWART_ONLY_PENDING)
+    const { wrapper } = await mountPage('/invite/tok-1', InviteView)
+
+    expect(wrapper.find('input[name="email_prefix"]').exists()).toBe(true)
+    expect(wrapper.find('input[name="personal_email"]').exists()).toBe(true)
+
+    await wrapper.find('input[name="display_name"]').setValue('张三')
+    await wrapper.find('input[name="username"]').setValue('zhangsan')
+    await wrapper.find('input[name="password"]').setValue('password123')
+    await wrapper.find('input[name="password_confirm"]').setValue('password123')
+    await wrapper.find('input[name="email_prefix"]').setValue('zhangsan')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    // 开×关：发信轴关着，个人邮箱仍必填（激活链接与 OIDC 首登消费锚没有兜底）
+    expect(submitInvite).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('请填写个人邮箱')
+
+    await wrapper.find('input[name="personal_email"]').setValue('zhangsan@personal.example')
+    await wrapper.find('form').trigger('submit')
+    await vi.waitFor(() => expect(submitInvite).toHaveBeenCalled())
+
+    const body = vi.mocked(submitInvite).mock.calls[0]![1] as Record<string, unknown>
+    expect(body.emailPrefix).toBe('zhangsan')
+    expect(body.personalEmail).toBe('zhangsan@personal.example')
+    // pending 文案走开户轴变体（承诺设密入口），不是 SMTP-only 的「结果发到个人邮箱」
+    expect(wrapper.text()).toContain('设置邮箱密码')
+    expect(wrapper.text()).not.toContain('结果将发送到你的个人邮箱')
   })
 })
