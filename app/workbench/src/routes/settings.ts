@@ -1,9 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+/**
+ * 实例设置域路由（#340 分域）：OIDC 登录 / 邮箱管理（Stalwart 开户）/ 通知发信（SMTP）
+ * 三段各自独立 GET/PUT。instance_config 的存储键：
+ * - OIDC：四个扁平键 oidc_issuer / oidc_client_id / oidc_client_secret / oidc_scope；
+ * - 邮箱管理：mail_stalwart 单键 JSON（enabled + baseUrl/apiKey/domain/portalUrl）；
+ * - 通知发信：mail_smtp 单键 JSON（enabled + host/port/username/password/from）。
+ *
+ * 密钥铁律：GET 恒回 '***'（已配置）或 ''（未配置），明文不进任何响应；
+ * PUT 传 '***'/空串 = 保持库中现值；审计只记动作与 target，不含字段值。
+ *
+ * D5 fail-closed：mail 两段 PUT 的 enabled 必填且恒布尔（缺 → 400）；enabled:true 时
+ * 必填字段不全（新值或库里已有都算已配）→ 400 拒绝落库。读侧装配只认 enabled === true
+ * （mail-config.ts 单点判定），这里只管写侧的形状与硬校验。
+ */
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 
 import { audit } from '../services/audit';
-import { parseMailSection } from '../services/members';
+import { parseMailSection, readSmtpSection, readStalwartSection } from '../services/mail-config';
 import { readSession } from '../session';
 import type { Bindings } from '../index';
 
@@ -18,23 +32,7 @@ const OIDC_KEYS = {
   scope: 'oidc_scope',
 } as const;
 
-/**
- * mail 段 JSON 字段（key='mail' 单条）：
- * stalwart-provisioner 消费 baseUrl/apiKey/domain，mail-smtp 消费 host/port/username/password/from，
- * portalUrl 仅供成员应用密码说明页跳转（#168，展示用）。
- */
-const MAIL_FIELDS = [
-  'baseUrl',
-  'apiKey',
-  'domain',
-  'host',
-  'port',
-  'username',
-  'password',
-  'from',
-  'portalUrl',
-] as const;
-
+/** mail_stalwart / mail_smtp 段的 JSON 字段面（分域后各自独立成键，互不掺杂）。 */
 type OidcField = keyof typeof OIDC_KEYS;
 
 interface OidcSettings {
@@ -44,25 +42,31 @@ interface OidcSettings {
   scope: string;
 }
 
-interface MailSettings {
+/** GET 的邮箱管理段：enabled 恒布尔；密钥只回 MASK。 */
+interface StalwartSettings {
+  enabled: boolean;
   baseUrl: string;
   apiKey: string;
   domain: string;
+  /** 邮件门户地址（#168）：缺省空串，成员说明页回退用 domain 推导。 */
+  portalUrl: string;
+}
+
+/** GET 的通知发信段：port 正整数或 ''（未配置/非法）。 */
+interface SmtpSettings {
+  enabled: boolean;
   host: string;
   port: number | '';
   username: string;
   password: string;
   from: string;
-  /** 邮件门户地址（#168）：缺省空串，成员说明页回退用 domain 推导。 */
-  portalUrl: string;
-  /** 邮件轴开关：缺省 true（老数据无字段视为开启，零迁移）。 */
-  enabled: boolean;
 }
 
-/** GET /api/admin/settings 的对外形状（两段齐备，缺省全空串）。 */
+/** GET /api/admin/settings 的对外形状（三段齐备，缺省全空串 + enabled:false）。 */
 export interface InstanceSettings {
   oidc: OidcSettings;
-  mail: MailSettings;
+  stalwart: StalwartSettings;
+  smtp: SmtpSettings;
 }
 
 /** oidc 段宽松校验：未知键忽略，非法类型 400。 */
@@ -73,23 +77,31 @@ const oidcSchema = z.object({
   scope: z.string().optional(),
 });
 
-/** mail 段宽松校验：port 只收正整数（空串表示不修改）；enabled 提供即写、不提供即保持。 */
-const mailSchema = z.object({
+/** mail_stalwart 段校验：enabled 必填恒布尔（D5，缺 → 400）；其余字段可选走合并语义。 */
+const stalwartSchema = z.object({
+  enabled: z.boolean(),
   baseUrl: z.string().optional(),
   apiKey: z.string().optional(),
   domain: z.string().optional(),
+  portalUrl: z.string().optional(),
+});
+
+/** mail_smtp 段校验：同上；port 只收正整数（空串表示不修改）。 */
+const smtpSchema = z.object({
+  enabled: z.boolean(),
   host: z.string().optional(),
   port: z.union([z.number().int().positive(), z.literal('')]).optional(),
   username: z.string().optional(),
   password: z.string().optional(),
   from: z.string().optional(),
-  portalUrl: z.string().optional(),
-  enabled: z.boolean().optional(),
 });
 
+/**
+ * PUT /api/admin/settings 只收 { oidc? }：历史 body 夹带的 mail/stalwart/smtp 键
+ * 直接忽略（zod strip 默认行为，不额外报错，保持宽松校验惯例）。
+ */
 const settingsSchema = z.object({
   oidc: oidcSchema.optional(),
-  mail: mailSchema.optional(),
 });
 
 /** 普通文本字段：缺失/非字符串 → 空串（展示层统一字符串）。 */
@@ -120,13 +132,14 @@ async function upsertConfig(db: D1Database, key: string, value: string): Promise
     .run();
 }
 
-/** 读全表组装两段配置；密钥字段只回 MASK。 */
+/** 读全表组装三段配置；密钥字段只回 MASK；无行/损坏段 enabled:false、其余空串。 */
 async function loadSettings(db: D1Database): Promise<InstanceSettings> {
   const rows = await db
     .prepare('SELECT key, value FROM instance_config')
     .all<{ key: string; value: string }>();
   const map = new Map(rows.results.map((row) => [row.key, row.value]));
-  const mail = parseMailSection(map.get('mail'));
+  const stalwart = parseMailSection(map.get('mail_stalwart'));
+  const smtp = parseMailSection(map.get('mail_smtp'));
   return {
     oidc: {
       issuer: text(map.get(OIDC_KEYS.issuer)),
@@ -134,29 +147,171 @@ async function loadSettings(db: D1Database): Promise<InstanceSettings> {
       clientSecret: masked(map.get(OIDC_KEYS.clientSecret)),
       scope: text(map.get(OIDC_KEYS.scope)),
     },
-    mail: {
-      baseUrl: text(mail.baseUrl),
-      apiKey: masked(mail.apiKey),
-      domain: text(mail.domain),
-      host: text(mail.host),
-      port: portValue(mail.port),
-      username: text(mail.username),
-      password: masked(mail.password),
-      from: text(mail.from),
-      portalUrl: text(mail.portalUrl),
-      enabled: mail.enabled !== false,
+    stalwart: {
+      enabled: stalwart.enabled === true,
+      baseUrl: text(stalwart.baseUrl),
+      apiKey: masked(stalwart.apiKey),
+      domain: text(stalwart.domain),
+      portalUrl: text(stalwart.portalUrl),
+    },
+    smtp: {
+      enabled: smtp.enabled === true,
+      host: text(smtp.host),
+      port: portValue(smtp.port),
+      username: text(smtp.username),
+      password: masked(smtp.password),
+      from: text(smtp.from),
     },
   };
 }
 
-/** 落库：非空/非 MASK 字段才写；mail 段读-改-写合并，绝不覆盖已有真值。 */
-async function saveSettings(
+// 段读取统一走 mail-config.ts 的单点 helper（一文件一职责：同语义 SQL 只此一处）。
+
+/**
+ * 「提供即写」字段合并（原 mail 合并语义逐字保留，分域后各段共用）：
+ * - 普通字段：非空且非 MASK 的字符串才覆盖（空串/'***' = 保持库值）；
+ * - clearable（portalUrl，#184）：字符串即处理——非空覆盖、空白删除覆盖键回落推导，
+ *   本段唯一可「清空」的字段；
+ * - numeric（port）：正整数才覆盖（空串 = 保持）。
+ * 返回是否有字段变化（不含 enabled）。
+ */
+function applyFieldMerges(
+  section: Record<string, unknown>,
+  input: Record<string, unknown>,
+  opts: { clearable?: string; numeric?: string } = {},
+): boolean {
+  let changed = false;
+  for (const [field, value] of Object.entries(input)) {
+    if (field === 'enabled' || value === undefined) continue;
+    if (field === opts.clearable) {
+      const trimmed = (value as string).trim();
+      if (trimmed.length > 0) {
+        section[field] = trimmed;
+      } else {
+        delete section[field];
+      }
+      changed = true;
+      continue;
+    }
+    if (field === opts.numeric) {
+      if (typeof value === 'number') {
+        section[field] = value;
+        changed = true;
+      }
+      continue;
+    }
+    if (typeof value === 'string' && value.length > 0 && value !== MASK) {
+      section[field] = value;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * D5 必填核对：文本字段非空串（trim 后）才算已配；数值字段（port）正整数才算已配。
+ * 缺 → 400 拒落库。
+ */
+function missingRequired(
+  section: Record<string, unknown>,
+  required: readonly string[],
+  numeric: readonly string[],
+): string[] {
+  return required.filter((field) => {
+    const value = section[field];
+    // 字段类型由规格声明（不是按当前值猜）：脏数据里 baseUrl:123 不能被当成「已配」放行
+    if (numeric.includes(field)) {
+      return !(typeof value === 'number' && Number.isInteger(value) && value > 0);
+    }
+    return typeof value !== 'string' || value.trim().length === 0;
+  });
+}
+
+/** mail 分域 PUT 的路由规格：存储键、审计 target、段读取 helper、D5 必填与人话清单。 */
+interface MailRouteSpec {
+  key: 'mail_stalwart' | 'mail_smtp';
+  target: 'mail-stalwart' | 'mail-smtp';
+  /** 段读取（mail-config.ts 单点实现；缺行/损坏 → 空对象）。 */
+  read: (db: D1Database) => Promise<Record<string, unknown>>;
+  required: readonly string[];
+  /** required 里哪些是「正整数」字段（其余按非空字符串判）。 */
+  numeric: readonly string[];
+  labels: Record<string, string>;
+  detailPrefix: string;
+}
+
+const STALWART_SPEC: MailRouteSpec = {
+  key: 'mail_stalwart',
+  target: 'mail-stalwart',
+  read: readStalwartSection,
+  required: ['baseUrl', 'apiKey', 'domain'],
+  numeric: [],
+  labels: { baseUrl: 'Stalwart 地址', apiKey: 'API Key', domain: '邮箱域名' },
+  detailPrefix: '开启邮箱管理需先配置：',
+};
+
+const SMTP_SPEC: MailRouteSpec = {
+  key: 'mail_smtp',
+  target: 'mail-smtp',
+  read: readSmtpSection,
+  required: ['host', 'port', 'username', 'password', 'from'],
+  numeric: ['port'],
+  labels: { host: 'SMTP host', port: 'port', username: '用户名', password: '密码', from: '发件地址' },
+  detailPrefix: '开启通知发信需先配置：',
+};
+
+/**
+ * mail 分域 PUT 主体：整键读-改-写，只碰本键（另一个 mail 键零接触，互不产生）。
+ * D5：enabled:true 时必填字段不全 → 400 拒落库（已存密钥视同已配）；
+ * enabled:false 半配置可落库（关着不算启用）。幂等：无变化不写库不写审计。
+ * #99 空保存：段本就不存在 + 只要求关闭 + 无字段变化 = 默认状态，幂等空操作不建段
+ * （缺行的 enabled 按 D5 同口径视为 false，否则会被判成 enabled 变化而凭空建行）。
+ */
+async function saveMailSection(
+  c: Context<{ Bindings: Bindings }>,
+  spec: MailRouteSpec,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const db = c.env.CORE_DB;
+  const section = await spec.read(db);
+  const noExistingSection = Object.keys(section).length === 0;
+  const fieldsChanged = applyFieldMerges(section, body, { clearable: 'portalUrl', numeric: 'port' });
+
+  if (noExistingSection && !fieldsChanged && body.enabled === false) {
+    return c.json({ ok: true });
+  }
+
+  const enabledChanged = section.enabled !== body.enabled;
+
+  if (body.enabled === true) {
+    const missing = missingRequired(section, spec.required, spec.numeric);
+    if (missing.length > 0) {
+      return c.json(
+        {
+          error: 'invalid settings',
+          detail: `${spec.detailPrefix}${missing.map((field) => spec.labels[field] ?? field).join('、')}`,
+        },
+        400,
+      );
+    }
+  }
+  section.enabled = body.enabled;
+
+  if (!fieldsChanged && !enabledChanged) {
+    return c.json({ ok: true });
+  }
+  await upsertConfig(db, spec.key, JSON.stringify(section));
+  await audit(db, (await readSession(c))!.uid, 'settings_updated', spec.target);
+  return c.json({ ok: true });
+}
+
+/** OIDC PUT 主体：只碰 oidc 四个扁平键；空/*** 字段跳过；幂等不写审计。 */
+async function saveOidcSettings(
   c: Context<{ Bindings: Bindings }>,
   body: z.infer<typeof settingsSchema>,
 ): Promise<Response> {
   const db = c.env.CORE_DB;
   let wrote = false;
-
   for (const field of Object.keys(OIDC_KEYS) as OidcField[]) {
     const value = body.oidc?.[field];
     if (typeof value === 'string' && value.length > 0 && value !== MASK) {
@@ -164,57 +319,23 @@ async function saveSettings(
       wrote = true;
     }
   }
-
-  const existing = await db
-    .prepare('SELECT value FROM instance_config WHERE key = ?')
-    .bind('mail')
-    .first<{ value: string }>();
-  const mail = parseMailSection(existing?.value);
-  let mailChanged = false;
-  for (const field of MAIL_FIELDS) {
-    const value = body.mail?.[field];
-    if (field === 'port') {
-      if (typeof value === 'number') {
-        mail[field] = value;
-        mailChanged = true;
-      }
-      continue;
-    }
-    // #184：portalUrl 是**可选覆盖**（空 = 按邮箱域名推导）。因此它是本段唯一可以「清空」的字段：
-    // 显式传空串 → 删掉覆盖键（回落推导）。其余字段空串一律视为「不修改」（保持既有语义）。
-    if (field === 'portalUrl') {
-      if (typeof value === 'string') {
-        const trimmed = value.trim();
-        if (trimmed.length > 0) {
-          mail[field] = trimmed;
-        } else {
-          delete mail[field];
-        }
-        mailChanged = true;
-      }
-      continue;
-    }
-    if (typeof value === 'string' && value.length > 0 && value !== MASK) {
-      mail[field] = value;
-      mailChanged = true;
-    }
-  }
-  // 邮件轴开关：boolean 才算提供（提供即写，与字段同走整段合并，不影响其余键）。
-  if (typeof body.mail?.enabled === 'boolean') {
-    mail.enabled = body.mail.enabled;
-    mailChanged = true;
-  }
-  // 整段合并后一次写回：只动本次传入的字段，其余键原样保留。
-  if (mailChanged) {
-    await upsertConfig(db, 'mail', JSON.stringify(mail));
-    wrote = true;
-  }
-
-  // 幂等：全部空/*** → 不写库不写审计，仍回 ok。
   if (wrote) {
-    await audit(db, (await readSession(c))!.uid, 'settings_updated');
+    await audit(db, (await readSession(c))!.uid, 'settings_updated', 'oidc');
   }
   return c.json({ ok: true });
+}
+
+/**
+ * JSON body 解析 + schema 校验。失败直接返回 400 响应（调用方 instanceof Response 判定后原样
+ * 回传——不能经 c.res 兜底：未设响应时 c.res 是默认 200，会吃掉 400）。
+ */
+async function parseBody<T>(c: Context<{ Bindings: Bindings }>, schema: z.ZodType<T>): Promise<T | Response> {
+  const raw: unknown = await c.req.json().catch(() => null);
+  const parsed = schema.safeParse(raw ?? {});
+  if (!parsed.success) {
+    return c.json({ error: 'invalid settings', detail: z.prettifyError(parsed.error) }, 400);
+  }
+  return parsed.data;
 }
 
 /**
@@ -222,16 +343,27 @@ async function saveSettings(
  * 守卫由组合根统一挂载（requireAdmin）；此处只定义路由语义。
  */
 export function registerSettingsRoutes(app: Hono<{ Bindings: Bindings }>): void {
-  /** 查看实例设置：OIDC 与 mail 两段；密钥字段脱敏。 */
+  /** 查看实例设置：OIDC / 邮箱管理 / 通知发信三段；密钥字段脱敏。 */
   app.get('/api/admin/settings', async (c) => c.json(await loadSettings(c.env.CORE_DB)));
 
-  /** 编辑实例设置：JSON body 部分字段合并；空/*** 字段跳过。 */
+  /** 编辑 OIDC 登录设置：只收 { oidc? }，多余键忽略；空/*** 字段跳过。 */
   app.put('/api/admin/settings', async (c) => {
-    const raw: unknown = await c.req.json().catch(() => null);
-    const parsed = settingsSchema.safeParse(raw ?? {});
-    if (!parsed.success) {
-      return c.json({ error: 'invalid settings', detail: z.prettifyError(parsed.error) }, 400);
-    }
-    return saveSettings(c, parsed.data);
+    const body = await parseBody(c, settingsSchema);
+    if (body instanceof Response) return body;
+    return saveOidcSettings(c, body);
+  });
+
+  /** 编辑邮箱管理（Stalwart 开户）段：整键读-改-写，D5 硬校验。 */
+  app.put('/api/admin/settings/mail-stalwart', async (c) => {
+    const body = await parseBody(c, stalwartSchema);
+    if (body instanceof Response) return body;
+    return saveMailSection(c, STALWART_SPEC, body);
+  });
+
+  /** 编辑通知发信（SMTP）段：整键读-改-写，D5 硬校验。 */
+  app.put('/api/admin/settings/mail-smtp', async (c) => {
+    const body = await parseBody(c, smtpSchema);
+    if (body instanceof Response) return body;
+    return saveMailSection(c, SMTP_SPEC, body);
   });
 }

@@ -151,10 +151,11 @@ describe('管理端成员生命周期（#49）', () => {
       },
     });
     const { env, db, adminCookie, memberCookie } = await envFor();
+    const STALWART_CONFIG = { enabled: true, baseUrl: 'https://mail.example.com', apiKey: 'k', domain: 'example.com' };
     db.run(
       'INSERT INTO instance_config (key, value) VALUES (?, ?)',
-      'mail',
-      JSON.stringify({ provider: 'fake' }),
+      'mail_stalwart',
+      JSON.stringify(STALWART_CONFIG),
     );
     seedHello(db);
 
@@ -191,7 +192,7 @@ describe('管理端成员生命周期（#49）', () => {
     expect(enabled.status).toBe(200);
     expect(await enabled.json()).toEqual({ id: 'u_member', status: 'active' });
     expect(calls).toEqual(['disable:member@example.com', 'enable:member@example.com']);
-    expect(mailConfigs).toEqual([{ provider: 'fake' }, { provider: 'fake' }]);
+    expect(mailConfigs).toEqual([STALWART_CONFIG, STALWART_CONFIG]);
     expect(
       db.query<{ actor: string; action: string; target: string }>(
         "SELECT actor, action, target FROM audit_log WHERE action LIKE 'member_%' ORDER BY id",
@@ -289,8 +290,8 @@ describe('管理端成员生命周期（#49）', () => {
     const { env, db, adminCookie } = await envFor();
     db.run(
       'INSERT INTO instance_config (key, value) VALUES (?, ?)',
-      'mail',
-      JSON.stringify({ provider: 'fake' }),
+      'mail_stalwart',
+      JSON.stringify({ enabled: true, baseUrl: 'https://mail.example.com', apiKey: 'k', domain: 'example.com' }),
     );
 
     for (let step = 0; step < errors.length; step++) {
@@ -375,8 +376,8 @@ describe('管理端成员生命周期（#49）', () => {
     const { env, db, adminCookie } = await envFor();
     db.run(
       'INSERT INTO instance_config (key, value) VALUES (?, ?)',
-      'mail',
-      JSON.stringify(FULL_MAIL_CONFIG),
+      'mail_smtp',
+      JSON.stringify({ enabled: true, host: FULL_MAIL_CONFIG.host, port: FULL_MAIL_CONFIG.port, username: FULL_MAIL_CONFIG.username, password: FULL_MAIL_CONFIG.password, from: FULL_MAIL_CONFIG.from }),
     );
     // 内置登录成员 + 已批准的邀请 + 一条待用激活令牌（重发前状态）
     db.run(
@@ -477,8 +478,8 @@ describe('应用密码说明页能力（#168）', () => {
     const { env, db, memberCookie } = await envFor();
     db.run(
       'INSERT INTO instance_config (key, value) VALUES (?, ?)',
-      'mail',
-      JSON.stringify({ domain: 'example.com', portalUrl: 'https://portal.example.com/app-passwords' }),
+      'mail_stalwart',
+      JSON.stringify({ enabled: true, domain: 'example.com', portalUrl: 'https://portal.example.com/app-passwords' }),
     );
 
     const res = await app.request(
@@ -497,8 +498,13 @@ describe('应用密码说明页能力（#168）', () => {
     const { env, db, memberCookie } = await envFor();
     db.run(
       'INSERT INTO instance_config (key, value) VALUES (?, ?)',
-      'mail',
-      JSON.stringify({ domain: 'example.com', host: 'smtp.example.com' }),
+      'mail_stalwart',
+      JSON.stringify({ enabled: true, domain: 'example.com' }),
+    );
+    db.run(
+      'INSERT INTO instance_config (key, value) VALUES (?, ?)',
+      'mail_smtp',
+      JSON.stringify({ enabled: true, host: 'smtp.example.com', port: 465, username: 'u', password: 'p', from: 'no-reply@example.com' }),
     );
 
     const res = await app.request(
@@ -517,8 +523,8 @@ describe('应用密码说明页能力（#168）', () => {
     const { env, db, memberCookie } = await envFor();
     db.run(
       'INSERT INTO instance_config (key, value) VALUES (?, ?)',
-      'mail',
-      JSON.stringify({ baseUrl: 'https://mail.example.com', apiKey: 'k' }),
+      'mail_stalwart',
+      JSON.stringify({ enabled: true, baseUrl: 'https://mail.example.com', apiKey: 'k' }),
     );
 
     const res = await app.request(
@@ -537,8 +543,8 @@ describe('应用密码说明页能力（#168）', () => {
     const { env, db, memberCookie } = await envFor();
     db.run(
       'INSERT INTO instance_config (key, value) VALUES (?, ?)',
-      'mail',
-      JSON.stringify({ domain: 'example.com', enabled: false }),
+      'mail_stalwart',
+      JSON.stringify({ enabled: false, baseUrl: 'https://mail.example.com', apiKey: 'k', domain: 'example.com' }),
     );
 
     const off = await app.request(

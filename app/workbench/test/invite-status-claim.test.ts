@@ -69,7 +69,8 @@ async function fixture(): Promise<Fixture> {
     'admin@example.com',
     'admin',
   );
-  db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail', JSON.stringify(MAIL_CONFIG));
+  db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail_stalwart', JSON.stringify({ enabled: true, baseUrl: MAIL_CONFIG.baseUrl, apiKey: MAIL_CONFIG.apiKey, domain: MAIL_CONFIG.domain }));
+  db.run('INSERT INTO instance_config (key, value) VALUES (?, ?)', 'mail_smtp', JSON.stringify({ enabled: true, host: MAIL_CONFIG.host, port: MAIL_CONFIG.port, username: MAIL_CONFIG.username, password: MAIL_CONFIG.password, from: MAIL_CONFIG.from }));
   const adminCookie = `unself_session=${await createSessionToken(
     { uid: 'u_admin', iss: 'https://idp.example.com', sub: 'admin-sub', name: '管理' },
     pair.privateKeyPem,
@@ -150,7 +151,7 @@ describe('#134 邀请状态三态（GET /api/invite/:token/status）', () => {
     // 批准后激活令牌未用 → approved（#149：响应带 mailEnabled，有 mail 段 fixture → true）
     const approved = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(approved.status).toBe(200);
-    expect(await approved.json()).toEqual({ status: 'approved', mailEnabled: true });
+    expect(await approved.json()).toEqual({ status: 'approved', mailEnabled: true, smtpEnabled: true });
 
     // 激活令牌被消费（激活域服务真路径）→ activated
     const activation = db.first<{ token_hash: string }>('SELECT token_hash FROM invite_activations');
@@ -162,7 +163,7 @@ describe('#134 邀请状态三态（GET /api/invite/:token/status）', () => {
 
     const activatedRes = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(activatedRes.status).toBe(200);
-    expect(await activatedRes.json()).toEqual({ status: 'activated', mailEnabled: true });
+    expect(await activatedRes.json()).toEqual({ status: 'activated', mailEnabled: true, smtpEnabled: true });
 
     // 无效令牌：404 人话
     const missing = await app.request('https://team.example.com/api/invite/wrong-token/status', {}, env);
@@ -180,7 +181,7 @@ describe('#134 邀请状态三态（GET /api/invite/:token/status）', () => {
 
     const res = await fx.app.request(`https://team.example.com/api/invite/${token}/status`, {}, fx.env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'pending', mailEnabled: true });
+    expect(await res.json()).toEqual({ status: 'pending', mailEnabled: true, smtpEnabled: true });
   });
 
   it('无激活行的 approved 邀请（弱化实例）→ activated（claim 判定同口径：无待激活即已激活；mailEnabled:false）', async () => {
@@ -230,7 +231,7 @@ describe('#134 邀请状态三态（GET /api/invite/:token/status）', () => {
 
     const res = await app.request(`https://team.example.com/api/invite/${token}/status`, {}, env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'activated', mailEnabled: false });
+    expect(await res.json()).toEqual({ status: 'activated', mailEnabled: false, smtpEnabled: false });
   });
 
   it('过期邀请 → 410 人话（不泄露 expired/rejected 状态机细节）', async () => {

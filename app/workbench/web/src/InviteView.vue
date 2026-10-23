@@ -41,6 +41,10 @@ const submitError = ref('')
 
 /** #149 实例能力开关：仅由 status 响应写入（mailEnabled=true 前提下行为与文案零变化）。 */
 const mailEnabled = ref(true)
+/** #340 发信轴能力（决策 #98）：与 mailEnabled 双旗；个人邮箱字段采集看任一轴开。 */
+const smtpEnabled = ref(false)
+/** 个人邮箱字段是否采集：SMTP 发审批结果、OIDC 首登消费邀请都靠它（任一轴开即必填）。 */
+const needPersonalEmail = computed(() => mailEnabled.value || smtpEnabled.value)
 
 /** #134 状态轮询：视图态与请求在途态分开（按钮 loading 不换文案）。 */
 const statusRefreshing = ref(false)
@@ -73,6 +77,7 @@ const fieldErrors = ref<{
 /** 三态 → 视图态：只认 pending/approved/activated；其余（失效）按错误卡展示。 */
 function applyStatus(response: InviteStatusResponse): void {
   mailEnabled.value = response.mailEnabled
+  smtpEnabled.value = response.smtpEnabled === true
   claimError.value = ''
   if (response.status === 'pending') {
     phase.value = 'submitted'
@@ -185,8 +190,9 @@ onMounted(async () => {
     // 读表单与读状态之间可能被批准：pending 才留表单，否则直接套用最新状态（#149 竞态防御）
     const status = await fetchInviteStatus(token)
     if (status.status === 'pending') {
-      // #149：能力开关同样只认 status 响应，无邮件实例表单不渲染邮箱字段
+      // #149：能力开关同样只认 status 响应，无邮件实例表单不渲染邮箱字段（#340 双旗）
       mailEnabled.value = status.mailEnabled
+      smtpEnabled.value = status.smtpEnabled === true
       phase.value = 'form'
     } else {
       applyStatus(status)
@@ -203,9 +209,12 @@ onBeforeUnmount(stopPolling)
 function validate(): boolean {
   const errors: typeof fieldErrors.value = {}
   if (application.displayName.trim().length === 0) errors.displayName = '请填写显示名'
-  // #149：无邮件实例无邮箱字段，两邮箱校验整体跳过（行内错误随 errors 重建自然清空）
+  // #149/#340：邮箱字段按轴采集——前缀 ⟷ 开户轴；个人邮箱 ⟷ 任一轴开
+  // （行内错误随 errors 重建自然清空）
   if (mailEnabled.value) {
     if (application.emailPrefix.trim().length === 0) errors.emailPrefix = '请填写邮箱前缀'
+  }
+  if (needPersonalEmail.value) {
     if (application.personalEmail.trim().length === 0) errors.personalEmail = '请填写个人邮箱'
   }
   if (!/^[a-zA-Z0-9_-]{3,32}$/.test(application.username ?? '')) {
@@ -222,8 +231,8 @@ function validate(): boolean {
 }
 
 /**
- * 提交载荷（#149）：有邮件实例带邮箱两字段（现行为零变化）；无邮件实例
- * body 完全不带这两键（省略而非显式 undefined，服务端两字段可省）。
+ * 提交载荷（#149 → #340）：有邮件实例带邮箱两字段（现行为零变化）；SMTP-only
+ * 只带 personalEmail（前缀键不出现）；双轴关两键都不带（省略而非显式 undefined）。
  */
 function buildSubmission(
   username: string | undefined,
@@ -236,6 +245,8 @@ function buildSubmission(
   }
   if (mailEnabled.value) {
     body.emailPrefix = application.emailPrefix.trim()
+  }
+  if (needPersonalEmail.value) {
     body.personalEmail = application.personalEmail.trim()
   }
   return body
@@ -273,8 +284,9 @@ async function onSubmit() {
       <div v-else-if="phase === 'submitted'" class="invite-done" role="status">
         <MailCheck class="invite-done-icon" :size="28" aria-hidden="true" />
         <h1 class="invite-title">管理员审批中</h1>
-        <!-- #149：mailEnabled=true 保现文案逐字不变；无邮件实例批准即激活，无设密入口 -->
+        <!-- #149/#340：文案按形态——开户轴开提设密入口；SMTP-only 提邮件通知；双关提直接登录 -->
         <p v-if="mailEnabled" class="invite-desc">申请已提交。管理员批准后，本页会出现「设置邮箱密码」入口；你也可以稍后回来刷新。</p>
+        <p v-else-if="smtpEnabled" class="invite-desc">申请已提交。管理员批准后，结果将发送到你的个人邮箱；你也可以稍后回来刷新。</p>
         <p v-else class="invite-desc">申请已提交。管理员批准后即可直接登录；你也可以稍后回来刷新。</p>
         <UButton
           class="invite-refresh"
@@ -288,7 +300,7 @@ async function onSubmit() {
         </UButton>
       </div>
 
-      <!-- #149：有邮件实例 approved = 待设邮箱密码（逐字零变化）；无邮件 approved 即激活，与 activated 同视图 -->
+      <!-- #149/#340：开户轴 approved = 待设邮箱密码；SMTP-only approved = 批准即激活（无设密入口，复用双关视图） -->
       <div
         v-else-if="phase === 'approved' && mailEnabled"
         class="invite-done"
@@ -374,7 +386,7 @@ async function onSubmit() {
           reserve-error-line
         />
         <UInput
-          v-if="mailEnabled"
+          v-if="needPersonalEmail"
           v-model="application.personalEmail"
           label="个人邮箱"
           type="email"
