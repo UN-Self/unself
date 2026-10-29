@@ -88,8 +88,8 @@ export function fetchAuditLog(): Promise<AuditEntry[]> {
 }
 
 // ---------------------------------------------------------------------------
-// 设置域（#340 分域：OIDC / 邮箱管理 Stalwart / 通知发信 SMTP 三段独立；
-// 敏感值 GET 恒 '***'，PUT '***'/空串 = 不修改）
+// 设置域（#340 分域：OIDC / 邮箱管理 Stalwart / 通知发信 SMTP 三段独立。
+// 邮件段写侧空串语义见决策 #100；OIDC 空串仍是不修改）
 // ---------------------------------------------------------------------------
 
 /** 已配置密钥的固定占位符（与后端 MASK 一致）。 */
@@ -108,7 +108,7 @@ export interface StalwartSettings {
   baseUrl: string
   apiKey: string
   domain: string
-  /** 应用密码说明页跳转目标（#168 展示用；#184 起可在设置页直接填）。空 = 后端按 domain 推导 https://mail.<domain>。 */
+  /** 应用密码说明页跳转目标（#168 展示用；#184 起设置页可直填，仍走本字段）。空 = 后端按 domain 推导 https://mail.<domain>。 */
   portalUrl: string
 }
 
@@ -116,7 +116,7 @@ export interface SmtpSettings {
   /** 通知发信开关（D5 fail-closed：装配只认 enabled === true；GET 恒回 boolean）。 */
   enabled: boolean
   host: string
-  /** 端口正整数；'' = 未配置/非法（后端合并语义：空 = 不修改）。 */
+  /** 端口正整数；'' = 未配置。PUT 传 '' = 清空（决策 #100）。 */
   port: number | ''
   username: string
   password: string
@@ -130,7 +130,13 @@ export interface InstanceSettings {
   smtp: SmtpSettings
 }
 
-/** PUT body：各段独立；字段可选，值为 '' / '***' / 缺省都表示不修改；enabled 随保存一起落库（#159 表单语义）。 */
+/**
+ * PUT body：各段独立，字段可选。
+ * OIDC：空串 / `***` / 缺键 = 不修改，不能清空。
+ * 邮件段（决策 #100）：缺键 = 保持；普通文本空串 = 删键（portalUrl 先 trim，纯空白也删）；
+ * port 空串 = 删键；密钥空串 / `***` = 保持（无清空入口）。
+ * enabled 恒显式布尔（D5）：邮件段 PUT 缺 enabled → 400。
+ */
 export type OidcSettingsUpdate = Partial<{ [K in keyof OidcSettings]: string }>
 export type StalwartSettingsUpdate = Partial<{ [K in keyof StalwartSettings]: StalwartSettings[K] }>
 export type SmtpSettingsUpdate = Partial<{ [K in keyof SmtpSettings]: SmtpSettings[K] }>

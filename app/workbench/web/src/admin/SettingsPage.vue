@@ -1,8 +1,24 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+/**
+ * 管理台设置页（#17 → #340 三段 → #100 三行清单 + 水舱弹窗）。形制全在决策 #100，此处只记实现要点：
+ * - 三行：OIDC 无开关、「编辑配置」恒显；邮件两行（Stalwart / SMTP）是持久能力开关，
+ *   「编辑配置」只在启用态渲染（停用行没有编辑入口：要改字段必须先开）。
+ * - 开关直落库：配置完整 → 只 PUT {enabled}；配置不全点「开」→ 不落库、开弹窗（enablePending，
+ *   保存恒带 enabled:true）；点「关」恒 PUT {enabled:false}。在途本行开关禁用，失败出行级 alert
+ *   且开关仍是原状态（开关值只在 refetch 成功后才随服务端状态变）。
+ * - 客户端完整性（stalwartComplete / smtpComplete）只决定直落库还是弹窗，不是校验边界，D5 400 才是。
+ * - 弹窗动线：同一颗按钮非成功态「测试连接」、成功态变「保存配置」；「跳过测试，直接保存」仅非成功态出现。
+ *   保存恒带 enabled:true；每次打开 / 关闭 / 保存成功都 resetDialogState，重开回到 rest 与初始态。
+ * - 测试吃当前草稿（候选化，#97/#99）：密钥留空或 `***` 原样传，后端自己回退已存值；
+ *   探测时抓草稿快照，返回时草稿已变则结果作废不回填，改字段也清掉已得结果。
+ * - 写侧：OIDC 只发有变化的非空字段（不能清空）；邮件文本先 trim 整段回写、空串照发（后端删键，决策 #100），
+ *   密钥只有新明文才带上。
+ * - Stalwart 保存 / 开关直落库成功后重取 me（#340：壳层「应用密码」入口随 mailEnabled 显隐）。
+ */
+import { computed, ref, watch } from 'vue'
 
-import { UButton, UCard, UErrorCard, UInput, USkeleton, USwitch } from '@unself/ui'
+import { UButton, UErrorCard, UInput, USkeleton, USwitch } from '@unself/ui'
 
 import {
   fetchSettings,
@@ -22,79 +38,57 @@ import {
 import { testOidcConnection } from '../lib/setup-api'
 import { fetchMe } from '../lib/session-api'
 import { useAsyncLoad } from '../lib/use-async-load'
+import SettingsConfigDialog from './settings-config-dialog.vue'
 
-/**
- * 管理台设置页（#17 → #340 三卡分域）：登录（OIDC）/ 邮箱管理（Stalwart）/ 通知发信（SMTP）
- * 三张独立 UCard，各卡独立启停、测试、保存，状态互不干扰（#139 语义延续到卡粒度）。
- * - 动线（#99）：「开（关）→ 填 → 测试 → 保存」任意顺序——
- *   ① 开关是纯表单字段（#159 落到底）：恒可切、只改本地状态，点本卡「保存」才落库；
- *     开启但字段不全由后端 D5 400 人话兜底（fail-closed 不变）；
- *   ② 配置区常显：无折叠（不采用 #159 的 `mailAxisOn || !mailConfigured` 收起式，保存不影响布局）；
- *   ③ 测试连接恒可用：吃当前表单草稿（#340 候选化），缺字段由后端回 200 ok:false 人话；
- *     密钥留空或 *** 原样传给后端（后端自己回退已存值）；本卡任一字段变更 → 丢弃本卡测试结果
- *     （含在途：探测时抓草稿快照，返回时草稿已变则结果作废）。
- * - 保存 body 恒带 enabled（#99）；段不存在且只要求关闭时后端按默认态幂等空操作，不建段。
- * - 密钥字段只写不读：服务端 GET 恒回 '***'，前端留空即不修改（不做客户端二次校验）。
- * - OIDC 卡保存只发 { oidc }（#340：不再夹带任何邮件字段）；Stalwart 卡保存成功后
- *   me 重取一次，壳层「应用密码」入口随新 mailEnabled 自动显隐。
- */
-
-// #142：加载三态样板收编 use-async-load（phase/loadError 变量名不变）
 const { phase, loadError, data: settings } = useAsyncLoad<InstanceSettings>(fetchSettings)
 
-// ---- 登录（OIDC）卡 ------------------------------------------------------
+const openDialog = ref<null | 'oidc' | 'stalwart' | 'smtp'>(null)
+/** 配置不全点「开」：保存成功时带 enabled:true。 */
+const enablePending = ref(false)
 
 const issuer = ref('')
 const clientId = ref('')
 const clientSecret = ref('')
 const scope = ref('')
-/** 已配置密钥的提示（GET 返回 '***' 即已配置）。 */
 const oidcSecretConfigured = ref(false)
-
+const oidcTesting = ref(false)
+/** 非 null = 测试成功，主动作按钮变为「保存配置」。改字段即清空。 */
+const oidcTestOk = ref<string | null>(null)
+const oidcTestFailReason = ref<string | null>(null)
 const oidcSaving = ref(false)
 const oidcSaveError = ref<string | null>(null)
-const oidcSaved = ref(false)
-const oidcTesting = ref(false)
-const oidcTestOk = ref<null | { warnings: string[] }>(null)
-const oidcTestFailReason = ref<string | null>(null)
 
-// ---- 邮箱管理（Stalwart）卡 ---------------------------------------------
-
-const stalwartEnabled = ref(true)
+const stalwartEnabled = ref(false)
 const stalwartBaseUrl = ref('')
 const stalwartApiKey = ref('')
 const stalwartDomain = ref('')
-/** 门户地址（#184）：应用密码说明页的跳转目标；留空则由后端按邮箱域名推导。 */
+/** 门户地址（#184）。 */
 const stalwartPortalUrl = ref('')
-/** 服务端当前存的 portalUrl：用于判断「用户是否真的改了」——没动过的空值不下发，避免无配置实例凭空建段。 */
-const loadedStalwartPortalUrl = ref('')
 const stalwartApiKeyConfigured = ref(false)
-
+const stalwartSwitching = ref(false)
+const stalwartRowError = ref<string | null>(null)
+const stalwartTesting = ref(false)
+const stalwartTestOk = ref<string | null>(null)
+const stalwartTestError = ref<string | null>(null)
 const stalwartSaving = ref(false)
 const stalwartSaveError = ref<string | null>(null)
-const stalwartSaved = ref(false)
-const stalwartTesting = ref(false)
-const stalwartTestError = ref<string | null>(null)
-const stalwartTest = ref<MailTestResult | null>(null)
 
-// ---- 通知发信（SMTP）卡 --------------------------------------------------
-
-const smtpEnabled = ref(true)
+const smtpEnabled = ref(false)
 const smtpHost = ref('')
 const smtpPort = ref('')
 const smtpUsername = ref('')
 const smtpPassword = ref('')
 const smtpFrom = ref('')
 const smtpPasswordConfigured = ref(false)
-
+const smtpSwitching = ref(false)
+const smtpRowError = ref<string | null>(null)
+const smtpTesting = ref(false)
+const smtpTestOk = ref<string | null>(null)
+const smtpTestError = ref<string | null>(null)
 const smtpSaving = ref(false)
 const smtpSaveError = ref<string | null>(null)
-const smtpSaved = ref(false)
-const smtpTesting = ref(false)
-const smtpTestError = ref<string | null>(null)
-const smtpTest = ref<MailTestResult | null>(null)
 
-// 数据就位 → 回填表单（含保存后无需重新拉取的既有行为）
+/** 数据就位 → 回填表单；每次保存 / 开关直落库后 refetch 再回填一次（不靠乐观更新）。 */
 watch(settings, (s) => { if (s) applyLoaded(s) }, { immediate: true })
 
 function applyLoaded(s: InstanceSettings): void {
@@ -103,30 +97,97 @@ function applyLoaded(s: InstanceSettings): void {
   scope.value = s.oidc.scope
   oidcSecretConfigured.value = s.oidc.clientSecret === SECRET_MASK
 
+  stalwartEnabled.value = s.stalwart.enabled
   stalwartBaseUrl.value = s.stalwart.baseUrl
   stalwartDomain.value = s.stalwart.domain
   stalwartPortalUrl.value = s.stalwart.portalUrl
-  loadedStalwartPortalUrl.value = s.stalwart.portalUrl
   stalwartApiKeyConfigured.value = s.stalwart.apiKey === SECRET_MASK
-  stalwartEnabled.value = s.stalwart.enabled
 
+  smtpEnabled.value = s.smtp.enabled
   smtpHost.value = s.smtp.host
   smtpPort.value = s.smtp.port === '' ? '' : String(s.smtp.port)
   smtpUsername.value = s.smtp.username
   smtpFrom.value = s.smtp.from
   smtpPasswordConfigured.value = s.smtp.password === SECRET_MASK
-  smtpEnabled.value = s.smtp.enabled
 }
 
-/** 保存/测试失败人话：后端 detail 优先（D5 校验清单是人话），退化到 ApiError.message。 */
+/** 失败人话：后端 detail 优先（D5 校验清单是人话），退化到 ApiError.message。 */
 function actionErrorText(err: unknown): string {
   const apiErr = err as ApiError
   return apiErr?.detail ?? apiErr?.message
 }
 
-// ---- OIDC 卡：构建 + 保存 + 测试 ----------------------------------------
+// 与 settings.ts 必填清单对齐。只决定直落库还是弹窗，不是校验边界。
+const stalwartComplete = computed(
+  () => stalwartBaseUrl.value.trim() !== ''
+    && stalwartApiKeyConfigured.value
+    && stalwartDomain.value.trim() !== '',
+)
+const smtpComplete = computed(
+  () => smtpHost.value.trim() !== ''
+    && /^[1-9]\d*$/.test(smtpPort.value)
+    && smtpUsername.value.trim() !== ''
+    && smtpPasswordConfigured.value
+    && smtpFrom.value.trim() !== '',
+)
 
-/** OIDC PUT body：只发有变化的字段；密钥只在填了新值（非空且非 ***）时发送；不带任何邮件字段。 */
+async function onToggleStalwart(next: boolean): Promise<void> {
+  if (!next) {
+    await persistStalwartEnabled(false)
+    return
+  }
+  if (stalwartComplete.value) {
+    await persistStalwartEnabled(true)
+    return
+  }
+  enablePending.value = true
+  openDialog.value = 'stalwart'
+}
+
+async function onToggleSmtp(next: boolean): Promise<void> {
+  if (!next) {
+    await persistSmtpEnabled(false)
+    return
+  }
+  if (smtpComplete.value) {
+    await persistSmtpEnabled(true)
+    return
+  }
+  enablePending.value = true
+  openDialog.value = 'smtp'
+}
+
+/** 开关直落库（邮件两行）：只发 {enabled}，成功后 refetch 取服务端真值；失败留行级 alert，开关不动。 */
+async function persistStalwartEnabled(enabled: boolean): Promise<void> {
+  stalwartSwitching.value = true
+  stalwartRowError.value = null
+  try {
+    await saveStalwartSettings({ enabled })
+    const s = await fetchSettings()
+    applyLoaded(s)
+    void refreshMe()
+  } catch (err) {
+    stalwartRowError.value = actionErrorText(err)
+  } finally {
+    stalwartSwitching.value = false
+  }
+}
+
+async function persistSmtpEnabled(enabled: boolean): Promise<void> {
+  smtpSwitching.value = true
+  smtpRowError.value = null
+  try {
+    await saveSmtpSettings({ enabled })
+    const s = await fetchSettings()
+    applyLoaded(s)
+  } catch (err) {
+    smtpRowError.value = actionErrorText(err)
+  } finally {
+    smtpSwitching.value = false
+  }
+}
+
+/** 只发非空字段。密钥只带新明文，空串和 `***` 都不发。 */
 function buildOidcUpdate(): OidcSettingsUpdate {
   const oidc: OidcSettingsUpdate = {}
   if (issuer.value) oidc.issuer = issuer.value
@@ -136,19 +197,45 @@ function buildOidcUpdate(): OidcSettingsUpdate {
   return oidc
 }
 
+async function onTestOidc(): Promise<void> {
+  // 探测只吃 issuer（与 setup 流程同端点）；其余草稿字段仅用于「在途改过即作废」对照
+  const tested = { issuer: issuer.value, clientId: clientId.value, scope: scope.value, secret: clientSecret.value }
+  oidcTesting.value = true
+  oidcTestOk.value = null
+  oidcTestFailReason.value = null
+  try {
+    const result = await testOidcConnection(issuer.value)
+    if (tested.issuer !== issuer.value || tested.clientId !== clientId.value
+      || tested.scope !== scope.value || tested.secret !== clientSecret.value) return
+    if (result.ok) {
+      oidcTestOk.value = result.warnings.length > 0
+        ? `连接成功（${result.warnings.join('；')}）`
+        : '连接成功'
+    } else {
+      oidcTestFailReason.value = result.reason
+    }
+  } catch (err) {
+    oidcTestFailReason.value = actionErrorText(err)
+  } finally {
+    oidcTesting.value = false
+  }
+}
+
+/** OIDC 保存：后端详情 = 后端校验人话；成功后关弹窗、重取设置（不回显密钥）。 */
 async function onSaveOidc(): Promise<void> {
   oidcSaving.value = true
   oidcSaveError.value = null
-  oidcSaved.value = false
   try {
     const update = buildOidcUpdate()
     await saveOidcSettings(update)
-    oidcSaved.value = true
-    // 密钥保存后清空输入（不回显真值），「已配置」提示翻转
     if (update.clientSecret) {
       oidcSecretConfigured.value = true
       clientSecret.value = ''
     }
+    openDialog.value = null
+    resetDialogState()
+    const s = await fetchSettings()
+    applyLoaded(s)
   } catch (err) {
     oidcSaveError.value = actionErrorText(err)
   } finally {
@@ -156,68 +243,23 @@ async function onSaveOidc(): Promise<void> {
   }
 }
 
-async function onTestOidcConnection(): Promise<void> {
-  oidcTesting.value = true
+watch([issuer, clientId, clientSecret, scope], () => {
   oidcTestOk.value = null
   oidcTestFailReason.value = null
-  const result = await testOidcConnection(issuer.value)
-  if (result.ok) {
-    oidcTestOk.value = { warnings: result.warnings }
-  } else {
-    oidcTestFailReason.value = result.reason
-  }
-  oidcTesting.value = false
-}
+})
 
-// ---- Stalwart 卡：构建 + 保存 + 测试 + 开关 ------------------------------
-
-/** Stalwart PUT body：只发有变化的字段（合并语义沿用）；#184 portalUrl 只在真的改过时下发。 */
-function buildStalwartUpdate(): StalwartSettingsUpdate {
+/** 文本 trim 后整段回写，空串照发（后端删键，#100）。密钥只带新明文。 */
+function buildStalwartUpdate(enabled: boolean): StalwartSettingsUpdate {
   const stalwart: StalwartSettingsUpdate = {}
-  if (stalwartBaseUrl.value) stalwart.baseUrl = stalwartBaseUrl.value
-  if (stalwartDomain.value) stalwart.domain = stalwartDomain.value
-  const nextPortalUrl = stalwartPortalUrl.value.trim()
-  if (nextPortalUrl !== loadedStalwartPortalUrl.value) stalwart.portalUrl = nextPortalUrl
+  stalwart.baseUrl = stalwartBaseUrl.value.trim()
+  stalwart.domain = stalwartDomain.value.trim()
+  stalwart.portalUrl = stalwartPortalUrl.value.trim()
   if (stalwartApiKey.value && stalwartApiKey.value !== SECRET_MASK) stalwart.apiKey = stalwartApiKey.value
-  // #99：开关恒是表单字段——enabled 恒携带；段不存在 + 只要求关闭时由后端按默认态幂等空操作（不建段）
-  stalwart.enabled = stalwartEnabled.value
+  stalwart.enabled = enabled
   return stalwart
 }
 
-/** me 重取（#340）：壳层「应用密码」入口随新 mailEnabled 显隐；失败静默（下次进页自然重取）。 */
-async function refreshMe(): Promise<void> {
-  try {
-    await fetchMe()
-  } catch {
-    // 会话态重取失败不影响保存结果
-  }
-}
-
-async function onSaveStalwart(): Promise<void> {
-  stalwartSaving.value = true
-  stalwartSaveError.value = null
-  stalwartSaved.value = false
-  try {
-    const update = buildStalwartUpdate()
-    await saveStalwartSettings(update)
-    stalwartSaved.value = true
-    // 保存成功 = 服务端状态与表单一致 → 刷新基线（否则「填地址保存 → 清空再保存」第二次不下发清空）
-    if (typeof update.portalUrl === 'string') loadedStalwartPortalUrl.value = update.portalUrl
-    // 密钥保存后清空输入（不回显真值），「已配置」提示翻转
-    if (update.apiKey) {
-      stalwartApiKeyConfigured.value = true
-      stalwartApiKey.value = ''
-    }
-    void refreshMe()
-  } catch (err) {
-    stalwartSaveError.value = actionErrorText(err)
-  } finally {
-    stalwartSaving.value = false
-  }
-}
-
 async function onTestStalwart(): Promise<void> {
-  // 竞态面（#99）：记下本次探测用的草稿快照；在途期间用户改过任意字段 → 结果作废不回填
   const tested = {
     baseUrl: stalwartBaseUrl.value,
     apiKey: stalwartApiKey.value,
@@ -225,17 +267,20 @@ async function onTestStalwart(): Promise<void> {
     portalUrl: stalwartPortalUrl.value,
   }
   stalwartTesting.value = true
+  stalwartTestOk.value = null
   stalwartTestError.value = null
-  stalwartTest.value = null
   try {
-    // 候选化（#340）：发当前表单草稿；密钥留空/'***' 原样传（后端自己回退已存值）
-    const result = await testStalwartConnection({
+    const result: MailTestResult = await testStalwartConnection({
       baseUrl: tested.baseUrl,
       apiKey: tested.apiKey,
       domain: tested.domain,
     })
     if (!sameStalwartDraft(tested)) return
-    stalwartTest.value = result
+    if (result.ok) {
+      stalwartTestOk.value = result.detail
+    } else {
+      stalwartTestError.value = result.detail
+    }
   } catch (err) {
     if (!sameStalwartDraft(tested)) return
     stalwartTestError.value = actionErrorText(err)
@@ -244,7 +289,6 @@ async function onTestStalwart(): Promise<void> {
   }
 }
 
-/** 草稿是否与探测时一致（#99 竞态面：任一字段改过即视为过期）。 */
 function sameStalwartDraft(tested: {
   baseUrl: string
   apiKey: string
@@ -257,47 +301,47 @@ function sameStalwartDraft(tested: {
     && tested.portalUrl === stalwartPortalUrl.value
 }
 
-/** #99：开关属表单状态——切换只改本地值，落库由本卡「保存」提交。 */
-function onStalwartSwitch(next: boolean): void {
-  stalwartEnabled.value = next
-}
-
-// ---- SMTP 卡：构建 + 保存 + 测试 + 开关 ----------------------------------
-
-/** SMTP PUT body：只发有变化的字段（合并语义沿用；port 只在填了正整数时下发）。 */
-function buildSmtpUpdate(): SmtpSettingsUpdate {
-  const smtp: SmtpSettingsUpdate = {}
-  if (smtpHost.value) smtp.host = smtpHost.value
-  if (smtpPort.value) smtp.port = Number(smtpPort.value)
-  if (smtpUsername.value) smtp.username = smtpUsername.value
-  if (smtpFrom.value) smtp.from = smtpFrom.value
-  if (smtpPassword.value && smtpPassword.value !== SECRET_MASK) smtp.password = smtpPassword.value
-  // #99：开关恒是表单字段——enabled 恒携带；段不存在 + 只要求关闭时由后端按默认态幂等空操作（不建段）
-  smtp.enabled = smtpEnabled.value
-  return smtp
-}
-
-async function onSaveSmtp(): Promise<void> {
-  smtpSaving.value = true
-  smtpSaveError.value = null
-  smtpSaved.value = false
+async function onSaveStalwart(): Promise<void> {
+  stalwartSaving.value = true
+  stalwartSaveError.value = null
   try {
-    const update = buildSmtpUpdate()
-    await saveSmtpSettings(update)
-    smtpSaved.value = true
-    if (update.password) {
-      smtpPasswordConfigured.value = true
-      smtpPassword.value = ''
+    const update = buildStalwartUpdate(true)
+    await saveStalwartSettings(update)
+    if (update.apiKey) {
+      stalwartApiKeyConfigured.value = true
+      stalwartApiKey.value = ''
     }
+    openDialog.value = null
+    enablePending.value = false
+    resetDialogState()
+    const s = await fetchSettings()
+    applyLoaded(s)
+    void refreshMe()
   } catch (err) {
-    smtpSaveError.value = actionErrorText(err)
+    stalwartSaveError.value = actionErrorText(err)
   } finally {
-    smtpSaving.value = false
+    stalwartSaving.value = false
   }
 }
 
+watch([stalwartBaseUrl, stalwartApiKey, stalwartDomain, stalwartPortalUrl], () => {
+  stalwartTestOk.value = null
+  stalwartTestError.value = null
+})
+
+/** 文本整段回写。port 空串照发，有值发正整数；密码只带新明文。 */
+function buildSmtpUpdate(enabled: boolean): SmtpSettingsUpdate {
+  const smtp: SmtpSettingsUpdate = {}
+  smtp.host = smtpHost.value.trim()
+  smtp.port = smtpPort.value.trim() === '' ? '' : Number(smtpPort.value)
+  smtp.username = smtpUsername.value.trim()
+  smtp.from = smtpFrom.value.trim()
+  if (smtpPassword.value && smtpPassword.value !== SECRET_MASK) smtp.password = smtpPassword.value
+  smtp.enabled = enabled
+  return smtp
+}
+
 async function onTestSmtp(): Promise<void> {
-  // 竞态面（#99）：记下本次探测用的草稿快照；在途期间用户改过任意字段 → 结果作废不回填
   const tested = {
     host: smtpHost.value,
     port: smtpPort.value,
@@ -306,10 +350,10 @@ async function onTestSmtp(): Promise<void> {
     from: smtpFrom.value,
   }
   smtpTesting.value = true
+  smtpTestOk.value = null
   smtpTestError.value = null
-  smtpTest.value = null
   try {
-    const result = await testSmtpConnection({
+    const result: MailTestResult = await testSmtpConnection({
       host: tested.host,
       port: tested.port,
       username: tested.username,
@@ -317,7 +361,11 @@ async function onTestSmtp(): Promise<void> {
       from: tested.from,
     })
     if (!sameSmtpDraft(tested)) return
-    smtpTest.value = result
+    if (result.ok) {
+      smtpTestOk.value = result.detail
+    } else {
+      smtpTestError.value = result.detail
+    }
   } catch (err) {
     if (!sameSmtpDraft(tested)) return
     smtpTestError.value = actionErrorText(err)
@@ -326,7 +374,6 @@ async function onTestSmtp(): Promise<void> {
   }
 }
 
-/** 草稿是否与探测时一致（#99 竞态面：任一字段改过即视为过期）。 */
 function sameSmtpDraft(tested: {
   host: string
   port: string
@@ -341,19 +388,108 @@ function sameSmtpDraft(tested: {
     && tested.from === smtpFrom.value
 }
 
-function onSmtpSwitch(next: boolean): void {
-  smtpEnabled.value = next
+async function onSaveSmtp(): Promise<void> {
+  smtpSaving.value = true
+  smtpSaveError.value = null
+  try {
+    const update = buildSmtpUpdate(true)
+    await saveSmtpSettings(update)
+    if (update.password) {
+      smtpPasswordConfigured.value = true
+      smtpPassword.value = ''
+    }
+    openDialog.value = null
+    enablePending.value = false
+    resetDialogState()
+    const s = await fetchSettings()
+    applyLoaded(s)
+  } catch (err) {
+    smtpSaveError.value = actionErrorText(err)
+  } finally {
+    smtpSaving.value = false
+  }
 }
 
-// 本卡任一字段变更 → 丢弃本卡测试结果（纯客户端比对；#340）：结果区消失、错误提示一并清掉
-watch([stalwartBaseUrl, stalwartApiKey, stalwartDomain, stalwartPortalUrl], () => {
-  stalwartTest.value = null
-  stalwartTestError.value = null
-})
 watch([smtpHost, smtpPort, smtpUsername, smtpPassword, smtpFrom], () => {
-  smtpTest.value = null
+  smtpTestOk.value = null
   smtpTestError.value = null
 })
+
+const stalwartRowDesc = computed(() => {
+  if (stalwartEnabled.value) return '已启用 · 新成员将自动开户'
+  return stalwartComplete.value ? '已停用 · 配置已保留' : '未配置'
+})
+const smtpRowDesc = computed(() => {
+  if (smtpEnabled.value) return '已启用 · 实例将发送通知邮件'
+  return smtpComplete.value ? '已停用 · 配置已保留' : '未配置'
+})
+const oidcRowDesc = computed(() =>
+  issuer.value.trim() !== '' && clientId.value.trim() !== '' && oidcSecretConfigured.value
+    ? '已配置'
+    : '未配置',
+)
+
+const dialogTitle = computed(() => {
+  switch (openDialog.value) {
+    case 'oidc': return '编辑登录（OIDC）'
+    case 'stalwart': return enablePending.value ? '启用邮箱管理（Stalwart）' : '编辑邮箱管理（Stalwart）'
+    case 'smtp': return enablePending.value ? '启用通知发信（SMTP）' : '编辑通知发信（SMTP）'
+    default: return ''
+  }
+})
+const dialogHint = computed(() =>
+  enablePending.value ? '配置保存后将自动启用该功能' : '',
+)
+
+function resetDialogState(): void {
+  oidcTestOk.value = null
+  oidcTestFailReason.value = null
+  oidcSaveError.value = null
+  stalwartTestOk.value = null
+  stalwartTestError.value = null
+  stalwartSaveError.value = null
+  smtpTestOk.value = null
+  smtpTestError.value = null
+  smtpSaveError.value = null
+}
+
+function closeDialog(): void {
+  openDialog.value = null
+  enablePending.value = false
+  resetDialogState()
+}
+
+function openEdit(domain: 'oidc' | 'stalwart' | 'smtp'): void {
+  resetDialogState()
+  enablePending.value = false
+  openDialog.value = domain
+}
+
+function boxOpen(domain: 'oidc' | 'stalwart' | 'smtp') {
+  return computed({
+    get: () => openDialog.value === domain,
+    set: (v: boolean) => {
+      if (v) {
+        resetDialogState()
+        openDialog.value = domain
+        return
+      }
+      if (openDialog.value === domain) closeDialog()
+    },
+  })
+}
+const oidcOpen = boxOpen('oidc')
+const stalwartOpen = boxOpen('stalwart')
+const smtpOpen = boxOpen('smtp')
+
+/** 壳层「应用密码」入口随 mailEnabled 显隐（#340）。 */
+async function refreshMe(): Promise<void> {
+  try {
+    await fetchMe()
+  } catch {
+    // 失败不影响保存结果，下次进页重取
+  }
+}
 </script>
 
 <template>
@@ -371,170 +507,171 @@ watch([smtpHost, smtpPort, smtpUsername, smtpPassword, smtpFrom], () => {
     />
 
     <template v-else>
-      <!-- 卡一：登录（OIDC）；字段、测试按钮、结果区原样，仅保存改为只发 oidc（#340） -->
-      <UCard class="settings-card" data-test="settings-card-oidc">
-        <h2 class="section-title">登录（OIDC）</h2>
-        <div class="settings-grid">
-          <UInput v-model="issuer" label="Issuer" name="oidc-issuer" type="url" placeholder="https://idp.example.com" />
-          <UInput v-model="clientId" label="Client ID" name="oidc-client-id" />
-          <UInput
-            v-model="clientSecret"
-            label="Client Secret"
-            name="oidc-client-secret"
-            type="password"
-            :placeholder="oidcSecretConfigured ? SECRET_MASK : '未配置'"
-          />
-          <p class="secret-hint">{{ oidcSecretConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
-          <UInput v-model="scope" label="Scope" name="oidc-scope" placeholder="openid profile email" />
-        </div>
-
-        <UButton variant="outline" :loading="oidcTesting" class="test-btn" data-test="settings-test-oidc" @click="onTestOidcConnection">
-          测试连接
-        </UButton>
-
-        <p v-if="oidcTestFailReason" class="form-alert" role="alert">{{ oidcTestFailReason }}</p>
-        <div v-if="oidcTestOk" class="test-result" role="status">
-          <p class="test-ok-line">连接成功</p>
-          <p v-for="warning in oidcTestOk.warnings" :key="warning" class="test-warning">
-            {{ warning }}
-          </p>
-        </div>
-
-        <p v-if="oidcSaveError" class="form-alert" role="alert">{{ oidcSaveError }}</p>
-        <p v-else-if="oidcSaved" class="save-ok" role="status">已保存</p>
-        <UButton :loading="oidcSaving" class="card-save-btn" data-test="settings-save-oidc" @click="onSaveOidc">保存</UButton>
-      </UCard>
-
-      <!-- 卡二：邮箱管理（Stalwart 开户）；独立开关/测试/保存（#340）；动线 #99：表单常显、测试恒可用 -->
-      <UCard class="settings-card" data-test="settings-card-stalwart">
-        <div class="mail-card-head">
-          <h2 class="section-title">邮箱管理（Stalwart）</h2>
-          <!-- #99：开关纯表单字段恒可切；aria-label 独立于可见标题 -->
-          <USwitch
-            :model-value="stalwartEnabled"
-            aria-label="邮箱管理开关"
-            data-test="settings-switch-stalwart"
-            @update:model-value="onStalwartSwitch"
-          />
-        </div>
-        <p v-if="!stalwartEnabled" class="mail-switch-hint">
-          关闭后新成员不再开户；已开通的邮箱不受影响
-        </p>
-
-        <!-- #99：配置区常显（无折叠——保存不再动布局；关态也可改配置、测试） -->
-        <div class="stalwart-config" data-test="stalwart-config">
-          <div class="settings-grid">
-            <UInput v-model="stalwartBaseUrl" label="Stalwart 地址" name="stalwart-baseurl" type="url" placeholder="https://mail.example.com" />
-            <UInput
-              v-model="stalwartApiKey"
-              label="API Key"
-              name="stalwart-apikey"
-              type="password"
-              :placeholder="stalwartApiKeyConfigured ? SECRET_MASK : '未配置'"
-            />
-            <p class="secret-hint">{{ stalwartApiKeyConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
-            <UInput v-model="stalwartDomain" label="邮箱域名" name="stalwart-domain" placeholder="example.com" />
-            <UInput
-              v-model="stalwartPortalUrl"
-              label="邮箱门户地址（可选）"
-              name="stalwart-portal"
-              type="url"
-              placeholder="留空 = 按邮箱域名自动推导"
-            />
-            <p class="secret-hint">
-              成员「应用密码说明页」的跳转目标；留空则按邮箱域名推导（https://mail.&lt;域名&gt;）。
-            </p>
+      <div class="settings-list" data-test="settings-list">
+        <div class="settings-row" data-test="settings-row-oidc">
+          <div class="settings-row-main">
+            <span class="settings-row-title">登录（OIDC）</span>
+            <span class="settings-row-desc">{{ oidcRowDesc }}</span>
           </div>
-
-          <!-- #99：测试恒可用（候选化探测不依赖开关状态）；缺字段由后端回人话结果 -->
           <UButton
             variant="outline"
-            :loading="stalwartTesting"
-            class="test-btn"
-            data-test="settings-test-stalwart"
-            @click="onTestStalwart"
+            size="sm"
+            data-test="settings-edit-oidc"
+            @click="openEdit('oidc')"
           >
-            测试连接
+            编辑配置
           </UButton>
-          <p v-if="stalwartTestError" class="form-alert" role="alert">{{ stalwartTestError }}</p>
-          <div v-if="stalwartTest" class="mail-test-results" role="status">
-            <div class="mail-test-card" :class="stalwartTest.ok ? 'is-ok' : 'is-fail'">
-              <strong>{{ stalwartTest.ok ? '成功' : '失败' }}</strong>
-              <span>{{ stalwartTest.detail }}</span>
-            </div>
+        </div>
+
+        <div class="settings-row" data-test="settings-row-stalwart">
+          <div class="settings-row-main">
+            <span class="settings-row-title">邮箱管理（Stalwart）</span>
+            <span class="settings-row-desc">{{ stalwartRowDesc }}</span>
+          </div>
+          <div class="settings-row-actions">
+            <UButton
+              v-if="stalwartEnabled"
+              variant="outline"
+              size="sm"
+              data-test="settings-edit-stalwart"
+              @click="openEdit('stalwart')"
+            >
+              编辑配置
+            </UButton>
+
+            <USwitch
+              :model-value="stalwartEnabled"
+              :disabled="stalwartSwitching"
+              aria-label="邮箱管理开关"
+              data-test="settings-switch-stalwart"
+              @update:model-value="onToggleStalwart"
+            />
           </div>
         </div>
 
-        <!-- 卡内保存（#340）：各卡独立提交（开关+字段一次落库） -->
-        <p v-if="stalwartSaveError" class="form-alert" role="alert">{{ stalwartSaveError }}</p>
-        <p v-else-if="stalwartSaved" class="save-ok" role="status">已保存</p>
-        <UButton :loading="stalwartSaving" class="card-save-btn" data-test="settings-save-stalwart" @click="onSaveStalwart">保存</UButton>
-      </UCard>
-
-      <!-- 卡三：通知发信（SMTP）；独立开关/测试/保存（#340）；动线 #99：表单常显、测试恒可用 -->
-      <UCard class="settings-card" data-test="settings-card-smtp">
-        <div class="mail-card-head">
-          <h2 class="section-title">通知发信（SMTP）</h2>
-          <!-- #99：开关纯表单字段恒可切 -->
-          <USwitch
-            :model-value="smtpEnabled"
-            aria-label="通知发信开关"
-            data-test="settings-switch-smtp"
-            @update:model-value="onSmtpSwitch"
-          />
+        <div class="settings-row" data-test="settings-row-smtp">
+          <div class="settings-row-main">
+            <span class="settings-row-title">通知发信（SMTP）</span>
+            <span class="settings-row-desc">{{ smtpRowDesc }}</span>
+          </div>
+          <div class="settings-row-actions">
+            <UButton
+              v-if="smtpEnabled"
+              variant="outline"
+              size="sm"
+              data-test="settings-edit-smtp"
+              @click="openEdit('smtp')"
+            >
+              编辑配置
+            </UButton>
+            <USwitch
+              :model-value="smtpEnabled"
+              :disabled="smtpSwitching"
+              aria-label="通知发信开关"
+              data-test="settings-switch-smtp"
+              @update:model-value="onToggleSmtp"
+            />
+          </div>
         </div>
-        <p v-if="!smtpEnabled" class="mail-switch-hint">
-          关闭后实例不再发送通知邮件；已存配置保留，重新开启无需重填
+      </div>
+
+      <p v-if="stalwartRowError" class="form-alert settings-row-alert" role="alert" data-test="settings-row-alert-stalwart">
+        {{ stalwartRowError }}
+      </p>
+      <p v-if="smtpRowError" class="form-alert settings-row-alert" role="alert" data-test="settings-row-alert-smtp">
+        {{ smtpRowError }}
+      </p>
+
+      <SettingsConfigDialog
+        v-model="oidcOpen"
+        domain="oidc"
+        :title="openDialog === 'oidc' ? dialogTitle : ''"
+        :testing="oidcTesting"
+        :saving="oidcSaving"
+        :ok-detail="oidcTestOk"
+        :error-text="oidcTestFailReason ?? oidcSaveError"
+        @test="onTestOidc"
+        @save="onSaveOidc"
+      >
+        <UInput v-model="issuer" label="Issuer" name="oidc-issuer" type="url" placeholder="https://idp.example.com" />
+        <UInput v-model="clientId" label="Client ID" name="oidc-client-id" />
+        <UInput
+          v-model="clientSecret"
+          label="Client Secret"
+          name="oidc-client-secret"
+          type="password"
+          :placeholder="oidcSecretConfigured ? SECRET_MASK : '未配置'"
+        />
+        <p class="secret-hint">{{ oidcSecretConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
+        <UInput v-model="scope" label="Scope" name="oidc-scope" placeholder="openid profile email" />
+      </SettingsConfigDialog>
+
+      <SettingsConfigDialog
+        v-model="stalwartOpen"
+        domain="stalwart"
+        :title="openDialog === 'stalwart' ? dialogTitle : ''"
+        :hint="openDialog === 'stalwart' ? dialogHint : ''"
+        :testing="stalwartTesting"
+        :saving="stalwartSaving"
+        :ok-detail="stalwartTestOk"
+        :error-text="stalwartTestError ?? stalwartSaveError"
+        @test="onTestStalwart"
+        @save="onSaveStalwart"
+      >
+        <UInput v-model="stalwartBaseUrl" label="Stalwart 地址" name="stalwart-baseurl" type="url" placeholder="https://mail.example.com" />
+        <UInput
+          v-model="stalwartApiKey"
+          label="API Key"
+          name="stalwart-apikey"
+          type="password"
+          :placeholder="stalwartApiKeyConfigured ? SECRET_MASK : '未配置'"
+        />
+        <p class="secret-hint">{{ stalwartApiKeyConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
+        <UInput v-model="stalwartDomain" label="邮箱域名" name="stalwart-domain" placeholder="example.com" />
+        <UInput
+          v-model="stalwartPortalUrl"
+          label="邮箱门户地址（可选）"
+          name="stalwart-portal"
+          type="url"
+          placeholder="留空 = 按邮箱域名自动推导"
+        />
+        <p class="secret-hint">
+          成员「应用密码说明页」的跳转目标；留空则按邮箱域名推导（https://mail.&lt;域名&gt;）。
         </p>
+      </SettingsConfigDialog>
 
-        <!-- #99：配置区常显（无折叠——关态也可改配置、测试） -->
-        <div class="smtp-config" data-test="smtp-config">
-          <div class="settings-grid">
-            <UInput v-model="smtpHost" label="SMTP 主机" name="smtp-host" placeholder="mail.example.com" />
-            <UInput
-              v-model="smtpPort"
-              label="SMTP 端口（纯数字，如 465）"
-              name="smtp-port"
-              type="text"
-              inputmode="numeric"
-              placeholder="465"
-            />
-            <UInput v-model="smtpUsername" label="SMTP 用户名" name="smtp-username" />
-            <UInput
-              v-model="smtpPassword"
-              label="SMTP 密码"
-              name="smtp-password"
-              type="password"
-              :placeholder="smtpPasswordConfigured ? SECRET_MASK : '未配置'"
-            />
-            <p class="secret-hint">{{ smtpPasswordConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
-            <UInput v-model="smtpFrom" label="发件地址" name="smtp-from" placeholder="no-reply@example.com" />
-          </div>
-
-          <!-- #99：测试恒可用（候选化探测不依赖开关状态）；缺字段由后端回人话结果 -->
-          <UButton
-            variant="outline"
-            :loading="smtpTesting"
-            class="test-btn"
-            data-test="settings-test-smtp"
-            @click="onTestSmtp"
-          >
-            测试连接
-          </UButton>
-          <p v-if="smtpTestError" class="form-alert" role="alert">{{ smtpTestError }}</p>
-          <div v-if="smtpTest" class="mail-test-results" role="status">
-            <div class="mail-test-card" :class="smtpTest.ok ? 'is-ok' : 'is-fail'">
-              <strong>{{ smtpTest.ok ? '成功' : '失败' }}</strong>
-              <span>{{ smtpTest.detail }}</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 卡内保存（#340）：各卡独立提交（开关+字段一次落库） -->
-        <p v-if="smtpSaveError" class="form-alert" role="alert">{{ smtpSaveError }}</p>
-        <p v-else-if="smtpSaved" class="save-ok" role="status">已保存</p>
-        <UButton :loading="smtpSaving" class="card-save-btn" data-test="settings-save-smtp" @click="onSaveSmtp">保存</UButton>
-      </UCard>
+      <SettingsConfigDialog
+        v-model="smtpOpen"
+        domain="smtp"
+        :title="openDialog === 'smtp' ? dialogTitle : ''"
+        :hint="openDialog === 'smtp' ? dialogHint : ''"
+        :testing="smtpTesting"
+        :saving="smtpSaving"
+        :ok-detail="smtpTestOk"
+        :error-text="smtpTestError ?? smtpSaveError"
+        @test="onTestSmtp"
+        @save="onSaveSmtp"
+      >
+        <UInput v-model="smtpHost" label="SMTP 主机" name="smtp-host" placeholder="mail.example.com" />
+        <UInput
+          v-model="smtpPort"
+          label="SMTP 端口（纯数字，如 465）"
+          name="smtp-port"
+          type="text"
+          inputmode="numeric"
+          placeholder="465"
+        />
+        <UInput v-model="smtpUsername" label="SMTP 用户名" name="smtp-username" />
+        <UInput
+          v-model="smtpPassword"
+          label="SMTP 密码"
+          name="smtp-password"
+          type="password"
+          :placeholder="smtpPasswordConfigured ? SECRET_MASK : '未配置'"
+        />
+        <p class="secret-hint">{{ smtpPasswordConfigured ? '已配置，留空表示不修改' : '尚未配置' }}</p>
+        <UInput v-model="smtpFrom" label="发件地址" name="smtp-from" placeholder="no-reply@example.com" />
+      </SettingsConfigDialog>
     </template>
   </div>
 </template>
@@ -542,26 +679,48 @@ watch([smtpHost, smtpPort, smtpUsername, smtpPassword, smtpFrom], () => {
 <style scoped>
 @import './page.css';
 
-.settings-card {
+.settings-list {
+  display: flex;
+  flex-direction: column;
   margin-bottom: var(--unself-space-4);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-lg);
+  background: var(--unself-color-surface);
+  box-shadow: var(--unself-shadow-card);
 }
-/* 邮件两卡头部：标题 + 开关一行（开关 aria-label 独立于可见标题） */
-.mail-card-head {
+.settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--unself-space-3);
+  padding: var(--unself-space-4);
 }
-.mail-switch-hint {
-  margin: 0 0 var(--unself-space-3);
+.settings-row + .settings-row {
+  border-top: 1px solid var(--unself-color-border);
+}
+.settings-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--unself-space-1);
+  min-width: 0;
+}
+.settings-row-title {
+  font-size: var(--unself-font-size-base);
+  font-weight: 500;
+  color: var(--unself-color-text);
+}
+.settings-row-desc {
   font-size: var(--unself-font-size-sm);
   color: var(--unself-color-text-tertiary);
 }
-.settings-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: var(--unself-space-4);
-  align-items: start;
+.settings-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--unself-space-3);
+}
+.settings-row-alert {
+  margin-top: var(--unself-space-3);
 }
 .secret-hint {
   grid-column: 2;
@@ -570,47 +729,10 @@ watch([smtpHost, smtpPort, smtpUsername, smtpPassword, smtpFrom], () => {
   font-size: var(--unself-font-size-xs);
   color: var(--unself-color-text-tertiary);
 }
-.test-btn {
-  margin-top: var(--unself-space-2);
-}
-/* #340：卡内保存（各卡独立提交） */
-.card-save-btn {
-  margin-top: var(--unself-space-3);
-}
-.test-result {
-  margin-top: var(--unself-space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--unself-space-2);
-}
-.test-ok-line {
-  margin: 0;
-  font-size: var(--unself-font-size-sm);
-  color: var(--unself-color-success);
-  font-weight: 500;
-}
-/* 黄牌：warning 色描边 + 文字（无 warning-soft 令牌，不造裸值） */
-.test-warning {
-  margin: 0;
-  padding: var(--unself-space-2) var(--unself-space-3);
-  border: 1px solid var(--unself-color-warning);
-  border-radius: var(--unself-radius-md);
-  color: var(--unself-color-warning);
-  font-size: var(--unself-font-size-sm);
-}
-.mail-test-results { margin-top: var(--unself-space-3); display: grid; gap: var(--unself-space-2); }
-.mail-test-card { padding: var(--unself-space-2) var(--unself-space-3); border: 1px solid currentColor; border-radius: var(--unself-radius-md); display: flex; gap: var(--unself-space-2); }
-.mail-test-card.is-ok { color: var(--unself-color-success); }
-.mail-test-card.is-fail { color: var(--unself-color-danger); }
-.save-ok {
-  margin: 0 0 var(--unself-space-3);
-  font-size: var(--unself-font-size-sm);
-  color: var(--unself-color-success);
-}
 
 @media (max-width: 768px) {
-  .settings-grid {
-    grid-template-columns: 1fr;
+  .settings-row {
+    flex-wrap: wrap;
   }
   .secret-hint {
     grid-column: 1;

@@ -9,8 +9,9 @@
  * 亮色单主题（M0）；暗色主题 = 未来换一份值，零组件改动。
  * 动效数值骨架（duration/ease/press-scale/lift-y）自 #307 起进契约（修订 #43/#95 口径：
  * 数值集中取值、组合用法仍归各模块）；无障碍降级纪律不变（每个动效带 reduced-motion）。
- * #95：@theme inline Tailwind 工具类映射已删——shell 全部走语义类 + var(--unself-*)，
- * 无人使用该映射（tailwindcss() 插件仍在 vite 流程，扫描不受影响）。
+ * #95：@theme inline Tailwind 工具类映射已删——shell 全部走语义类 + var(--unself-*)。
+ * tailwindcss() 插件的自动源扫描（无 @source 配置，vite root = web/）仍会看到这里的 var() 引用，
+ * 因此本文件增删令牌不影响工具类产物。
  */
 
 :root {
@@ -86,6 +87,8 @@
   --unself-duration-shake: 450ms;
   --unself-duration-spin: 800ms;
   --unself-duration-shimmer: 1400ms;
+  /* #100：走完一整卡高。WaveFill 水位时长 = 距离占比 × 本值；扑动单程 = 本值 / 2，横移一周期 = 本值 × 2 */
+  --unself-duration-wave: 6000ms;
 }
 
 /**

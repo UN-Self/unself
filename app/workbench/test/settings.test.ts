@@ -4,7 +4,8 @@
  * - GET 三段（oidc/stalwart/smtp）全量形状 + 密钥恒 '***'；
  * - PUT /api/admin/settings 只收 { oidc }（夹带 mail 键被忽略不落库）；
  * - PUT /api/admin/settings/mail-stalwart / mail-smtp 整键读-改-写、互不产生对方键；
- * - D5 fail-closed：enabled 必填恒布尔；enabled:true 必填不全 → 400 拒落库。
+ * - D5 fail-closed：enabled 必填恒布尔；enabled:true 必填不全 → 400 拒落库；
+ * - #100：邮件文本空串删键，密钥空串 / *** 保持，值不变不写库。
  * 断言打在行为上（HTTP 状态/响应体/库中真实行），不碰内部调用计数。
  */
 import { Hono } from 'hono';
@@ -568,7 +569,7 @@ describe('PUT /api/admin/settings/mail-stalwart（#340 分域 + D5）', () => {
 
     const second = await putJson(app, '/api/admin/settings/mail-stalwart', { enabled: true }, adminCookie, env);
     expect(second.status).toBe(200);
-    // enabled:true 已是现状、无字段变更 → 不写库不写审计。
+    // enabled 已是现状、无字段变更：不写库不写审计
     expect(auditCount(db, 'mail-stalwart')).toBe(1);
   });
 
@@ -598,8 +599,106 @@ describe('PUT /api/admin/settings/mail-stalwart（#340 分域 + D5）', () => {
     );
     expect(clear.status).toBe(200);
     expect('portalUrl' in JSON.parse(storedValue(db, 'mail_stalwart')!)).toBe(false);
-    // 清空确实改了配置 → 有审计行。
+    // 清空改了配置，记审计
     expect(auditCount(db, 'mail-stalwart')).toBe(2);
+  });
+  it('清空语义（#100）：文本字段传空串 → 删键清库值、GET 回空；密钥传空串 = 保持', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db, { enabled: false });
+
+    const cleared = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      // 前端整段回写：域名清空发空串；密钥留空发空串，必须当成不修改
+      { enabled: false, baseUrl: 'https://mail.example.com', apiKey: '', domain: '' },
+      adminCookie,
+      env,
+    );
+    expect(cleared.status).toBe(200);
+
+    const stored = JSON.parse(storedValue(db, 'mail_stalwart')!) as Record<string, unknown>;
+    expect('domain' in stored, '清空必须真删键，不能保留原值').toBe(false);
+    expect(stored.apiKey, '空串的密钥不是清空：密钥只写不读，留空 = 保持').toBe('api-key');
+    expect(stored.baseUrl).toBe('https://mail.example.com');
+    expect(auditCount(db, 'mail-stalwart')).toBe(1);
+
+    const body = (await (await getSettings(app, adminCookie, env)).json()) as {
+      stalwart: Record<string, unknown>;
+    };
+    expect(body.stalwart.domain).toBe('');
+    expect(body.stalwart.apiKey).toBe('***');
+  });
+
+  it('清空必填字段后 enabled:true → 400 人话（清空生效后被 D5 拦下，不静默保留旧值）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: true, baseUrl: '', domain: 'example.com' },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { detail: string }).detail).toContain('Stalwart 地址');
+    // 400 整段不写：清空没有半途落库
+    expect(JSON.parse(storedValue(db, 'mail_stalwart')!)).toMatchObject({
+      baseUrl: 'https://mail.example.com',
+    });
+  });
+
+  it('SMTP 清空：username/from 空串删键、port 空串删键；enabled:true 由 D5 拦成 400', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    // 关着清空：半配置可以落库
+    const off = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: false, username: '', from: '', port: '' },
+      adminCookie,
+      env,
+    );
+    expect(off.status).toBe(200);
+    const stored = JSON.parse(storedValue(db, 'mail_smtp')!) as Record<string, unknown>;
+    expect('username' in stored).toBe(false);
+    expect('from' in stored).toBe(false);
+    expect('port' in stored).toBe(false);
+    expect(stored.password, '密码空串 = 保持').toBe('smtp-pass');
+
+    // 开着且必填被清空 → 400，不再沿用旧值
+    const on = await putJson(
+      app,
+      '/api/admin/settings/mail-smtp',
+      { enabled: true, username: '', port: '' },
+      adminCookie,
+      env,
+    );
+    expect(on.status).toBe(400);
+    const detail = ((await on.json()) as { detail: string }).detail;
+    expect(detail).toContain('用户名');
+    expect(detail).toContain('port');
+  });
+
+  it('幂等：未改动的字段照发原值 → 不算字段变化（不写库不写审计）', async () => {
+    const app = settingsApp();
+    const { env, db, adminCookie } = await envFor();
+    seedSampleConfig(db);
+
+    const res = await putJson(
+      app,
+      '/api/admin/settings/mail-stalwart',
+      { enabled: true, baseUrl: 'https://mail.example.com', domain: 'example.com', portalUrl: 'https://mail.example.com/portal' },
+      adminCookie,
+      env,
+    );
+    expect(res.status).toBe(200);
+    // 值与库中一致：不算变化
+    expect(auditCount(db, 'mail-stalwart')).toBe(0);
   });
 });
 
@@ -660,7 +759,7 @@ describe('PUT /api/admin/settings/mail-smtp（#340 分域 + D5）', () => {
     const { env, db, adminCookie } = await envFor();
     seedSampleConfig(db);
 
-    // 库里 password 已存，传 *** 视同已配 → 200。
+    // 库里 password 已存，传 *** 视同已配
     const maskedOk = await putJson(
       app,
       '/api/admin/settings/mail-smtp',
@@ -670,7 +769,7 @@ describe('PUT /api/admin/settings/mail-smtp（#340 分域 + D5）', () => {
     );
     expect(maskedOk.status).toBe(200);
 
-    // 干净库：缺 username/password/from → 400 列出全部缺失项，库中无行。
+    // 干净库缺 username/password/from：400 列出缺失项，库中无行
     const fresh = await envFor();
     const bad = await putJson(
       app,

@@ -15,6 +15,8 @@
  *   ∪ tokens.css 已声明的内部令牌（动效 duration/ease 等：平台自己的 CSS 声明了值，
  *   壳/组件内引用可解析；但模块页引它们仍会被部署期体检红——通道注入只投契约令牌）；
  *   豁免文件同样检查（tokens.css 内 --unself-focus-ring: 2px solid var(--unself-color-primary) 必须通过）。
+ *   补充（#100）：同一文件里**内联声明**的自定义属性（`--name:`）也放行——组件私有变量不从契约与
+ *   tokens.css 取值；未声明的引用照旧红，跨文件引用仍只认契约令牌（证书见 PR 的红灯验证）。
  * 规则四（断点漂移，#192 F7）：@media 条件里的像素断点必须 ∈ tokens.css 声明的 `--unself-bp-*` 取值
  *   （CSS 规范不允许 @media 用 var()，也不能靠 @custom-media——本仓构建链只在入口 chunk 展开它，
  *   组件独立 chunk 会漏解析 → 响应式样式静默失效；故「取值一处定义 + 字面量必须一致」由本规则机器执行）。
@@ -47,6 +49,8 @@ const CONTRACT_PACKAGE = 'core/contracts/src/theme-tokens.json';
 const HEX_RE = /#[0-9a-fA-F]{3,8}\b/g;
 const RGB_RE = /rgba?\(/g;
 const VAR_RE = /var\(\s*(--[a-zA-Z0-9-]+)/g;
+/** 规则二补充：自定义属性声明（`--name:`），用于识别组件内联定义的私有变量。 */
+const LOCAL_DECL_RE = /(--[a-zA-Z0-9-]+)\s*:/g;
 /** 规则四：媒体查询条件里的像素断点（值必须 ∈ tokens.css 的 --unself-bp-* 声明）。 */
 const MEDIA_PX_RE = /@media[^{;]*?(\d+)px/g;
 
@@ -134,10 +138,13 @@ export function lintFile(relPath, text, varWhitelist, breakpoints = new Set()) {
       violations.push(`${relPath}:${lineOf(code, m.index)}: 裸颜色值 ${m[0]}（样式只出自主题令牌）`);
     }
   }
-  // 规则二：var 白名单（豁免文件同样查）
+  // 规则二：var 白名单（豁免文件同样查）。本文件内联声明的自定义属性也算「有定义」——
+  // 组件私有变量（#100 的 --unself-wave-testing-local 等）不从契约与 tokens.css 取值，
+  // 只要求先声明后使用；拼错未声明仍会红，跨模块引用仍只认契约令牌。
+  const localDecls = new Set([...code.matchAll(LOCAL_DECL_RE)].map((m) => m[1]));
   for (const m of code.matchAll(VAR_RE)) {
     const name = m[1];
-    if (!varWhitelist.has(name)) {
+    if (!varWhitelist.has(name) && !localDecls.has(name)) {
       violations.push(`${relPath}:${lineOf(code, m.index)}: 未解析令牌 ${name}（不在契约白名单）`);
     }
   }

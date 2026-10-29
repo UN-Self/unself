@@ -40,11 +40,13 @@ function stubClipboard(): { writeText: ReturnType<typeof vi.fn> } {
 /**
  * 管理台行为测试（#17，docs/testing.md 两问检验）：
  * - 守卫：非 admin 访问 /admin → 重定向工作台（用户可见结果 = 路由变了）
- * - 成员页：confirm 停用 → 发出 disable 请求 → 徽章翻转
+ * - 成员页：确认停用 → 发出 disable 请求 → 徽章翻转
  * - 邀请页：批准/拒绝按钮只对 pending 出现；批准翻转行状态、拒绝先 confirm；生成链接只显示一次（#18）
- * - 设置页（#340 三卡）：各卡独立保存只发改动字段（密钥留空不回传）；测试连接发未保存草稿；
- *   本卡字段变更丢弃本卡测试结果；开关切换不发请求（#159），点本卡保存才落库；
- *   配置区常显、测试恒可用、开关恒可切（#99 动线：开→填→测→存任意顺序）
+ * - 设置页（#100 三行清单 + 水舱弹窗）：列表三行与描述；邮件开关直落库只发 {enabled}、失败回行级 alert、
+ *   配置不全点「开」先弹窗（保存恒带 enabled:true）；弹窗按钮非成功态测试、成功态保存，
+ *   「跳过测试」只在非成功态；字段再改作废测试结果、测试在途改草稿不回填；
+ *   文本字段空串照发（后端删键）、密钥只有新明文才带；弹层焦点与 Esc、取消零请求、重开回初始态。
+ *   #99 的「开关纯表单字段、整卡保存」已被 #100 取代。
  */
 
 vi.mock('./lib/session-api', () => ({
@@ -299,7 +301,7 @@ describe('MembersPage 停用/启用（#17 + #192 F6）', () => {
   })
 })
 
-/** #340 三卡分域后的设置页夹具：oidc 全量 + 两邮件段各给完整已存配置（密钥为 MASK）。 */
+/** 设置页夹具（#340 → #100 列表版沿用）：oidc 全量 + 两邮件段各给完整已存配置（密钥为 MASK）。 */
 function settingsFixture(overrides?: {
   oidc?: Partial<InstanceSettings['oidc']>
   stalwart?: Partial<InstanceSettings['stalwart']>
@@ -328,116 +330,442 @@ function settingsFixture(overrides?: {
 }
 
 /**
- * #340 设置页定位纪律（#342 评审定案）：只认 data-test 与 input[name]，
- * 不用按钮/标题文案定位、不按卡序/输入序取下标——文案与结构改版不牵连测试。
+ * #100 列表形态定位纪律（#342 延续）：只认 data-test 与 input[name]，
+ * 不用按钮/标题文案定位、不按行序取下标——文案与结构改版不牵连测试；
+ * 水位断言走 [data-level] 属性（WaveFill 恒 aria-hidden，纯装饰不承载语义）。
  */
-function settingsCard(wrapper: ReturnType<typeof mount>, domain: 'oidc' | 'stalwart' | 'smtp') {
-  return wrapper.find(`[data-test="settings-card-${domain}"]`)
+function settingsRow(wrapper: ReturnType<typeof mount>, domain: 'oidc' | 'stalwart' | 'smtp') {
+  return wrapper.find(`[data-test="settings-row-${domain}"]`)
 }
-function saveButton(wrapper: ReturnType<typeof mount>, domain: 'oidc' | 'stalwart' | 'smtp') {
-  return wrapper.find(`[data-test="settings-save-${domain}"]`)
-}
-function testButton(wrapper: ReturnType<typeof mount>, domain: 'oidc' | 'stalwart' | 'smtp') {
-  return wrapper.find(`[data-test="settings-test-${domain}"]`)
+function editButton(wrapper: ReturnType<typeof mount>, domain: 'oidc' | 'stalwart' | 'smtp') {
+  return wrapper.find(`[data-test="settings-edit-${domain}"]`)
 }
 function switchButton(wrapper: ReturnType<typeof mount>, axis: 'stalwart' | 'smtp') {
   return wrapper.find(`[data-test="settings-switch-${axis}"]`)
+}
+function dialogBox(wrapper: ReturnType<typeof mount>, domain: 'oidc' | 'stalwart' | 'smtp') {
+  return wrapper.find(`[data-test="settings-dialog-${domain}"]`)
+}
+function actionButton(wrapper: ReturnType<typeof mount>, domain: 'oidc' | 'stalwart' | 'smtp') {
+  return wrapper.find(`[data-test="settings-action-${domain}"]`)
+}
+function skipButton(wrapper: ReturnType<typeof mount>, domain: 'oidc' | 'stalwart' | 'smtp') {
+  return wrapper.find(`[data-test="settings-skip-${domain}"]`)
+}
+/** 当前打开弹窗的水位。同一时刻至多一个弹窗在 DOM，data-level 全局唯一。 */
+function waterLevel(wrapper: ReturnType<typeof mount>): string {
+  return wrapper.find('[data-level]').attributes('data-level')!
 }
 /** 往指定 name 的输入框填值（name 是表单语义，不是测试专用钩子）。 */
 async function fillInput(wrapper: ReturnType<typeof mount>, name: string, value: string): Promise<void> {
   await wrapper.find(`input[name="${name}"]`).setValue(value)
 }
 
-describe('SettingsPage 保存与测试连接（#340 三卡分域）', () => {
-  beforeEach(() => {
-    // 调用史清零：上一例的保存/测试调用不得泄漏到下一例的「调用次数」断言
-    vi.clearAllMocks()
-    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture())
-    vi.mocked(saveOidcSettings).mockResolvedValue({ ok: true })
-    vi.mocked(saveStalwartSettings).mockResolvedValue({ ok: true })
-    vi.mocked(saveSmtpSettings).mockResolvedValue({ ok: true })
-    vi.mocked(testStalwartConnection).mockResolvedValue({ ok: true, detail: '已连接，域名 example.com 可用' })
-    vi.mocked(testSmtpConnection).mockResolvedValue({ ok: true, detail: 'SMTP 连接、认证与退出测试成功（未投递邮件）' })
-  })
+/** 设置页各 describe 共用的默认替身（clearAllMocks 只清调用史不清实现，逐项重设）。 */
+function mockSettingsDefaults(): void {
+  // 调用史清零：上一例的保存/测试调用不得泄漏到下一例的「未调用/调用次数」断言
+  vi.clearAllMocks()
+  vi.mocked(fetchSettings).mockResolvedValue(settingsFixture())
+  vi.mocked(saveOidcSettings).mockResolvedValue({ ok: true })
+  vi.mocked(saveStalwartSettings).mockResolvedValue({ ok: true })
+  vi.mocked(saveSmtpSettings).mockResolvedValue({ ok: true })
+  vi.mocked(testStalwartConnection).mockResolvedValue({ ok: true, detail: '已连接，域名 example.com 可用' })
+  vi.mocked(testSmtpConnection).mockResolvedValue({ ok: true, detail: 'SMTP 连接、认证与退出测试成功（未投递邮件）' })
+}
 
-  it('#340 三卡各自独立保存：只点 SMTP 卡「保存」→ 仅 PUT mail-smtp 被调用，无其他 PUT', async () => {
+describe('SettingsPage 列表形态（#100）', () => {
+  beforeEach(mockSettingsDefaults)
+
+  it('#100 列表三行：行标题 + 状态描述；OIDC 编辑恒显无开关；邮件两行启用态编辑 + 胶囊开关在场', async () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    await saveButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-
-    expect(saveSmtpSettings).toHaveBeenCalledTimes(1)
-    expect(saveOidcSettings).not.toHaveBeenCalled()
-    expect(saveStalwartSettings).not.toHaveBeenCalled()
-    // 保存成功的可见结果收敛到本卡作用域（多卡同构，全局匹配会遮住「错误落到他卡」的回归）
-    expect(settingsCard(wrapper, 'smtp').text()).toContain('已保存')
+    expect(wrapper.find('[data-test="settings-list"]').exists()).toBe(true)
+    expect(settingsRow(wrapper, 'oidc').text()).toContain('登录（OIDC）')
+    expect(settingsRow(wrapper, 'stalwart').text()).toContain('已启用')
+    expect(settingsRow(wrapper, 'smtp').text()).toContain('已启用')
+    // OIDC 非能力轴：只有编辑按钮，无开关
+    expect(editButton(wrapper, 'oidc').exists()).toBe(true)
+    expect(wrapper.find('[data-test="settings-switch-oidc"]').exists()).toBe(false)
+    // 邮件两行：启用态 → 编辑在场 + 开关 aria-checked=true
+    for (const axis of ['stalwart', 'smtp'] as const) {
+      expect(editButton(wrapper, axis).exists()).toBe(true)
+      expect(switchButton(wrapper, axis).attributes('aria-checked')).toBe('true')
+    }
+    // 三卡（#340 settings-card-*）不复存在：列表形态替代
+    expect(wrapper.find('[data-test="settings-card-oidc"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="settings-card-stalwart"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="settings-card-smtp"]').exists()).toBe(false)
   })
 
-  it('#340 OIDC 保存只发 oidc 域字段（无 mail/stalwart/smtp 键），另两张卡 PUT 零调用', async () => {
+  it('#100 编辑仅启用态显示：停用（配置完整保留）→ 编辑按钮不渲染，行描述「已停用 · 配置已保留」', async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture({ stalwart: { enabled: false } }))
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    await fillInput(wrapper, 'oidc-issuer', 'https://new.example.com')
-    await saveButton(wrapper, 'oidc').trigger('click')
-    await flushPromises()
-
-    expect(saveOidcSettings).toHaveBeenCalledTimes(1)
-    const body = vi.mocked(saveOidcSettings).mock.calls[0]![0] as Record<string, unknown>
-    // 只发 oidc 域字段；密钥留空绝不回传
-    expect(Object.keys(body).sort()).toEqual(['clientId', 'issuer', 'scope'])
-    expect(body.clientSecret).toBeUndefined()
-    // 不夹带任何邮件字段（#340：历史 body 的 mail 键不复存在）
-    expect(body.mail).toBeUndefined()
-    expect(body.stalwart).toBeUndefined()
-    expect(body.smtp).toBeUndefined()
-    expect(saveStalwartSettings).not.toHaveBeenCalled()
-    expect(saveSmtpSettings).not.toHaveBeenCalled()
+    expect(settingsRow(wrapper, 'stalwart').text()).toContain('已停用 · 配置已保留')
+    expect(editButton(wrapper, 'stalwart').exists()).toBe(false)
+    // 开关仍可切（不因停用禁用）
+    expect(switchButton(wrapper, 'stalwart').attributes('aria-checked')).toBe('false')
+    expect(switchButton(wrapper, 'stalwart').attributes('disabled')).toBeUndefined()
   })
 
-  it('保存：密钥留空 → 各卡 PUT body 不含密钥字段，只发改动/非空字段', async () => {
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    // OIDC 卡：改 issuer 保存
-    await fillInput(wrapper, 'oidc-issuer', 'https://new.example.com')
-    await saveButton(wrapper, 'oidc').trigger('click')
-    await flushPromises()
-
-    // Stalwart 卡：不改任何字段直接保存（合并语义：非空字段全量回传，密钥绝不出现）
-    await saveButton(wrapper, 'stalwart').trigger('click')
-    await flushPromises()
-
-    const stalwartBody = vi.mocked(saveStalwartSettings).mock.calls[0]![0] as Record<string, unknown>
-    expect(stalwartBody.baseUrl).toBe('https://mail.example.com')
-    expect(stalwartBody.domain).toBe('example.com')
-    expect(stalwartBody.apiKey).toBeUndefined()
-    // 各卡保存成功的可见结果各归各卡（OIDC 卡保存过、Stalwart 卡也保存过）
-    expect(settingsCard(wrapper, 'oidc').text()).toContain('已保存')
-    expect(settingsCard(wrapper, 'stalwart').text()).toContain('已保存')
-  })
-
-  it('#184：填了邮箱门户地址 → Stalwart PUT 带 portalUrl；清空 → PUT 带空串（后端清覆盖、回落推导）', async () => {
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    // 填值保存：PUT 里出现 portalUrl
-    await fillInput(wrapper, 'stalwart-portal', 'https://portal.example.com/app-passwords')
-    await saveButton(wrapper, 'stalwart').trigger('click')
-    await flushPromises()
-    expect(saveStalwartSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ portalUrl: 'https://portal.example.com/app-passwords' }),
+  it('#100 无配置行描述 =「未配置」；开关在场恒可切、无编辑入口', async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({ stalwart: { enabled: false, baseUrl: '', apiKey: '', domain: '', portalUrl: '' } }),
     )
-
-    // 清空再保存：空串（= 让后端删掉覆盖键、回落按域名推导），不是「不发该字段」
-    vi.mocked(saveStalwartSettings).mockClear()
-    await fillInput(wrapper, 'stalwart-portal', '')
-    await saveButton(wrapper, 'stalwart').trigger('click')
+    const wrapper = mount(SettingsPage)
     await flushPromises()
-    expect(saveStalwartSettings).toHaveBeenCalledWith(expect.objectContaining({ portalUrl: '' }))
+
+    expect(settingsRow(wrapper, 'stalwart').text()).toContain('未配置')
+    expect(editButton(wrapper, 'stalwart').exists()).toBe(false)
+    expect(switchButton(wrapper, 'stalwart').exists()).toBe(true)
+  })
+})
+
+describe('SettingsPage 开关直落库（#100）', () => {
+  beforeEach(mockSettingsDefaults)
+
+  it('#100 配置完整点开关（开→关）→ 立即 PUT {enabled:false}，不夹带字段；refetch 后行描述翻转、编辑消失', async () => {
+    vi.mocked(fetchSettings)
+      .mockResolvedValueOnce(settingsFixture())
+      .mockResolvedValue(settingsFixture({ stalwart: { enabled: false } }))
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await switchButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    // 只发 {enabled}，字段（含密钥）不夹带
+    expect(saveStalwartSettings).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(saveStalwartSettings).mock.calls[0]![0]).toEqual({ enabled: false })
+    expect(settingsRow(wrapper, 'stalwart').text()).toContain('已停用 · 配置已保留')
+    expect(editButton(wrapper, 'stalwart').exists()).toBe(false)
   })
 
-  it('测试连接成功 + IdP 缺 nonce → 黄牌警告可见', async () => {
+  it('#100 停用行开关切回（关→开）→ PUT {enabled:true}；refetch 后编辑按钮回归', async () => {
+    vi.mocked(fetchSettings)
+      .mockResolvedValueOnce(settingsFixture({ smtp: { enabled: false } }))
+      .mockResolvedValue(settingsFixture())
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await switchButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+
+    expect(saveSmtpSettings).toHaveBeenCalledWith({ enabled: true })
+    expect(editButton(wrapper, 'smtp').exists()).toBe(true)
+    expect(settingsRow(wrapper, 'smtp').text()).toContain('已启用')
+  })
+
+  it('#100 开关直落库失败 → 开关回滚（aria-checked 不变）+ 行级 role=alert 人话', async () => {
+    vi.mocked(saveStalwartSettings).mockRejectedValueOnce(makeApiError(500, '保存失败：服务端错误'))
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await switchButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    expect(saveStalwartSettings).toHaveBeenCalledWith({ enabled: false })
+    // 开关绑的是已加载值，失败后仍是开
+    expect(switchButton(wrapper, 'stalwart').attributes('aria-checked')).toBe('true')
+    const alert = wrapper.find('[data-test="settings-row-alert-stalwart"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('保存失败：服务端错误')
+  })
+
+  it('#100 切换在途：本轴开关禁用防双击（aria-disabled），另一轴不受牵连', async () => {
+    let resolveSave!: (value: { ok: boolean }) => void
+    vi.mocked(saveSmtpSettings).mockImplementation(() => new Promise((res) => { resolveSave = res }))
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await switchButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+
+    expect(switchButton(wrapper, 'smtp').attributes('aria-disabled')).toBe('true')
+    expect(switchButton(wrapper, 'stalwart').attributes('aria-disabled')).toBeUndefined()
+
+    resolveSave({ ok: true })
+    await flushPromises()
+    expect(switchButton(wrapper, 'smtp').attributes('aria-disabled')).toBeUndefined()
+  })
+})
+
+describe('SettingsPage 配置不全先弹窗（#100）', () => {
+  beforeEach(mockSettingsDefaults)
+
+  const emptyStalwart = {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    domain: '',
+    portalUrl: '',
+  } as const
+
+  it('#100 配置不全点开开关 → 开关保持关 + 弹窗开 + 提示条「自动启用」；取消（Esc）零请求', async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture({ stalwart: emptyStalwart }))
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await switchButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    // 不发请求；开关保持关
+    expect(saveStalwartSettings).not.toHaveBeenCalled()
+    expect(switchButton(wrapper, 'stalwart').attributes('aria-checked')).toBe('false')
+    const box = dialogBox(wrapper, 'stalwart')
+    expect(box.exists()).toBe(true)
+    expect(box.find('[data-test="settings-dialog-hint"]').text()).toContain('自动启用')
+    expect(box.attributes('aria-label')).toContain('启用邮箱管理')
+
+    // Esc 关闭，仍然零请求
+    await box.trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(dialogBox(wrapper, 'stalwart').exists()).toBe(false)
+    expect(saveStalwartSettings).not.toHaveBeenCalled()
+  })
+
+  it('#100 enable-pending 跳过测试直接保存：body 恒带 enabled:true + 字段；成功后弹窗关、行翻「已启用」', async () => {
+    vi.mocked(fetchSettings)
+      .mockResolvedValueOnce(settingsFixture({ stalwart: emptyStalwart }))
+      .mockResolvedValue(settingsFixture())
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await switchButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    await fillInput(wrapper, 'stalwart-baseurl', 'https://mail.example.com')
+    await fillInput(wrapper, 'stalwart-apikey', 'key-123')
+    await fillInput(wrapper, 'stalwart-domain', 'example.com')
+    await skipButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    expect(testStalwartConnection).not.toHaveBeenCalled()
+    expect(saveStalwartSettings).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(saveStalwartSettings).mock.calls[0]![0]).toEqual({
+      baseUrl: 'https://mail.example.com',
+      apiKey: 'key-123',
+      domain: 'example.com',
+      // 文本整段回写：留空的门户地址照发空串
+      portalUrl: '',
+      enabled: true,
+    })
+    // 弹窗关；refetch 后行启用，编辑按钮出现
+    expect(dialogBox(wrapper, 'stalwart').exists()).toBe(false)
+    expect(settingsRow(wrapper, 'stalwart').text()).toContain('已启用')
+    expect(editButton(wrapper, 'stalwart').exists()).toBe(true)
+  })
+
+  it('#100 enable-pending 保存失败（D5 400 人话）→ 弹窗不关 + 弹窗内 role=alert + 开关仍关', async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture({ stalwart: emptyStalwart }))
+    vi.mocked(saveStalwartSettings).mockRejectedValueOnce(
+      makeApiError(400, '请求失败（400）', 'req-9', '开启邮箱管理需先配置：Stalwart 地址、API Key、邮箱域名'),
+    )
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await switchButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    await fillInput(wrapper, 'stalwart-domain', 'example.com')
+    await skipButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    const box = dialogBox(wrapper, 'stalwart')
+    expect(box.exists()).toBe(true)
+    expect(box.find('[role="alert"]').text()).toContain('开启邮箱管理需先配置')
+    expect(switchButton(wrapper, 'stalwart').attributes('aria-checked')).toBe('false')
+  })
+
+  it('#100 enable-pending 完整动线：填 → 测试成功（按钮变「保存配置」）→ 保存 → 自动启用', async () => {
+    vi.mocked(fetchSettings)
+      .mockResolvedValueOnce(settingsFixture({ stalwart: emptyStalwart }))
+      .mockResolvedValue(settingsFixture())
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await switchButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    await fillInput(wrapper, 'stalwart-baseurl', 'https://mail.example.com')
+    await fillInput(wrapper, 'stalwart-apikey', 'key-123')
+    await fillInput(wrapper, 'stalwart-domain', 'example.com')
+
+    // rest 态按钮是「测试连接」
+    expect(actionButton(wrapper, 'stalwart').text()).toContain('测试连接')
+    await actionButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    // 成功态：按钮变「保存配置」，status 在场，跳过链接退场
+    expect(actionButton(wrapper, 'stalwart').text()).toContain('保存配置')
+    expect(dialogBox(wrapper, 'stalwart').find('[role="status"]').text()).toContain('域名 example.com 可用')
+    expect(skipButton(wrapper, 'stalwart').exists()).toBe(false)
+
+    // 保存后自动启用
+    await actionButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    expect(saveStalwartSettings).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(saveStalwartSettings).mock.calls[0]![0]).toMatchObject({ enabled: true })
+    expect(dialogBox(wrapper, 'stalwart').exists()).toBe(false)
+    expect(settingsRow(wrapper, 'stalwart').text()).toContain('已启用')
+  })
+})
+
+describe('SettingsPage 水舱动线（#100）', () => {
+  beforeEach(mockSettingsDefaults)
+
+  it('#100 填写中水位 rest（基线波动）；测试在途 → 按钮 aria-busy + 水位 testing（阈值悬停）', async () => {
+    let resolveTest!: (value: { ok: boolean; detail: string }) => void
+    vi.mocked(testStalwartConnection).mockImplementation(() => new Promise((res) => { resolveTest = res }))
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    // rest：基线水位，按钮未在途
+    expect(waterLevel(wrapper)).toBe('rest')
+    expect(actionButton(wrapper, 'stalwart').attributes('aria-busy')).toBeUndefined()
+
+    await actionButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    // testing：水位悬停，按钮 aria-busy 且禁用
+    expect(waterLevel(wrapper)).toBe('testing')
+    expect(actionButton(wrapper, 'stalwart').attributes('aria-busy')).toBe('true')
+    expect(actionButton(wrapper, 'stalwart').attributes('disabled')).toBeDefined()
+
+    resolveTest({ ok: true, detail: '已连接，域名 example.com 可用' })
+    await flushPromises()
+
+    // 成功：满灌，按钮变「保存配置」，跳过链接退场
+    expect(waterLevel(wrapper)).toBe('full')
+    expect(actionButton(wrapper, 'stalwart').text()).toContain('保存配置')
+    expect(dialogBox(wrapper, 'stalwart').find('[role="status"]').exists()).toBe(true)
+    expect(skipButton(wrapper, 'stalwart').exists()).toBe(false)
+  })
+
+  it('#100 测试失败（后端 200 ok:false 人话）→ 水位回落 rest + role=alert + 按钮回「测试连接」', async () => {
+    vi.mocked(testStalwartConnection).mockResolvedValue({
+      ok: false,
+      detail: '请先填写完整的 Stalwart 地址、API Key 与邮箱域名配置',
+    })
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    await actionButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    expect(waterLevel(wrapper)).toBe('rest')
+    expect(dialogBox(wrapper, 'stalwart').find('[role="alert"]').text()).toContain('请先填写完整的 Stalwart 地址')
+    expect(actionButton(wrapper, 'stalwart').text()).toContain('测试连接')
+    expect(saveStalwartSettings).not.toHaveBeenCalled()
+  })
+
+  it('#100 测试异常（502）→ 同失败面：水位回落 + 后端 detail 人话', async () => {
+    vi.mocked(testStalwartConnection).mockRejectedValue(
+      makeApiError(502, '请求失败（502）', undefined, '邮件服务不可达：请检查 Stalwart 地址'),
+    )
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    await actionButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    expect(waterLevel(wrapper)).toBe('rest')
+    expect(dialogBox(wrapper, 'stalwart').find('[role="alert"]').text()).toContain('邮件服务不可达')
+  })
+
+  it('#100 成功满灌后改字段 → 结果作废：水位回 rest、按钮回退「测试连接」、跳过链接回归', async () => {
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    await actionButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    expect(waterLevel(wrapper)).toBe('full')
+
+    await fillInput(wrapper, 'stalwart-domain', 'other.example.com')
+    await flushPromises()
+
+    expect(waterLevel(wrapper)).toBe('rest')
+    expect(actionButton(wrapper, 'stalwart').text()).toContain('测试连接')
+    expect(skipButton(wrapper, 'stalwart').exists()).toBe(true)
+    expect(dialogBox(wrapper, 'stalwart').find('[role="status"]').exists()).toBe(false)
+  })
+
+  it('#100 测试在途改字段 → 迟到结果作废不回填（#99 竞态语义延续）', async () => {
+    let resolveTest!: (value: { ok: boolean; detail: string }) => void
+    vi.mocked(testStalwartConnection).mockImplementation(() => new Promise((res) => { resolveTest = res }))
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    await actionButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    // 在途改域名：这次探测对应的草稿已失效
+    await fillInput(wrapper, 'stalwart-domain', 'other.example.com')
+    resolveTest({ ok: true, detail: '旧草稿探测结果' })
+    await flushPromises()
+
+    expect(dialogBox(wrapper, 'stalwart').text()).not.toContain('旧草稿探测结果')
+    expect(waterLevel(wrapper)).toBe('rest')
+  })
+
+  it('#100 编辑已启用轴：跳过测试直接保存 → 不调 test API、PUT 带字段与 enabled:true、弹窗关', async () => {
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+    await skipButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+
+    expect(testSmtpConnection).not.toHaveBeenCalled()
+    expect(saveSmtpSettings).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(saveSmtpSettings).mock.calls[0]![0]).toEqual({
+      host: 'smtp.example.com',
+      port: 465,
+      username: 'smtp-user',
+      from: 'no-reply@example.com',
+      enabled: true,
+    })
+    expect(dialogBox(wrapper, 'smtp').exists()).toBe(false)
+  })
+
+  it('#100 测试吃当前草稿（#340 候选化保留）：改 host 后点测试 → 请求体带草稿值', async () => {
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+    await fillInput(wrapper, 'smtp-host', 'smtp2.example.net')
+    await actionButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+
+    expect(testSmtpConnection).toHaveBeenCalledWith({
+      host: 'smtp2.example.net',
+      port: '465',
+      username: 'smtp-user',
+      password: '',
+      from: 'no-reply@example.com',
+    })
+    expect(waterLevel(wrapper)).toBe('full')
+  })
+})
+
+describe('SettingsPage OIDC 弹窗（#100）', () => {
+  beforeEach(mockSettingsDefaults)
+
+  it('#100 OIDC 测试成功（含警告）→ status 行合并展示 + 按钮变「保存配置」', async () => {
     vi.mocked(testOidcConnection).mockResolvedValue({
       ok: true,
       issuer: 'https://idp.example.com',
@@ -446,496 +774,256 @@ describe('SettingsPage 保存与测试连接（#340 三卡分域）', () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    const testBtn = testButton(wrapper, 'oidc')
-    await testBtn.trigger('click')
+    await editButton(wrapper, 'oidc').trigger('click')
+    await flushPromises()
+    await actionButton(wrapper, 'oidc').trigger('click')
     await flushPromises()
 
-    expect(settingsCard(wrapper, 'oidc').text()).toContain('连接成功')
-    expect(settingsCard(wrapper, 'oidc').text()).toContain('该 IdP 可能无法完成登录（不回显 nonce）')
+    const box = dialogBox(wrapper, 'oidc')
+    expect(box.find('[role="status"]').text()).toContain('连接成功')
+    expect(box.find('[role="status"]').text()).toContain('该 IdP 可能无法完成登录')
+    expect(actionButton(wrapper, 'oidc').text()).toContain('保存配置')
   })
 
-  it('测试连接失败 → 人话原因可见（不显示成功）', async () => {
-    vi.mocked(testOidcConnection).mockResolvedValue({ ok: false, reason: '无法访问该 Issuer：请检查地址是否正确或网络可达性' })
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    const testBtn = testButton(wrapper, 'oidc')
-    await testBtn.trigger('click')
-    await flushPromises()
-
-    expect(settingsCard(wrapper, 'oidc').text()).toContain('无法访问该 Issuer')
-    expect(settingsCard(wrapper, 'oidc').text()).not.toContain('连接成功')
-  })
-
-  it('#340 未保存草稿测试：改 SMTP host 后点本卡测试 → 请求体带草稿值不是已存值', async () => {
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    await fillInput(wrapper, 'smtp-host', 'smtp2.example.net')
-    await testButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-
-    expect(testSmtpConnection).toHaveBeenCalledTimes(1)
-    // 草稿全量发出：改动字段带草稿值，未改字段带当前表单值；密钥留空原样传 ''（后端回退已存值）
-    expect(testSmtpConnection).toHaveBeenCalledWith({
-      host: 'smtp2.example.net',
-      port: '465',
-      username: 'smtp-user',
-      password: '',
-      from: 'no-reply@example.com',
+  it('#100 OIDC 测试失败 → alert 人话 + 按钮保持「测试连接」', async () => {
+    vi.mocked(testOidcConnection).mockResolvedValue({
+      ok: false,
+      reason: '无法访问该 Issuer：请检查地址是否正确或网络可达性',
     })
-  })
-
-  it('#340 未保存草稿测试：Stalwart 卡不动任何字段点测试 → 草稿原样发当前表单值（密钥留空发空串，不发明文）', async () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    await testButton(wrapper, 'stalwart').trigger('click')
+    await editButton(wrapper, 'oidc').trigger('click')
+    await flushPromises()
+    await actionButton(wrapper, 'oidc').trigger('click')
     await flushPromises()
 
-    expect(testStalwartConnection).toHaveBeenCalledTimes(1)
-    expect(testStalwartConnection).toHaveBeenCalledWith({
-      baseUrl: 'https://mail.example.com',
-      apiKey: '',
-      domain: 'example.com',
-    })
+    const box = dialogBox(wrapper, 'oidc')
+    expect(box.find('[role="alert"]').text()).toContain('无法访问该 Issuer')
+    expect(actionButton(wrapper, 'oidc').text()).toContain('测试连接')
   })
 
-  it('#340 本卡字段变更 → 本卡旧测试结果消失（结果区移除）；他卡测试结果不受影响', async () => {
+  it('#100 OIDC 保存：只发 oidc 域字段（密钥留空不回传）；成功后弹窗关', async () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    // 两张邮件卡各测一次，结果各归各卡（结果断言都收敛到卡内作用域）
-    const stalwartCard = settingsCard(wrapper, 'stalwart')
-    const smtpCard = settingsCard(wrapper, 'smtp')
-    await testButton(wrapper, 'stalwart').trigger('click')
+    await editButton(wrapper, 'oidc').trigger('click')
     await flushPromises()
-    await testButton(wrapper, 'smtp').trigger('click')
+    await fillInput(wrapper, 'oidc-issuer', 'https://new.example.com')
+    await skipButton(wrapper, 'oidc').trigger('click')
     await flushPromises()
-    expect(stalwartCard.text()).toContain('域名 example.com 可用')
-    expect(smtpCard.text()).toContain('未投递邮件')
 
-    // 改 SMTP host：只清 SMTP 卡结果；Stalwart 卡结果保留
-    await fillInput(wrapper, 'smtp-host', 'smtp2.example.net')
-    await flushPromises()
-    expect(smtpCard.text()).not.toContain('未投递邮件')
-    expect(stalwartCard.text()).toContain('域名 example.com 可用')
-
-    // 改 Stalwart 域名：Stalwart 卡结果也消失
-    await fillInput(wrapper, 'stalwart-domain', 'other.example.com')
-    await flushPromises()
-    expect(stalwartCard.text()).not.toContain('域名 example.com 可用')
+    expect(saveOidcSettings).toHaveBeenCalledTimes(1)
+    const body = vi.mocked(saveOidcSettings).mock.calls[0]![0] as Record<string, unknown>
+    expect(Object.keys(body).sort()).toEqual(['clientId', 'issuer', 'scope'])
+    expect(body.clientSecret).toBeUndefined()
+    expect(dialogBox(wrapper, 'oidc').exists()).toBe(false)
   })
 
-  it('#340 Stalwart 测试失败（#139）→ 错误文案只在邮箱管理卡内，不落在其他卡', async () => {
-    vi.mocked(testStalwartConnection).mockRejectedValue(
-      makeApiError(502, '请求失败（502）', undefined, '邮件服务不可达：请检查 Stalwart 地址'),
+  it('#100 OIDC 保存失败 → 弹窗内 role=alert、弹窗不关', async () => {
+    vi.mocked(saveOidcSettings).mockRejectedValueOnce(
+      makeApiError(400, '请求失败（400）', 'req-4', 'issuer 必须是合法 URL'),
     )
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    await testButton(wrapper, 'stalwart').trigger('click')
+    await editButton(wrapper, 'oidc').trigger('click')
+    await flushPromises()
+    await fillInput(wrapper, 'oidc-issuer', 'not-a-url')
+    await skipButton(wrapper, 'oidc').trigger('click')
     await flushPromises()
 
-    const stalwartCard = settingsCard(wrapper, 'stalwart')
-    expect(stalwartCard.text()).toContain('邮件服务不可达')
-    expect(stalwartCard.find('[role="alert"]').exists()).toBe(true)
-    expect(settingsCard(wrapper, 'oidc').find('[role="alert"]').exists()).toBe(false)
-    expect(settingsCard(wrapper, 'smtp').find('[role="alert"]').exists()).toBe(false)
-    expect(settingsCard(wrapper, 'oidc').text()).not.toContain('邮件服务不可达')
-    expect(settingsCard(wrapper, 'smtp').text()).not.toContain('邮件服务不可达')
-  })
-
-  it('#340 OIDC 测试与邮件卡测试互不影响（#139）→ loading 独立，结果各归各卡', async () => {
-    let resolveOidc!: (v: { ok: true; issuer: string; warnings: string[] }) => void
-    vi.mocked(testOidcConnection).mockImplementation(
-      () => new Promise((res) => { resolveOidc = res }),
-    )
-    vi.mocked(testSmtpConnection).mockResolvedValue({ ok: true, detail: 'SMTP 通了' })
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    const oidcBtn = testButton(wrapper, 'oidc')
-    const smtpBtn = testButton(wrapper, 'smtp')
-
-    await oidcBtn.trigger('click')
-    await flushPromises()
-    // OIDC 在途转圈，SMTP 测试按钮不受牵连（aria-busy = 可访问性树上的在途态）
-    expect(oidcBtn.attributes('aria-busy')).toBe('true')
-    expect(smtpBtn.attributes('aria-busy')).toBeUndefined()
-
-    await smtpBtn.trigger('click')
-    await flushPromises()
-    // SMTP 测试完成，结果在 SMTP 卡内；OIDC 仍在途、无结果
-    expect(settingsCard(wrapper, 'smtp').text()).toContain('SMTP 通了')
-    expect(settingsCard(wrapper, 'oidc').text()).not.toContain('连接成功')
-    expect(oidcBtn.attributes('aria-busy')).toBe('true')
-
-    resolveOidc({ ok: true, issuer: 'https://idp.example.com', warnings: [] })
-    await flushPromises()
-    expect(settingsCard(wrapper, 'oidc').text()).toContain('连接成功')
-    // SMTP 结果不被 OIDC 结果冲掉
-    expect(settingsCard(wrapper, 'smtp').text()).toContain('SMTP 通了')
-  })
-
-  it('#340 保存失败 → 后端 400 detail 人话在本卡 role=alert 可见（不触发本卡「已保存」），他卡不受影响', async () => {
-    vi.mocked(saveSmtpSettings).mockRejectedValueOnce(
-      makeApiError(400, '请求失败（400）', 'req-4', '开启通知发信需先配置：port'),
-    )
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    await saveButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-
-    const smtpCard = settingsCard(wrapper, 'smtp')
-    expect(smtpCard.find('[role="alert"]').text()).toContain('开启通知发信需先配置：port')
-    expect(smtpCard.text()).not.toContain('已保存')
-    expect(settingsCard(wrapper, 'oidc').find('[role="alert"]').exists()).toBe(false)
-    expect(settingsCard(wrapper, 'stalwart').find('[role="alert"]').exists()).toBe(false)
+    const box = dialogBox(wrapper, 'oidc')
+    expect(box.exists()).toBe(true)
+    expect(box.find('[role="alert"]').text()).toContain('issuer 必须是合法 URL')
   })
 })
 
-// ---------------------------------------------------------------------------
-// SettingsPage 邮件两卡开关（#340：enabled 可操作化，卡粒度 #159 表单语义）
-// ---------------------------------------------------------------------------
+describe('SettingsPage 弹窗重开（#100）', () => {
+  beforeEach(mockSettingsDefaults)
 
-describe('SettingsPage 邮件卡开关（#340 两卡版）', () => {
-  beforeEach(() => {
-    // 保存 mock 是模块级共享的：清掉前序用例的调用痕迹（「未调用」断言才可信）
-    vi.clearAllMocks()
-    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture())
-    vi.mocked(saveOidcSettings).mockResolvedValue({ ok: true })
-    vi.mocked(saveStalwartSettings).mockResolvedValue({ ok: true })
-    vi.mocked(saveSmtpSettings).mockResolvedValue({ ok: true })
-    // 测试连接默认实现：clearAllMocks 只清调用史、不清实现，前序用例的在途替身会泄漏过来
-    vi.mocked(testStalwartConnection).mockResolvedValue({ ok: true, detail: '已连接，域名 example.com 可用' })
-    vi.mocked(testSmtpConnection).mockResolvedValue({ ok: true, detail: 'SMTP 连接、认证与退出测试成功（未投递邮件）' })
-  })
-
-  it('#99/#159 表单语义（邮箱管理卡）：切换开关不发请求（配置区常显、保持可编辑），点本卡「保存」才落库 enabled=false', async () => {
+  it('满灌态下标题与关闭按钮仍在 DOM', async () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    const sw = switchButton(wrapper, 'stalwart')
-    expect(sw.attributes('aria-checked')).toBe('true')
-
-    await sw.trigger('click')
+    await editButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+    await actionButton(wrapper, 'smtp').trigger('click')
     await flushPromises()
 
-    // 切换不发请求；表单常显（#99）：配置区不存在折叠态——输入仍可编辑、无 inert/aria-hidden
-    expect(saveStalwartSettings).not.toHaveBeenCalled()
-    expect(switchButton(wrapper, 'stalwart').attributes('aria-checked')).toBe('false')
-    const config = wrapper.find('[data-test="stalwart-config"]')
-    expect(config.attributes('inert')).toBeUndefined()
-    expect(config.attributes('aria-hidden')).toBeUndefined()
-    expect(config.find('input[name="stalwart-baseurl"]').exists()).toBe(true)
+    expect(waterLevel(wrapper)).toBe('full')
+    const box = dialogBox(wrapper, 'smtp')
+    expect(box.find('.settings-dialog-title').text()).toContain('通知发信')
+    expect(box.find('[data-test="settings-dialog-close"]').exists()).toBe(true)
+  })
 
-    // 本卡保存 → enabled 随字段一次落库（关≠清配置：密钥字段绝不回传）
-    await saveButton(wrapper, 'stalwart').trigger('click')
+  it('保存成功关弹窗后重新打开 → 回到最初态（水位 rest + 按钮「测试连接」+ 无 status）', async () => {
+    const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    expect(saveStalwartSettings).toHaveBeenCalledTimes(1)
+    await editButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+    await actionButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+    expect(waterLevel(wrapper)).toBe('full')
+
+    await actionButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+    expect(dialogBox(wrapper, 'smtp').exists()).toBe(false)
+
+    // 重新打开回到 rest，不停留在满灌
+    await editButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+
+    expect(waterLevel(wrapper)).toBe('rest')
+    expect(actionButton(wrapper, 'smtp').text()).toContain('测试连接')
+    expect(dialogBox(wrapper, 'smtp').find('[role="status"]').exists()).toBe(false)
+    expect(dialogBox(wrapper, 'smtp').find('[role="alert"]').exists()).toBe(false)
+    expect(skipButton(wrapper, 'smtp').exists()).toBe(true)
+  })
+
+  it('成功态后 Esc 关闭再打开 → 同样回到最初态', async () => {
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    await actionButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    expect(waterLevel(wrapper)).toBe('full')
+
+    await dialogBox(wrapper, 'stalwart').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(dialogBox(wrapper, 'stalwart').exists()).toBe(false)
+
+    await editButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    expect(waterLevel(wrapper)).toBe('rest')
+    expect(actionButton(wrapper, 'stalwart').text()).toContain('测试连接')
+  })
+})
+
+describe('SettingsPage 清空字段（#100）', () => {
+  beforeEach(mockSettingsDefaults)
+
+  it('Stalwart 清空邮箱域名后「跳过测试，直接保存」→ body 带 domain 空串（后端据此删键清库值）', async () => {
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    await fillInput(wrapper, 'stalwart-domain', '')
+    await skipButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
     const body = vi.mocked(saveStalwartSettings).mock.calls[0]![0] as Record<string, unknown>
-    expect(body.enabled).toBe(false)
+    expect(body.domain).toBe('')
+    expect(body.baseUrl).toBe('https://mail.example.com')
+    // 密钥没填新值：不回传
     expect(body.apiKey).toBeUndefined()
-  })
-
-  it('#99/#159 表单语义（SMTP 卡）：切换开关不发请求（配置区常显、保持可编辑），点本卡「保存」才落库 enabled=false；他卡 PUT 零调用', async () => {
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    const sw = switchButton(wrapper, 'smtp')
-    expect(sw.attributes('aria-checked')).toBe('true')
-
-    await sw.trigger('click')
-    await flushPromises()
-
-    expect(saveSmtpSettings).not.toHaveBeenCalled()
-    expect(switchButton(wrapper, 'smtp').attributes('aria-checked')).toBe('false')
-    const config = wrapper.find('[data-test="smtp-config"]')
-    expect(config.attributes('inert')).toBeUndefined()
-    expect(config.attributes('aria-hidden')).toBeUndefined()
-    expect(config.find('input[name="smtp-host"]').exists()).toBe(true)
-
-    await saveButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-
-    expect(saveSmtpSettings).toHaveBeenCalledTimes(1)
-    const body = vi.mocked(saveSmtpSettings).mock.calls[0]![0] as Record<string, unknown>
-    expect(body.enabled).toBe(false)
-    expect(body.password).toBeUndefined()
-    // 卡独立性：只点了 SMTP 保存，另两卡零请求
-    expect(saveOidcSettings).not.toHaveBeenCalled()
-    expect(saveStalwartSettings).not.toHaveBeenCalled()
-  })
-
-  it('#99 关闭态：两卡配置区常显可编辑 + 测试按钮不再禁用 + 关态提示在场', async () => {
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    await switchButton(wrapper, 'stalwart').trigger('click')
-    await switchButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-
-    for (const key of ['stalwart-config', 'smtp-config'] as const) {
-      const config = wrapper.find(`[data-test="${key}"]`)
-      expect(config.exists()).toBe(true)
-      expect(config.attributes('inert')).toBeUndefined()
-      expect(config.attributes('aria-hidden')).toBeUndefined()
-    }
-    // #99 测试恒可用：轴关着也能测（候选化探测不依赖开关状态）
-    expect(testButton(wrapper, 'stalwart').attributes('disabled')).toBeUndefined()
-    expect(testButton(wrapper, 'smtp').attributes('disabled')).toBeUndefined()
-    // 关态提示（状态切换后的可见结果）：收敛为关键词，不锁整句文案
-    const stalwartCard = settingsCard(wrapper, 'stalwart')
-    const smtpCard = settingsCard(wrapper, 'smtp')
-    expect(stalwartCard.text()).toContain('不再开户')
-    expect(smtpCard.text()).toContain('不再发送通知邮件')
-  })
-
-  it('#99 全链路动线（SMTP 卡）：关 → 填 → 测试 → 保存，PUT 恒带 enabled', async () => {
-    vi.mocked(fetchSettings).mockResolvedValue(
-      settingsFixture({ smtp: { enabled: false } }),
-    )
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    // ① 开：开关纯表单字段，恒可切（不发请求）
-    await switchButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-    expect(saveSmtpSettings).not.toHaveBeenCalled()
-
-    // ② 填：改 host 为新草稿值
-    await fillInput(wrapper, 'smtp-host', 'smtp2.example.net')
-
-    // ③ 测试：轴关着照样能测，吃的是当前草稿
-    await testButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-    expect(testSmtpConnection).toHaveBeenCalledWith(
-      expect.objectContaining({ host: 'smtp2.example.net' }),
-    )
-    expect(settingsCard(wrapper, 'smtp').text()).toContain('未投递邮件')
-
-    // ④ 保存：开关 + 字段一次落库
-    await saveButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-
-    expect(saveSmtpSettings).toHaveBeenCalledTimes(1)
-    const body = vi.mocked(saveSmtpSettings).mock.calls[0]![0] as Record<string, unknown>
     expect(body.enabled).toBe(true)
-    expect(body.host).toBe('smtp2.example.net')
+  })
+
+  it('Stalwart 清空门户地址 → body 带 portalUrl 空串（回落按域名推导）', async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({ stalwart: { portalUrl: 'https://portal.example.com/app-passwords' } }),
+    )
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    await fillInput(wrapper, 'stalwart-portal', '')
+    await skipButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+
+    const body = vi.mocked(saveStalwartSettings).mock.calls[0]![0] as Record<string, unknown>
+    expect(body.portalUrl).toBe('')
+  })
+
+  it('SMTP 清空用户名后跳过测试保存 → body 带 username 空串；密码不回传', async () => {
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+    await fillInput(wrapper, 'smtp-username', '')
+    await skipButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+
+    const body = vi.mocked(saveSmtpSettings).mock.calls[0]![0] as Record<string, unknown>
+    expect(body.username).toBe('')
+    expect(body.host).toBe('smtp.example.com')
+    expect(body.port).toBe(465)
     expect(body.password).toBeUndefined()
-    expect(settingsCard(wrapper, 'smtp').text()).toContain('已保存')
   })
 
-  it('#99 空保存幂等（全新实例无配置）：enabled 恒携带——只发 {enabled:false}，不夹带任何字段', async () => {
-    vi.mocked(fetchSettings).mockResolvedValue(
-      settingsFixture({ stalwart: { enabled: false, baseUrl: '', apiKey: '', domain: '', portalUrl: '' } }),
-    )
+  it('SMTP 清空端口 → body 带 port 空串（后端删键 = 未配置，D5 会拦成 400 人话）', async () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
-    // 什么都不填、开关保持关 → 点保存：body 仍必须是合法对象（enabled 必填，缺了后端 400）
-    await saveButton(wrapper, 'stalwart').trigger('click')
+    await editButton(wrapper, 'smtp').trigger('click')
+    await flushPromises()
+    await fillInput(wrapper, 'smtp-port', '')
+    await skipButton(wrapper, 'smtp').trigger('click')
     await flushPromises()
 
-    expect(saveStalwartSettings).toHaveBeenCalledWith({ enabled: false })
-    expect(settingsCard(wrapper, 'stalwart').text()).toContain('已保存')
+    const body = vi.mocked(saveSmtpSettings).mock.calls[0]![0] as Record<string, unknown>
+    expect(body.port).toBe('')
   })
 
-  it('#99 全新实例开开关即存：body {enabled:true} → 后端 D5 人话 detail 可见（不是 zod 机器文案）', async () => {
-    vi.mocked(fetchSettings).mockResolvedValue(
-      settingsFixture({ stalwart: { enabled: false, baseUrl: '', apiKey: '', domain: '', portalUrl: '' } }),
-    )
-    vi.mocked(saveStalwartSettings).mockRejectedValueOnce(
-      makeApiError(400, '请求失败（400）', 'req-9', '开启邮箱管理需先配置：Stalwart 地址、API Key、邮箱域名'),
-    )
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    await switchButton(wrapper, 'stalwart').trigger('click')
-    await saveButton(wrapper, 'stalwart').trigger('click')
-    await flushPromises()
-
-    expect(saveStalwartSettings).toHaveBeenCalledWith({ enabled: true })
-    const card = settingsCard(wrapper, 'stalwart')
-    expect(card.find('[role="alert"]').text()).toContain('开启邮箱管理需先配置')
-    expect(card.text()).not.toContain('已保存')
-  })
-
-  it('#99 测试在途改字段 → 迟到结果作废，不回填本卡（#340 竞态面）', async () => {
-    let resolveTest!: (value: { ok: boolean; detail: string }) => void
-    vi.mocked(testStalwartConnection).mockImplementation(
-      () => new Promise((res) => { resolveTest = res }),
-    )
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    await testButton(wrapper, 'stalwart').trigger('click')
-    await flushPromises()
-    // 在途：改域名形成新草稿，探测结果对应的是旧草稿
-    await fillInput(wrapper, 'stalwart-domain', 'other.example.com')
-
-    resolveTest({ ok: true, detail: '旧草稿探测结果' })
-    await flushPromises()
-
-    expect(settingsCard(wrapper, 'stalwart').text()).not.toContain('旧草稿探测结果')
-  })
-
-  it('#340 卡级隔离：保存只在被点的那张卡显示「已保存」，另两卡不显示', async () => {
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    await saveButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-
-    expect(settingsCard(wrapper, 'smtp').text()).toContain('已保存')
-    expect(settingsCard(wrapper, 'oidc').text()).not.toContain('已保存')
-    expect(settingsCard(wrapper, 'stalwart').text()).not.toContain('已保存')
-  })
-
-  it('#340 卡级隔离：保存在途只转本卡按钮（aria-busy），另两卡保持空闲', async () => {
-    let resolveSave!: (value: { ok: boolean }) => void
-    vi.mocked(saveSmtpSettings).mockImplementation(
-      () => new Promise((res) => { resolveSave = res }),
-    )
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    await saveButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-
-    expect(saveButton(wrapper, 'smtp').attributes('aria-busy')).toBe('true')
-    expect(saveButton(wrapper, 'oidc').attributes('aria-busy')).toBeUndefined()
-    expect(saveButton(wrapper, 'stalwart').attributes('aria-busy')).toBeUndefined()
-
-    resolveSave({ ok: true })
-    await flushPromises()
-    expect(saveButton(wrapper, 'smtp').attributes('aria-busy')).toBeUndefined()
-  })
-
-  it('#340 密钥写入正路径：三卡填密钥保存 → body 带新值；保存后输入清空、「已配置」提示翻转', async () => {
-    vi.mocked(fetchSettings).mockResolvedValue(
-      settingsFixture({ oidc: { clientSecret: '' }, stalwart: { apiKey: '' }, smtp: { password: '' } }),
-    )
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    // 保存前：三卡密钥均「尚未配置」
-    for (const card of ['oidc', 'stalwart', 'smtp'] as const) {
-      expect(settingsCard(wrapper, card).text()).toContain('尚未配置')
-    }
-
-    const secrets = [
-      { card: 'oidc', name: 'oidc-client-secret', value: 'new-client-secret' },
-      { card: 'stalwart', name: 'stalwart-apikey', value: 'new-api-key' },
-      { card: 'smtp', name: 'smtp-password', value: 'new-smtp-pass' },
-    ] as const
-    for (const secret of secrets) {
-      await fillInput(wrapper, secret.name, secret.value)
-      await saveButton(wrapper, secret.card).trigger('click')
-      await flushPromises()
-    }
-
-    // 各卡 PUT body 都带上新密钥（只写不读：GET 永远是 ***）
-    expect(vi.mocked(saveOidcSettings).mock.calls[0]![0]).toMatchObject({ clientSecret: 'new-client-secret' })
-    expect(vi.mocked(saveStalwartSettings).mock.calls[0]![0]).toMatchObject({ apiKey: 'new-api-key' })
-    expect(vi.mocked(saveSmtpSettings).mock.calls[0]![0]).toMatchObject({ password: 'new-smtp-pass' })
-
-    // 保存后输入清空（不回显真值），提示翻「已配置」
-    for (const secret of secrets) {
-      expect((wrapper.find(`input[name="${secret.name}"]`).element as HTMLInputElement).value).toBe('')
-      expect(settingsCard(wrapper, secret.card).text()).toContain('已配置')
-    }
-  })
-
-  it('#99 关态直测（邮箱管理卡）：轴关着直接点测试 → 请求照发、结果落在本卡', async () => {
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    await switchButton(wrapper, 'stalwart').trigger('click')
-    await flushPromises()
-
-    expect(testButton(wrapper, 'stalwart').attributes('disabled')).toBeUndefined()
-    await testButton(wrapper, 'stalwart').trigger('click')
-    await flushPromises()
-
-    expect(testStalwartConnection).toHaveBeenCalledTimes(1)
-    expect(settingsCard(wrapper, 'stalwart').text()).toContain('域名 example.com 可用')
-  })
-
-  it('#99 无邮箱管理行（全字段空）→ 开关恒可切；开 → 填 → 存一步到位（PUT 带 enabled:true）', async () => {
-    vi.mocked(fetchSettings).mockResolvedValue(
-      settingsFixture({
-        stalwart: { enabled: false, baseUrl: '', apiKey: '', domain: '', portalUrl: '' },
-      }),
-    )
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    const sw = switchButton(wrapper, 'stalwart')
-    expect(sw.attributes('aria-checked')).toBe('false')
-    // #99：无「无配置 disabled」守卫——开关恒可切
-    expect(sw.attributes('disabled')).toBeUndefined()
-    await sw.trigger('click')
-    expect(switchButton(wrapper, 'stalwart').attributes('aria-checked')).toBe('true')
-    expect(saveStalwartSettings).not.toHaveBeenCalled()
-
-    // 配置区常显可编辑、测试恒可用
-    const config = wrapper.find('[data-test="stalwart-config"]')
-    expect(config.find('input[name="stalwart-baseurl"]').exists()).toBe(true)
-    expect(testButton(wrapper, 'stalwart').attributes('disabled')).toBeUndefined()
-
-    // 填写并本卡保存 → 创建行且带 enabled（表单语义：开关值随保存落库）
-    await fillInput(wrapper, 'stalwart-baseurl', 'https://mail.example.com')
-    await saveButton(wrapper, 'stalwart').trigger('click')
-    await flushPromises()
-
-    expect(saveStalwartSettings).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(saveStalwartSettings).mock.calls[0]![0]).toEqual({
-      baseUrl: 'https://mail.example.com',
-      enabled: true,
-    })
-  })
-
-  it('#99 无 SMTP 行 → 开关可切、配置区常显；填 → 存只发 mail-smtp PUT（两键互不产生）', async () => {
-    vi.mocked(fetchSettings).mockResolvedValue(
-      settingsFixture({
-        smtp: { enabled: false, host: '', port: '', username: '', password: '', from: '' },
-      }),
-    )
-    const wrapper = mount(SettingsPage)
-    await flushPromises()
-
-    const sw = switchButton(wrapper, 'smtp')
-    expect(sw.attributes('aria-checked')).toBe('false')
-    expect(sw.attributes('disabled')).toBeUndefined()
-    expect(wrapper.find('[data-test="smtp-config"]').find('input[name="smtp-host"]').exists()).toBe(true)
-
-    await fillInput(wrapper, 'smtp-host', 'smtp.example.com')
-    await saveButton(wrapper, 'smtp').trigger('click')
-    await flushPromises()
-
-    expect(saveSmtpSettings).toHaveBeenCalledTimes(1)
-    expect(saveStalwartSettings).not.toHaveBeenCalled()
-  })
-
-  it('保存失败 → 后端 detail/message 人话在本卡 role=alert（不触发本卡「已保存」）；开关保持用户所选（本地表单态，未落库）', async () => {
-    vi.mocked(saveSmtpSettings).mockRejectedValueOnce(makeApiError(500, '保存失败：服务端错误'))
+  it('开关直落库路径不夹带字段（只发 {enabled}）：清空不靠开关生效', async () => {
     const wrapper = mount(SettingsPage)
     await flushPromises()
 
     await switchButton(wrapper, 'smtp').trigger('click')
     await flushPromises()
-    expect(switchButton(wrapper, 'smtp').attributes('aria-checked')).toBe('false')
 
-    await saveButton(wrapper, 'smtp').trigger('click')
+    expect(vi.mocked(saveSmtpSettings).mock.calls[0]![0]).toEqual({ enabled: false })
+  })
+})
+
+describe('SettingsPage 弹层可达性（#100，沿用 #192 F5）', () => {
+  beforeEach(mockSettingsDefaults)
+
+  it('#100 打开焦点入内 + Esc 关闭焦点回归 + 水面恒 aria-hidden', async () => {
+    const wrapper = mount(SettingsPage, { attachTo: document.body })
     await flushPromises()
 
-    const smtpCard = settingsCard(wrapper, 'smtp')
-    expect(smtpCard.find('[role="alert"]').text()).toContain('保存失败：服务端错误')
-    expect(smtpCard.text()).not.toContain('已保存')
+    const edit = editButton(wrapper, 'oidc')
+    // jsdom 点按钮不自动聚焦，手工模拟触发元素已聚焦（与真实浏览器一致）
+    ;(edit.element as HTMLElement).focus()
+    await edit.trigger('click')
+    await flushPromises()
+
+    const box = dialogBox(wrapper, 'oidc')
+    expect(box.exists()).toBe(true)
+    expect(box.element.contains(document.activeElement)).toBe(true)
+    // 水面纯装饰，恒 aria-hidden
+    expect(wrapper.find('[data-level]').attributes('aria-hidden')).toBe('true')
+
+    await box.trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    expect(dialogBox(wrapper, 'oidc').exists()).toBe(false)
+    expect(document.activeElement).toBe(edit.element)
+    wrapper.unmount()
+  })
+
+  it('#100 取消不落库：弹窗内改字段后点 ✕ 关闭 → PUT/test 零调用', async () => {
+    const wrapper = mount(SettingsPage)
+    await flushPromises()
+
+    await editButton(wrapper, 'stalwart').trigger('click')
+    await flushPromises()
+    await fillInput(wrapper, 'stalwart-baseurl', 'https://changed.example.com')
+    await dialogBox(wrapper, 'stalwart').find('[data-test="settings-dialog-close"]').trigger('click')
+    await flushPromises()
+
+    expect(dialogBox(wrapper, 'stalwart').exists()).toBe(false)
+    expect(saveStalwartSettings).not.toHaveBeenCalled()
+    expect(testStalwartConnection).not.toHaveBeenCalled()
   })
 })
 

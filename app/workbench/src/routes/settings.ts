@@ -7,7 +7,9 @@
  * - 通知发信：mail_smtp 单键 JSON（enabled + host/port/username/password/from）。
  *
  * 密钥铁律：GET 恒回 '***'（已配置）或 ''（未配置），明文不进任何响应；
- * PUT 传 '***'/空串 = 保持库中现值；审计只记动作与 target，不含字段值。
+ * PUT 密钥传 '***'、空串或缺键 = 保持库中现值（密钥无清空入口）；
+ * 普通文本字段传空串 = 清空该字段（删键，决策 #100；portalUrl 先 trim，纯空白也删）；
+ * 审计只记动作与 target，不含字段值。
  *
  * D5 fail-closed：mail 两段 PUT 的 enabled 必填且恒布尔（缺 → 400）；enabled:true 时
  * 必填字段不全（新值或库里已有都算已配）→ 400 拒绝落库。读侧装配只认 enabled === true
@@ -32,7 +34,6 @@ const OIDC_KEYS = {
   scope: 'oidc_scope',
 } as const;
 
-/** mail_stalwart / mail_smtp 段的 JSON 字段面（分域后各自独立成键，互不掺杂）。 */
 type OidcField = keyof typeof OIDC_KEYS;
 
 interface OidcSettings {
@@ -48,11 +49,11 @@ interface StalwartSettings {
   baseUrl: string;
   apiKey: string;
   domain: string;
-  /** 邮件门户地址（#168）：缺省空串，成员说明页回退用 domain 推导。 */
+  /** 邮件门户地址（#184）：缺省空串，成员说明页回退用 domain 推导。 */
   portalUrl: string;
 }
 
-/** GET 的通知发信段：port 正整数或 ''（未配置/非法）。 */
+/** GET 的通知发信段：port 正整数或 ''（未配置）；密钥只回 MASK。 */
 interface SmtpSettings {
   enabled: boolean;
   host: string;
@@ -86,7 +87,7 @@ const stalwartSchema = z.object({
   portalUrl: z.string().optional(),
 });
 
-/** mail_smtp 段校验：同上；port 只收正整数（空串表示不修改）。 */
+/** mail_smtp 段校验：同上；port 收正整数或空串（空串 = 删键，#100）。 */
 const smtpSchema = z.object({
   enabled: z.boolean(),
   host: z.string().optional(),
@@ -168,40 +169,66 @@ async function loadSettings(db: D1Database): Promise<InstanceSettings> {
 // 段读取统一走 mail-config.ts 的单点 helper（一文件一职责：同语义 SQL 只此一处）。
 
 /**
- * 「提供即写」字段合并（原 mail 合并语义逐字保留，分域后各段共用）：
- * - 普通字段：非空且非 MASK 的字符串才覆盖（空串/'***' = 保持库值）；
- * - clearable（portalUrl，#184）：字符串即处理——非空覆盖、空白删除覆盖键回落推导，
- *   本段唯一可「清空」的字段；
- * - numeric（port）：正整数才覆盖（空串 = 保持）。
- * 返回是否有字段变化（不含 enabled）。
+ * 邮件两段字段合并（决策 #100）。缺键 = 保持（值 undefined 的键直接跳过）。
+ * 按字段类别分级，同一字段只落一类：
+ * - sensitive（apiKey / password）：只写不读——仅非空、非 MASK 且与库值不同才覆盖；
+ *   空串 / MASK 一律保持（没有清空入口）。
+ * - numeric（port）：正整数覆盖；空串删键；其它类型原样忽略（schema 已挡，这里不兜底报错）。
+ * - clearable（portalUrl）：先 trim，非空覆盖、空白删键（读侧回落按域名推导，#184）。
+ * - 其余文本：非空覆盖（不 trim，纯空白仍算非空），空串删键。
+ * 值与库中相同不算变化；返回是否有字段变化（不含 enabled）。
  */
 function applyFieldMerges(
   section: Record<string, unknown>,
   input: Record<string, unknown>,
-  opts: { clearable?: string; numeric?: string } = {},
+  opts: { clearable?: string; numeric?: string; sensitive?: readonly string[] } = {},
 ): boolean {
+  const sensitive = opts.sensitive ?? [];
   let changed = false;
   for (const [field, value] of Object.entries(input)) {
     if (field === 'enabled' || value === undefined) continue;
-    if (field === opts.clearable) {
-      const trimmed = (value as string).trim();
-      if (trimmed.length > 0) {
-        section[field] = trimmed;
-      } else {
-        delete section[field];
-      }
-      changed = true;
-      continue;
-    }
-    if (field === opts.numeric) {
-      if (typeof value === 'number') {
+    if (sensitive.includes(field)) {
+      if (typeof value === 'string' && value.length > 0 && value !== MASK && value !== section[field]) {
         section[field] = value;
         changed = true;
       }
       continue;
     }
-    if (typeof value === 'string' && value.length > 0 && value !== MASK) {
-      section[field] = value;
+    if (field === opts.numeric) {
+      if (typeof value === 'number') {
+        if (section[field] !== value) {
+          section[field] = value;
+          changed = true;
+        }
+      } else if (value === '' && field in section) {
+        delete section[field];
+        changed = true;
+      }
+      continue;
+    }
+    if (typeof value !== 'string') continue;
+    if (field === opts.clearable) {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        if (section[field] !== trimmed) {
+          section[field] = trimmed;
+          changed = true;
+        }
+      } else if (field in section) {
+        delete section[field];
+        changed = true;
+      }
+      continue;
+    }
+    if (value.length > 0) {
+      if (section[field] !== value) {
+        section[field] = value;
+        changed = true;
+      }
+      continue;
+    }
+    if (field in section) {
+      delete section[field];
       changed = true;
     }
   }
@@ -236,6 +263,8 @@ interface MailRouteSpec {
   required: readonly string[];
   /** required 里哪些是「正整数」字段（其余按非空字符串判）。 */
   numeric: readonly string[];
+  /** 只写不读的密钥字段（无清空入口）。 */
+  sensitive: readonly string[];
   labels: Record<string, string>;
   detailPrefix: string;
 }
@@ -246,6 +275,7 @@ const STALWART_SPEC: MailRouteSpec = {
   read: readStalwartSection,
   required: ['baseUrl', 'apiKey', 'domain'],
   numeric: [],
+  sensitive: ['apiKey'],
   labels: { baseUrl: 'Stalwart 地址', apiKey: 'API Key', domain: '邮箱域名' },
   detailPrefix: '开启邮箱管理需先配置：',
 };
@@ -256,13 +286,15 @@ const SMTP_SPEC: MailRouteSpec = {
   read: readSmtpSection,
   required: ['host', 'port', 'username', 'password', 'from'],
   numeric: ['port'],
+  sensitive: ['password'],
   labels: { host: 'SMTP host', port: 'port', username: '用户名', password: '密码', from: '发件地址' },
   detailPrefix: '开启通知发信需先配置：',
 };
 
 /**
  * mail 分域 PUT 主体：整键读-改-写，只碰本键（另一个 mail 键零接触，互不产生）。
- * D5：enabled:true 时必填字段不全 → 400 拒落库（已存密钥视同已配）；
+ * 顺序：内存合并（applyFieldMerges，#100）→ D5 核对（enabled:true 且合并后必填不全 → 400，
+ * 此时整段不落库，清空也无半途生效）→ 落库 + 审计。
  * enabled:false 半配置可落库（关着不算启用）。幂等：无变化不写库不写审计。
  * #99 空保存：段本就不存在 + 只要求关闭 + 无字段变化 = 默认状态，幂等空操作不建段
  * （缺行的 enabled 按 D5 同口径视为 false，否则会被判成 enabled 变化而凭空建行）。
@@ -275,7 +307,11 @@ async function saveMailSection(
   const db = c.env.CORE_DB;
   const section = await spec.read(db);
   const noExistingSection = Object.keys(section).length === 0;
-  const fieldsChanged = applyFieldMerges(section, body, { clearable: 'portalUrl', numeric: 'port' });
+  const fieldsChanged = applyFieldMerges(section, body, {
+    clearable: 'portalUrl',
+    numeric: 'port',
+    sensitive: spec.sensitive,
+  });
 
   if (noExistingSection && !fieldsChanged && body.enabled === false) {
     return c.json({ ok: true });
