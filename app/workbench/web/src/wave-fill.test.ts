@@ -26,20 +26,40 @@ import source from './components/wave-fill.vue?raw'
  * 组件的私有自定义属性一律带 -local 后缀（先内联声明后使用，verify-tokens 据此放行）。
  */
 
-/** 从样式块读单条声明（取第一个匹配块）。改了样式这里必红，逼同步复核。 */
+/**
+ * 去掉样式块里的 /* … *\/ 注释。注释留在块内会被按 `;` 切断成伪声明，
+ * 且「注释之前的声明」会被吞进同一条，导致 decl() 查不到（真机踩过）。
+ */
+function stripComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '')
+}
+
+/**
+ * 从样式块读单条声明（取第一个命中该声明的块）。改了样式这里必红，逼同步复核。
+ * 按 `;` 切分声明后做「名称前缀相等」比对，而不是把 prop 拼进正则：
+ * 自定义属性名自带前导 `-`（`--unself-wave-testing-local`），拼进正则后前导 `\s` 会把它当作匹配项吞掉。
+ * 逐块扫描而非只认第一块：分组块里查不到的同名声明（如子块的 transition-duration）要落到正确的选择器块上。
+ */
 function decl(selector: string, prop: string): string {
   // 选择器整体按正则字面量转义（含 [data-level=...] 的方括号与引号）
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const block = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(source)?.[1]
-  if (!block) throw new Error(`找不到样式块 ${selector}`)
-  const value = new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+);`).exec(block)?.[1]
-  if (!value) throw new Error(`找不到 ${selector} 的 ${prop}`)
-  return value.trim()
+  const blockRe = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'g')
+  for (const match of source.matchAll(blockRe)) {
+    for (const declaration of stripComments(match[1]!).split(';')) {
+      const colon = declaration.indexOf(':')
+      if (colon < 0) continue
+      if (declaration.slice(0, colon).trim() !== prop) continue
+      const value = declaration.slice(colon + 1).trim()
+      if (!value) throw new Error(`${selector} 的 ${prop} 是空值`)
+      return value
+    }
+  }
+  throw new Error(`找不到 ${selector} 的 ${prop}`)
 }
 
 /** 取某条 keyframes 的全部拐点声明体。 */
 function keyframeSteps(name: string): string[] {
-  const block = new RegExp(`@keyframes ${name}\\s*\\{([\\s\\S]*?)\\n\\}`).exec(source)?.[1]
+  const block = new RegExp(`@keyframes ${name}\\s*\\{([\\s\\S]*?)\\r?\\n\\}`).exec(source)?.[1]
   if (!block) throw new Error(`找不到关键帧 ${name}`)
   return [...block.matchAll(/(?:from|to|\d+%)\s*\{([^}]*)\}/g)].map((m) => m[1]!)
 }
@@ -169,13 +189,13 @@ describe('WaveFill 驻波几何（#100）', () => {
     const sink = decl('.wave-fill-water', 'transition')
     // duration-wave = 走完一整卡高。testing 与回落都是 (0.9 − 波带占比) × wave
     expect(testing).toBe(
-      'calc((var(--unself-wave-testing) - var(--unself-wave-band-ratio)) * var(--unself-duration-wave))',
+      'calc((var(--unself-wave-testing-local) - var(--unself-wave-band-ratio-local)) * var(--unself-duration-wave))',
     )
     // full：(1 − 0.9) × wave，与卡高无关
-    expect(full).toBe('calc((1 - var(--unself-wave-testing)) * var(--unself-duration-wave))')
+    expect(full).toBe('calc((1 - var(--unself-wave-testing-local)) * var(--unself-duration-wave))')
     // 回落与涨潮同一段距离，不写死秒数
     expect(sink).toContain(
-      'calc((var(--unself-wave-testing) - var(--unself-wave-band-ratio)) * var(--unself-duration-wave))',
+      'calc((var(--unself-wave-testing-local) - var(--unself-wave-band-ratio-local)) * var(--unself-duration-wave))',
     )
     // 三档都不引用 duration-wave 以外的时长，也不写死毫秒
     for (const value of [testing, full, sink]) {
@@ -188,16 +208,20 @@ describe('WaveFill 驻波几何（#100）', () => {
     expect(sink).toContain('--unself-duration-wave')
   })
 
-  it('速度模型常量与 CSS 变量同源：WAVE_TESTING_LEVEL = --unself-wave-testing = 0.9', () => {
+  it('速度模型常量与 CSS 变量同源：WAVE_TESTING_LEVEL = --unself-wave-testing-local = 0.9', () => {
     expect(WAVE_TESTING_LEVEL).toBe(0.9)
     // CSS 变量必须与导出常量一致：改常量必须同步样式字面量
-    expect(decl('.wave-fill', '--unself-wave-testing')).toBe(String(WAVE_TESTING_LEVEL))
-    // 波带高 = space-8 = 32px，组件用它换算 --unself-wave-band-ratio
+    expect(decl('.wave-fill', '--unself-wave-testing-local')).toBe(String(WAVE_TESTING_LEVEL))
+    // 波带高 = space-8 = 32px，组件用它换算 --unself-wave-band-ratio-local
     expect(WAVE_BAND_PX).toBe(32)
     // testing 顶缘与阈值同比：改阈值不用手改 translateY
     expect(decl(".wave-fill[data-level='testing'] .wave-fill-water", 'transform')).toBe(
-      'translateY(calc((1 - var(--unself-wave-testing)) * 100%))',
+      'translateY(calc((1 - var(--unself-wave-testing-local)) * 100%))',
     )
+    // 组件私有变量只在样式块内声明（verify-tokens 靠「内联声明」放行），不进契约
+    for (const prop of ['--unself-wave-testing-local', '--unself-wave-band-ratio-local']) {
+      expect(decl('.wave-fill', prop), `${prop} 必须在内联声明后才被引用`).not.toBe('')
+    }
     // 上涨用 ease-page-turn；回落用下坠曲线
     expect(decl(".wave-fill[data-level='testing'] .wave-fill-water", 'transition-timing-function')).toBe(
       'var(--unself-ease-page-turn)',
