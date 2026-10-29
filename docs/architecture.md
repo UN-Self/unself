@@ -382,7 +382,7 @@ component 层  组件接口令牌（button-bg、card-radius…）→ core/ui 内
 | 字号 | font-size-xs / sm / base / lg / xl / 2xl |
 | 阴影 | shadow-card / shadow-pop |
 | 其他 | focus-ring |
-| 动效（#307 起进契约） | duration-fast / normal / slow / shake / spin / shimmer；ease-out / ease-spring；motion-press-scale / motion-lift-y |
+| 动效（#307 起进契约） | duration-fast / normal / slow / shake / spin / shimmer / wave（#100：6000ms = 走完一整卡高）；ease-out / ease-spring；motion-press-scale / motion-lift-y |
 
 规则：**清单发布后只增不改名、不删项**。模块引用它，永远不碎。
 

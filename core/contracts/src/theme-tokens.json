@@ -45,5 +45,6 @@
   "unself.focus-ring": "2px solid var(--unself-color-primary)",
   "unself.duration.shake": "450ms",
   "unself.duration.spin": "800ms",
-  "unself.duration.shimmer": "1400ms"
+  "unself.duration.shimmer": "1400ms",
+  "unself.duration.wave": "6000ms"
 }

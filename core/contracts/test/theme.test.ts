@@ -27,7 +27,7 @@ const SPEC_SHADOWS = ['card', 'pop'] as const;
 const SPEC_OTHER = ['focus-ring'] as const;
 
 /** SPEC §6.5.2 动效数值骨架清单（#307 起进契约，修订 #43/#95 口径：数值集中、用法归模块）。 */
-const SPEC_MOTION = ['fast', 'normal', 'slow', 'shake', 'spin', 'shimmer'] as const;
+const SPEC_MOTION = ['fast', 'normal', 'slow', 'shake', 'spin', 'shimmer', 'wave'] as const;
 const SPEC_EASES = ['out', 'spring'] as const;
 const SPEC_MOTION_PARAMS = ['press-scale', 'lift-y'] as const;
 
