@@ -31,7 +31,7 @@ M0 技术栈（已拍板 2026-09-06）：TypeScript + Hono + Vue 3 + Vite + Tail
 > **命名对照（2026-09-20，#303）**：里程碑表里的历史名对应今天的包/目录——`core-api` → `app/workbench/src`；`shell` → `app/workbench/web`；`module-sdk` → `core/sdk`（发 npm：`@unself/sdk`）；`deploy/cloudflare` → `app/installer/src/engine`；模块 → `app/modules/<id>`。两桶判据见决策 #83。
 | **M1** | 入职闭环与可用性：管理界面（成员/模块/审计/设置）、邀请→审批→邀请页三态自助激活全链、通知类型表+运行时邮件配置、Stalwart 瘦适配（MailProvisioner 接口 + JMAP 实现） | 完整版：真实邀请一人，从填表到登录全程不碰 Stalwart 后台；最小版：内置账号+无邮件实例邀请审批闭环可用，且邀请页三态自助激活可达（#134）；手机同页可审批 |
 | **M2** | 聊天（EdgeChat 模块化）：token 化认证、manifest 包装、前端自研（mobile-first）+ 后端搬运适配、逐条已读回执 | 仅启用聊天的实例可完整使用消息与已读回执，手机端消息流可用 |
-| **M3** | Git 联动 + 部署自由化（#343，2026-10-18 改写；原「workerd 路径 Docker 部署」让位于双路径模型）：Gitea webhook 通知内部化、Git 开户入链路 1；双路径落地——壳内 URL 接入（#98）、PG 存储三实现（#99）、installer 向导扩展（#97：DB 连接串/落点屏/S3 屏）、落点双形态（#100）、DO 平替预研（#102） | Git 事件进通知中心；自管路径 docker run 起 core + 壳内接入 URL 模块全链路；core 可跑在 PG（实测版本入档）；单机/多机两拓扑可装配 |
+| **M3** | Git 联动 + 部署自由化（#343，2026-10-18 改写；原「workerd 路径 Docker 部署」让位于双路径模型）：Gitea webhook 通知内部化、Git 开户入链路 1；双路径落地——壳内 URL 接入（#102）、PG 存储三实现（#103）、installer 向导扩展（#101：DB 连接串/落点屏/S3 屏）、落点双形态（#104）、DO 平替预研（#106） | Git 事件进通知中心；自管路径 docker run 起 core + 壳内接入 URL 模块全链路；core 可跑在 PG（实测版本入档）；单机/多机两拓扑可装配 |
 | **M4** | 日历/会议/会议记录：tsdav + CalDAV、P2P iframe、转写两档（本地默认、云端显式 opt-in） | 日历建会一键入会；会后纪要生成；音频存档不出自有机 |
 | **M5** | 文档、看板、R2/S3 存储适配层 | 文档可写可读，看板可用，任务截止与日历联动，文件直传用户配置的存储 |
 | **M6** | 长尾：PWA 安装化+推送、别名/限速、邮箱凭据页（A2）、portal 完整版、多级审批、全局搜索、命令面板等 | 按当时优先级排序定验收 |
