@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { z } from 'zod';
 
-import { checkProvisioning, DEPLOY_MODES, STORAGE_LEVELS, type DeployMode, type StorageLevel } from '@unself/control-plane';
+// 子路径进点（./types）：枚举与校验单点在 control-plane，且不把 node:sqlite 侧拖进 worker 打包图。
+import {
+  checkProvisioning,
+  DEPLOY_MODES,
+  STORAGE_LEVELS,
+  type DeployMode,
+  type StorageLevel,
+} from '@unself/control-plane/types';
 import { ModuleManifestSchema } from '@unself/contracts';
 
 /**
