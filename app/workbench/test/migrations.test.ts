@@ -296,3 +296,94 @@ describe('0011 拆键（老库 0001-0010 已应用 + 0011，#340）', () => {
     }
   });
 });
+
+/**
+ * #348 0012 落点列：硬性走「存量老库升级」路径——只应用 0001-0011、种旧 registry 行
+ * 后再跑 0012（createCoreDb 是全新库，测不到「存量行补默认值」这一升级语义）。
+ */
+function legacyCoreDb0011(): DatabaseSync {
+  const dir = fileURLToPath(new URL('../migrations/core/', import.meta.url));
+  const sqlite = new DatabaseSync(':memory:');
+  const applied = readdirSync(dir)
+    .map((file) => ({ file, prefix: /^(\d{4})_/.exec(file)?.[1] }))
+    .filter(({ file, prefix }) => prefix !== undefined && Number(prefix) <= 11 && file.endsWith('.sql'))
+    .sort((a, b) => a.file.localeCompare(b.file));
+  for (const { file } of applied) {
+    sqlite.exec(readFileSync(`${dir}/${file}`, 'utf8'));
+  }
+  return sqlite;
+}
+
+function apply0012(sqlite: DatabaseSync): void {
+  sqlite.exec(readFileSync(fileURLToPath(new URL('../migrations/core/0012_registry_provisioning.sql', import.meta.url)), 'utf8'));
+}
+
+describe('0012 落点列（老库 0001-0011 已应用 + 0012，#348）', () => {
+  it('存量行升级：mode 补默认 cloudflare，entry/storage_level 为 NULL', () => {
+    const sqlite = legacyCoreDb0011();
+    try {
+      sqlite
+        .prepare("INSERT INTO module_registry (id, enabled, version, manifest_json) VALUES ('hello', 1, '0.1.0', '{}')")
+        .run();
+
+      apply0012(sqlite);
+
+      const row = sqlite.prepare("SELECT entry, storage_level, mode FROM module_registry WHERE id = 'hello'").get() as {
+        entry: string | null;
+        storage_level: string | null;
+        mode: string;
+      };
+      expect(row).toEqual({ entry: null, storage_level: null, mode: 'cloudflare' });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it('CHECK 不变式：connect 而 entry 为空 → 拒收；非法 mode → 拒收；connect + entry → 通过', () => {
+    const sqlite = legacyCoreDb0011();
+    try {
+      apply0012(sqlite);
+      expect(() =>
+        sqlite
+          .prepare('INSERT INTO module_registry (id, enabled, manifest_json, mode, entry) VALUES (?, 1, ?, ?, ?)')
+          .run('bad_connect', '{}', 'connect', null),
+      ).toThrow(/CHECK/i);
+      expect(() =>
+        sqlite
+          .prepare('INSERT INTO module_registry (id, enabled, manifest_json, mode) VALUES (?, 1, ?, ?)')
+          .run('bad_mode', '{}', 'quantum'),
+      ).toThrow(/CHECK/i);
+      sqlite
+        .prepare('INSERT INTO module_registry (id, enabled, manifest_json, mode, entry) VALUES (?, 1, ?, ?, ?)')
+        .run('good_connect', '{}', 'connect', 'https://team.example.com/m/hello/');
+      const modes = sqlite
+        .prepare('SELECT id, mode FROM module_registry ORDER BY id')
+        .all() as Array<{ id: string; mode: string }>;
+      expect(modes).toEqual([
+        { id: 'good_connect', mode: 'connect' },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it('PG 变体与 SQLite 同构（#103①：可移植子集重合处共用，分歧前防漂移）', () => {
+    const core = readFileSync(
+      fileURLToPath(new URL('../migrations/core/0012_registry_provisioning.sql', import.meta.url)),
+      'utf8',
+    );
+    const pg = readFileSync(
+      fileURLToPath(new URL('../migrations/pg/0012_registry_provisioning.pg.sql', import.meta.url)),
+      'utf8',
+    );
+    const stmts = (text: string) =>
+      text
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('--'))
+        .join('\n')
+        .split(';')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    expect(stmts(pg)).toEqual(stmts(core));
+  });
+});
