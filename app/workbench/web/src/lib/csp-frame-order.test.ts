@@ -26,6 +26,9 @@ const CROSS_MODULE: RegistryModule = {
   id: 'todo',
   enabled: true,
   version: '0.1.0',
+  mode: 'cloudflare',
+  entry: null,
+  storage_level: null,
   manifest: {
     id: 'todo',
     route: '/m/todo/',

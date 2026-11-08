@@ -10,6 +10,9 @@ describe('moduleFrameSrc（iframe 装载地址解析）', () => {
     id: 'hello',
     enabled: true,
     version: '1.0.0',
+    mode: 'cloudflare',
+    entry: null,
+    storage_level: null,
     manifest: {
       id: 'hello',
       route: '/m/hello',

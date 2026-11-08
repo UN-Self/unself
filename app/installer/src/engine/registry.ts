@@ -7,14 +7,17 @@
 import { ModuleManifestSchema, manifestFromYamlText, type ModuleManifest } from '@unself/contracts';
 import type { UnselfConfig, ModuleRef } from './config';
 
-/** 注册表 upsert SQL（与 core-api upsertModule 相同的收敛语义）。 */
+/** 注册表 upsert SQL（与 core-api/control-plane REGISTRY_UPSERT_SQL 同源；0012 起带落点三列）。 */
 export function registryUpsertSql(): string {
-  return `INSERT INTO module_registry (id, enabled, version, manifest_json)
-VALUES (?1, ?2, ?3, ?4)
+  return `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 ON CONFLICT(id) DO UPDATE SET
   enabled = excluded.enabled,
   version = excluded.version,
-  manifest_json = excluded.manifest_json`;
+  manifest_json = excluded.manifest_json,
+  mode = excluded.mode,
+  entry = excluded.entry,
+  storage_level = excluded.storage_level`;
 }
 
 /**
@@ -65,15 +68,26 @@ export function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-/** 选中模块的 upsert 语句参数（--json 命令数组形态）。 */
+/** 选中模块的 upsert 语句参数（--json 命令数组形态）；落点三列（#348）随命令给（缺省 cloudflare/空）。 */
 export function registryUpsertCommand(input: {
   manifest: ModuleManifest;
-}): { sql: string; binds: [string, number, string, string] } {
+  mode?: 'cloudflare' | 'docker' | 'connect';
+  entry?: string | null;
+  storage_level?: string | null;
+}): { sql: string; binds: [string, number, string, string, string, string | null, string | null] } {
   const { manifest } = input;
   const manifestJson = JSON.stringify(manifest);
   return {
     sql: registryUpsertSql(),
-    binds: [manifest.id, 1, manifest.version, manifestJson],
+    binds: [
+      manifest.id,
+      1,
+      manifest.version,
+      manifestJson,
+      input.mode ?? 'cloudflare',
+      input.entry ?? null,
+      input.storage_level ?? null,
+    ],
   };
 }
 

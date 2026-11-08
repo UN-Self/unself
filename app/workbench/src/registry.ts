@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { z } from 'zod';
 
+import { checkProvisioning, DEPLOY_MODES, STORAGE_LEVELS, type DeployMode, type StorageLevel } from '@unself/control-plane';
 import { ModuleManifestSchema } from '@unself/contracts';
 
 /**
@@ -10,14 +11,35 @@ import { ModuleManifestSchema } from '@unself/contracts';
  */
 
 /** 注册/更新请求体（deploy 脚本 → core-api）。 */
-export const ModuleRegistrationSchema = z.object({
-  /** 模块 id（表前缀/路由段/aud）。 */
-  id: z.string().regex(/^[a-z][a-z0-9-]+$/),
-  /** 是否启用（注册时默认按配置文件的选中状态）。 */
-  enabled: z.boolean().default(true),
-  /** 模块清单快照：注册时校验，运行期不回读。 */
-  manifest: ModuleManifestSchema,
-});
+export const ModuleRegistrationSchema = z
+  .object({
+    /** 模块 id（表前缀/路由段/aud）。 */
+    id: z.string().regex(/^[a-z][a-z0-9-]+$/),
+    /** 是否启用（注册时默认按配置文件的选中状态）。 */
+    enabled: z.boolean().default(true),
+    /** 模块清单快照：注册时校验，运行期不回读。 */
+    manifest: ModuleManifestSchema,
+    /** 落点形态（#348/#103② 用户实际选择，非 manifest 声明快照）；缺省 cloudflare。 */
+    mode: z.enum(DEPLOY_MODES).default('cloudflare'),
+    /** connect 模式的接入 URL；其余模式为 NULL（缺字段/空串都归一为 null）。 */
+    entry: z.preprocess(
+      (v) => (v == null || v === '' ? null : v),
+      z.string().nullable(),
+    ),
+    /** 存储四级（决策 #55）；缺省 NULL = 未选（缺字段/空串都归一为 null）。 */
+    storage_level: z.preprocess(
+      (v) => (v == null || v === '' ? null : v),
+      z.enum(STORAGE_LEVELS).nullable(),
+    ),
+  })
+  // 落点不变式与 0012 CHECK 同一规则（入口层给 400 人话，数据层是同一构成定义）：
+  // 错误文案单点在 control-plane checkProvisioning，这里只透传。
+  .superRefine((data, ctx) => {
+    const problem = checkProvisioning(data.mode, data.entry);
+    if (problem) {
+      ctx.addIssue({ code: 'custom', message: problem });
+    }
+  });
 
 export type ModuleRegistration = z.infer<typeof ModuleRegistrationSchema>;
 
@@ -27,6 +49,12 @@ export interface RegistryEntry {
   enabled: boolean;
   version: string | null;
   manifest: unknown;
+  /** 落点形态（#348）；缺省 cloudflare。 */
+  mode: DeployMode;
+  /** connect 模式接入 URL；其余模式 NULL。 */
+  entry: string | null;
+  /** 存储四级；NULL = 未选。 */
+  storage_level: StorageLevel | null;
 }
 
 /** 启停响应。 */
@@ -36,7 +64,15 @@ export interface ToggleResult {
 }
 
 /** D1 行 → API 条目。 */
-export function rowToEntry(row: { id: string; enabled: number; version: string | null; manifest_json: string }): RegistryEntry {
+export function rowToEntry(row: {
+  id: string;
+  enabled: number;
+  version: string | null;
+  manifest_json: string;
+  mode?: string | null;
+  entry?: string | null;
+  storage_level?: string | null;
+}): RegistryEntry {
   let manifest: unknown;
   try {
     manifest = JSON.parse(row.manifest_json);
@@ -48,24 +84,39 @@ export function rowToEntry(row: { id: string; enabled: number; version: string |
     enabled: row.enabled === 1,
     version: row.version,
     manifest,
+    mode: (row.mode ?? 'cloudflare') as DeployMode,
+    entry: row.entry ?? null,
+    storage_level: (row.storage_level ?? null) as StorageLevel | null,
   };
 }
 
-/** 注册或更新（upsert）：manifest 快照随注册刷新，enabled 按请求给。 */
+/** 注册或更新（upsert）：manifest 快照随注册刷新，enabled/落点三列按请求给。 */
 export async function upsertModule(db: D1Database, reg: ModuleRegistration): Promise<RegistryEntry> {
   const manifestJson = JSON.stringify(reg.manifest);
   await db
     .prepare(
-      `INSERT INTO module_registry (id, enabled, version, manifest_json) VALUES (?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, version = excluded.version, manifest_json = excluded.manifest_json`,
+      `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, version = excluded.version, manifest_json = excluded.manifest_json,
+       mode = excluded.mode, entry = excluded.entry, storage_level = excluded.storage_level`,
     )
-    .bind(reg.id, reg.enabled ? 1 : 0, reg.manifest.version, manifestJson)
+    .bind(
+      reg.id,
+      reg.enabled ? 1 : 0,
+      reg.manifest.version,
+      manifestJson,
+      reg.mode ?? 'cloudflare',
+      reg.entry ?? null,
+      reg.storage_level ?? null,
+    )
     .run();
   return {
     id: reg.id,
     enabled: reg.enabled,
     version: reg.manifest.version,
     manifest: reg.manifest,
+    mode: reg.mode ?? 'cloudflare',
+    entry: reg.entry ?? null,
+    storage_level: reg.storage_level ?? null,
   };
 }
 
@@ -86,8 +137,8 @@ export async function listModules(db: D1Database): Promise<RegistryEntry[]> {
   // 列集合与迁移 0001 建表严格一致（旧版 RegistryEntry 带不存在于 DB 的注册时间幻影字段，
   // 响应恒返空串——已删；真列 SELECT 可暴露查询列 ↔ 建表列错位）。
   const result = await db
-    .prepare('SELECT id, enabled, version, manifest_json FROM module_registry ORDER BY id')
-    .all<{ id: string; enabled: number; version: string | null; manifest_json: string }>();
+    .prepare('SELECT id, enabled, version, manifest_json, mode, entry, storage_level FROM module_registry ORDER BY id')
+    .all<{ id: string; enabled: number; version: string | null; manifest_json: string; mode: string | null; entry: string | null; storage_level: string | null }>();
   return result.results.map(rowToEntry);
 }
 

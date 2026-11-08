@@ -11,6 +11,7 @@ import {
   migrationsInsertIgnoreSql,
   migrationsInsertSql,
   migrationsListSql,
+  provisioningBinds,
   REGISTRY_LIST_SQL,
   REGISTRY_TOGGLE_SQL,
   REGISTRY_UPSERT_SQL,
@@ -87,7 +88,11 @@ export function openCoreDb(path: string): { db: DatabaseSync; ensureSchema(): vo
           id TEXT PRIMARY KEY,
           enabled INTEGER NOT NULL DEFAULT 0,
           version TEXT,
-          manifest_json TEXT NOT NULL
+          manifest_json TEXT NOT NULL,
+          entry TEXT,
+          storage_level TEXT,
+          mode TEXT NOT NULL DEFAULT 'cloudflare'
+            CHECK (mode IN ('cloudflare', 'docker', 'connect') AND (mode != 'connect' OR entry IS NOT NULL))
         );
         CREATE INDEX IF NOT EXISTS idx_module_registry_enabled ON module_registry (enabled, id);
       `);
@@ -108,6 +113,9 @@ export function rowToEntry(row: Record<string, unknown>): RegistryEntry {
     enabled: Number(row.enabled) === 1,
     version: row.version == null ? null : String(row.version),
     manifest,
+    mode: (row.mode == null ? 'cloudflare' : String(row.mode)) as RegistryEntry['mode'],
+    entry: row.entry == null ? null : String(row.entry),
+    storage_level: (row.storage_level == null ? null : String(row.storage_level)) as RegistryEntry['storage_level'],
   };
 }
 
@@ -131,9 +139,10 @@ export class SqliteControlPlane implements ControlPlane {
 
   async upsertModule(reg: ModuleRegistration): Promise<RegistryEntry> {
     const version = reg.version ?? readManifestVersion(reg.manifest);
+    const [mode, entry, storageLevel] = provisioningBinds(reg);
     const row = await this.exec
       .prepare(REGISTRY_UPSERT_SQL)
-      .bind(reg.id, reg.enabled ? 1 : 0, version, JSON.stringify(reg.manifest))
+      .bind(reg.id, reg.enabled ? 1 : 0, version, JSON.stringify(reg.manifest), mode, entry, storageLevel)
       .first<Record<string, unknown>>();
     if (!row) throw new Error(`upsertModule 未返回行（id=${reg.id}）`);
     return rowToEntry(row);

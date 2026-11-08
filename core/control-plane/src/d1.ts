@@ -5,6 +5,7 @@
  * 结构面取 D1Database 的最小子集（prepare/bind/first/all/run），不 import workers-types。
  */
 import {
+  provisioningBinds,
   REGISTRY_LIST_SQL,
   REGISTRY_TOGGLE_SQL,
   REGISTRY_UPSERT_SQL,
@@ -33,6 +34,9 @@ interface RawRow {
   enabled: unknown;
   version: unknown;
   manifest_json: unknown;
+  mode: unknown;
+  entry: unknown;
+  storage_level: unknown;
 }
 
 export class D1ControlPlane implements ControlPlane {
@@ -40,9 +44,10 @@ export class D1ControlPlane implements ControlPlane {
 
   async upsertModule(reg: ModuleRegistration): Promise<RegistryEntry> {
     const version = reg.version ?? readVersion(reg.manifest);
+    const [mode, entry, storageLevel] = provisioningBinds(reg);
     const row = await this.db
       .prepare(REGISTRY_UPSERT_SQL)
-      .bind(reg.id, reg.enabled ? 1 : 0, version, JSON.stringify(reg.manifest))
+      .bind(reg.id, reg.enabled ? 1 : 0, version, JSON.stringify(reg.manifest), mode, entry, storageLevel)
       .first<RawRow>();
     if (!row) throw new Error(`upsertModule 未返回行（id=${reg.id}）`);
     return rowToEntry({ ...row, manifest_json: row.manifest_json });

@@ -28,6 +28,34 @@ export interface RegistryEntry {
   enabled: boolean;
   version: string | null;
   manifest: unknown;
+  /** 落点形态（#103② 用户实际选择，非 manifest 声明快照；0012 起有列，缺省 cloudflare）。 */
+  mode: DeployMode;
+  /** connect 模式的接入 URL（其余模式 NULL）；connect 必填由 0012 CHECK 承载。 */
+  entry: string | null;
+  /** 存储四级（决策 #55）：core/shared/dedicated/external；NULL = 未选。 */
+  storage_level: StorageLevel | null;
+}
+
+/** 落点形态枚举（0012 CHECK 同源清单；zod 侧直接 z.enum(DEPLOY_MODES) 复用）。 */
+export const DEPLOY_MODES = ['cloudflare', 'docker', 'connect'] as const;
+export type DeployMode = (typeof DEPLOY_MODES)[number];
+
+/** 存储四级枚举（决策 #55；0012 列值域同源清单）。 */
+export const STORAGE_LEVELS = ['core', 'shared', 'dedicated', 'external'] as const;
+export type StorageLevel = (typeof STORAGE_LEVELS)[number];
+
+/**
+ * 落点不变式（#348：两个平行入口——API zod 与 installer 直写——各自调用；
+ * 数据层 0012 CHECK 是同一规则的构成定义）。返回人话错误，null = 合法。
+ */
+export function checkProvisioning(mode: string, entry: string | null | undefined): string | null {
+  if (!(DEPLOY_MODES as readonly string[]).includes(mode)) {
+    return `mode 必须是 ${DEPLOY_MODES.join('/')} 之一，收到「${mode}」`;
+  }
+  if (mode === 'connect' && !entry) {
+    return 'mode=connect 时必须提供 entry（接入 URL）';
+  }
+  return null;
 }
 
 /** 注册/更新输入（装配器传完整快照；core-api 路由层已有 zod 门禁）。 */
@@ -37,6 +65,12 @@ export interface ModuleRegistration {
   manifest: unknown;
   /** manifest.version 镜像列（upsert 时随快照刷新）。 */
   version?: string;
+  /** 落点形态；缺省 cloudflare（装配期 CF 路径默认值）。 */
+  mode?: DeployMode;
+  /** connect 模式接入 URL；其余模式 NULL。 */
+  entry?: string | null;
+  /** 存储四级；缺省 NULL（未选）。 */
+  storage_level?: StorageLevel | null;
 }
 
 /** setup token 三态（与 core-api setup 域语义对齐）。 */

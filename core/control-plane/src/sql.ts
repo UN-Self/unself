@@ -6,23 +6,31 @@
  * - 按模块独立迁移记账（#55 护栏①：表名 unself_migrations_<module>）。
  * 全部占位符用 ?1/?2 序号形式——D1 与 node:sqlite 都支持，读侧各自绑定执行器。
  */
-import { migrationsTableFor } from './types';
+import { migrationsTableFor, type ModuleRegistration } from './types';
 
-// ---- module_registry（core 库 0001）----
+// ---- module_registry（core 库 0001 建表 + 0012 落点三列）----
 
-export const REGISTRY_UPSERT_SQL = `INSERT INTO module_registry (id, enabled, version, manifest_json)
-VALUES (?1, ?2, ?3, ?4)
+export const REGISTRY_UPSERT_SQL = `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 ON CONFLICT(id) DO UPDATE SET
   enabled = excluded.enabled,
   version = excluded.version,
-  manifest_json = excluded.manifest_json
-RETURNING id, enabled, version, manifest_json`;
+  manifest_json = excluded.manifest_json,
+  mode = excluded.mode,
+  entry = excluded.entry,
+  storage_level = excluded.storage_level
+RETURNING id, enabled, version, manifest_json, mode, entry, storage_level`;
 
 export const REGISTRY_TOGGLE_SQL =
-  'UPDATE module_registry SET enabled = ?2 WHERE id = ?1 RETURNING id, enabled, version, manifest_json';
+  'UPDATE module_registry SET enabled = ?2 WHERE id = ?1 RETURNING id, enabled, version, manifest_json, mode, entry, storage_level';
 
 export const REGISTRY_LIST_SQL =
-  'SELECT id, enabled, version, manifest_json FROM module_registry ORDER BY id';
+  'SELECT id, enabled, version, manifest_json, mode, entry, storage_level FROM module_registry ORDER BY id';
+
+/** upsert 绑参：mode/entry/storage_level 缺省值与 0012 列 DEFAULT 同源（三实现共用，#64）。 */
+export function provisioningBinds(reg: ModuleRegistration): [string, string | null, string | null] {
+  return [reg.mode ?? 'cloudflare', reg.entry ?? null, reg.storage_level ?? null];
+}
 
 // ---- setup_tokens（core 库 0002）----
 

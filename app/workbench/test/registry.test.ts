@@ -181,9 +181,56 @@ describe('registry CRUD 与启停语义（#7）', () => {
 
   // --- 守护用例（审核 T1：查询列 ↔ 建表列错位即红） ------------------------
 
+  it('落点三列（#348）：透传 + 缺省 + CHECK 不变式人话 400', async () => {
+    const { env, db, cookie } = await envFor('admin');
+
+    // 透传：mode/entry/storage_level 原样落库并回显
+    const created = await register(env, cookie, {
+      id: 'hello',
+      manifest: helloManifest,
+      mode: 'connect',
+      entry: 'https://self.example.com/hello/',
+      storage_level: 'dedicated',
+    });
+    expect(created.status).toBe(201);
+    expect(await created.json()).toMatchObject({
+      mode: 'connect',
+      entry: 'https://self.example.com/hello/',
+      storage_level: 'dedicated',
+    });
+
+    // 缺省：不带落点字段 → mode=cloudflare，entry/storage_level 均空
+    await register(env, cookie, { id: 'plain', manifest: helloManifest });
+    const plain = db.first<Record<string, unknown>>("SELECT mode, entry, storage_level FROM module_registry WHERE id = 'plain'");
+    expect(plain).toEqual({ mode: 'cloudflare', entry: null, storage_level: null });
+
+    // 反面：connect 而 entry 为空 → 400 人话（与 0012 CHECK 同一规则）
+    const bad = await register(env, cookie, { id: 'bad', manifest: helloManifest, mode: 'connect' });
+    expect(bad.status).toBe(400);
+    const badBody = (await bad.json()) as { error: string; detail?: string };
+    expect(badBody.detail ?? badBody.error).toContain('entry');
+
+    // 反面：非法 mode / storage_level → 400
+    expect((await register(env, cookie, { id: 'x1', manifest: helloManifest, mode: 'quantum' })).status).toBe(400);
+    expect((await register(env, cookie, { id: 'x2', manifest: helloManifest, storage_level: 'mega' })).status).toBe(400);
+
+    // 空串归一为 null（不用空串占位）
+    await register(env, cookie, { id: 'blank', manifest: helloManifest, mode: 'cloudflare', entry: '', storage_level: '' });
+    const blank = db.first<Record<string, unknown>>("SELECT entry, storage_level FROM module_registry WHERE id = 'blank'");
+    expect(blank).toEqual({ entry: null, storage_level: null });
+  });
+
   it('守护：module_registry 行结构 == 迁移建表列（幻影列/漏列即红）', async () => {
     const { env, db, cookie } = await envFor('admin');
-    expect(db.columns('module_registry')).toEqual(['id', 'enabled', 'version', 'manifest_json']);
+    expect(db.columns('module_registry')).toEqual([
+      'id',
+      'enabled',
+      'version',
+      'manifest_json',
+      'entry',
+      'storage_level',
+      'mode',
+    ]);
     await register(env, cookie, { id: 'hello', manifest: helloManifest });
 
     // 真库全字段行：列集合必须与建表一致（历史幻影列会在此暴露）
@@ -196,8 +243,11 @@ describe('registry CRUD 与启停语义（#7）', () => {
     const entries = (await list.json()) as Array<Record<string, unknown>>;
     expect(Object.keys(entries[0] ?? {}).sort()).toEqual([
       'enabled',
+      'entry',
       'id',
       'manifest',
+      'mode',
+      'storage_level',
       'version',
     ]);
   });

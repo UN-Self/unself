@@ -1028,7 +1028,15 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     const snapshot = declaration
       ? { ...manifest, storage: storageWithDeclaration(manifest.storage, declaration as StorageLevel) }
       : manifest;
-    await coreCp.upsertModule({ id: mod.id, enabled: true, manifest: snapshot });
+    // 落点三列（#348/#103②）：mode=cloudflare（CF 装配路径），storage_level=用户四级选择
+    // （同一 declaration，列与快照各司其职：列是用户选择，快照是 manifest 侧声明）。
+    await coreCp.upsertModule({
+      id: mod.id,
+      enabled: true,
+      manifest: snapshot,
+      mode: 'cloudflare',
+      storage_level: (declaration as StorageLevel | undefined) ?? null,
+    });
     rep.log(`upsert ${mod.id}（enabled=1，快照刷新${declaration ? `，落点 ${declaration}` : ''}）`);
   }
   for (const mod of disabledIds.map((id) => ({ id }))) {

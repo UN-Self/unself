@@ -9,6 +9,7 @@ import {
   migrationsInsertIgnoreSql,
   migrationsInsertSql,
   migrationsListSql,
+  provisioningBinds,
   REGISTRY_LIST_SQL,
   REGISTRY_TOGGLE_SQL,
   REGISTRY_UPSERT_SQL,
@@ -32,6 +33,9 @@ interface RawRow {
   enabled: unknown;
   version: unknown;
   manifest_json: unknown;
+  mode: unknown;
+  entry: unknown;
+  storage_level: unknown;
 }
 
 export class RestD1ControlPlane implements ControlPlane {
@@ -39,9 +43,10 @@ export class RestD1ControlPlane implements ControlPlane {
 
   async upsertModule(reg: ModuleRegistration): Promise<RegistryEntry> {
     const version = reg.version ?? readVersion(reg.manifest);
+    const [mode, entry, storageLevel] = provisioningBinds(reg);
     const { results } = await this.exec.query<RawRow>(
       REGISTRY_UPSERT_SQL,
-      [reg.id, reg.enabled ? 1 : 0, version, JSON.stringify(reg.manifest)],
+      [reg.id, reg.enabled ? 1 : 0, version, JSON.stringify(reg.manifest), mode, entry, storageLevel],
     );
     const row = results[0];
     if (!row) throw new Error(`upsertModule 未返回行（id=${reg.id}）`);
@@ -162,6 +167,9 @@ function toEntry(row: RawRow): RegistryEntry {
     enabled: Number(row.enabled) === 1,
     version: row.version == null ? null : String(row.version),
     manifest,
+    mode: (row.mode == null ? 'cloudflare' : String(row.mode)) as RegistryEntry['mode'],
+    entry: row.entry == null ? null : String(row.entry),
+    storage_level: (row.storage_level == null ? null : String(row.storage_level)) as RegistryEntry['storage_level'],
   };
 }
 
