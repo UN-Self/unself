@@ -193,7 +193,7 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       yes: true,
-      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      configOverride: { domain: '', modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0', storage: { declaration: 'core' } }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
     });
     const calls = fake.calls;
@@ -217,6 +217,11 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     // registry 终态：#284 未选模块只来自 lock（config 只有 hello、lock 为空 → 没有可 disable 的）
     const toggles = calls.filter(sqlStartsWith('UPDATE module_registry'));
     expect(toggles).toHaveLength(0);
+    // 落点写入（#348）：config 里的用户四级选择必须随 upsert 落进 storage_level 列（绑参第 7 位，非 null）
+    const upsertParams = (calls[registryUpsert]?.body as { params?: unknown[] } | undefined)?.params ?? [];
+    expect(upsertParams[0]).toBe('hello');
+    expect(upsertParams[4]).toBe('cloudflare');
+    expect(upsertParams[6]).toBe('core');
   });
 
   it('domain 设定时：core 上传后立即 ensureDns（先于 registry 与冒烟）', { timeout: 120_000 }, async () => {
