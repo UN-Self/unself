@@ -94,7 +94,10 @@ function discoverMigrationDirs() {
       if (entry.name === 'migrations') {
         // 候选迁移根：子目录逐个入闸门；无子目录且含 .sql → 根自身入闸门
         const inner = readdirSync(child, { withFileTypes: true });
-        const subDirs = inner.filter((e) => e.isDirectory());
+        const subDirs = inner.filter((e) => e.isDirectory() && e.name !== 'pg');
+        // 子目录名 pg = 方言覆盖轨（#348）：与 core/ 平行的 PG 变体，不是独立谱系
+        // （无 0001-0011 基线，SQLite 执行器重放必炸）。入闸门 = D5 用 PG runner
+        // 重放整套 pg/ 历史时再接；豁免留档于此，不靠隐式行为。
         const hasSql = inner.some((e) => e.isFile() && e.name.endsWith('.sql'));
         if (subDirs.length === 0 && hasSql) {
           dirs.push(relChild);
