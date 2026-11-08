@@ -65,13 +65,26 @@ describe('registry（⑤ · 形状契约）', () => {
     expect(sqlString("o'brien")).toBe(`'o''brien'`);
   });
 
-  it('registryUpsertCommand：enabled=1 + manifest 快照 JSON（upsert 语义随 ControlPlane 跑行为）', () => {
-    const cmd = registryUpsertCommand({ manifest: ModuleManifestSchema.parse(manifest) });
+  it('registryUpsertCommand：enabled=1 + manifest 快照 JSON + 落点三列（#348，upsert 语义随 ControlPlane 跑行为）', () => {
+    const cmd = registryUpsertCommand({
+      manifest: ModuleManifestSchema.parse(manifest),
+      mode: 'cloudflare',
+      storage_level: 'dedicated',
+    });
     expect(cmd.binds[0]).toBe('hello');
     expect(cmd.binds[1]).toBe(1);
     expect(cmd.binds[2]).toBe('0.1.0');
     expect(JSON.parse(String(cmd.binds[3]))).toMatchObject({ id: 'hello' });
+    // 落点三列（#348）：显式传参原样透传，缺省回落 cloudflare/空
+    expect(cmd.binds[4]).toBe('cloudflare');
+    expect(cmd.binds[5]).toBeNull();
+    expect(cmd.binds[6]).toBe('dedicated');
+    const bare = registryUpsertCommand({ manifest: ModuleManifestSchema.parse(manifest) });
+    expect(bare.binds[4]).toBe('cloudflare');
+    expect(bare.binds[5]).toBeNull();
+    expect(bare.binds[6]).toBeNull();
     expect(cmd.sql).toContain('ON CONFLICT(id) DO UPDATE');
+    expect(cmd.sql).toContain('mode, entry, storage_level');
   });
 
   it('registryDisableCommand：只翻 enabled，不凭空建行', () => {

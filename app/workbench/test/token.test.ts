@@ -164,7 +164,15 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
 
   it('守护：module_registry 行结构 == 迁移建表列（幻影列/漏列即红）', async () => {
     const db = createCoreDb();
-    expect(db.columns('module_registry')).toEqual(['id', 'enabled', 'version', 'manifest_json']);
+    expect(db.columns('module_registry')).toEqual([
+      'id',
+      'enabled',
+      'version',
+      'manifest_json',
+      'entry',
+      'storage_level',
+      'mode',
+    ]);
     seedHello(db);
 
     // 真库全字段行：列集合必须与建表一致（#56 的幻影列会在此暴露）

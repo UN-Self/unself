@@ -116,7 +116,7 @@ describe('S6 /api/modules 字段剥离回归（#208）', () => {
     expect(list).toHaveLength(1);
     expect(list[0]!.manifest).not.toHaveProperty('evil');
     expect(list[0]!.manifest).not.toHaveProperty('admin');
-    // 响应条目本身也只有契约四键（id/enabled/version/manifest）
-    expect(Object.keys(list[0]!).sort()).toEqual(['enabled', 'id', 'manifest', 'version']);
+    // 响应条目本身只有契约键（id/enabled/version/manifest + #348 落点三列）
+    expect(Object.keys(list[0]!).sort()).toEqual(['enabled', 'entry', 'id', 'manifest', 'mode', 'storage_level', 'version']);
   });
 });

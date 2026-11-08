@@ -204,6 +204,9 @@ importers:
       '@unself/contracts':
         specifier: workspace:*
         version: link:../../core/contracts
+      '@unself/control-plane':
+        specifier: workspace:*
+        version: link:../../core/control-plane
       '@unself/mail-smtp':
         specifier: workspace:*
         version: link:../../core/adapters/mail-smtp

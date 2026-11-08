@@ -49,6 +49,9 @@ describe('useModuleFrame 握手超时（#306）', () => {
     id: 'hello',
     enabled: true,
     version: '0.1.0',
+    mode: 'cloudflare',
+    entry: null,
+    storage_level: null,
     manifest: {
       id: 'hello',
       route: '/m/hello/',
@@ -149,6 +152,9 @@ describe('useModuleFrame 握手超时（#306）', () => {
         id: 'broken',
         enabled: true,
         version: '0.1.0',
+        mode: 'cloudflare',
+        entry: null,
+        storage_level: null,
         manifest: { id: 'broken', route: '/m/broken/', entry: '', runtimes: ['worker'], version: '0.1.0' },
       } as RegistryModule
       const { wrapper, api } = mountHostWithModule(broken)

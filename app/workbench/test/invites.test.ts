@@ -1178,6 +1178,7 @@ describe('邀请域 HTTP（#18）', () => {
       '0009_profile_revision.sql',
       '0010_profile_avatar.sql',
       '0011_split_mail_config.sql', // #340：mail 段拆键（含升级路径断言：见 test/migrations.test.ts）
+      '0012_registry_provisioning.sql', // #348：registry 落点三列（含升级路径断言：见 test/migrations.test.ts）
     ]);
 
     const sqlite = new DatabaseSync(':memory:');
