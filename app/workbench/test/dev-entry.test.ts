@@ -148,3 +148,58 @@ describe('#182 dev-entry 单例 fake：完整形态第 8 步（跨请求）', ()
     });
   });
 });
+
+/**
+ * dev 密钥形态归一（.dev.vars dotenv 单行化）：
+ * base64（推荐形态）与 PEM 原文（兼容）都必须让会话验签可用——
+ * 会话通 = 密钥通，断言打在用户可见行为（/api/me 200）。
+ */
+describe('dev-entry 密钥形态归一', () => {
+  it('JWT_PRIVATE_KEY_BASE64（推荐形态）→ 会话验签可用', async () => {
+    const pair = await generateInstanceKeyPair();
+    const { createCoreDb } = await import('./test-factory');
+    const db = createCoreDb();
+    try {
+      db.run("INSERT INTO users (id, issuer, sub, display_name, role, status) VALUES ('u_admin', 'https://idp', 's', '走查', 'admin', 'active')");
+      const b64 = btoa(pair.privateKeyPem);
+      const app = (await import('./dev-entry')).default;
+      const token = await createSessionToken({ uid: 'u_admin', iss: 'https://idp', sub: 's', name: '走查' }, pair.privateKeyPem);
+      const res = await request(
+        app,
+        { CORE_DB: db.d1, MODULES_DB: db.d1, JWT_PRIVATE_KEY_BASE64: b64 } as Bindings,
+        '/api/me',
+        { headers: { cookie: `unself_session=${token}` } },
+      );
+      expect(res.status).toBe(200);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('JWT_PRIVATE_KEY 为 PEM 原文 → 兼容不变；非密钥值 → 不炸（下游人话报错）', async () => {
+    const pair = await generateInstanceKeyPair();
+    const { createCoreDb } = await import('./test-factory');
+    const db = createCoreDb();
+    try {
+      db.run("INSERT INTO users (id, issuer, sub, display_name, role, status) VALUES ('u_admin', 'https://idp', 's', '走查', 'admin', 'active')");
+      const app = (await import('./dev-entry')).default;
+      const token = await createSessionToken({ uid: 'u_admin', iss: 'https://idp', sub: 's', name: '走查' }, pair.privateKeyPem);
+      const ok = await request(
+        app,
+        { CORE_DB: db.d1, MODULES_DB: db.d1, JWT_PRIVATE_KEY: pair.privateKeyPem } as Bindings,
+        '/api/me',
+        { headers: { cookie: `unself_session=${token}` } },
+      );
+      expect(ok.status).toBe(200);
+      const bad = await request(
+        app,
+        { CORE_DB: db.d1, MODULES_DB: db.d1, JWT_PRIVATE_KEY: 'not-a-key' } as Bindings,
+        '/api/me',
+        { headers: { cookie: `unself_session=${token}` } },
+      );
+      expect(bad.status).toBe(401);
+    } finally {
+      db.close();
+    }
+  });
+});

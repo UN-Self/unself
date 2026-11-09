@@ -33,6 +33,34 @@ const app = createApp({
   createMailProvisioner: () => provisioner,
 });
 
+/**
+ * dev 密钥形态归一：JWT_PRIVATE_KEY_BASE64（推荐，单行，见 .dev.vars.example）优先；
+ * JWT_PRIVATE_KEY 兼容 PEM 原文或其 base64。生产（wrangler secret）恒为 PEM 原文，
+ * 此函数仅在 dev 入口调用；生产入口（装配器生成）零改动。
+ */
+function normalizeSigningKey(env: Bindings): Bindings {
+  const out = { ...env };
+  const b64 = env.JWT_PRIVATE_KEY_BASE64;
+  if (b64) {
+    try {
+      const decoded = atob(b64);
+      if (decoded.includes('-----BEGIN')) out.JWT_PRIVATE_KEY = decoded;
+    } catch {
+      // 非 base64 → 保留原值继续
+    }
+  }
+  const direct = out.JWT_PRIVATE_KEY;
+  if (direct && !direct.includes('-----BEGIN')) {
+    try {
+      const decoded = atob(direct.replaceAll('\\n', ''));
+      if (decoded.includes('-----BEGIN')) out.JWT_PRIVATE_KEY = decoded;
+    } catch {
+      // 非法值原样透传，下游人话报错
+    }
+  }
+  return out;
+}
+
 export default {
   /**
    * wrangler dev 以 `fetch(request, env, ctx)` 三参调用模块默认导出——
@@ -42,6 +70,6 @@ export default {
    * 同时保留具体签名（#193 的 dev-entry.test 要直接三参调用）。
    */
   fetch(request: Request, env: Bindings, ctx: ExecutionContext): Response | Promise<Response> {
-    return app.fetch(request, env, ctx);
+    return app.fetch(request, normalizeSigningKey(env), ctx);
   },
 } satisfies ExportedHandler<Bindings>;

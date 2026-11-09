@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// 本地开发专用（wrangler dev）；生产部署一律走装配器：
+// `npx @unself/installer` 在 .deploy/cloudflare/ 生成带真实 database_id 与模块绑定的
+// 独立配置，本文件的 REPLACE_ME 永远不会出现在生产。
+//
+// 本地完整形态（#182）：
+//   npx wrangler dev --config wrangler.dev.jsonc --persist-to .wrangler/state
+// - main 指 test/dev-entry.ts：进程内单例假邮件适配器（批准→激活跨请求可见）；
+// - assets 指 dist/web（先 `pnpm vite build`）：SPA fallback + API/JWKS 先跑 Worker；
+// - 密钥走 .dev.vars（JWT_PRIVATE_KEY_BASE64 单行，见 .dev.vars.example）。
+{
+  "name": "unself-workbench-dev",
+  "main": "test/dev-entry.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "dist/web",
+    "binding": "ASSETS",
+    // SPA：未命中文件回 index.html；API/JWKS 一律先跑 Worker（同装配器生成形态）
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/.well-known/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "CORE_DB",
+      "database_name": "unself-core",
+      "database_id": "REPLACE_ME",
+      // migrations_dir：CORE_DB 迁移在本包 migrations/core/（wrangler d1 migrations apply CORE_DB）
+      "migrations_dir": "migrations/core"
+    },
+    {
+      "binding": "MODULES_DB",
+      "database_name": "unself-modules",
+      "database_id": "REPLACE_ME"
+      // migrations_dir：MODULES_DB 迁移由各 module 包自管（如 app/modules/hello/migrations/hello/）
+    }
+  ]
+}
