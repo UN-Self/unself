@@ -29,6 +29,8 @@ export interface Bindings {
   MODULES_DB: D1Database;
   /** 实例签名私钥（PKCS8 PEM）；由部署/首启流程写入 wrangler secret（#14/#16）。 */
   JWT_PRIVATE_KEY?: string;
+  /** 仅 dev：私钥的 base64 形态（.dev.vars dotenv 单行；dev-entry 归一为 PEM）。生产不设。 */
+  JWT_PRIVATE_KEY_BASE64?: string;
   /** 开发便利：未跑 setup 时允许环境变量提供 OIDC 配置（生产走 instance_config 表）。 */
   OIDC_ISSUER?: string;
   OIDC_CLIENT_ID?: string;

@@ -1,0 +1,6 @@
+# 本地 dev 密钥模板：拷成 .dev.vars 后填入实例私钥。
+# 生成方式（一次性）：仓库根跑 node scripts/generate-keys.mjs（装配器同款 ES256），
+# 或用已有 PEM：base64 -w0 私钥.pem 得单行值。
+# base64 形态是 dotenv 唯一能可靠承载的（裸 PEM 多行会被换行截断）；
+# dev-entry 会自动 base64→PEM 归一，PEM 原文形态也兼容（仅本地用）。
+JWT_PRIVATE_KEY_BASE64=<base64 -w0 输出贴这里>
