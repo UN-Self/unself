@@ -3,15 +3,21 @@
 // `npx @unself/installer` 在 .deploy/cloudflare/ 生成带真实 database_id 与模块绑定的
 // 独立配置，本文件的 REPLACE_ME 永远不会出现在生产。
 //
+// 日常入口：`pnpm dev`（scripts/dev.mjs）——自动 vite build（dist/web 缺失时）+
+// 自动迁移（d1_migrations 记账）+ 自生成 .dev.vars + 起 wrangler dev。
+// 手动等价：先 `pnpm build:web`，再 `npx wrangler dev --config wrangler.dev.jsonc`。
+//
 // 本地完整形态（#182）：
-//   npx wrangler dev --config wrangler.dev.jsonc --persist-to .wrangler/state
 // - main 指 test/dev-entry.ts：进程内单例假邮件适配器（批准→激活跨请求可见）；
-// - assets 指 dist/web（先 `pnpm vite build`）：SPA fallback + API/JWKS 先跑 Worker；
-// - 密钥走 .dev.vars（JWT_PRIVATE_KEY_BASE64 单行，见 .dev.vars.example）。
+// - assets 指 dist/web：SPA fallback + API/JWKS 一律先跑 Worker（同装配器生成形态）；
+// - 密钥走 .dev.vars（JWT_PRIVATE_KEY 单行 env，dev.mjs 自动生成；也兼容
+//   JWT_PRIVATE_KEY_BASE64，见 .dev.vars.example）。
 {
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "unself-workbench-dev",
   "main": "test/dev-entry.ts",
   "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true
   },
@@ -26,6 +32,7 @@
     {
       "binding": "CORE_DB",
       "database_name": "unself-core",
+      // database_id：本地 miniflare 只当存储 key 用，REPLACE_ME 占位即可（生产由装配器替换）
       "database_id": "REPLACE_ME",
       // migrations_dir：CORE_DB 迁移在本包 migrations/core/（wrangler d1 migrations apply CORE_DB）
       "migrations_dir": "migrations/core"
