@@ -57,6 +57,12 @@ export interface AdminModule {
   id: string
   enabled: boolean
   version: string | null
+  /** 落点形态（#348/#103② 用户实际选择）；字面量与 control-plane DEPLOY_MODES 同源清单。 */
+  mode: 'cloudflare' | 'docker' | 'connect'
+  /** connect 模式接入 URL；其余模式 NULL。 */
+  entry: string | null
+  /** 存储四级（#55）；NULL = 未选。 */
+  storage_level: 'core' | 'shared' | 'dedicated' | 'external' | null
 }
 
 export function fetchAdminModules(): Promise<AdminModule[]> {
