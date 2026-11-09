@@ -21,7 +21,15 @@ vi.mock('../lib/admin-api', () => ({
   fetchAuditLog: vi.fn(),
 }))
 
-const mod = (over: Partial<AdminModule> = {}): AdminModule => ({ id: 'hello', enabled: true, version: '0.1.0', ...over })
+const mod = (over: Partial<AdminModule> = {}): AdminModule => ({
+  id: 'hello',
+  enabled: true,
+  version: '0.1.0',
+  mode: 'cloudflare',
+  entry: null,
+  storage_level: null,
+  ...over,
+})
 
 const entry = (over: Partial<AuditEntry> = {}): AuditEntry => ({
   id: 1,
@@ -59,6 +67,21 @@ describe('ModulesPage（#208）', () => {
     expect(wrapper.text()).toContain('hello')
     expect(wrapper.text()).toContain('v0.1.0')
     expect(wrapper.find('[data-test="module-row"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('落点三列可见（#348/#107 消费面）：mode+存储，connect 模式带接入 URL', async () => {
+    vi.mocked(fetchAdminModules).mockResolvedValue([
+      mod({ id: 'a', mode: 'cloudflare', storage_level: 'dedicated' }),
+      mod({ id: 'b', mode: 'connect', entry: 'https://team.example.com/m/b/', storage_level: null }),
+    ])
+    const wrapper = mount(ModulesPage)
+    await flushPromises()
+
+    const rows = wrapper.findAll('[data-test="module-provisioning"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.text()).toBe('落点 cloudflare · 存储 dedicated')
+    expect(rows[1]!.text()).toBe('落点 connect · 存储 未选 · 接入 https://team.example.com/m/b/')
     wrapper.unmount()
   })
 

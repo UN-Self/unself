@@ -56,6 +56,10 @@ async function onToggle(mod: AdminModule): Promise<void> {
         <div class="module-id">
           {{ mod.id }}
           <span v-if="mod.version" class="module-version">v{{ mod.version }}</span>
+          <!-- #348 落点三列（决策 #107 最小消费面）：纯文本展示，徽章视觉属 D3 -->
+          <span class="module-provisioning" data-test="module-provisioning">
+            落点 {{ mod.mode }} · 存储 {{ mod.storage_level ?? '未选' }}<template v-if="mod.mode === 'connect' && mod.entry"> · 接入 {{ mod.entry }}</template>
+          </span>
         </div>
         <span class="badge" :class="mod.enabled ? 'badge-ok' : 'badge-muted'">
           {{ mod.enabled ? '启用中' : '已停用' }}
@@ -100,6 +104,13 @@ async function onToggle(mod: AdminModule): Promise<void> {
 }
 .module-version {
   margin-left: var(--unself-space-2);
+  font-size: var(--unself-font-size-xs);
+  font-weight: 400;
+  color: var(--unself-color-text-tertiary);
+}
+.module-provisioning {
+  display: block;
+  margin-top: var(--unself-space-1);
   font-size: var(--unself-font-size-xs);
   font-weight: 400;
   color: var(--unself-color-text-tertiary);
