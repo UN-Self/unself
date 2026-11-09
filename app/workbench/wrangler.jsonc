@@ -1,3 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // ⚠️ 占位文件——不可用于部署（#194 D6）。生产配置由装配器生成（.deploy/cloudflare/）。
-// 本地开发配置：wrangler.dev.jsonc（wrangler dev --config wrangler.dev.jsonc，见其头注释）。
+// 本地开发不用改本文件：`pnpm dev` 走 wrangler.dev.jsonc（自动迁移 + 假邮件 + 自生成密钥），
+// 手动调试用 wrangler dev --config wrangler.dev.jsonc（见其头注释）。
+{
+  "name": "unself-workbench",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "CORE_DB",
+      "database_name": "unself-core",
+      "database_id": "REPLACE_ME",
+      // migrations_dir：CORE_DB 迁移在本包 migrations/core/（wrangler d1 migrations apply CORE_DB）
+      "migrations_dir": "migrations/core"
+    },
+    {
+      "binding": "MODULES_DB",
+      "database_name": "unself-modules",
+      "database_id": "REPLACE_ME"
+      // migrations_dir：MODULES_DB 迁移由各 module 包自管（如 app/modules/hello/migrations/hello/）
+    }
+  ]
+}

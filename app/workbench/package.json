@@ -11,8 +11,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite",
     "build": "pnpm typecheck && pnpm build:worker && vite build",
+    "build:web": "vite build",
     "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "build:worker": "tsx scripts/build-worker.ts"
