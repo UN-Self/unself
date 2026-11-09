@@ -22,6 +22,7 @@
  * 用法：`pnpm dev`（= node scripts/dev.mjs，需先 pnpm install；前端快速回路另见 `pnpm dev:web`）。
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -199,6 +200,47 @@ async function migrate() {
     log(`迁移已应用 ${report.applied.length} 个：${report.applied.join('、')}`);
   }
   log(report.skipped.length > 0 ? `记账跳过 ${report.skipped.length} 个（幂等重跑）` : '迁移全部应用，无跳过');
+  return dbPath;
+}
+
+// ----------------------------------------------------------------
+// ②′ setup 深链接：与 docker/entrypoint.sh ③③ 同一套探测/签发语义
+//    （docker 首启打印一次性 setup 链接，dev 同款——三路同逻辑，不是 docker 特有）。
+//    SQL 与 core/control-plane SETUP_STATUS_SQL 同形状（SQL 单点防漂移；同款复制）。
+// ----------------------------------------------------------------
+const SETUP_PROBE_SQL =
+  "SELECT (SELECT COUNT(*) FROM instance_config WHERE key = 'setup_done' AND value = '1') AS sealed, " +
+  '(SELECT token FROM setup_tokens WHERE used_at IS NULL ORDER BY created_at LIMIT 1) AS token';
+
+function ensureSetupLink(dbPath) {
+  const db = new DatabaseSync(dbPath);
+  try {
+    const row = db.prepare(SETUP_PROBE_SQL).get();
+    if (Number(row.sealed) > 0) {
+      log('实例已封箱（setup 已完成），无需 setup 链接');
+      return;
+    }
+    let token = row.token ? String(row.token) : null;
+    if (token) {
+      log('复用未消费的 setup token（幂等重跑收敛）');
+    } else {
+      // 与 entrypoint lower(hex(randomblob(24))) 同形：48 hex，消费后自动作废
+      token = randomBytes(24).toString('hex');
+      db.prepare('INSERT INTO setup_tokens (token) VALUES (?1)').run(token);
+      log('已签发一次性 setup token（消费后自动作废）');
+    }
+    console.log(
+      '\n' +
+        '==========================================================================\n' +
+        '  ✅ Unself 核心已就绪\n' +
+        '  一次性 setup 链接（点开配置管理员与实例设置；token 用后即焚，泄露请删 .wrangler 重来）：\n\n' +
+        `      http://localhost:8788/setup?token=${token}\n` +
+        '\n' +
+        '==========================================================================\n',
+    );
+  } finally {
+    db.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -240,8 +282,9 @@ function startWrangler() {
 // ---------------------------------------------------------------------------
 async function main() {
   ensureWebDist();
-  await migrate();
+  const dbPath = await migrate();
   await ensureDevVars();
+  ensureSetupLink(dbPath);
   startWrangler();
 }
 
