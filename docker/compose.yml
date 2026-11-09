@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# R2 最简部署：单服务（核心 workbench）+ 数据卷（wrangler 持久层 = D1 sqlite 落盘处）。
+# 用法：docker compose -f docker/compose.yml up --build
+#   -f 必带（compose 文件在 docker/ 下，build 上下文相对它解析）。
+# 可选 env（.env 或 shell 透传）：UNSELF_PORT（默认 8787）、UNSELF_BASE_URL（反代/远程访问时必设）。
+# TODO(#108): R1 落地后本目录整块删除。
+services:
+  workbench:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      additional_contexts:
+        # 产物上下文 = app/workbench（dist/、migrations/、LICENSE、NOTICE）
+        wb: ../app/workbench
+    image: unself-workbench:local
+    restart: unless-stopped
+    ports:
+      - "${UNSELF_PORT:-8787}:${UNSELF_PORT:-8787}"
+    environment:
+      UNSELF_PORT: ${UNSELF_PORT:-8787}
+      UNSELF_BASE_URL: ${UNSELF_BASE_URL:-}
+      # 现阶段允许自带私钥（留空则 entrypoint 首启自举生成，落数据卷）——TODO(#108)
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
+    volumes:
+      - unself-data:/app/data
+
+volumes:
+  unself-data:
