@@ -37,6 +37,7 @@ interface RawRow {
   mode: unknown;
   entry: unknown;
   storage_level: unknown;
+  credential_hash: unknown;
 }
 
 export class D1ControlPlane implements ControlPlane {
@@ -44,10 +45,10 @@ export class D1ControlPlane implements ControlPlane {
 
   async upsertModule(reg: ModuleRegistration): Promise<RegistryEntry> {
     const version = reg.version ?? readVersion(reg.manifest);
-    const [mode, entry, storageLevel] = provisioningBinds(reg);
+    const [mode, entry, storageLevel, credentialHash] = provisioningBinds(reg);
     const row = await this.db
       .prepare(REGISTRY_UPSERT_SQL)
-      .bind(reg.id, reg.enabled ? 1 : 0, version, JSON.stringify(reg.manifest), mode, entry, storageLevel)
+      .bind(reg.id, reg.enabled ? 1 : 0, version, JSON.stringify(reg.manifest), mode, entry, storageLevel, credentialHash)
       .first<RawRow>();
     if (!row) throw new Error(`upsertModule 未返回行（id=${reg.id}）`);
     return rowToEntry({ ...row, manifest_json: row.manifest_json });

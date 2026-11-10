@@ -7,17 +7,21 @@
 import { ModuleManifestSchema, manifestFromYamlText, type ModuleManifest } from '@unself/contracts';
 import type { UnselfConfig, ModuleRef } from './config';
 
-/** 注册表 upsert SQL（与 core-api/control-plane REGISTRY_UPSERT_SQL 同源；0012 起带落点三列；合并语义同源——未写保留旧值，#348 review 定案）。 */
+/** 注册表 upsert SQL（与 core-api/control-plane REGISTRY_UPSERT_SQL 同源；0012 起带落点三列，
+ * 0013 起带 credential_hash（#349，8 参形态）；合并语义同源——未写保留旧值，#348 review 定案。
+ * installer 不传凭证（binds 恒 NULL = 首插落 NULL / 冲突保留旧值）：反连凭证只经
+ * workbench connect-register / 保存流程写入，装配合不冲掉哈希。） */
 export function registryUpsertSql(): string {
-  return `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level)
-VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7)
+  return `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash)
+VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7, ?8)
 ON CONFLICT(id) DO UPDATE SET
   enabled = excluded.enabled,
   version = excluded.version,
   manifest_json = excluded.manifest_json,
   mode = coalesce(?5, mode),
   entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END),
-  storage_level = coalesce(?7, storage_level)`;
+  storage_level = coalesce(?7, storage_level),
+  credential_hash = coalesce(?8, credential_hash)`;
 }
 
 /**
@@ -68,13 +72,14 @@ export function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-/** 选中模块的 upsert 语句参数（--json 命令数组形态）；落点三列（#348）随命令给，未写归一 NULL = 保留旧值（#348 review 定案）。 */
+/** 选中模块的 upsert 语句参数（--json 命令数组形态）；落点三列（#348）随命令给，未写归一 NULL = 保留旧值（#348 review 定案）。
+ * credential_hash 恒 NULL（#349：installer 不经手凭证；首插落 NULL，冲突分支保留已有哈希）。 */
 export function registryUpsertCommand(input: {
   manifest: ModuleManifest;
   mode?: 'cloudflare' | 'docker' | 'connect' | null;
   entry?: string | null;
   storage_level?: string | null;
-}): { sql: string; binds: [string, number, string, string, string | null, string | null, string | null] } {
+}): { sql: string; binds: [string, number, string, string, string | null, string | null, string | null, string | null] } {
   const { manifest } = input;
   const manifestJson = JSON.stringify(manifest);
   return {
@@ -87,6 +92,7 @@ export function registryUpsertCommand(input: {
       input.mode ?? null,
       input.entry ?? null,
       input.storage_level ?? null,
+      null,
     ],
   };
 }

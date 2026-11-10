@@ -36,6 +36,7 @@ interface RawRow {
   mode: unknown;
   entry: unknown;
   storage_level: unknown;
+  credential_hash: unknown;
 }
 
 export class RestD1ControlPlane implements ControlPlane {
@@ -43,10 +44,10 @@ export class RestD1ControlPlane implements ControlPlane {
 
   async upsertModule(reg: ModuleRegistration): Promise<RegistryEntry> {
     const version = reg.version ?? readVersion(reg.manifest);
-    const [mode, entry, storageLevel] = provisioningBinds(reg);
+    const [mode, entry, storageLevel, credentialHash] = provisioningBinds(reg);
     const { results } = await this.exec.query<RawRow>(
       REGISTRY_UPSERT_SQL,
-      [reg.id, reg.enabled ? 1 : 0, version, JSON.stringify(reg.manifest), mode, entry, storageLevel],
+      [reg.id, reg.enabled ? 1 : 0, version, JSON.stringify(reg.manifest), mode, entry, storageLevel, credentialHash],
     );
     const row = results[0];
     if (!row) throw new Error(`upsertModule 未返回行（id=${reg.id}）`);
@@ -170,6 +171,7 @@ function toEntry(row: RawRow): RegistryEntry {
     mode: (row.mode == null ? 'cloudflare' : String(row.mode)) as RegistryEntry['mode'],
     entry: row.entry == null ? null : String(row.entry),
     storage_level: (row.storage_level == null ? null : String(row.storage_level)) as RegistryEntry['storage_level'],
+    credential_hash: row.credential_hash == null ? null : String(row.credential_hash),
   };
 }
 

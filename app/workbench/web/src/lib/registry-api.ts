@@ -11,12 +11,15 @@ import { request, type ApiError } from './api-client'
 export type { ApiError }
 
 /**
- * 注册表条目（core-api RegistryEntry 的成员侧子集）。
+ * 注册表条目（core-api RegistryEntry 的成员侧子集，#348 遗留收窄 / #349）：
+ * GET /api/modules 回 id/enabled/name/manifest——不回落点三列（mode/entry/storage_level）
+ * 与 credential_hash（凭证敏感面，管理员视角才有，GET /api/admin/modules）。
  */
 export interface RegistryModule {
   id: string
   enabled: boolean
-  version: string | null
+  /** 可读名（manifest.description ?? id，服务端填）。 */
+  name: string
   manifest: {
     id: string
     route: string
@@ -27,12 +30,6 @@ export interface RegistryModule {
     description?: string
     icon?: string
   } | null
-  /** 落点形态（#348/#103② 用户实际选择）；字面量与 control-plane DEPLOY_MODES 同源清单。 */
-  mode: 'cloudflare' | 'docker' | 'connect'
-  /** connect 模式接入 URL；其余模式 NULL。 */
-  entry: string | null
-  /** 存储四级（#55）；NULL = 未选。 */
-  storage_level: 'core' | 'shared' | 'dedicated' | 'external' | null
 }
 
 export async function fetchEnabledModules(): Promise<RegistryModule[]> {

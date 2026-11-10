@@ -79,7 +79,7 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
     dnsA: new Set(options.dnsA ?? []),
     totalTlsCalls: 0,
     // core 库的迷你 SQL 态（module_registry / setup_tokens / 记账表）
-    registry: new Map<string, { enabled: number; version: string; manifest_json: string; mode: string; entry: string | null; storage_level: string | null }>(),
+    registry: new Map<string, { enabled: number; version: string; manifest_json: string; mode: string; entry: string | null; storage_level: string | null; credential_hash?: string | null }>(),
     importEtags: new Set<string>(),
     importCalls: [] as Array<{ action: string; etag?: string; bookmark?: string }>,
     /** 已因注入失败而被拒绝的 etag（重放也必须失败，否则「逐文件定位」测试会看到假成功）。 */
@@ -385,7 +385,7 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
       return env(null, false, 7500, 'no such table: d1_migrations', 400);
     }
     if (sql.startsWith('INSERT INTO module_registry')) {
-      const [id, enabled, version, manifestJson, mode, entry, storageLevel] = params as [
+      const [id, enabled, version, manifestJson, mode, entry, storageLevel, credentialHash] = params as [
         string,
         number,
         string,
@@ -393,9 +393,10 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
         string,
         string | null,
         string | null,
+        string | null,
       ];
-      state.registry.set(id, { enabled, version, manifest_json: manifestJson, mode, entry, storage_level: storageLevel });
-      return envRow([{ id, enabled, version, manifest_json: manifestJson, mode, entry, storage_level: storageLevel }], 1);
+      state.registry.set(id, { enabled, version, manifest_json: manifestJson, mode, entry, storage_level: storageLevel, credential_hash: credentialHash });
+      return envRow([{ id, enabled, version, manifest_json: manifestJson, mode, entry, storage_level: storageLevel, credential_hash: credentialHash }], 1);
     }
     if (sql.startsWith('DELETE FROM module_registry')) {
       const id = String(params[0]);
@@ -419,14 +420,15 @@ export function makeCfRestFake(options: FakeAccountOptions = {}) {
       const row = state.registry.get(id);
       if (!row) return envRow([], 0);
       row.enabled = enabled;
-      return envRow([{ id, enabled, version: row.version, manifest_json: row.manifest_json, mode: row.mode, entry: row.entry, storage_level: row.storage_level }], 1);
+      return envRow([{ id, enabled, version: row.version, manifest_json: row.manifest_json, mode: row.mode, entry: row.entry, storage_level: row.storage_level, credential_hash: row.credential_hash }], 1);
     }
     if (sql.startsWith('SELECT id, enabled, version, manifest_json FROM module_registry') ||
-      sql.startsWith('SELECT id, enabled, version, manifest_json, mode, entry, storage_level FROM module_registry')) {
+      // #348/#349 两代列清单（前缀匹配到 mode/credential_hash 尾列变化）
+      /^SELECT id, enabled, version, manifest_json, mode, entry, storage_level(, credential_hash)? FROM module_registry/.test(sql)) {
       return envRow(
         [...state.registry]
           .sort()
-          .map(([id, r]) => ({ id, enabled: r.enabled, version: r.version, manifest_json: r.manifest_json, mode: r.mode, entry: r.entry, storage_level: r.storage_level })),
+          .map(([id, r]) => ({ id, enabled: r.enabled, version: r.version, manifest_json: r.manifest_json, mode: r.mode, entry: r.entry, storage_level: r.storage_level, credential_hash: r.credential_hash })),
       );
     }
     if (sql.includes('instance_config')) {
