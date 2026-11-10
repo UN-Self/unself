@@ -387,3 +387,98 @@ describe('0012 落点列（老库 0001-0011 已应用 + 0012，#348）', () => {
     expect(stmts(pg)).toEqual(stmts(core));
   });
 });
+
+/**
+ * #349 0013 credential_hash：硬性走「存量老库升级」路径——0001-0012 已应用、种既有行
+ * 后再跑 0013（createCoreDb 是全新库，测不到升级语义）。
+ */
+function legacyCoreDb0012(): DatabaseSync {
+  const dir = fileURLToPath(new URL('../migrations/core/', import.meta.url));
+  const sqlite = new DatabaseSync(':memory:');
+  const applied = readdirSync(dir)
+    .map((file) => ({ file, prefix: /^(\d{4})_/.exec(file)?.[1] }))
+    .filter(({ file, prefix }) => prefix !== undefined && Number(prefix) <= 12 && file.endsWith('.sql'))
+    .sort((a, b) => a.file.localeCompare(b.file));
+  for (const { file } of applied) {
+    sqlite.exec(readFileSync(`${dir}/${file}`, 'utf8'));
+  }
+  return sqlite;
+}
+
+function apply0013(sqlite: DatabaseSync): void {
+  sqlite.exec(readFileSync(fileURLToPath(new URL('../migrations/core/0013_registry_credential.sql', import.meta.url)), 'utf8'));
+}
+
+describe('0013 credential_hash 列（老库 0001-0012 已应用 + 0013，#349）', () => {
+  it('存量行升级：credential_hash 为 NULL，既有行不受影响', () => {
+    const sqlite = legacyCoreDb0012();
+    try {
+      sqlite
+        .prepare(
+          "INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry) VALUES ('hello', 1, '0.1.0', '{}', 'connect', 'https://team.example.com/m/hello/')",
+        )
+        .run();
+
+      apply0013(sqlite);
+
+      const row = sqlite.prepare("SELECT mode, entry, credential_hash FROM module_registry WHERE id = 'hello'").get() as {
+        mode: string;
+        entry: string;
+        credential_hash: string | null;
+      };
+      expect(row).toEqual({
+        mode: 'connect',
+        entry: 'https://team.example.com/m/hello/',
+        credential_hash: null,
+      });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it('新列可写可空：记账写哈希、不写即 NULL；0012 CHECK 不因新迁移放松', () => {
+    const sqlite = legacyCoreDb0012();
+    try {
+      apply0013(sqlite);
+      const hash = 'c'.repeat(64);
+      sqlite
+        .prepare('INSERT INTO module_registry (id, enabled, manifest_json, mode, entry, credential_hash) VALUES (?, 0, ?, ?, ?, ?)')
+        .run('pending', '{}', 'connect', 'https://team.example.com/m/pending/', hash);
+      expect(
+        sqlite.prepare("SELECT credential_hash FROM module_registry WHERE id = 'pending'").get(),
+      ).toEqual({ credential_hash: hash });
+      sqlite.prepare('INSERT INTO module_registry (id, enabled, manifest_json, credential_hash) VALUES (?, 1, ?, ?)').run('bare', '{}', 'd'.repeat(64));
+      expect(
+        sqlite.prepare("SELECT credential_hash FROM module_registry WHERE id = 'bare'").get(),
+      ).toEqual({ credential_hash: 'd'.repeat(64) });
+      // 反面：connect 而 entry 为空仍拒（0013 不动 0012 的构成定义）
+      expect(() =>
+        sqlite
+          .prepare('INSERT INTO module_registry (id, enabled, manifest_json, mode, credential_hash) VALUES (?, 0, ?, ?, ?)')
+          .run('bad_connect', '{}', 'connect', hash),
+      ).toThrow(/CHECK/i);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it('PG 变体与 SQLite 同构（#103①：可移植子集重合处共用，分歧前防漂移）', () => {
+    const core = readFileSync(
+      fileURLToPath(new URL('../migrations/core/0013_registry_credential.sql', import.meta.url)),
+      'utf8',
+    );
+    const pg = readFileSync(
+      fileURLToPath(new URL('../migrations/pg/0013_registry_credential.pg.sql', import.meta.url)),
+      'utf8',
+    );
+    const stmts = (text: string) =>
+      text
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('--'))
+        .join('\n')
+        .split(';')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    expect(stmts(pg)).toEqual(stmts(core));
+  });
+});

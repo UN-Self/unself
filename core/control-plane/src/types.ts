@@ -22,7 +22,9 @@ export interface BoundQuery {
   };
 }
 
-/** 注册表行（module_registry；enabled 以 0/1 存，接口层转 boolean）。 */
+/**
+ * 注册表行（module_registry；enabled 以 0/1 存，接口层转 boolean）。
+ */
 export interface RegistryEntry {
   id: string;
   enabled: boolean;
@@ -34,6 +36,11 @@ export interface RegistryEntry {
   entry: string | null;
   /** 存储四级（决策 #55）：core/shared/dedicated/external；NULL = 未选。 */
   storage_level: StorageLevel | null;
+  /**
+   * 反连凭证哈希（#349，决策 #108）：SHA-256 hex（64 位小写），core 验证用、明文不落库；
+   * 0013 起有列。mode=connect 且完成保存（registry upsert 激活）后必有值；未完成保存可有值（pending 态）。
+   */
+  credential_hash: string | null;
 }
 
 /** 落点形态枚举（0012 CHECK 同源清单；zod 侧直接 z.enum(DEPLOY_MODES) 复用）。 */
@@ -59,6 +66,12 @@ export function checkProvisioning(mode: string, entry: string | null | undefined
 }
 
 /**
+ * 反连 key 哈希形状（#349）：浏览器 hex(SHA-256(key))，64 位小写 hex。
+ * 形状规则单点于此（connect-register zod 与未来 dial-home 校验共用），不散落数处。
+ */
+export const CREDENTIAL_HASH_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
  * 注册/更新输入（装配器传完整快照；core-api 路由层已有 zod 门禁）。
  * 落点三列合并语义（#348 review 定案）：本次未写（undefined/缺字段）= 保留列中旧值，
  * 本语句不承担清空——清空走独立管理动作；首次插入的缺省值由 0012 列 DEFAULT 承载。
@@ -75,6 +88,8 @@ export interface ModuleRegistration {
   entry?: string | null;
   /** 存储四级；未写 = 保留旧值（NULL = 未选）。 */
   storage_level?: StorageLevel | null;
+  /** 反连凭证哈希（#349）；未写 = 保留旧值（合并语义同落点三列）。 */
+  credential_hash?: string | null;
 }
 
 /** setup token 三态（与 core-api setup 域语义对齐）。 */

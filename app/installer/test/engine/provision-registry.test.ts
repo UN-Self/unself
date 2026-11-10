@@ -91,11 +91,13 @@ describe('registry（⑤ · 形状契约）', () => {
 
   it('registryUpsertCommand：未写三列 binds 全 NULL，SQL 冲突分支引用原始 ?N 保留旧值（#348 review）', () => {
     const bare = registryUpsertCommand({ manifest: ModuleManifestSchema.parse(manifest) });
-    expect(bare.binds).toEqual(['hello', 1, '0.1.0', expect.any(String), null, null, null]);
+    // #349 起 8 参形态：第 8 参 credential_hash 恒 NULL（installer 不经手凭证；首插落 NULL，冲突保留旧值）
+    expect(bare.binds).toEqual(['hello', 1, '0.1.0', expect.any(String), null, null, null, null]);
     expect(bare.sql).toContain("coalesce(?5, 'cloudflare')");
     expect(bare.sql).toContain('coalesce(?5, mode)');
     expect(bare.sql).toContain("coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END)");
     expect(bare.sql).toContain('coalesce(?7, storage_level)');
+    expect(bare.sql).toContain('coalesce(?8, credential_hash)');
   });
 
   it('registryDisableCommand：只翻 enabled，不凭空建行', () => {

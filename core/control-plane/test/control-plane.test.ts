@@ -48,6 +48,33 @@ describe('SqliteControlPlane（真 sqlite）', () => {
     expect((await cp.readRegistry())[0]).toMatchObject({ mode: 'cloudflare', entry: null, storage_level: 'core' });
   });
 
+  it('credential_hash（#349）：合并语义同落点三列——未写保留旧值、显式传值覆盖、首插直写', async () => {
+    const cp = SqliteControlPlane.open(':memory:');
+    // 首插直写（connect-register 记账首行形态）：无旧值也落哈希
+    const first = await cp.upsertModule({
+      id: 'hello',
+      enabled: false,
+      manifest: MANIFEST,
+      mode: 'connect',
+      entry: 'https://core.example.com/m/hello/',
+      credential_hash: 'a'.repeat(64),
+    });
+    expect(first).toMatchObject({ credential_hash: 'a'.repeat(64) });
+    // 未写（undefined）→ 保留旧值：模块升级/保存段 upsert 不冲掉哈希
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: { ...MANIFEST, version: '0.2.0' } });
+    expect((await cp.readRegistry())[0]).toMatchObject({ enabled: true, credential_hash: 'a'.repeat(64) });
+    // 未写与显式 null 同为「未写」（绑定 NULL）→ 保留旧值（#348 review 定案：绑定级合并；
+    // 清凭证走管理动作，本语句不承担清空）
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, credential_hash: null });
+    expect((await cp.readRegistry())[0]).toMatchObject({ credential_hash: 'a'.repeat(64) });
+    // 显式传值再覆盖
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, credential_hash: 'b'.repeat(64) });
+    expect((await cp.readRegistry())[0]).toMatchObject({ credential_hash: 'b'.repeat(64) });
+    // 装配路径（installer 同构：provisioningBinds 恒 NULL）不冲掉已有哈希
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, mode: 'cloudflare', entry: null, storage_level: 'core' });
+    expect((await cp.readRegistry())[0]).toMatchObject({ mode: 'cloudflare', entry: null, storage_level: 'core', credential_hash: 'b'.repeat(64) });
+  });
+
   it('upsert 收敛：同 id 重复注册刷新快照不重复建行；toggle 不存在的 id 回 null', async () => {
     const cp = SqliteControlPlane.open(':memory:');
     await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST });

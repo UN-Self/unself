@@ -48,10 +48,7 @@ describe('useModuleFrame 握手超时（#306）', () => {
   const MODULE = {
     id: 'hello',
     enabled: true,
-    version: '0.1.0',
-    mode: 'cloudflare',
-    entry: null,
-    storage_level: null,
+    name: 'hello',
     manifest: {
       id: 'hello',
       route: '/m/hello/',

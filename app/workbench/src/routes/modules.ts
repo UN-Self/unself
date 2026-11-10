@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { getSigningRuntime } from '../keys';
 import { checkTokenGate, issueModuleToken, MODULE_TOKEN_ISSUER } from '../token';
-import { listModules, ModuleRegistrationSchema, registryFrameOrigins, toggleModule, upsertModule } from '../registry';
+import { ConnectRegisterSchema, connectPendingManifest, listMemberModules, listModules, ModuleRegistrationSchema, registryFrameOrigins, toggleModule, upsertModule } from '../registry';
 import { audit } from '../services/audit';
 import { configuredMailSender, deliverNotification } from '../services/notifications';
 import { readSession } from '../session';
@@ -112,15 +112,62 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
     return c.json({ id: moduleId, removed: true });
   });
 
+  /**
+   * 反连接入：记账预注册（#349，决策 #108 两段式的第①段）。
+   * 动线：用户在工作台「新增模块」选 connect 形态 → 浏览器本地 WebCrypto 生成 key、
+   * 算 hex(SHA-256(key)) → 本端点记账；之后用户把 core 可达地址 + key 写进模块 env 部署，
+   * 模块主动外连（dial-home）完成注册与保活 → 工作台「测试连接」绿 → 保存。
+   * 保存 = 两段式的第②段：复用既有 POST /api/admin/modules upsert 激活（enabled=true）。
+   *
+   * 本端点语义 = upsert 一行 mode='connect' + credential_hash + entry=core 隧道路由的
+   * pending 态（enabled=false）：
+   * - 不携带 manifest（#349）：清单快照归保存段的 upsert；本段只负责「记账 + 发路由」。core
+   *   侧 /m/<id>/ 路由分配由 T2（core 隧道面）承接，此处只写注册表。
+   * - 幂等：同一 moduleId 重放（双击/重试）覆盖哈希，不建第二行（PK 硬闸）。
+   * - keyHash 形状（64 位小写 hex，浏览器 hex(SHA-256(key))）由 CREDENTIAL_HASH_PATTERN 单点校验；
+   *   明文 key 只在浏览器内存与一次性展示里，core 全程只见哈希（#102 措辞修订，决策 #108）。
+   * - 权限：管理员会话（requireAdmin 由组合根 /api/admin/* 前缀统一挂）——接入是实例级管理动作。
+   * - 落点列合并语义跟 0012/#348 review 定案：本段未写 entry/storage_level 时保留列中旧值
+   *   （重复记账不冲掉用户已选存储）， credential_hash 显式传值覆盖（记账语义就是写哈希）。
+   */
+  app.post('/api/admin/modules/connect-register', async (c) => {
+    const parsed = ConnectRegisterSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: 'invalid connect registration', detail: z.prettifyError(parsed.error) }, 400);
+    }
+    const { moduleId, keyHash, storageLevel } = parsed.data;
+    // core 分配路由（决策 #108）：反连模块的接入点 = core 自己的隧道路由 /m/<id>/，
+    // 记账时刻即可知（请求 origin）。这也是 0012 CHECK（connect 必填 entry）的满足方式
+    // ——记账段不放松数据层不变式， entry 指向的隧道面由 T2（core 隧道面）承接。
+    const routeEntry = `${new URL(c.req.url).origin}/m/${moduleId}/`;
+    // 两段式语义承载于此：pending 态（enabled=false），第②段保存时经既有 upsert 激活（enabled=true）。
+    // manifest 用占位快照（真快照归保存段）；storage_level 未写保留旧值（合并语义，#348 review 定案）。
+    // entry 每次显式写 core 路由（记账语义 = 把模块接回 core 隧道）。
+    const entry = await upsertModule(c.env.CORE_DB, {
+      id: moduleId,
+      enabled: false,
+      manifest: connectPendingManifest(moduleId, routeEntry),
+      mode: 'connect',
+      entry: routeEntry,
+      credential_hash: keyHash,
+      storage_level: storageLevel ?? null,
+    });
+    await audit(c.env.CORE_DB, (await readSession(c))!.uid, 'module_connect_registered', moduleId);
+    return c.json({ id: entry.id, mode: entry.mode, enabled: entry.enabled }, 201);
+  });
+
   /** 全量列表（管理端，含停用）。 */
   app.get('/api/admin/modules', async (c) => {
     return c.json(await listModules(c.env.CORE_DB));
   });
 
-  /** 成员侧：仅启用模块（边栏/nav 数据源，#12 消费）。 */
+  /**
+   * 成员侧：仅启用模块的收窄面（#348 遗留收窄，#349）——不回落点三列与 credential_hash。
+   * 每行回 id/enabled/name/manifest（壳 iframe 与 nav 图标的数据源）；
+   * 完整条目走管理端 GET /api/admin/modules。
+   */
   app.get('/api/modules', async (c) => {
-    const all = await listModules(c.env.CORE_DB);
-    return c.json(all.filter((m) => m.enabled));
+    return c.json(await listMemberModules(c.env.CORE_DB));
   });
 
   /**

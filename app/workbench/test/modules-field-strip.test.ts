@@ -102,7 +102,7 @@ describe('S6 /api/modules 字段剥离回归（#208）', () => {
     expect((await res.json() as Record<string, unknown>)).not.toHaveProperty('evil');
   });
 
-  it('GET /api/modules 匿名响应条目不含未知键（成员可见面）', async () => {
+  it('GET /api/modules 匿名响应条目不含未知键（成员可见面：最小面收窄，#348 遗留/#349）', async () => {
     const { env, cookie } = await adminEnv();
     await register(env, cookie, {
       id: 'hello',
@@ -114,9 +114,14 @@ describe('S6 /api/modules 字段剥离回归（#208）', () => {
     expect(res.status).toBe(200);
     const list = (await res.json()) as Array<Record<string, unknown>>;
     expect(list).toHaveLength(1);
+    // 成员可见面收窄（#349）：不回落点三列与凭证哈希；manifest 保留（壳 iframe 与 nav 数据源）
+    expect(Object.keys(list[0]!).sort()).toEqual(['enabled', 'id', 'manifest', 'name']);
+    expect(list[0]).not.toHaveProperty('mode');
+    expect(list[0]).not.toHaveProperty('entry');
+    expect(list[0]).not.toHaveProperty('storage_level');
+    expect(list[0]).not.toHaveProperty('credential_hash');
+    // manifest 内部的未知键仍被注册时剥离（S6 原语义不变）
     expect(list[0]!.manifest).not.toHaveProperty('evil');
     expect(list[0]!.manifest).not.toHaveProperty('admin');
-    // 响应条目本身只有契约键（id/enabled/version/manifest + #348 落点三列）
-    expect(Object.keys(list[0]!).sort()).toEqual(['enabled', 'entry', 'id', 'manifest', 'mode', 'storage_level', 'version']);
   });
 });

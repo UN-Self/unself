@@ -26,10 +26,7 @@ const { TOKEN, MODULE, REJECTED } = vi.hoisted(() => {
   const MODULE = {
     id: 'hello',
     enabled: true,
-    version: '0.1.0',
-    mode: 'cloudflare' as const,
-    entry: null,
-    storage_level: null as 'core' | 'shared' | 'dedicated' | 'external' | null,
+    name: 'hello',
     manifest: {
       id: 'hello',
       route: '/m/hello/',

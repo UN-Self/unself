@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 // 子路径进点（./types）：枚举与校验单点在 control-plane，且不把 node:sqlite 侧拖进 worker 打包图。
 import {
+  CREDENTIAL_HASH_PATTERN,
   checkProvisioning,
   DEPLOY_MODES,
   STORAGE_LEVELS,
@@ -42,6 +43,11 @@ export const ModuleRegistrationSchema = z
       (v) => (v === '' ? null : v),
       z.enum(STORAGE_LEVELS).nullish(),
     ),
+    /** 反连凭证哈希（#349）：64 位小写 hex；未写 = 保留旧值（合并语义同落点三列）。 */
+    credential_hash: z.preprocess(
+      (v) => (v === '' ? null : v),
+      z.string().regex(CREDENTIAL_HASH_PATTERN).nullish(),
+    ),
   })
   // 落点不变式与 0012 CHECK 同一规则（入口层给 400 人话，数据层是同一构成定义）：
   // 错误文案单点在 control-plane checkProvisioning，这里只透传。mode 未写 = 保留旧值，
@@ -56,7 +62,34 @@ export const ModuleRegistrationSchema = z
 
 export type ModuleRegistration = z.infer<typeof ModuleRegistrationSchema>;
 
-/** registry 行（API 响应形状；enabled 以 boolean 暴露，映射 D1 INTEGER 0/1）。 */
+/**
+ * 反连接入记账请求体（#349，决策 #108 两段式第①段）。
+ * keyHash = 浏览器 hex(SHA-256(key))，形状单点在 control-plane CREDENTIAL_HASH_PATTERN；
+ * storageLevel 可选（用户此时可能还没选存储，未写 = 保留列中旧值，合并语义同落点三列）。
+ */
+export const ConnectRegisterSchema = z.object({
+  moduleId: z.string().regex(/^[a-z][a-z0-9-]+$/),
+  keyHash: z.string().regex(CREDENTIAL_HASH_PATTERN),
+  storageLevel: z.enum(STORAGE_LEVELS).optional(),
+});
+
+/**
+ * connect 记账 pending 态的 manifest 占位快照（#349）：ModuleManifestSchema 的最小合法形状。
+ * 决策 #108 两段式中本段不携带真清单（模块还没部署）；真快照由第②段「测试连接→保存」
+ * 的 POST /api/admin/modules 写入并覆盖此占位。entry = core 侧隧道路由（与 registry entry
+ * 同源，见 connect-register 路由注释）；credential_hash 列（非快照）才是凭证真值面。
+ */
+export function connectPendingManifest(moduleId: string, entry: string): z.infer<typeof ModuleManifestSchema> {
+  return ModuleManifestSchema.parse({
+    id: moduleId,
+    version: '0.0.0',
+    runtimes: ['external'],
+    route: `/m/${moduleId}`,
+    entry,
+  });
+}
+
+/** 注册表行（API 响应形状；enabled 以 boolean 暴露，映射 D1 INTEGER 0/1）。 */
 export interface RegistryEntry {
   id: string;
   enabled: boolean;
@@ -68,6 +101,22 @@ export interface RegistryEntry {
   entry: string | null;
   /** 存储四级；NULL = 未选。 */
   storage_level: StorageLevel | null;
+  /** 反连凭证哈希（#349，决策 #108）；mode=connect 且完成保存后必有值。 */
+  credential_hash: string | null;
+}
+
+/**
+ * 成员侧模块条目（GET /api/modules，#348 遗留收窄，#349）：不回落点三列与 credential_hash。
+ * 排除面 = 0012 落点三列（mode/entry/storage_level）+ 0013 credential_hash（凭证敏感面，
+ * 任务书「不回 entry/credential_hash/落点三列」）。manifest 保留：壳的 iframe 装载
+ * （moduleFrameSrc）与 nav 图标（manifest.icon）都消费它，收掉即壳耀瘫。
+ * name = manifest.description ?? id（描述缺省时给可读名；描述进 manifest 由 contracts schema 掌握）。
+ */
+export interface MemberModuleEntry {
+  id: string;
+  enabled: boolean;
+  name: string;
+  manifest: unknown;
 }
 
 /** 启停响应。 */
@@ -85,6 +134,7 @@ export function rowToEntry(row: {
   mode?: string | null;
   entry?: string | null;
   storage_level?: string | null;
+  credential_hash?: string | null;
 }): RegistryEntry {
   let manifest: unknown;
   try {
@@ -100,6 +150,7 @@ export function rowToEntry(row: {
     mode: (row.mode ?? 'cloudflare') as DeployMode,
     entry: row.entry ?? null,
     storage_level: (row.storage_level ?? null) as StorageLevel | null,
+    credential_hash: row.credential_hash ?? null,
   };
 }
 
@@ -111,10 +162,11 @@ export async function upsertModule(db: D1Database, reg: ModuleRegistration): Pro
   const manifestJson = JSON.stringify(reg.manifest);
   const row = await db
     .prepare(
-      `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level) VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7)
+      `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash) VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7, ?8)
        ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, version = excluded.version, manifest_json = excluded.manifest_json,
-       mode = coalesce(?5, mode), entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END), storage_level = coalesce(?7, storage_level)
-       RETURNING id, enabled, version, manifest_json, mode, entry, storage_level`,
+       mode = coalesce(?5, mode), entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END), storage_level = coalesce(?7, storage_level),
+       credential_hash = coalesce(?8, credential_hash)
+       RETURNING id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash`,
     )
     .bind(
       reg.id,
@@ -124,8 +176,9 @@ export async function upsertModule(db: D1Database, reg: ModuleRegistration): Pro
       reg.mode ?? null,
       reg.entry ?? null,
       reg.storage_level ?? null,
+      reg.credential_hash ?? null,
     )
-    .first<{ id: string; enabled: number; version: string | null; manifest_json: string; mode: string | null; entry: string | null; storage_level: string | null }>();
+    .first<{ id: string; enabled: number; version: string | null; manifest_json: string; mode: string | null; entry: string | null; storage_level: string | null; credential_hash: string | null }>();
   if (!row) {
     throw new Error(`upsertModule 未返回行（id=${reg.id}）`);
   }
@@ -144,14 +197,50 @@ export async function toggleModule(db: D1Database, id: string, enabled: boolean)
   return { id: row.id, enabled: row.enabled === 1 };
 }
 
-/** 列出全部模块（管理端；成员侧由 shell 过滤 enabled）。 */
+/** 列出全部模块（管理端，含停用；成员侧由 GET /api/modules 收窄）。 */
 export async function listModules(db: D1Database): Promise<RegistryEntry[]> {
-  // 列集合与迁移 0001 建表严格一致（旧版 RegistryEntry 带不存在于 DB 的注册时间幻影字段，
-  // 响应恒返空串——已删；真列 SELECT 可暴露查询列 ↔ 建表列错位）。
+  // 列集合与迁移 0001 建表严格一致（历史幻影列教训：响应恒返空串——已删；真列 SELECT 可暴露查询列 ↔ 建表列错位）。
   const result = await db
-    .prepare('SELECT id, enabled, version, manifest_json, mode, entry, storage_level FROM module_registry ORDER BY id')
-    .all<{ id: string; enabled: number; version: string | null; manifest_json: string; mode: string | null; entry: string | null; storage_level: string | null }>();
+    .prepare('SELECT id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash FROM module_registry ORDER BY id')
+    .all<{ id: string; enabled: number; version: string | null; manifest_json: string; mode: string | null; entry: string | null; storage_level: string | null; credential_hash: string | null }>();
   return result.results.map(rowToEntry);
+}
+
+/**
+ * 成员侧启用清单（GET /api/modules，#348 遗留收窄，#349）：不回落点三列与 credential_hash。
+ * 语义：只回 enabled 行；每行回 id/enabled/name/manifest（壳 iframe 与 nav 图标的数据源），
+ * 不回 mode/entry/storage_level/credential_hash。需要完整条目走管理端 GET /api/admin/modules
+ * （requireAdmin）。
+ */
+export async function listMemberModules(db: D1Database): Promise<MemberModuleEntry[]> {
+  const rows = await db
+    .prepare('SELECT id, enabled, manifest_json FROM module_registry WHERE enabled = 1 ORDER BY id')
+    .all<{ id: string; enabled: number; manifest_json: string }>();
+  return rows.results.map((row) => ({
+    id: row.id,
+    enabled: row.enabled === 1,
+    name: memberModuleName(row.manifest_json) || row.id,
+    manifest: memberModuleManifest(row.manifest_json),
+  }));
+}
+
+/** 成员侧条目名：manifest.description；缺省/非字符串/快照损坏 → 空串（调用方回退 id）。 */
+function memberModuleName(manifestJson: string): string {
+  try {
+    const manifest = JSON.parse(manifestJson) as { description?: unknown };
+    return typeof manifest.description === 'string' ? manifest.description : '';
+  } catch {
+    return '';
+  }
+}
+
+/** 成员侧条目 manifest：解析快照；损坏回 null（与 rowToEntry 同口径，不外泄原始串）。 */
+function memberModuleManifest(manifestJson: string): unknown {
+  try {
+    return JSON.parse(manifestJson);
+  } catch {
+    return null;
+  }
 }
 
 /**

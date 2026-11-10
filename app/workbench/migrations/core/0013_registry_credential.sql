@@ -1,0 +1,28 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
+-- unself-core：module_registry 增 credential_hash 列（issue #349，决策 #108）
+--
+-- 背景：connect 反连接入（决策 #108）：用户在管理台点「新增模块」→ 浏览器本地 WebCrypto
+-- 生成 key → core 只存哈希（SHA-256 hex）验证。本列存反连 key 的哈希，core 侧验证用；
+-- 明文 key 只在浏览器内存与用户复制粘贴的一次性展示里，不落库、不进日志。
+--
+-- 语义：
+--   credential_hash  反连 key 的 SHA-256 hex（64 位小写 hex）；可空。
+--                    mode=connect 且完成「测试连接→保存」后必有值（保存 = registry
+--                    upsert 激活，enabled=true）。该不变式由流程顺序承载（先
+--                    connect-register 记账预注册、后保存 upsert 激活），不作列级
+--                    CHECK：0012 CHECK 已锁定 mode/entry 构成，列级约束无法表达
+--                    「保存已完成」这一流程事实。
+--
+-- 两段式接入语义（决策 #108，#349）：
+--   ① POST /api/modules/connect-register：记账预注册——upsert mode='connect' +
+--      credential_hash，pending 态（enabled=0），不携带 manifest；
+--   ② POST /api/admin/modules（既有 upsert）：测试连接绿 → 保存 = registry upsert
+--      激活（enabled=true，manifest 快照入库）。第②步未写 credential_hash，
+--      冲突分支保留第①步写入的哈希（合并语义：未写保留旧值）。
+--
+-- 迁移安全性（#61 增量安全语句 + 按文件名记账）：纯 ADD COLUMN 可空列，无数据回填，
+-- 重放幂等（记账跳过）；与 0012 同范式。
+--
+-- 实测版本：SQLite 3.54.1（node:sqlite；ADD COLUMN 可空列零回填）。
+
+ALTER TABLE module_registry ADD COLUMN credential_hash TEXT;

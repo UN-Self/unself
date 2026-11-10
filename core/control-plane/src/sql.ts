@@ -8,40 +8,46 @@
  */
 import { migrationsTableFor, type ModuleRegistration } from './types';
 
-// ---- module_registry（core 库 0001 建表 + 0012 落点三列）----
+// ---- module_registry（core 库 0001 建表 + 0012 落点三列 + 0013 credential_hash）----
 
 /**
  * upsert 冲突分支合并语义（#348 review 定案，#103②「用户实际选择」的构成定义）：
- * 落点三列要活过模块升级——本次未写（绑定值为 NULL）保留列中旧值，清空必须走显式写值
- * （管理接口/管理动作），装配器不承担清空职责。首次插入的缺省值（mode='cloudflare'）由
+ * 落点三列与 credential_hash（#349）要活过模块升级——本次未写（绑定值为 NULL）保留列中旧值，
+ * 清空必须走显式写值（管理接口/管理动作），装配器不承担清空职责。首次插入的缺省值（mode='cloudflare'）由
  * VALUES 里的 coalesce 承载（列 DEFAULT 不救显式 NULL）；冲突分支引用原始绑定值与目标行
  * 现值合并，不复用被 coerce 过的 excluded.*（否则会把「未写」变成「写默认值」）。同一 ?N
- * 可多处引用，bind 数仍是 7（D1 与 node:sqlite 同语义，三实现共用）。
+ * 可多处引用，bind 数仍是 8（D1 与 node:sqlite 同语义，三实现共用）。
+ * credential_hash（#349）进 INSERT 列清单（首插即写，如 connect-register 的记账首行）+
+ * 冲突分支 bare 列引用合并（未写保留旧值）；旧库（0013 前）无此列也不炸（分支不被触发）。
+ * installer 同源副本（app/installer/src/engine/registry.ts）随本语句同步 8 参；installer
+ * 本身不传凭证（缺省 NULL 保留旧值），反连凭证只经 connect-register / 保存流程写入。
  * enabled/version/manifest_json 仍随注册刷新。
  */
-export const REGISTRY_UPSERT_SQL = `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level)
-VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7)
+export const REGISTRY_UPSERT_SQL = `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash)
+VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7, ?8)
 ON CONFLICT(id) DO UPDATE SET
   enabled = excluded.enabled,
   version = excluded.version,
   manifest_json = excluded.manifest_json,
   mode = coalesce(?5, mode),
   entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END),
-  storage_level = coalesce(?7, storage_level)
-RETURNING id, enabled, version, manifest_json, mode, entry, storage_level`;
+  storage_level = coalesce(?7, storage_level),
+  credential_hash = coalesce(?8, credential_hash)
+RETURNING id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash`;
 
 export const REGISTRY_TOGGLE_SQL =
-  'UPDATE module_registry SET enabled = ?2 WHERE id = ?1 RETURNING id, enabled, version, manifest_json, mode, entry, storage_level';
+  'UPDATE module_registry SET enabled = ?2 WHERE id = ?1 RETURNING id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash';
 
 export const REGISTRY_LIST_SQL =
-  'SELECT id, enabled, version, manifest_json, mode, entry, storage_level FROM module_registry ORDER BY id';
+  'SELECT id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash FROM module_registry ORDER BY id';
 
 /**
- * upsert 绑参：三列按本次请求透传，未写（undefined）归一为 NULL = 保留旧值（#348 review 定案）。
+ * upsert 绑参：落点三列与 credential_hash（#349）按本次请求透传，
+ * 未写（undefined）归一为 NULL = 保留旧值（#348 review 定案）。
  * 不再补默认值——「装配器没填」≠「用户选了 cloudflare」，首次插入的默认值由 0012 列 DEFAULT 承载。
  */
-export function provisioningBinds(reg: ModuleRegistration): [string | null, string | null, string | null] {
-  return [reg.mode ?? null, reg.entry ?? null, reg.storage_level ?? null];
+export function provisioningBinds(reg: ModuleRegistration): [string | null, string | null, string | null, string | null] {
+  return [reg.mode ?? null, reg.entry ?? null, reg.storage_level ?? null, reg.credential_hash ?? null];
 }
 
 // ---- setup_tokens（core 库 0002）----
