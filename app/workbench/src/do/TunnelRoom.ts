@@ -24,8 +24,6 @@
  * 最先响应者（connect 模块默认单实例部署，多连是重连竞态窗口的过渡形态）；
  * 负载均衡/粘滞归后续 issue。
  */
-/// <reference types="@cloudflare/workers-types" />
-
 import { verifyConnectCredential } from '../services/connect-registry';
 
 /** serializeAttachment 形状（决策 #51 同纪律：只存已核验的绑定事实，JSON 可序列化）。 */
