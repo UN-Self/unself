@@ -644,3 +644,18 @@ describe('运行时装配端点 POST /api/admin/modules/install（#349）', () =
     }
   });
 });
+
+/**
+ * 前后端端点对拍（#279 的同一个坑）：客户端单点路径必须真的在服务端路由表里，
+ * 否则单测（mock 掉 fetch）全绿、真浏览器 404。曾实锤：记账端点漏写 /admin 段。
+ */
+describe('「新增模块」端点路径与客户端单点一致（#349）', () => {
+  it('ADD_MODULE_PATHS 的每条路径都能在 app.routes 找到（方法与路径同时核对）', async () => {
+    const { ADD_MODULE_PATHS } = await import('../web/src/lib/modules-install-api');
+    const routes = app.routes.map((r) => `${r.method} ${r.path}`);
+    expect(routes).toContain(`POST ${ADD_MODULE_PATHS.register}`);
+    expect(routes).toContain(`GET ${ADD_MODULE_PATHS.status}`);
+    expect(routes).toContain(`POST ${ADD_MODULE_PATHS.activate}`);
+    expect(routes).toContain(`POST ${ADD_MODULE_PATHS.install}`);
+  });
+});
