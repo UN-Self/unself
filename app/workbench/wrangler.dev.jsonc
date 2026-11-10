@@ -28,6 +28,11 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*", "/.well-known/*"]
   },
+  // #349 隧道 DO：connect 反连模块的数据面出口（hibernation 省费；决策 #106 过渡事实）
+  "durable_objects": {
+    "bindings": [{ "name": "CONNECT_TUNNEL", "class_name": "TunnelRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TunnelRoom"] }],
   "d1_databases": [
     {
       "binding": "CORE_DB",

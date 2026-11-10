@@ -321,6 +321,12 @@ export function coreWranglerConfig(input: {
       vars: {
         ...(config.domain ? { UNSELF_BASE_URL: `https://${config.domain}` } : {}),
       },
+      // #349 connect 反连隧道（决策 #108）：模块拨号回家的数据面出口住 DO（hibernation 省费）。
+      // 决策 #106：DO 是当前实现的事实而非承诺，平替时按同名内部路由重写 TunnelRoom。
+      durable_objects: {
+        bindings: [{ name: 'CONNECT_TUNNEL', class_name: 'TunnelRoom' }],
+      },
+      migrations: [{ tag: 'v1', new_sqlite_classes: ['TunnelRoom'] }],
       observability: { enabled: true },
     },
     null,

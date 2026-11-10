@@ -27,13 +27,22 @@ export interface ConnectBindings {
 }
 
 
-/** DO 内部请求（stub.fetch 专用；TUNNEL_INTERNAL_ORIGIN 仅内部可达）。 */
-function internalRequest(path: string, params: Record<string, string>): Request {
+/**
+ * DO 内部请求（stub.fetch 专用；TUNNEL_INTERNAL_ORIGIN 仅内部可达）。
+ * base 传入时按其**原样保留方法与头**（含 WS upgrade 的 `Upgrade`/`Connection`——
+ * 真机取证教训：重建 Request 丢 upgrade 头会被 TunnelRoom.handleConnect 拒 400，
+ * 单测直打 DO 内部路由测不到这层）。
+ */
+function internalRequest(
+  path: string,
+  params: Record<string, string>,
+  base?: Request,
+): Request {
   const url = new URL(`${TUNNEL_INTERNAL_ORIGIN}${path}`);
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
-  return new Request(url);
+  return base ? new Request(url, base) : new Request(url);
 }
 
 export function registerConnectRoutes(app: Hono<{ Bindings: ConnectBindings }>): void {
@@ -61,7 +70,8 @@ export function registerConnectRoutes(app: Hono<{ Bindings: ConnectBindings }>):
     }
     const stub = ns.get(ns.idFromName(moduleId));
     return stub.fetch(
-      internalRequest('/connect', { moduleId, keyHash }),
+      // upgrade 头必须原样带进 DO（handleConnect 以它判定 WS 交接；见 internalRequest 注释）
+      internalRequest('/connect', { moduleId, keyHash }, c.req.raw),
     );
   });
 
