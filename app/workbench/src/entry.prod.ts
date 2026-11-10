@@ -25,10 +25,13 @@ import { createApp, type Bindings } from './index';
 import { normalizeAssetResponse } from './asset-response';
 import { registryFrameOrigins } from './registry';
 import { withHtmlSecurityHeaders } from './security-headers';
+import { TUNNEL_INTERNAL_ORIGIN } from './do/TunnelRoom';
 
-/** 运行期绑定 = app 自身绑定 + 静态资产（装配期由引擎挂上 assets 目录）。 */
+/** 运行期绑定 = app 自身绑定 + 静态资产（装配期由引擎挂上 assets 目录）+ 隧道 DO（#349）。 */
 export interface ProdEnv extends Bindings {
   ASSETS: Fetcher;
+  /** connect 反连隧道 DO（#349 决策 #108）：未绑定 = /m/<id> 隧道路由按 503 人话兜底。 */
+  CONNECT_TUNNEL?: DurableObjectNamespace;
 }
 
 // `CreateMailProvisioner` 收 `unknown`（契约不认适配器形状）→ 在适配器侧收口校验，缺字段当场抛结构化失败。
@@ -42,8 +45,45 @@ const isApiPath = (p: string): boolean =>
   p.startsWith('/api/') || p.startsWith('/life/') || p.startsWith('/.well-known/');
 const wantsHtml = (request: Request): boolean => (request.headers.get('accept') ?? '').includes('text/html');
 
+/** connect 反连数据面（#349）：/m/<id>/… 命中且 CONNECT_TUNNEL 在位 → 经隧道转发。 */
+async function tryTunnelDataPlane(request: Request, env: ProdEnv): Promise<Response | null> {
+  const url = new URL(request.url);
+  // 接入模式分流（决策 #104 双形态）：/m/<id>/* 同一段路由既可能是直连模块（CF worker
+  // 自己接 zone 路由），也可能是 connect 反连模块（隧道出口）。core 在 workers.dev 形态
+  // 下不接 /m/*（模块自有子域根挂载）；domain 形态下 core 的 <domain>/* 全吞所有路由
+  // （#59 实证），必须按 registry mode 列（0012 既有列，非 T1 范围）识别 connect 模块
+  // ——只对 mode='connect' 的 id 走隧道转发，直连模块路由零影响。查询未命中（未知 id）
+  // 也返回 null，让请求走既有 404 面（不扩大隧道面的接管范围）。
+  if (!url.pathname.startsWith('/m/')) return null;
+  const ns = env.CONNECT_TUNNEL;
+  if (!ns || !env.CORE_DB) return null;
+  const moduleId = url.pathname.split('/')[2] ?? '';
+  if (!moduleId) return null;
+  const row = await env.CORE_DB.prepare('SELECT mode FROM module_registry WHERE id = ?')
+    .bind(moduleId)
+    .first<{ mode: string | null }>();
+  if (row?.mode !== 'connect') return null;
+  const stub = ns.get(ns.idFromName(moduleId));
+  const forwardUrl = new URL(
+    `${TUNNEL_INTERNAL_ORIGIN}/forward?target=${encodeURIComponent(url.pathname + url.search)}`,
+  );
+  return stub.fetch(
+    new Request(forwardUrl, {
+      method: request.method,
+      headers: request.headers,
+      body:
+        request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.arrayBuffer(),
+    }),
+  );
+}
+
 export default {
   async fetch(request: Request, env: ProdEnv, ctx: ExecutionContext): Promise<Response> {
+    // 隧道数据面先行（路由命中顺序注释）：/m/<id>/* 且 registry mode='connect' → 隧道转发，
+    // 不落 SPA assets 兜底（connect 模块无壳内资产，SPA 回 index.html 只会答错页面）；
+    // 503/504 人话在 TunnelRoom。直连模块（mode != 'connect'）零影响，走既有链路。
+    const tunnel = await tryTunnelDataPlane(request, env);
+    if (tunnel) return tunnel;
     const res = await app.fetch(request, env, ctx);
     if (res.status !== 404 || !env.ASSETS) return res;
     const url = new URL(request.url);
