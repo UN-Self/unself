@@ -15,6 +15,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 
+import { createApp } from '../src/index';
 import { createCoreDb, type CoreTestDb } from './test-factory';
 import {
   FakeDoState,
@@ -131,6 +132,39 @@ describe('verifyConnectCredential（registry credential_hash 单点核对）', (
   it('keyHash 形状 = 64 位小写 hex（KDF_SALT 常量已定型，注释为漂移锚）', () => {
     expect(keyHashOf('k')).toMatch(/^[0-9a-f]{64}$/);
     expect(KDF_SALT).toBe('unself-connect-v1');
+  });
+});
+
+
+// ①.5 路由层 → DO 交接保留 upgrade 头（真机取证教训：internalRequest 重建 Request
+// 丢 Upgrade 头会被 handleConnect 拒 400；单测直打 DO 测不到，必须走路由级断言）。
+describe('路由级 WS 交接保留 upgrade 头（#349 真机取证回归）', () => {
+  it('GET /api/modules/connect-ws（合法凭据）到达 DO 后仍是 websocket upgrade（非 400 expected websocket upgrade）', async () => {
+    const db = createCoreDb();
+    seedModule(db, 'route-hello', { key: 'route-key', mode: 'connect' });
+    // 最小 DO namespace 替身：抓到路由层转进来的内部请求，直驱同一个 room.fetch
+    const seen: Request[] = [];
+    const ns = {
+      idFromName: () => 'route-hello',
+      get: () => ({
+        fetch: (req: Request) => {
+          seen.push(req);
+          return room.fetch(req);
+        },
+      }),
+    } as unknown as DurableObjectNamespace;
+    const app = createApp();
+    const res = await app.request(
+      '/api/modules/connect-ws?moduleId=route-hello&keyHash=' + keyHashOf('route-key'),
+      { headers: { upgrade: 'websocket' } },
+      { CORE_DB: db.d1, CONNECT_TUNNEL: ns } as never,
+    );
+    // 断言一：请求真的转进了 DO（路由层放行凭据）
+    expect(seen).toHaveLength(1);
+    // 断言二（本用例的存在意义）：upgrade 头原样带进 DO——
+    // 若路由层重建 Request 丢头，DO 会回 400「expected websocket upgrade」
+    expect(res.status).not.toBe(400);
+    await res.body?.cancel().catch(() => {});
   });
 });
 

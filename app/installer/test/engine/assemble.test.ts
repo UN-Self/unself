@@ -50,6 +50,15 @@ describe('coreWranglerConfig（③生成的部署配置）', () => {
   it('同一输入生成字节级相同配置（确定性/幂等前提）', () => {
     expect(coreWranglerConfig(base)).toBe(coreWranglerConfig(base));
   });
+
+  it('#349 反连隧道 DO：core 配置带 CONNECT_TUNNEL 绑定与迁移（生产形态可拨号）', () => {
+    const cfg = JSON.parse(coreWranglerConfig(base)) as {
+      durable_objects?: { bindings: Array<{ name: string; class_name: string }> };
+      migrations?: Array<{ tag: string; new_sqlite_classes?: string[] }>;
+    };
+    expect(cfg.durable_objects?.bindings).toEqual([{ name: 'CONNECT_TUNNEL', class_name: 'TunnelRoom' }]);
+    expect(cfg.migrations?.[0]?.new_sqlite_classes).toContain('TunnelRoom');
+  });
 });
 
 /** 合法公钥 JWKS（真实 P-256 公钥 JWK 形状的静态夹具，与 core GET /.well-known/jwks.json 同形）。 */

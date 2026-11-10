@@ -27,6 +27,9 @@ import { registryFrameOrigins } from './registry';
 import { withHtmlSecurityHeaders } from './security-headers';
 import { TUNNEL_INTERNAL_ORIGIN } from './do/TunnelRoom';
 
+/** DO 类必须由主模块导出（wrangler durable_objects 的 class_name 解析依赖它）；#349 隧道面。 */
+export { TunnelRoom } from './do/TunnelRoom';
+
 /** 运行期绑定 = app 自身绑定 + 静态资产（装配期由引擎挂上 assets 目录）+ 隧道 DO（#349）。 */
 export interface ProdEnv extends Bindings {
   ASSETS: Fetcher;

@@ -26,6 +26,9 @@ import { createFakeMailProvisioner } from '@unself/contracts';
 
 import { createApp, type Bindings } from '../src/index';
 
+/** dev 形态同生产：DO 类必须由主模块导出，wrangler 才能解析 durable_objects.class_name（#349）。 */
+export { TunnelRoom } from '../src/do/TunnelRoom';
+
 /** 进程内单例：批准写的账户在后续激活请求里仍可读（这就是 #182 拦路虎的解）。 */
 const provisioner = createFakeMailProvisioner();
 
