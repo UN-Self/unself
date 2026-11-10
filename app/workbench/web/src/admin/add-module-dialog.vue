@@ -262,7 +262,7 @@ function close(): void {
           </select>
         </label>
         <p class="add-dialog-hint">
-          凭证只用于本次部署，不写入实例数据，也不进日志（决策 #165）。带 Durable Object / 资产 / 迁移的模块
+          凭证只用于本次部署，不写入实例数据，也不进日志（会话凭证纪律）。带 Durable Object / 资产 / 迁移的模块
           仍走安装器装配期路径。
         </p>
       </div>
