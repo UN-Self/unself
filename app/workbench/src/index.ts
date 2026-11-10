@@ -12,6 +12,7 @@ import { registerMemberRoutes } from './routes/members';
 import { registerModuleApiRoutes } from './routes/module-api';
 import { registerModuleRoutes } from './routes/modules';
 import { registerNotificationRoutes } from './routes/notifications';
+import { registerConnectRoutes } from './routes/connect';
 import { registerAvatarRoutes } from './routes/avatar';
 import type { AvatarStore } from './services/avatar-store';
 import { registerProfileRoutes } from './routes/profile';
@@ -94,6 +95,10 @@ export function createApp(dependencies: CoreApiDependencies = {}) {
   // 激活域：公开 /api/activate/<token>（#18；登录态无关，链接双证之一）
   registerActivateRoutes(routes, dependencies);
   registerModuleRoutes(routes);
+  // connect 反连隧道面（#349 决策 #108：公开 dial-home 端点，凭证核验在路由内自带，
+  // 不走会话守卫——调用者是模块进程，不是浏览器会话）。窄化同组合根既有模式：
+  // 路由域只认 Bindings（+ 可选 CONNECT_TUNNEL，生产装配器挂 DO、单测注入 stub）。
+  registerConnectRoutes(routes as unknown as Parameters<typeof registerConnectRoutes>[0]);
   // 模块后端面（决策 #56）：/api/module-api/* 走 Bearer 模块 token + permissions 门禁，
   // 与用户会话守卫分层（调用者是模块 Worker/SDK 代理，不是浏览器会话）。
   registerModuleApiRoutes(app as unknown as Hono<{ Bindings: Bindings; Variables: ModuleAuthVariables }>);
