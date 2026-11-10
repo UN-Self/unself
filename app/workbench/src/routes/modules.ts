@@ -7,6 +7,22 @@ import { getSigningRuntime } from '../keys';
 import { checkTokenGate, issueModuleToken, MODULE_TOKEN_ISSUER } from '../token';
 import { ConnectRegisterSchema, connectPendingManifest, listMemberModules, listModules, ModuleRegistrationSchema, registryFrameOrigins, toggleModule, upsertModule } from '../registry';
 import { audit } from '../services/audit';
+import { installNpmModule, RuntimeInstallError, wipeCredential } from '../services/runtime-install';
+import { DEPLOY_MODES, STORAGE_LEVELS } from '@unself/control-plane/types';
+
+/**
+ * 运行时装配入参（#349 模式一）：npm 规格 + 会话内 CF 凭证 + 账号维度 + 可选落点覆盖。
+ * `cfToken` 不进任何持久面（#165）；`accountId` 是 CF 的资源定位，不是凭证。
+ */
+export const InstallRequestSchema = z.object({
+  npmSpec: z.string().min(1).max(200),
+  cfToken: z.string().min(1).max(200),
+  accountId: z.string().min(1).max(64),
+  scriptName: z.string().regex(/^[a-z][a-z0-9-]*$/).max(63).optional(),
+  mode: z.enum(DEPLOY_MODES).optional(),
+  entry: z.string().max(2048).nullish(),
+  storageLevel: z.enum(STORAGE_LEVELS).nullish(),
+});
 import { configuredMailSender, deliverNotification } from '../services/notifications';
 import { readSession } from '../session';
 import { profileAvatarUrl } from '../services/avatar-store';
@@ -88,6 +104,48 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
     const entry = await upsertModule(c.env.CORE_DB, parsed.data);
     await audit(c.env.CORE_DB, (await readSession(c))!.uid, 'module_upserted', parsed.data.id);
     return c.json(entry, 201);
+  });
+
+  /**
+   * 运行时装配（#349 模式一，决策 #109）：装后增补单个 CF 模块。
+   *
+   * 凭证纪律（#165）：`cfToken` 只做本次请求的一次上传，`finally` 里连请求体副本一起抹掉；
+   * 审计只记模块 id（不记 npmSpec 之外的任何凭证痕迹，也不记 token）。
+   * 落点三列（#348/#103②）与既有注册同一写入口 upsertModule——不另开旁路写库。
+   */
+  app.post('/api/admin/modules/install', async (c) => {
+    const parsed = InstallRequestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: 'invalid install request', detail: z.prettifyError(parsed.error) }, 400);
+    }
+    const input = parsed.data;
+    try {
+      const installed = await installNpmModule({
+        npmSpec: input.npmSpec,
+        cfToken: input.cfToken,
+        accountId: input.accountId,
+        scriptName: input.scriptName,
+      });
+      const entry = await upsertModule(c.env.CORE_DB, {
+        id: installed.manifest.id,
+        enabled: true,
+        manifest: installed.manifest,
+        // 运行时装的是 CF worker（模式一语义），落点三列显式落库
+        mode: input.mode ?? 'cloudflare',
+        entry: input.entry ?? null,
+        storage_level: input.storageLevel ?? null,
+      });
+      await audit(c.env.CORE_DB, (await readSession(c))!.uid, 'module_upserted', installed.manifest.id);
+      return c.json({ ...entry, scriptName: installed.scriptName, version: installed.version }, 201);
+    } catch (error) {
+      if (error instanceof RuntimeInstallError) {
+        return c.json({ error: error.message }, error.status);
+      }
+      throw error;
+    } finally {
+      // 用后即焚：请求体副本与本作用域入参都不留凭证
+      wipeCredential(input);
+    }
   });
 
   /** 翻转启停（#7 遗留端点，行为不变）：运行时秒级生效（边栏隐藏 + token 门禁拒发，§5.5）。 */
