@@ -48,8 +48,18 @@ const testResult = ref<{ ok: boolean; text: string } | null>(null)
 const savingOidc = ref(false)
 const oidcSaveError = ref<ApiError | null>(null)
 const oidcSaved = ref(false)
-const oidcDirty = ref(false)
-const oidcState = computed(() => oidcDirty.value ? '待保存' : oidcSaved.value ? '已配置' : '可选')
+// dirty = 当前值偏离基准（初始空值 / 上次保存值），敲入再撤回不算待保存
+type OidcValues = { issuer: string; clientId: string; clientSecret: string }
+const oidcBaseline = ref<OidcValues>({ issuer: '', clientId: '', clientSecret: '' })
+const currentOidcValues = (): OidcValues => ({
+  issuer: issuer.value.trim(),
+  clientId: clientId.value.trim(),
+  clientSecret: clientSecret.value,
+})
+const valuesEqual = (a: OidcValues, b: OidcValues) =>
+  a.issuer === b.issuer && a.clientId === b.clientId && a.clientSecret === b.clientSecret
+const oidcDirty = computed(() => !valuesEqual(currentOidcValues(), oidcBaseline.value))
+const oidcState = computed(() => oidcSaved.value && !oidcDirty.value ? '已配置' : oidcDirty.value ? '待保存' : '可选')
 
 // 内置管理员表单（issue-A 默认分支）
 const adminUsername = ref('')
@@ -68,8 +78,9 @@ const verified = ref(false)
 
 // 边界语义 1：测试通过后改任意字段 → 测试结果失效 → 按钮回「测试连接」
 watch([issuer, clientId, clientSecret], () => {
-  oidcDirty.value = true
   announcement.value = ''
+  // 保存失败留下的错误卡只在「值没变」时仍成立；一旦改动即清除，避免旧错误误导
+  oidcSaveError.value = null
   if (verified.value) {
     verified.value = false
     testResult.value = null
@@ -82,6 +93,8 @@ async function flipTo(nextFace: 'admin' | 'oidc', focusCreate = false) {
   if (active instanceof HTMLElement && setupShell.value?.contains(active)) active.blur()
   face.value = nextFace
   await nextTick()
+  // 代次守卫：翻页途中被反向翻走（快速交错触发）时放弃本次聚焦，焦点不落已隐藏页
+  if (face.value !== nextFace) return
   const target = focusCreate
     ? setupShell.value?.querySelector<HTMLElement>('[data-testid="create-admin"]')
     : nextFace === 'oidc'
@@ -156,7 +169,7 @@ async function onSaveOidcConfig() {
   try {
     await saveOidcConfig(token.value, oidc)
     oidcSaved.value = true
-    oidcDirty.value = false
+    oidcBaseline.value = currentOidcValues()
     testResult.value = null
     announcement.value = 'OIDC 配置已保存'
     saved = true
@@ -414,7 +427,7 @@ async function onLoginCreatedAdmin() {
                   @click="onTestConnection"
                 >
                   <PlugZap :size="16" aria-hidden="true" />
-                  测试连接
+                  测试 Issuer 可达
                 </UButton>
                 <UButton
                   v-else
@@ -526,8 +539,9 @@ async function onLoginCreatedAdmin() {
   position: absolute;
   top: 0;
   right: 0;
-  width: 100%;
-  height: 100%;
+  /* 热区只覆盖可见折角一带：整卡面热区会压住标题/表单上半区的点击 */
+  width: calc(var(--unself-space-8) * 3);
+  height: calc(var(--unself-space-8) * 3);
   padding: 0;
   border-radius: 0 var(--unself-radius-lg) 0 0;
   background: transparent;
