@@ -120,10 +120,12 @@ describe('verifyConnectCredential（registry credential_hash 单点核对）', (
     expect(right).toEqual({ ok: true, moduleId: 'hello' });
   });
 
-  it('停用（enabled=0）→ 403（即便哈希一致；启停秒级生效）', async () => {
+  it('pending（enabled=0 但哈希一致）→ 放行握手：两段式第①段后模块必须能拨上来', async () => {
+    // 真机取证修正（#349）：记账即 pending，若握手要求 enabled=1 则「测试连接」永远绿不了。
+    // 停用语义仍生效，但落在 token 签发与导航面（checkTokenGate），不在这条隧道上。
     seedModule(db, 'hello', { key: 'k', enabled: false, mode: 'connect' });
     const gate = await verifyConnectCredential(db.d1, 'hello', keyHashOf('k'));
-    expect(gate).toEqual({ ok: false, status: 403, error: 'module disabled' });
+    expect(gate).toEqual({ ok: true, moduleId: 'hello' });
   });
 
   it('keyHash 形状 = 64 位小写 hex（KDF_SALT 常量已定型，注释为漂移锚）', () => {

@@ -64,7 +64,11 @@ export type CredentialCheck =
  * - 模块存在但无凭证（credential_hash NULL）→ 403（两段式第①段未做，keyHash 必不配）；
  * - keyHash 形状非法 → 403（64 位小写 hex，CREDENTIAL_HASH_PATTERN 单点）；
  * - 哈希不一致 → 403（时序安全比较，时序侧信道最小化）；
- * - 模块被停用（enabled=false）→ 403（停用秒级生效语义同 §5.5 token 门禁）。
+ * - **不核对 enabled**（#349 真机取证修正）：反连是两段式——第①段记账即 pending
+ *   （enabled=false），模块拨号上来「测试连接」通过后才第②段保存激活。若此处要求
+ *   enabled=1，则待接入模块永远连不上（鸡生蛋死锁，真浏览器抓到的 403）。
+ *   「停用」的语义仍成立，但门禁落在**可用面**：token 签发（checkTokenGate）与导航/iframe
+ *   装载照旧按 enabled 拦，隧道只负责「这条线通不通」。
  * 一律不回明文原因给连接方（连接方不是浏览器用户，人话无意义；管理员排障走审计）。
  */
 export async function verifyConnectCredential(
@@ -84,9 +88,6 @@ export async function verifyConnectCredential(
   const provided = hexToBytes(keyHash);
   if (!stored || !provided || !constantTimeEqual(stored, provided)) {
     return { ok: false, status: 403, error: 'credential mismatch' };
-  }
-  if (row.enabled !== 1) {
-    return { ok: false, status: 403, error: 'module disabled' };
   }
   return { ok: true, moduleId };
 }
