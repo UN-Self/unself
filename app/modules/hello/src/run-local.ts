@@ -10,7 +10,6 @@
  * - UNSELF_MODULE_ADDR  本地监听地址（默认 127.0.0.1:8790）
  * - UNSELF_CORE_URL     core 可达地址（有它 + KEY 才反连；缺省 = 只跑本地 HTTP，零回归）
  * - UNSELF_MODULE_KEY   浏览器生成的模块凭据（决策 #108：壳只存它的哈希）
- * - UNSELF_MODULE_ID    实例内模块 id（默认 manifest.id = hello）
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -53,10 +52,9 @@ if (coreUrl && moduleKey) {
   const handle = startDialHome({
     coreUrl,
     moduleKey,
-    moduleId: process.env.UNSELF_MODULE_ID ?? 'hello',
     handler: (request) => app.fetch(request, bindings, {} as ExecutionContext),
   });
-  console.log(`已开始反连 ${coreUrl}（模块 id: ${process.env.UNSELF_MODULE_ID ?? 'hello'}）`);
+  console.log(`已开始反连 ${coreUrl}（凭 key 哈希握手，core 侧定位模块）`);
   const shutdown = () => {
     handle.stop();
     server.close(() => process.exit(0));

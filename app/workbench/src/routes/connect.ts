@@ -17,7 +17,7 @@
 import { Hono } from 'hono';
 
 import { TUNNEL_INTERNAL_ORIGIN } from '../do/TunnelRoom';
-import { verifyConnectCredential } from '../services/connect-registry';
+import { lookupConnectModule, verifyConnectCredential } from '../services/connect-registry';
 
 /** Bindings + 隧道 DO 绑定（生产 wrangler durable_objects；单测/Node 运行体注入 stub）。 */
 export interface ConnectBindings {
@@ -49,7 +49,8 @@ export function registerConnectRoutes(app: Hono<{ Bindings: ConnectBindings }>):
   const connect = new Hono<{ Bindings: ConnectBindings }>();
 
   /**
-   * dial-home WS：upgrade 时核哈希（未知模块 404 / 哈希不配或停用 403，HTTP 状态码承载
+   * dial-home WS：upgrade 时按 keyHash 反查模块（#108 env 契约只有地址+key；模块不报 id）。
+   * （未知凭据 404 / 形状或不配 403，HTTP 状态码承载
    * 「未通过握手」；凭据吊销类断连由 DO 按帧重验后关 1008）。核过后 upgrade 请求原样
    * 转进 TunnelRoom（accept + serializeAttachment 绑 moduleId+keyHash，见 TunnelRoom.ts）。
    */
@@ -57,12 +58,12 @@ export function registerConnectRoutes(app: Hono<{ Bindings: ConnectBindings }>):
     if (c.req.header('upgrade')?.toLowerCase() !== 'websocket') {
       return c.json({ error: 'expected websocket upgrade' }, 400);
     }
-    const moduleId = c.req.query('moduleId') ?? '';
     const keyHash = c.req.query('keyHash') ?? '';
-    const gate = await verifyConnectCredential(c.env.CORE_DB, moduleId, keyHash);
+    const gate = await lookupConnectModule(c.env.CORE_DB, keyHash);
     if (!gate.ok) {
       return c.json({ error: gate.error }, gate.status);
     }
+    const moduleId = gate.moduleId;
     const ns = c.env.CONNECT_TUNNEL;
     if (!ns) {
       // 无隧道运行时（生产装配器未挂 DO / 测试未注入）：503 拒而不降级。
@@ -81,12 +82,12 @@ export function registerConnectRoutes(app: Hono<{ Bindings: ConnectBindings }>):
    * 响应：{ requests: TunnelRequestFrame[] }；空轮询带 waitMs 时 DO 内挂等待（上限截断）。
    */
   connect.post('/api/modules/connect-poll', async (c) => {
-    const moduleId = c.req.query('moduleId') ?? '';
     const keyHash = c.req.query('keyHash') ?? '';
-    const gate = await verifyConnectCredential(c.env.CORE_DB, moduleId, keyHash);
+    const gate = await lookupConnectModule(c.env.CORE_DB, keyHash);
     if (!gate.ok) {
       return c.json({ error: gate.error }, gate.status);
     }
+    const moduleId = gate.moduleId;
     const ns = c.env.CONNECT_TUNNEL;
     if (!ns) {
       return c.json({ error: 'tunnel runtime not available' }, 503);
@@ -103,12 +104,12 @@ export function registerConnectRoutes(app: Hono<{ Bindings: ConnectBindings }>):
 
   /** 模块对轮询帧的 HTTP 回答（body = response 帧；形状/配对/纪律在 DO 侧核）。 */
   connect.post('/api/modules/connect-respond', async (c) => {
-    const moduleId = c.req.query('moduleId') ?? '';
     const keyHash = c.req.query('keyHash') ?? '';
-    const gate = await verifyConnectCredential(c.env.CORE_DB, moduleId, keyHash);
+    const gate = await lookupConnectModule(c.env.CORE_DB, keyHash);
     if (!gate.ok) {
       return c.json({ error: gate.error }, gate.status);
     }
+    const moduleId = gate.moduleId;
     const ns = c.env.CONNECT_TUNNEL;
     if (!ns) {
       return c.json({ error: 'tunnel runtime not available' }, 503);

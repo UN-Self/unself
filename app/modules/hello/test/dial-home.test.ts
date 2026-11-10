@@ -60,7 +60,6 @@ function setup(overrides?: {
   const handle = startDialHome({
     coreUrl: 'https://core.example.com/',
     moduleKey: 'super-secret-key',
-    moduleId: 'hello',
     handler: overrides?.handler ?? echoHandler,
     webSocketImpl: (overrides?.webSocketImpl ?? FakeSocket) as unknown as new (url: string) => WebSocketLike,
     sleep: async (ms: number) => {
@@ -83,14 +82,15 @@ describe('hello 反连客户端（#349 决策 #108）', () => {
     expect(FakeSocket.instances).toHaveLength(1);
     const url = new URL(FakeSocket.instances[0]!.url);
     expect(`${url.protocol}//${url.host}${url.pathname}`).toBe('wss://core.example.com/api/modules/connect-ws');
-    expect(url.searchParams.get('moduleId')).toBe('hello');
+    // 模块不报 id：握手只带哈希，core 凭 keyHash 反查定位（#108 env 契约两项）
+    expect(url.searchParams.get('moduleId')).toBeNull();
     const hash = url.searchParams.get('keyHash') ?? '';
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(FakeSocket.instances[0]!.url).not.toContain('super-secret-key');
     handle.stop();
   });
 
-  it('帧往返：宿主前缀被剥离，响应按 requestId 配对、body 走 base64', async () => {
+  it('帧往返：core 已剥 /m/<id> 前缀（模块按根路径收帧），响应按 requestId 配对、body 走 base64', async () => {
     const { handle } = setup();
     await settle();
 
@@ -102,7 +102,7 @@ describe('hello 反连客户端（#349 决策 #108）', () => {
         type: 'request',
         requestId: 'req-1',
         method: 'GET',
-        path: '/m/hello/api/health',
+        path: '/api/health',
         query: 'x=1',
         headers: {},
         body: null,

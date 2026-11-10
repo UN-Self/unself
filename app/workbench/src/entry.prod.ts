@@ -67,8 +67,10 @@ export async function tryTunnelDataPlane(request: Request, env: ProdEnv): Promis
     .first<{ mode: string | null }>();
   if (row?.mode !== 'connect') return null;
   const stub = ns.get(ns.idFromName(moduleId));
+  // 前缀在 core 侧剥掉：模块恒挂根路径（#63 不变式），模块无需知道自己的 /m/<id>/ 外部名
+  const innerPath = url.pathname.slice(`/m/${moduleId}`.length) || '/';
   const forwardUrl = new URL(
-    `${TUNNEL_INTERNAL_ORIGIN}/forward?target=${encodeURIComponent(url.pathname + url.search)}`,
+    `${TUNNEL_INTERNAL_ORIGIN}/forward?target=${encodeURIComponent(innerPath + url.search)}`,
   );
   return stub.fetch(
     new Request(forwardUrl, {
