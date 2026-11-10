@@ -4,7 +4,7 @@
  * 同一份 SQL 跑在 sqlite 实现上，验证注册表收敛 / setup token 三态 / 原子消费 /
  * 按模块独立记账（#55 护栏①）/ node:sqlite 友好探测。
  * 两问检验：把 upsert 改成「不收敛」（如 INSERT 无 ON CONFLICT）必红；
- * 把记账表改成全局共享（同表）必红。
+ * 把记账表改成全局共享（同表）必红；落点三列改回覆盖式（excluded.x 直赋）必红（#348 review）。
  */
 import { describe, expect, it } from 'vitest';
 import { D1ControlPlane } from '../src/d1';
@@ -24,6 +24,28 @@ describe('SqliteControlPlane（真 sqlite）', () => {
     expect(issue).toEqual({ status: 'created', token: 'tok-abc' });
     await expect(cp.isSetupTokenValid('tok-abc')).resolves.toBe(true);
     await expect(cp.readRegistry()).resolves.toHaveLength(1);
+  });
+
+  it('落点三列合并语义（#348 review）：未写保留旧值，显式传值覆盖；首次插入 mode 缺省 cloudflare', async () => {
+    const cp = SqliteControlPlane.open(':memory:');
+    // 首次插入：三列全未写 → mode 由 SQL 内 coalesce 落 'cloudflare'（列 DEFAULT 不救显式 NULL）
+    const first = await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST });
+    expect(first).toMatchObject({ mode: 'cloudflare', entry: null, storage_level: null });
+    // 管理接口路径写入用户选择
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, storage_level: 'dedicated', mode: 'connect', entry: 'https://bridge.example.com/m/bridge/' });
+    // 模块升级（重新装配）三列全未写 → 旧值保留，快照刷新
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: { ...MANIFEST, version: '0.2.0' } });
+    const rows = await cp.readRegistry();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      version: '0.2.0',
+      mode: 'connect',
+      entry: 'https://bridge.example.com/m/bridge/',
+      storage_level: 'dedicated',
+    });
+    // 显式传值仍可覆盖（下次装配路径变化时）
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, mode: 'cloudflare', storage_level: 'core' });
+    expect((await cp.readRegistry())[0]).toMatchObject({ mode: 'cloudflare', entry: null, storage_level: 'core' });
   });
 
   it('upsert 收敛：同 id 重复注册刷新快照不重复建行；toggle 不存在的 id 回 null', async () => {

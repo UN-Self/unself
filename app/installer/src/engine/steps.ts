@@ -1030,12 +1030,16 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       : manifest;
     // 落点三列（#348/#103②）：mode=cloudflare（CF 装配路径），storage_level=用户四级选择
     // （同一 declaration，列与快照各司其职：列是用户选择，快照是 manifest 侧声明）。
+    // 合并语义（#348 review 定案）：declaration 未选时不写该键——「未写 = 保留旧值」，
+    // 装配器不把用户此前通过管理接口选的落点冲成 NULL。entry 列语义 = connect 接入
+    // URL（0012），CF 装配路径不写；mode='cloudflare' 是本次装配的事实（worker 确实
+    // 重新部署在 CF），照旧显式写。
     await coreCp.upsertModule({
       id: mod.id,
       enabled: true,
       manifest: snapshot,
       mode: 'cloudflare',
-      storage_level: (declaration as StorageLevel | undefined) ?? null,
+      ...(declaration ? { storage_level: declaration as StorageLevel } : {}),
     });
     rep.log(`upsert ${mod.id}（enabled=1，快照刷新${declaration ? `，落点 ${declaration}` : ''}）`);
   }

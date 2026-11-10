@@ -80,11 +80,22 @@ describe('registry（⑤ · 形状契约）', () => {
     expect(cmd.binds[5]).toBeNull();
     expect(cmd.binds[6]).toBe('dedicated');
     const bare = registryUpsertCommand({ manifest: ModuleManifestSchema.parse(manifest) });
-    expect(bare.binds[4]).toBe('cloudflare');
+    // 合并语义（#348 review 定案）：未写三列 binds 归一 NULL（= 保留旧值），
+    // 首次插入的 mode 缺省 'cloudflare' 由 SQL 内 coalesce 承载，不在 binds 里补。
+    expect(bare.binds[4]).toBeNull();
     expect(bare.binds[5]).toBeNull();
     expect(bare.binds[6]).toBeNull();
     expect(cmd.sql).toContain('ON CONFLICT(id) DO UPDATE');
     expect(cmd.sql).toContain('mode, entry, storage_level');
+  });
+
+  it('registryUpsertCommand：未写三列 binds 全 NULL，SQL 冲突分支引用原始 ?N 保留旧值（#348 review）', () => {
+    const bare = registryUpsertCommand({ manifest: ModuleManifestSchema.parse(manifest) });
+    expect(bare.binds).toEqual(['hello', 1, '0.1.0', expect.any(String), null, null, null]);
+    expect(bare.sql).toContain("coalesce(?5, 'cloudflare')");
+    expect(bare.sql).toContain('coalesce(?5, mode)');
+    expect(bare.sql).toContain("coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END)");
+    expect(bare.sql).toContain('coalesce(?7, storage_level)');
   });
 
   it('registryDisableCommand：只翻 enabled，不凭空建行', () => {

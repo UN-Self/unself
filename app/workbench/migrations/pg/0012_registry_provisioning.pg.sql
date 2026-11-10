@@ -17,6 +17,12 @@
 -- 实测版本：本文件当前无 PG 执行器消费（D5 才接），生产定案须注明实测 PG 版本
 -- ——该义务随 D5 落地，本 issue 不冒领。
 
+-- 写入合并语义（#348 review 定案 2026-11-10）：三列是用户选择、活过模块升级——upsert
+-- 冲突分支按「本次未写（NULL）保留列中旧值」合并（control-plane sql.ts REGISTRY_UPSERT_SQL
+-- 与 installer 同源副本承载）；显式传值才覆盖；entry 保留跟随生效后的 mode（显式切走
+-- connect 时 entry 清 NULL，维持 CHECK 的构成定义）。清空必须走显式管理动作，装配器
+-- 不承担清空职责。已应用迁移禁改，本注释不涉及列定义与 CHECK，仅补语义说明。
+
 ALTER TABLE module_registry ADD COLUMN entry TEXT;
 
 ALTER TABLE module_registry ADD COLUMN storage_level TEXT;

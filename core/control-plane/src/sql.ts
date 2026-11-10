@@ -10,15 +10,24 @@ import { migrationsTableFor, type ModuleRegistration } from './types';
 
 // ---- module_registry（core 库 0001 建表 + 0012 落点三列）----
 
+/**
+ * upsert 冲突分支合并语义（#348 review 定案，#103②「用户实际选择」的构成定义）：
+ * 落点三列要活过模块升级——本次未写（绑定值为 NULL）保留列中旧值，清空必须走显式写值
+ * （管理接口/管理动作），装配器不承担清空职责。首次插入的缺省值（mode='cloudflare'）由
+ * VALUES 里的 coalesce 承载（列 DEFAULT 不救显式 NULL）；冲突分支引用原始绑定值与目标行
+ * 现值合并，不复用被 coerce 过的 excluded.*（否则会把「未写」变成「写默认值」）。同一 ?N
+ * 可多处引用，bind 数仍是 7（D1 与 node:sqlite 同语义，三实现共用）。
+ * enabled/version/manifest_json 仍随注册刷新。
+ */
 export const REGISTRY_UPSERT_SQL = `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7)
 ON CONFLICT(id) DO UPDATE SET
   enabled = excluded.enabled,
   version = excluded.version,
   manifest_json = excluded.manifest_json,
-  mode = excluded.mode,
-  entry = excluded.entry,
-  storage_level = excluded.storage_level
+  mode = coalesce(?5, mode),
+  entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END),
+  storage_level = coalesce(?7, storage_level)
 RETURNING id, enabled, version, manifest_json, mode, entry, storage_level`;
 
 export const REGISTRY_TOGGLE_SQL =
@@ -27,9 +36,12 @@ export const REGISTRY_TOGGLE_SQL =
 export const REGISTRY_LIST_SQL =
   'SELECT id, enabled, version, manifest_json, mode, entry, storage_level FROM module_registry ORDER BY id';
 
-/** upsert 绑参：mode/entry/storage_level 缺省值与 0012 列 DEFAULT 同源（三实现共用，#64）。 */
-export function provisioningBinds(reg: ModuleRegistration): [string, string | null, string | null] {
-  return [reg.mode ?? 'cloudflare', reg.entry ?? null, reg.storage_level ?? null];
+/**
+ * upsert 绑参：三列按本次请求透传，未写（undefined）归一为 NULL = 保留旧值（#348 review 定案）。
+ * 不再补默认值——「装配器没填」≠「用户选了 cloudflare」，首次插入的默认值由 0012 列 DEFAULT 承载。
+ */
+export function provisioningBinds(reg: ModuleRegistration): [string | null, string | null, string | null] {
+  return [reg.mode ?? null, reg.entry ?? null, reg.storage_level ?? null];
 }
 
 // ---- setup_tokens（core 库 0002）----

@@ -7,17 +7,17 @@
 import { ModuleManifestSchema, manifestFromYamlText, type ModuleManifest } from '@unself/contracts';
 import type { UnselfConfig, ModuleRef } from './config';
 
-/** 注册表 upsert SQL（与 core-api/control-plane REGISTRY_UPSERT_SQL 同源；0012 起带落点三列）。 */
+/** 注册表 upsert SQL（与 core-api/control-plane REGISTRY_UPSERT_SQL 同源；0012 起带落点三列；合并语义同源——未写保留旧值，#348 review 定案）。 */
 export function registryUpsertSql(): string {
   return `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7)
 ON CONFLICT(id) DO UPDATE SET
   enabled = excluded.enabled,
   version = excluded.version,
   manifest_json = excluded.manifest_json,
-  mode = excluded.mode,
-  entry = excluded.entry,
-  storage_level = excluded.storage_level`;
+  mode = coalesce(?5, mode),
+  entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END),
+  storage_level = coalesce(?7, storage_level)`;
 }
 
 /**
@@ -68,13 +68,13 @@ export function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-/** 选中模块的 upsert 语句参数（--json 命令数组形态）；落点三列（#348）随命令给（缺省 cloudflare/空）。 */
+/** 选中模块的 upsert 语句参数（--json 命令数组形态）；落点三列（#348）随命令给，未写归一 NULL = 保留旧值（#348 review 定案）。 */
 export function registryUpsertCommand(input: {
   manifest: ModuleManifest;
-  mode?: 'cloudflare' | 'docker' | 'connect';
+  mode?: 'cloudflare' | 'docker' | 'connect' | null;
   entry?: string | null;
   storage_level?: string | null;
-}): { sql: string; binds: [string, number, string, string, string, string | null, string | null] } {
+}): { sql: string; binds: [string, number, string, string, string | null, string | null, string | null] } {
   const { manifest } = input;
   const manifestJson = JSON.stringify(manifest);
   return {
@@ -84,7 +84,7 @@ export function registryUpsertCommand(input: {
       1,
       manifest.version,
       manifestJson,
-      input.mode ?? 'cloudflare',
+      input.mode ?? null,
       input.entry ?? null,
       input.storage_level ?? null,
     ],
