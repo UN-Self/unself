@@ -14,7 +14,7 @@
  */
 import { computed, ref, watch } from 'vue'
 
-import { UButton } from '@unself/ui'
+import { UButton, UMotionSelect, type SelectOption } from '@unself/ui'
 
 import {
   activateConnectModule,
@@ -54,12 +54,20 @@ const cfToken = ref('')
 const accountId = ref('')
 const cfStorage = ref<'' | NonNullable<AdminModule['storage_level']>>('')
 
-const coreUrl = computed(() => (typeof window === 'undefined' ? '' : window.location.origin))
-const envLines = computed(() => [
-  `UNSELF_CORE_URL=${coreUrl.value}`,
-  `UNSELF_MODULE_KEY=${connectKey.value ?? ''}`,
-  `UNSELF_MODULE_ID=${connectId.value}`,
-])
+const connectStorageOptions: SelectOption[] = [
+  { value: '', label: '不指定（模块自管存储）' },
+  { value: 'core', label: 'core（经核心代理）' },
+]
+const cfStorageOptions: SelectOption[] = [
+  { value: '', label: '不指定（保留现状）' },
+  { value: 'core', label: 'core（经核心代理）' },
+  { value: 'shared', label: 'shared（共享库）' },
+  { value: 'dedicated', label: 'dedicated（核心代供）' },
+  { value: 'external', label: 'external（模块自备）' },
+]
+// env 只展示 key 一项（#108 决策原样）；core 可达地址由用户按部署拓扑自填，
+// 浏览器地址 ≠ 模块可达地址时猜 origin 反而是误导（#349 验收反馈收敛）
+const envLines = computed(() => [`UNSELF_MODULE_KEY=${connectKey.value ?? ''}`])
 
 const canTest = computed(() => Boolean(connectKey.value) && !busy.value)
 const canSave = computed(() => connectStatus.value === 'online' && !busy.value)
@@ -208,16 +216,17 @@ function close(): void {
           <span class="add-field-label">模块 id</span>
           <input v-model="connectId" class="add-field-input" data-test="connect-id" placeholder="如 bridge" />
         </label>
-        <label class="add-field">
-          <span class="add-field-label">存储落点（可选）</span>
-          <select v-model="connectStorage" class="add-field-input" data-test="connect-storage">
-            <option value="">不指定</option>
-            <option value="core">core（经核心代理）</option>
-            <option value="shared">shared（共享库）</option>
-            <option value="dedicated">dedicated（核心代供）</option>
-            <option value="external">external（模块自备）</option>
-          </select>
-        </label>
+        <div class="add-field">
+          <span class="add-field-label" id="connect-storage-label">存储落点（可选）</span>
+          <UMotionSelect
+            v-model="connectStorage"
+            :options="connectStorageOptions"
+            label="存储落点"
+            aria-labelledby="connect-storage-label"
+            placeholder="不指定（模块自管存储）"
+            data-test="connect-storage"
+          />
+        </div>
 
         <UButton
           v-if="!connectKey"
@@ -234,6 +243,10 @@ function close(): void {
             这串接入码只显示这一次，关闭后不可再查看。请写入模块的 env：
           </p>
           <pre class="add-dialog-env" data-test="connect-env">{{ envLines.join('\n') }}</pre>
+          <p class="add-dialog-hint">
+            模块 env 另需 UNSELF_CORE_URL：填 core 的可达地址（域名 / 局域网 IP / Tailscale IP 均可，
+            以模块所在机器能连到为准），模块凭它主动连回 core。
+          </p>
         </template>
       </div>
 
@@ -251,16 +264,17 @@ function close(): void {
           <span class="add-field-label">API Token（用后即焚）</span>
           <input v-model="cfToken" type="password" class="add-field-input" data-test="cf-token" autocomplete="off" />
         </label>
-        <label class="add-field">
-          <span class="add-field-label">存储落点（可选）</span>
-          <select v-model="cfStorage" class="add-field-input" data-test="cf-storage">
-            <option value="">不指定</option>
-            <option value="core">core（经核心代理）</option>
-            <option value="shared">shared（共享库）</option>
-            <option value="dedicated">dedicated（核心代供）</option>
-            <option value="external">external（模块自备）</option>
-          </select>
-        </label>
+        <div class="add-field">
+          <span class="add-field-label" id="cf-storage-label">存储落点（可选）</span>
+          <UMotionSelect
+            v-model="cfStorage"
+            :options="cfStorageOptions"
+            label="存储落点"
+            aria-labelledby="cf-storage-label"
+            placeholder="不指定（保留现状）"
+            data-test="cf-storage"
+          />
+        </div>
         <p class="add-dialog-hint">
           凭证只用于本次部署，不写入实例数据，也不进日志（会话凭证纪律）。带 Durable Object / 资产 / 迁移的模块
           仍走安装器装配期路径。

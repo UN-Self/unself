@@ -218,7 +218,7 @@ function ensureSetupLink(dbPath) {
     const row = db.prepare(SETUP_PROBE_SQL).get();
     if (Number(row.sealed) > 0) {
       log('实例已封箱（setup 已完成），无需 setup 链接');
-      return;
+      return null;
     }
     let token = row.token ? String(row.token) : null;
     if (token) {
@@ -229,15 +229,8 @@ function ensureSetupLink(dbPath) {
       db.prepare('INSERT INTO setup_tokens (token) VALUES (?1)').run(token);
       log('已签发一次性 setup token（消费后自动作废）');
     }
-    console.log(
-      '\n' +
-        '==========================================================================\n' +
-        '  ✅ Unself 核心已就绪\n' +
-        '  一次性 setup 链接（点开配置管理员与实例设置；token 用后即焚，泄露请删 .wrangler 重来）：\n\n' +
-        `      http://localhost:8788/setup?token=${token}\n` +
-        '\n' +
-        '==========================================================================\n',
-    );
+    // 链接不在此时打印：wrangler 实际端口要等它自己报 Ready 才知道（时序修复，#349 验收反馈）
+    return token;
   } finally {
     db.close();
   }
@@ -265,12 +258,37 @@ async function ensureDevVars() {
 // ---------------------------------------------------------------------------
 // ④ wrangler dev（前台进程，Ctrl-C 退出）
 // ---------------------------------------------------------------------------
-function startWrangler() {
+function startWrangler(setupToken) {
   log('起 wrangler dev（--config wrangler.dev.jsonc）……');
   const child = spawn('npx', ['wrangler', 'dev', '--config', 'wrangler.dev.jsonc'], {
     cwd: PKG_DIR,
-    stdio: 'inherit',
+    stdio: ['inherit', 'pipe', 'inherit'],
     shell: process.platform === 'win32',
+  });
+  // stdout 原样转发，同时守真实端口：wrangler 报「Ready on http://localhost:<PORT>」之后，
+  // 才用该端口拼 setup 深链（8788 是写死的教训——wrangler 端口会被占用时自动漂移）
+  let ready = setupToken == null; // 无 token（已封箱）则无事可守
+  let buf = '';
+  child.stdout.on('data', (chunk) => {
+    const text = chunk.toString();
+    process.stdout.write(text);
+    if (ready) return;
+    buf += text;
+    const m = buf.match(/Ready on http:\/\/localhost:(\d+)/);
+    if (m) {
+      ready = true;
+      console.log(
+        '\n' +
+          '==========================================================================\n' +
+          '  ✅ Unself 核心已就绪\n' +
+          '  一次性 setup 链接（点开配置管理员与实例设置；token 用后即焚，泄露请删 .wrangler 重来）：\n\n' +
+          `      http://localhost:${m[1]}/setup?token=${setupToken}\n` +
+          '\n' +
+          '==========================================================================\n',
+      );
+    } else if (buf.length > 4096) {
+      buf = buf.slice(-1024); // 防跨 chunk 截断：留尾窗口
+    }
   });
   child.on('exit', (code) => process.exitCode = code ?? 0);
   // 转发退出信号，wrangler 干净收场
@@ -284,8 +302,8 @@ async function main() {
   ensureWebDist();
   const dbPath = await migrate();
   await ensureDevVars();
-  ensureSetupLink(dbPath);
-  startWrangler();
+  const setupToken = ensureSetupLink(dbPath);
+  startWrangler(setupToken);
 }
 
 // 直执行守卫：import（vitest）不跑 main，只有 `node scripts/dev.mjs` 才起 dev

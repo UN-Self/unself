@@ -57,6 +57,11 @@ export type CredentialCheck =
   | { ok: true; moduleId: string }
   | { ok: false; status: 404 | 403; error: string };
 
+/** 纯哈希反查结果：ok 时回命中行的模块 id（调用方凭它定位 DO 分片）。 */
+export type HashLookup =
+  | { ok: true; moduleId: string }
+  | { ok: false; status: 404 | 403; error: string };
+
 /**
  * 核对反连凭证（隧道 WS upgrade / poll 共用单点，#51 验签纪律：fail-closed）。
  * 规则：
@@ -76,7 +81,7 @@ export async function verifyConnectCredential(
   moduleId: string,
   keyHash: string,
 ): Promise<CredentialCheck> {
-  // 定向单行读：列名引 0013 真列（迁移是列名单点），不拉全表不解析 manifest 快照。
+  // 先按 id 行锁（调用方已持 moduleId 时走快路径，哈希比较同 lookupConnectModule 语义）
   const row = await db
     .prepare('SELECT enabled, credential_hash FROM module_registry WHERE id = ?')
     .bind(moduleId)
@@ -90,6 +95,32 @@ export async function verifyConnectCredential(
     return { ok: false, status: 403, error: 'credential mismatch' };
   }
   return { ok: true, moduleId };
+}
+
+/**
+ * 纯哈希反查（#349 验收反馈收敛：模块拨号只交 keyHash，不报自己的 id——#108 env 契约
+ * 本就只有「core 地址 + key」两项，id 是实现自加的冗余）。core 凭 0013 credential_hash
+ * 列定位模块：64 位 hex 全域唯一（key 生成于浏览器 CSPRNG，碰撞概率忽略），按哈希等值
+ * 定向单行读 + 时序安全比较。语义与 verifyConnectCredential 同一构（404 不区分不存在与
+ * 未记账防枚举 / 403 形状或不配 / 不核 enabled 两段式），仅查找方向相反。
+ */
+export async function lookupConnectModule(
+  db: D1Database,
+  keyHash: string,
+): Promise<HashLookup> {
+  const provided = hexToBytes(keyHash);
+  if (!provided) {
+    return { ok: false, status: 403, error: 'credential mismatch' };
+  }
+  const row = await db
+    .prepare('SELECT id, credential_hash FROM module_registry WHERE credential_hash = ?')
+    .bind(keyHash)
+    .first<{ id: string; credential_hash: string | null }>();
+  // 哈希列等值命中后再时序安全比较（防 DB 级旁路；单行读不存在枚举面）
+  if (!row || !constantTimeEqual(hexToBytes(row.credential_hash ?? '') ?? new Uint8Array(), provided)) {
+    return { ok: false, status: 404, error: 'unknown credential' };
+  }
+  return { ok: true, moduleId: row.id };
 }
 
 /**

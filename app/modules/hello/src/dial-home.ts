@@ -57,8 +57,6 @@ export interface DialHomeOptions {
   coreUrl: string;
   /** 模块凭据明文（只在模块 env；只以哈希形态过网）。 */
   moduleKey: string;
-  /** 实例内模块 id（默认调用方给 manifest.id）。 */
-  moduleId: string;
   /** 模块自身的 HTTP 处理函数（hello 的 Hono app.fetch 直接传入——同一套路由，不造第二套）。 */
   handler: (request: Request) => Promise<Response> | Response;
   webSocketImpl?: new (url: string) => WebSocketLike;
@@ -102,10 +100,9 @@ export function startDialHome(options: DialHomeOptions): DialHomeHandle {
     return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
   }
 
-  /** 帧 → 真请求：宿主侧前缀剥离（决策 #63「模块恒挂根路径」不变式在隧道形态的落点）。 */
+  /** 帧 → 真请求：core 侧已剥 /m/<id> 前缀（#63「模块恒挂根路径」，剥前缀是 core 的活）。 */
   function frameToRequest(frame: TunnelRequestFrame): Request {
-    const prefix = `/m/${options.moduleId}`;
-    const path = frame.path.startsWith(prefix) ? frame.path.slice(prefix.length) || '/' : frame.path;
+    const path = frame.path || '/';
     const query = frame.query ? `?${frame.query}` : '';
     const headers = new Headers(frame.headers ?? {});
     const body =
@@ -159,8 +156,8 @@ export function startDialHome(options: DialHomeOptions): DialHomeHandle {
   /** 一次连接尝试：注册 → 握手 → 保持到断开。任何失败都 reject（外层退避）。 */
   function attempt(hash: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      const wsUrl = `${coreUrl.replace(/^http/, 'ws')}/api/modules/connect-ws` +
-        `?moduleId=${encodeURIComponent(options.moduleId)}&keyHash=${hash}`;
+      // 模块不报 id：core 凭 keyHash 反查定位（#108 env 契约 = 地址 + key 两项）
+      const wsUrl = `${coreUrl.replace(/^http/, 'ws')}/api/modules/connect-ws?keyHash=${hash}`;
       let ws: WebSocketLike;
       try {
         ws = new WebSocketCtor(wsUrl);

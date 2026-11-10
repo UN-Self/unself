@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
+import { UMotionSelect } from '@unself/ui'
 import AddModuleDialog from './add-module-dialog.vue'
 import ModulesPage from './ModulesPage.vue'
 import {
@@ -67,6 +68,18 @@ describe('AddModuleDialog（#349 双模式）', () => {
     expect(wrapper.find('[data-test="add-module-connect"]').exists()).toBe(false)
   })
 
+  it('存储落点收敛（#349 验收）：反连只有 core/不指定，CF 保留四级', async () => {
+    // 反连 tab：core 不部署模块运行体，shared/dedicated「核心代供」语义不成立
+    const connect = mountDialog()
+    const connectOptions = connect.findComponent(UMotionSelect).props('options') as Array<{ value: string }>
+    expect(connectOptions.map((o) => o.value)).toEqual(['', 'core'])
+
+    const cf = mountDialog()
+    await cf.find('[data-test="add-module-tab-cloudflare"]').trigger('click')
+    const cfOptions = cf.findComponent(UMotionSelect).props('options') as Array<{ value: string }>
+    expect(cfOptions.map((o) => o.value)).toEqual(['', 'core', 'shared', 'dedicated', 'external'])
+  })
+
   it('生成接入码：只把哈希交给 core，明文 key 只出现在 env 区一次', async () => {
     const wrapper = mountDialog()
     await wrapper.find('[data-test="connect-id"]').setValue('bridge')
@@ -79,8 +92,10 @@ describe('AddModuleDialog（#349 双模式）', () => {
       storageLevel: undefined,
     })
     const env = wrapper.find('[data-test="connect-env"]').text()
+    // env 收敛为 key 一项（#108 决策原样；id 不下发——core 凭哈希反查，地址按拓扑自填）
     expect(env).toContain('UNSELF_MODULE_KEY=plain-key-123')
-    expect(env).toContain('UNSELF_MODULE_ID=bridge')
+    expect(env).not.toContain('UNSELF_MODULE_ID')
+    expect(env).not.toContain('UNSELF_CORE_URL')
     // 生成的请求体里没有明文
     expect(JSON.stringify(vi.mocked(registerConnectModule).mock.calls[0]![0])).not.toContain('plain-key-123')
   })

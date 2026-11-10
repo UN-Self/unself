@@ -155,7 +155,8 @@ describe('路由级 WS 交接保留 upgrade 头（#349 真机取证回归）', (
     } as unknown as DurableObjectNamespace;
     const app = createApp();
     const res = await app.request(
-      '/api/modules/connect-ws?moduleId=route-hello&keyHash=' + keyHashOf('route-key'),
+      // 模块不报 id：core 凭 keyHash 反查（#349 验收收敛），DO id 从命中行来
+      '/api/modules/connect-ws?keyHash=' + keyHashOf('route-key'),
       { headers: { upgrade: 'websocket' } },
       { CORE_DB: db.d1, CONNECT_TUNNEL: ns } as never,
     );
