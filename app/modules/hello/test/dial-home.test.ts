@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { startDialHome, type WebSocketLike } from '../src/dial-home.js';
 
@@ -48,29 +48,21 @@ async function settle(times = 10): Promise<void> {
   for (let i = 0; i < times; i += 1) await new Promise((r) => setTimeout(r, 0));
 }
 
-/** 标准装配：注册成功、按需返回 WS。 */
+/** 标准装配：模块不自我注册（决策 #108：key 由部署者在管理台生成并预注册）。 */
 function setup(overrides?: {
-  registerStatus?: () => number;
   handler?: (request: Request) => Promise<Response>;
+  webSocketImpl?: new (url: string) => WebSocketLike;
 }) {
   FakeSocket.instances = [];
-  const registerCalls: Array<{ url: string; body: unknown }> = [];
-  const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-    const target = String(url);
-    registerCalls.push({ url: target, body: init?.body ? JSON.parse(String(init.body)) : null });
-    const status = overrides?.registerStatus ? overrides.registerStatus() : 200;
-    return new Response(status === 200 ? JSON.stringify({ ok: true }) : JSON.stringify({ error: 'nope' }), {
-      status,
-    });
-  });
+  // 模块不自我注册 → 不该有任何 HTTP 调用；这里只留一个会失败的空实现（被调用即崩测试）
+  const fetchCalls: Array<{ url: string; body: unknown }> = [];
   const sleeps: number[] = [];
   const handle = startDialHome({
     coreUrl: 'https://core.example.com/',
     moduleKey: 'super-secret-key',
     moduleId: 'hello',
     handler: overrides?.handler ?? echoHandler,
-    fetchImpl: fetchImpl as unknown as typeof fetch,
-    webSocketImpl: FakeSocket as unknown as new (url: string) => WebSocketLike,
+    webSocketImpl: (overrides?.webSocketImpl ?? FakeSocket) as unknown as new (url: string) => WebSocketLike,
     sleep: async (ms: number) => {
       sleeps.push(ms);
       await new Promise((r) => setTimeout(r, 0));
@@ -78,26 +70,23 @@ function setup(overrides?: {
     backoffBaseMs: 100,
     backoffMaxMs: 400,
   });
-  return { handle, registerCalls, sleeps };
+  return { handle, fetchCalls, sleeps };
 }
 
 describe('hello 反连客户端（#349 决策 #108）', () => {
-  it('先注册再握手：注册体带 hex(SHA-256(key)) 哈希，明文 key 不过网', async () => {
-    const { handle, registerCalls } = setup();
+  it('只握手不自我注册：WS 地址带 hex(SHA-256(key))，明文 key 不过网', async () => {
+    const { handle, fetchCalls } = setup();
     await settle();
 
-    expect(registerCalls).toHaveLength(1);
-    expect(registerCalls[0]!.url).toBe('https://core.example.com/api/modules/connect-register');
-    const body = registerCalls[0]!.body as { moduleId: string; keyHash: string };
-    expect(body.moduleId).toBe('hello');
-    // sha256('super-secret-key')
-    expect(body.keyHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(JSON.stringify(body)).not.toContain('super-secret-key');
-
+    // 模块不调用任何注册端点（预注册是管理台的动作）
+    expect(fetchCalls).toHaveLength(0);
     expect(FakeSocket.instances).toHaveLength(1);
-    expect(FakeSocket.instances[0]!.url).toBe(
-      'wss://core.example.com/api/modules/connect-ws?moduleId=hello&keyHash=' + body.keyHash,
-    );
+    const url = new URL(FakeSocket.instances[0]!.url);
+    expect(`${url.protocol}//${url.host}${url.pathname}`).toBe('wss://core.example.com/api/modules/connect-ws');
+    expect(url.searchParams.get('moduleId')).toBe('hello');
+    const hash = url.searchParams.get('keyHash') ?? '';
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(FakeSocket.instances[0]!.url).not.toContain('super-secret-key');
     handle.stop();
   });
 
@@ -158,39 +147,42 @@ describe('hello 反连客户端（#349 决策 #108）', () => {
     handle.stop();
   });
 
-  it('断线重连：重新注册 + 新握手（重连必重核哈希，不缓存凭据）', async () => {
-    const { handle, registerCalls } = setup();
+  it('断线重连：新握手仍带同一哈希（重连必重核，core 不缓存会话）', async () => {
+    const { handle } = setup();
     await settle();
-    expect(registerCalls).toHaveLength(1);
+    const firstUrl = FakeSocket.instances[0]!.url;
 
     FakeSocket.instances[0]!.close();
     await settle();
 
-    expect(registerCalls).toHaveLength(2);
     expect(FakeSocket.instances).toHaveLength(2);
-    expect(registerCalls[1]!.body).toEqual(registerCalls[0]!.body);
+    expect(FakeSocket.instances[1]!.url).toBe(firstUrl);
     handle.stop();
   });
 
-  it('注册失败按指数退避重试，退避有上限', async () => {
+  it('握手失败按指数退避重试，退避有上限', async () => {
     let attempt = 0;
-    const { handle, sleeps, registerCalls } = setup({
-      // 前三次全失败（触发 100 → 200 → 400），上限 400
-      registerStatus: () => (attempt++ < 3 ? 503 : 200),
-    });
+    // 前三次握手被拒（core 侧 403/1008 的客户端表现），之后成功——退避 100 → 200 → 400（封顶）
+    const FailingSocket = class extends FakeSocket {
+      constructor(url: string) {
+        if (attempt++ < 3) throw new Error('handshake refused');
+        super(url);
+      }
+    };
+    const { handle, sleeps } = setup({ webSocketImpl: FailingSocket as unknown as new (url: string) => WebSocketLike });
     await settle(40);
 
-    expect(registerCalls.length).toBeGreaterThanOrEqual(4);
+    expect(attempt).toBeGreaterThanOrEqual(4);
     expect(sleeps.slice(0, 3)).toEqual([100, 200, 400]);
     handle.stop();
   });
 
   it('stop() 之后不再重连', async () => {
-    const { handle, registerCalls } = setup();
+    const { handle } = setup();
     await settle();
     handle.stop();
     FakeSocket.instances[0]?.close();
     await settle();
-    expect(registerCalls).toHaveLength(1);
+    expect(FakeSocket.instances).toHaveLength(1);
   });
 });

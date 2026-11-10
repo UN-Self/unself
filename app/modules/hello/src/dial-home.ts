@@ -6,6 +6,10 @@
  * core 就行（决策 #108 第一条：拓扑自由，互通即可）。core 侧把 `/m/<id>/*` 的请求经隧道
  * 反向推到这条连接上（TunnelRoom DO / Node 纯 WS），模块只当普通 HTTP 服务应答。
  *
+ * 凭证何时产生：**由部署者在管理台生成并预注册**（决策 #108：浏览器生成 key、core 只存
+ * 哈希）。模块启动时只拿 env 里的明文 key 去**握手**——没有「模块自我注册」这一步，
+ * 那等于绕开部署者的信任动作（管理台待连接行才是安装意图的载体）。
+ *
  * 帧协议（与 app/workbench/src/do/TunnelRoom.ts 同源定义，勿在此另造一套语义）：
  * - 入站 `{v:1,type:'request',requestId,method,path,query,headers,body}`
  * - 出站 `{v:1,type:'response',requestId,status,headers,body}`
@@ -14,7 +18,7 @@
  * 凭证纪律（决策 #102/#108）：key 明文只活在模块自己的 env 里，连的只是**哈希**
  * （hex(SHA-256(key))）；core 侧比对 registry.credential_hash。壳永不生成、永不经手明文密钥。
  *
- * 断线语义：任一断开都回到「重新注册 + 重新握手」——重连必重核哈希，不缓存会话凭据。
+ * 断线语义：任一断开都回到「重新握手」——每次重连都带哈希重新核验（core 不缓存会话）。
  * 指数退避（1s→2s→4s…上限 BACKOFF_MAX_MS），停止后不再重连。
  */
 
@@ -57,8 +61,6 @@ export interface DialHomeOptions {
   moduleId: string;
   /** 模块自身的 HTTP 处理函数（hello 的 Hono app.fetch 直接传入——同一套路由，不造第二套）。 */
   handler: (request: Request) => Promise<Response> | Response;
-  /** 注入面（测试用；生产用全局 fetch / WebSocket）。 */
-  fetchImpl?: typeof fetch;
   webSocketImpl?: new (url: string) => WebSocketLike;
   /** 退避等待（测试注入，免真睡）。 */
   sleep?: (ms: number) => Promise<void>;
@@ -84,7 +86,6 @@ const DEFAULT_BACKOFF_MAX_MS = 60_000;
  * 返回句柄；调用方负责把 handler 接到模块自己的 HTTP 面上（同一条路由）。
  */
 export function startDialHome(options: DialHomeOptions): DialHomeHandle {
-  const fetchImpl = options.fetchImpl ?? fetch;
   const WebSocketCtor = options.webSocketImpl ?? (globalThis.WebSocket as unknown as new (url: string) => WebSocketLike);
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const coreUrl = options.coreUrl.replace(/\/+$/, '');
@@ -99,18 +100,6 @@ export function startDialHome(options: DialHomeOptions): DialHomeHandle {
   async function keyHash(): Promise<string> {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(options.moduleKey));
     return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  /** 先注册（pending 预注册，core 记哈希）再握手——重连每次都走完整两段。 */
-  async function register(hash: string): Promise<void> {
-    const res = await fetchImpl(`${coreUrl}/api/modules/connect-register`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ moduleId: options.moduleId, keyHash: hash }),
-    });
-    if (!res.ok) {
-      throw new Error(`connect-register failed: ${res.status}`);
-    }
   }
 
   /** 帧 → 真请求：宿主侧前缀剥离（决策 #63「模块恒挂根路径」不变式在隧道形态的落点）。 */
@@ -212,7 +201,6 @@ export function startDialHome(options: DialHomeOptions): DialHomeHandle {
     while (!stopped) {
       try {
         const hash = await keyHash();
-        await register(hash);
         if (stopped) return;
         await attempt(hash);
         // 正常断开（core 侧关闭）：立刻重试一次，不惩罚
