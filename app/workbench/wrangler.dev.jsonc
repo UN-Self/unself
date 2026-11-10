@@ -26,7 +26,8 @@
     "binding": "ASSETS",
     // SPA：未命中文件回 index.html；API/JWKS 一律先跑 Worker（同装配器生成形态）
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/.well-known/*"]
+    // /m/* 也经 worker：connect 反连模块的数据面出口（隧道转发）在这里，#349
+    "run_worker_first": ["/api/*", "/.well-known/*", "/m/*"]
   },
   // #349 隧道 DO：connect 反连模块的数据面出口（hibernation 省费；决策 #106 过渡事实）
   "durable_objects": {
