@@ -74,3 +74,12 @@
     transition: none;
   }
 }
+
+/* 页头（标题 + 右侧动作）：模块页「新增模块」等页级主操作落这里（#349）。 */
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--unself-space-3);
+  margin-bottom: var(--unself-space-4);
+}
