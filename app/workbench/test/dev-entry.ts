@@ -25,6 +25,7 @@ import type { ExecutionContext } from 'hono';
 import { createFakeMailProvisioner } from '@unself/contracts';
 
 import { createApp, type Bindings } from '../src/index';
+import { tryTunnelDataPlane } from '../src/entry.prod';
 
 /** dev 形态同生产：DO 类必须由主模块导出，wrangler 才能解析 durable_objects.class_name（#349）。 */
 export { TunnelRoom } from '../src/do/TunnelRoom';
@@ -72,7 +73,13 @@ export default {
    * 外层 `satisfies ExportedHandler<Bindings>` 保证这确实是合法 Workers entry 形状，
    * 同时保留具体签名（#193 的 dev-entry.test 要直接三参调用）。
    */
-  fetch(request: Request, env: Bindings, ctx: ExecutionContext): Response | Promise<Response> {
-    return app.fetch(request, normalizeSigningKey(env), ctx);
+  async fetch(request: Request, env: Bindings, ctx: ExecutionContext): Promise<Response> {
+    const signed = normalizeSigningKey(env);
+    // connect 反连数据面（#349）：/m/<id>/ 且 mode='connect' → 隧道转发（同生产入口顺序，
+    // 先于 Hono/SPA assets——connect 模块无壳内资产）。CONNECT_TUNNEL 未绑定（旧 dev 环境）
+    // 返回 null 走原链路，零回归。
+    const tunnel = await tryTunnelDataPlane(request, signed as never);
+    if (tunnel) return tunnel;
+    return app.fetch(request, signed, ctx);
   },
 } satisfies ExportedHandler<Bindings>;

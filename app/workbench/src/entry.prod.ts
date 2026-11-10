@@ -49,7 +49,7 @@ const isApiPath = (p: string): boolean =>
 const wantsHtml = (request: Request): boolean => (request.headers.get('accept') ?? '').includes('text/html');
 
 /** connect 反连数据面（#349）：/m/<id>/… 命中且 CONNECT_TUNNEL 在位 → 经隧道转发。 */
-async function tryTunnelDataPlane(request: Request, env: ProdEnv): Promise<Response | null> {
+export async function tryTunnelDataPlane(request: Request, env: ProdEnv): Promise<Response | null> {
   const url = new URL(request.url);
   // 接入模式分流（决策 #104 双形态）：/m/<id>/* 同一段路由既可能是直连模块（CF worker
   // 自己接 zone 路由），也可能是 connect 反连模块（隧道出口）。core 在 workers.dev 形态
