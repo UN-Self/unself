@@ -25,10 +25,7 @@ import type { RegistryModule } from './registry-api'
 const CROSS_MODULE: RegistryModule = {
   id: 'todo',
   enabled: true,
-  version: '0.1.0',
-  mode: 'cloudflare',
-  entry: null,
-  storage_level: null,
+  name: '待办',
   manifest: {
     id: 'todo',
     route: '/m/todo/',
