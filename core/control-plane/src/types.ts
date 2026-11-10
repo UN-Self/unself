@@ -58,18 +58,22 @@ export function checkProvisioning(mode: string, entry: string | null | undefined
   return null;
 }
 
-/** 注册/更新输入（装配器传完整快照；core-api 路由层已有 zod 门禁）。 */
+/**
+ * 注册/更新输入（装配器传完整快照；core-api 路由层已有 zod 门禁）。
+ * 落点三列合并语义（#348 review 定案）：本次未写（undefined/缺字段）= 保留列中旧值，
+ * 本语句不承担清空——清空走独立管理动作；首次插入的缺省值由 0012 列 DEFAULT 承载。
+ */
 export interface ModuleRegistration {
   id: string;
   enabled: boolean;
   manifest: unknown;
   /** manifest.version 镜像列（upsert 时随快照刷新）。 */
   version?: string;
-  /** 落点形态；缺省 cloudflare（装配期 CF 路径默认值）。 */
-  mode?: DeployMode;
-  /** connect 模式接入 URL；其余模式 NULL。 */
+  /** 落点形态；未写 = 保留旧值（#348 review 定案）。 */
+  mode?: DeployMode | null;
+  /** connect 模式接入 URL；未写 = 保留旧值。 */
   entry?: string | null;
-  /** 存储四级；缺省 NULL（未选）。 */
+  /** 存储四级；未写 = 保留旧值（NULL = 未选）。 */
   storage_level?: StorageLevel | null;
 }
 

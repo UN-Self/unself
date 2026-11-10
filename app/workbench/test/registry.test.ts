@@ -71,6 +71,36 @@ function register(
 }
 
 describe('registry CRUD 与启停语义（#7）', () => {
+  it('落点三列合并语义（#348 review 定案）：未写保留旧值，201 回合并后真行；mode 显式给出才核对 connect/entry', async () => {
+    const { env, cookie } = await envFor('admin');
+    // 首次注册：显式写三列（管理接口路径的用户选择）
+    const first = await register(env, cookie, {
+      id: 'hello',
+      enabled: true,
+      manifest: helloManifest,
+      mode: 'connect',
+      entry: 'https://bridge.example.com/m/bridge/',
+      storage_level: 'dedicated',
+    });
+    expect(first.status).toBe(201);
+    await expect(first.json()).resolves.toMatchObject({
+      mode: 'connect',
+      entry: 'https://bridge.example.com/m/bridge/',
+      storage_level: 'dedicated',
+    });
+    // 重新注册（装配路径：只刷新快照，三列未写）→ 旧值保留；响应是 RETURNING 真行，不回显请求值
+    const second = await register(env, cookie, { id: 'hello', enabled: true, manifest: helloManifest });
+    expect(second.status).toBe(201);
+    await expect(second.json()).resolves.toMatchObject({
+      mode: 'connect',
+      entry: 'https://bridge.example.com/m/bridge/',
+      storage_level: 'dedicated',
+    });
+    // mode 显式给出而 entry 缺失 → 400（不变式照旧）；mode 未写则不参与核对（列中旧值入库时已过 CHECK）
+    const bad = await register(env, cookie, { id: 'other', enabled: true, manifest: helloManifest, mode: 'connect' });
+    expect(bad.status).toBe(400);
+  });
+
   it('注册模块：写入 manifest 快照，201 返回条目', async () => {
     const { env, db, cookie } = await envFor('admin');
     const res = await register(env, cookie, { id: 'hello', enabled: true, manifest: helloManifest });

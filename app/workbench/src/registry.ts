@@ -26,23 +26,29 @@ export const ModuleRegistrationSchema = z
     enabled: z.boolean().default(true),
     /** 模块清单快照：注册时校验，运行期不回读。 */
     manifest: ModuleManifestSchema,
-    /** 落点形态（#348/#103② 用户实际选择，非 manifest 声明快照）；缺省 cloudflare。 */
-    mode: z.enum(DEPLOY_MODES).default('cloudflare'),
-    /** connect 模式的接入 URL；其余模式为 NULL（缺字段/空串都归一为 null）。 */
+    /**
+     * 落点三列（#348/#103② 用户实际选择，非 manifest 声明快照）。合并语义（#348 review 定案）：
+     * 未写 = 保留列中旧值，清空必须显式传值（装配器/注册调用不承担清空）。
+     * 注意不用 .default()：默认值会把「未写」变成「写了 cloudflare/null」，合并语义就没意义了。
+     */
+    mode: z.enum(DEPLOY_MODES).optional(),
+    /** connect 模式的接入 URL；显式 null/空串 = 清空，缺字段 = 保留旧值。 */
     entry: z.preprocess(
-      (v) => (v == null || v === '' ? null : v),
-      z.string().nullable(),
+      (v) => (v === '' ? null : v),
+      z.string().nullish(),
     ),
-    /** 存储四级（决策 #55）；缺省 NULL = 未选（缺字段/空串都归一为 null）。 */
+    /** 存储四级（决策 #55）；显式 null/空串 = 清空（未选），缺字段 = 保留旧值。 */
     storage_level: z.preprocess(
-      (v) => (v == null || v === '' ? null : v),
-      z.enum(STORAGE_LEVELS).nullable(),
+      (v) => (v === '' ? null : v),
+      z.enum(STORAGE_LEVELS).nullish(),
     ),
   })
   // 落点不变式与 0012 CHECK 同一规则（入口层给 400 人话，数据层是同一构成定义）：
-  // 错误文案单点在 control-plane checkProvisioning，这里只透传。
+  // 错误文案单点在 control-plane checkProvisioning，这里只透传。mode 未写 = 保留旧值，
+  // 不参与本次核对（列中旧值在写入时已过 CHECK，不可能非法）。
   .superRefine((data, ctx) => {
-    const problem = checkProvisioning(data.mode, data.entry);
+    if (data.mode === undefined) return;
+    const problem = checkProvisioning(data.mode, data.entry ?? null);
     if (problem) {
       ctx.addIssue({ code: 'custom', message: problem });
     }
@@ -97,34 +103,33 @@ export function rowToEntry(row: {
   };
 }
 
-/** 注册或更新（upsert）：manifest 快照随注册刷新，enabled/落点三列按请求给。 */
+/**
+ * 注册或更新（upsert）：manifest 快照随注册刷新，enabled 按请求给；
+ * 落点三列合并语义（#348 review 定案）：本次未写 = 保留列中旧值，RETURNING 回合并后的真行。
+ */
 export async function upsertModule(db: D1Database, reg: ModuleRegistration): Promise<RegistryEntry> {
   const manifestJson = JSON.stringify(reg.manifest);
-  await db
+  const row = await db
     .prepare(
-      `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level) VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7)
        ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, version = excluded.version, manifest_json = excluded.manifest_json,
-       mode = excluded.mode, entry = excluded.entry, storage_level = excluded.storage_level`,
+       mode = coalesce(?5, mode), entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END), storage_level = coalesce(?7, storage_level)
+       RETURNING id, enabled, version, manifest_json, mode, entry, storage_level`,
     )
     .bind(
       reg.id,
       reg.enabled ? 1 : 0,
       reg.manifest.version,
       manifestJson,
-      reg.mode ?? 'cloudflare',
+      reg.mode ?? null,
       reg.entry ?? null,
       reg.storage_level ?? null,
     )
-    .run();
-  return {
-    id: reg.id,
-    enabled: reg.enabled,
-    version: reg.manifest.version,
-    manifest: reg.manifest,
-    mode: reg.mode ?? 'cloudflare',
-    entry: reg.entry ?? null,
-    storage_level: reg.storage_level ?? null,
-  };
+    .first<{ id: string; enabled: number; version: string | null; manifest_json: string; mode: string | null; entry: string | null; storage_level: string | null }>();
+  if (!row) {
+    throw new Error(`upsertModule 未返回行（id=${reg.id}）`);
+  }
+  return rowToEntry(row);
 }
 
 /** 翻转启停（运行时秒级生效：边栏隐藏 + token 门禁拒发，§5.5）。 */
