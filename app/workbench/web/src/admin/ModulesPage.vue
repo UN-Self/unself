@@ -6,6 +6,7 @@ import { UButton, UErrorCard, USkeleton } from '@unself/ui'
 
 import { fetchAdminModules, toggleModule, type AdminModule } from '../lib/admin-api'
 import { useAsyncLoad } from '../lib/use-async-load'
+import AddModuleDialog from './add-module-dialog.vue'
 
 /**
  * 管理台模块页（#17）：全量列表（含停用）+ 启停开关。
@@ -14,9 +15,15 @@ import { useAsyncLoad } from '../lib/use-async-load'
  */
 
 // #142：加载三态样板收编 use-async-load（phase/loadError 变量名不变，模板零改动）
-const { phase, loadError, data: modules } = useAsyncLoad<AdminModule[]>(fetchAdminModules, { initial: [] })
+const { phase, loadError, data: modules, load } = useAsyncLoad<AdminModule[]>(fetchAdminModules, { initial: [] })
 const busyId = ref<string | null>(null)
 const actionError = ref<string | null>(null)
+/** 「新增模块」弹窗（#349 双模式）：成功即重取列表（部署/激活都在服务端落库）。 */
+const addOpen = ref(false)
+
+function onModuleAdded(): void {
+  void load()
+}
 
 /** 启停直接生效（注册表开关秒级可见；无 confirm——动作可逆）。 */
 async function onToggle(mod: AdminModule): Promise<void> {
@@ -35,7 +42,14 @@ async function onToggle(mod: AdminModule): Promise<void> {
 
 <template>
   <div>
-    <h1 class="page-title">模块</h1>
+    <header class="page-head">
+      <h1 class="page-title">模块</h1>
+      <UButton variant="primary" size="sm" data-test="add-module" @click="addOpen = true">
+        新增模块
+      </UButton>
+    </header>
+
+    <AddModuleDialog v-model="addOpen" @done="onModuleAdded" />
 
     <USkeleton v-if="phase === 'loading'" class="page-skeleton" />
 
