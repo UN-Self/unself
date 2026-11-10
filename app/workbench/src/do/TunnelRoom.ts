@@ -18,7 +18,8 @@
  * 参考（只参考模式，不动其代码）：app/modules/chat/worker/src/do/ChannelRoom.js 的
  * DO websocket 模式（acceptWebSocket + serializeAttachment）；#51 验签纪律照搬：
  * 入站先验（upgrade/poll/respond 由路由层核哈希后带参进来，DO 侧再验启停状态）+
- * 已建连按帧重验（每条响应帧回库重查 enabled，哈希不重查——建连已核、换 key = 重连）。
+ * 已建连按帧重验（每条响应帧回库重查**凭据是否被吊销**；哈希不重查——建连已核、换 key = 重连；
+ * enabled 不参与隧道核验，见 connect-registry.ts：pending 模块必须能拨上来做「测试连接」）。
  *
  * 连接池语义（决策 #108：连接形式模块自选，core 备能力不强制）：一房多连 = 广播取
  * 最先响应者（connect 模块默认单实例部署，多连是重连竞态窗口的过渡形态）；
@@ -417,7 +418,8 @@ export class TunnelRoom {
         this.closeSocket(ws, 1008, 'unsolicited response');
         return;
       }
-      // #51 按帧重验（轻量版）：注册表启停/吊销状态随帧变；哈希不重查（建连已核 + 换 key = 重连）。
+      // #51 按帧重验（轻量版）：吊销（哈希被清/换）随帧生效；哈希不重查（建连已核 + 换 key = 重连）；
+      // enabled 不在此判（pending 模块要能拨上来；启停门禁在 token/导航面）。
       const gate = await verifyConnectCredential(this.env.CORE_DB, meta.moduleId, meta.keyHash);
       if (!gate.ok) {
         // 在途转发立刻 reject（调用面收 504/503），socket 关 1008（重连必重新核哈希）。
