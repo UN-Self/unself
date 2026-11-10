@@ -190,7 +190,12 @@ describe('SetupView 初始化边界（#332）', () => {
     const wrapper = mount(SetupView)
     await prepareOidc(wrapper)
     await submit(wrapper, 'oidc')
-    expect(wrapper.get('[role="alert"]').text()).toContain('服务尚未就绪')
+    // 503 不在契约内（setup 域不产生），按兜底人话呈现即可
+    expect(wrapper.get('[role="alert"]').text()).toContain('配置失败（503）')
+    // 旧保存错误卡在字段一改动时就清除，不留到重测成功之后误导
+    await wrapper.get('input[name="issuer"]').setValue(ISSUER + '/')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    await wrapper.get('input[name="issuer"]').setValue(ISSUER)
     await submit(wrapper, 'oidc')
     expect(requests(SAVE)).toHaveLength(1)
     await testConnection(wrapper)
@@ -233,6 +238,21 @@ describe('SetupView 卡片翻页动线', () => {
     expect((wrapper.get('input[name="issuer"]').element as HTMLInputElement).value).toBe(ISSUER)
     expect((wrapper.get('input[name="client_secret"]').element as HTMLInputElement).value).toBe('secret-1')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('快速交错翻页后焦点不落在隐藏页（最后一次翻页为准）', async () => {
+    const wrapper = mount(SetupView, { attachTo: document.body })
+    try {
+      await editBranch(wrapper, 'oidc')
+      // 在途翻页（不 await settle）时立刻反向翻回：两次 flipTo 交错
+      await wrapper.get('[data-testid="return-admin"]').trigger('click')
+      await settle()
+      expect(document.activeElement).toBe(wrapper.get('[data-testid="open-oidc"]').element)
+      expect((wrapper.get('input[name="issuer"]').element.closest('[inert]')) !== null).toBe(true)
+      expectNoCompletion()
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('打开时焦点进入 OIDC，Escape 返回折角入口；无效创建聚焦首个错误字段', async () => {

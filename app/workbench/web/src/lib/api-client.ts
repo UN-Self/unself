@@ -39,16 +39,30 @@ export function makeApiError(status: number, message: string, requestId?: string
 /** 非流式 JSON 请求默认人话策略：message 优先取后端 error 字段（后端已给人话），拿不到回 `请求失败（<status>）`。 */
 export function preferServerMessage(status: number, serverMessage?: string): string {
   const trimmed = typeof serverMessage === 'string' ? serverMessage.trim() : ''
-  return trimmed || `请求失败（${status}）`
+  return trimmed || fallbackMessage(status)
 }
 
 /** status-only 人话策略：忽略后端 error，文案由域内按状态映射后经 payload 传入。 */
 export function statusOnlyMessage(status: number, _serverMessage?: string): string {
-  return `请求失败（${status}）`
+  return fallbackMessage(status)
 }
 
 /** message 出错时的人话兜底（fetch 抛 TypeError 等非 ApiError 异常）。 */
 export const NETWORK_UNAVAILABLE = '网络不可用，请检查连接后重试'
+
+/** 兜底文案构造单点（statusOnlyMessage 与 preferServerMessage 的兜底分支共用）。 */
+export function fallbackMessage(status: number): string {
+  return `请求失败（${status}）`
+}
+
+/**
+ * 判断 ApiError 的 message 是否是客户端自造的兜底文案（而非后端 error 字段透传）。
+ * 调用方据此区分「服务端说了什么」与「服务端没说、文案是客户端拼的」——
+ * 判断逻辑单点在这，改兜底格式不会让调用方的反推失明。
+ */
+export function isFallbackMessage(err: ApiError): boolean {
+  return err.status === 0 ? err.message === NETWORK_UNAVAILABLE : err.message === fallbackMessage(err.status)
+}
 
 /** 传给 request 的解析/错误构造配置（与历史实现逐一对齐）。 */
 export interface ClientOptions {

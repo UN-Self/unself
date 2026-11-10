@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { saveOidcConfig, testOidcConnection } from './setup-api'
+import { getSetupStatus, saveOidcConfig, testOidcConnection } from './setup-api'
 
 /** 默认 fetch 桩：测试中任何未经 mock 的请求都视为失败（不允许真实网络）。 */
 let baseFetchMock: ReturnType<typeof vi.fn>
@@ -57,7 +57,6 @@ describe('saveOidcConfig（POST /api/setup/oidc-config）', () => {
       issuer: 'https://idp.example.com',
       clientId: 'c1',
       clientSecret: 's3cret',
-      scope: 'openid profile email',
     })
 
     expect(result).toEqual({
@@ -68,7 +67,7 @@ describe('saveOidcConfig（POST /api/setup/oidc-config）', () => {
     expect(String(url)).toBe('/api/setup/oidc-config?token=tok-1')
     expect(init?.method).toBe('POST')
     expect(init?.headers).toMatchObject({ 'content-type': 'application/json' })
-    // 契约：三字段必填、无 scope 字段（即使调用方传入 scope 也不发）
+    // 契约：body 严格三字段（OidcSetup 无 scope 字段）
     expect(JSON.parse(init?.body as string)).toEqual({
       issuer: 'https://idp.example.com',
       clientId: 'c1',
@@ -186,5 +185,48 @@ describe('testOidcConnection（表单[测试连接]按钮的本地预检 + 服�
 
     const result = await testOidcConnection('https://idp.example.com')
     expect(result).toEqual({ ok: false, reason: '连接测试失败：请确认服务端可访问该 Issuer' })
+  })
+
+  it('后端没给 error（兜底文案）时走状态码人话；给了 error 则透传', async () => {
+    mockFetchOnce(jsonResponse({ ok: false, status: 500, body: {} }))
+    const fallback = await testOidcConnection('https://idp.example.com')
+    expect(fallback).toEqual({ ok: false, reason: '连接测试失败（500），请稍后重试' })
+
+    mockFetchOnce(jsonResponse({ ok: false, status: 500, body: { error: 'IdP 证书过期' } }))
+    const server = await testOidcConnection('https://idp.example.com')
+    expect(server).toEqual({ ok: false, reason: 'IdP 证书过期' })
+  })
+})
+
+describe('getSetupStatus（GET /api/setup/status，路由守卫的契约点）', () => {
+  it('token 经 encodeURIComponent 进 query（守卫依赖的契约）', async () => {
+    const fetchMock = mockFetchOnce(
+      jsonResponse({ ok: true, status: 200, body: { done: false, tokenValid: true } }),
+    )
+
+    const status = await getSetupStatus('tok 1/x')
+    expect(status).toEqual({ done: false, tokenValid: true })
+    const [url] = callArgs(fetchMock)
+    expect(String(url)).toBe('/api/setup/status?token=tok%201%2Fx')
+  })
+
+  it('无 token 时不带 query', async () => {
+    const fetchMock = mockFetchOnce(
+      jsonResponse({ ok: true, status: 200, body: { done: true } }),
+    )
+
+    const status = await getSetupStatus()
+    expect(status).toEqual({ done: true })
+    const [url] = callArgs(fetchMock)
+    expect(String(url)).toBe('/api/setup/status')
+  })
+
+  it('非 2xx 抛 ApiError 且走 humanize 人话', async () => {
+    mockFetchOnce(jsonResponse({ ok: false, status: 409, body: { error: 'sealed' } }))
+
+    await expect(getSetupStatus('tok-1')).rejects.toMatchObject({
+      status: 409,
+      message: '实例已完成配置，setup 页面已关闭',
+    })
   })
 })
