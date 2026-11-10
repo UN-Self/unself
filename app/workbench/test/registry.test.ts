@@ -563,3 +563,84 @@ describe('模块启停写端点 POST /toggle（#49）', () => {
     expect(db.query('SELECT id FROM audit_log')).toEqual([]);
   });
 });
+
+/**
+ * 运行时装配端点（#349 模式一，决策 #109）：
+ * - 门禁沿用管理守卫（普通成员 403），凭证不落库（#165）；
+ * - 校验不过不上传（不花用户 CF 额度）；
+ * - 成功即走同一条 upsertModule 写落点三列（#348 单一写入口）。
+ */
+describe('运行时装配端点 POST /api/admin/modules/install（#349）', () => {
+  const INSTALL_URL = 'https://t.example/api/admin/modules/install';
+
+  function install(
+    env: { JWT_PRIVATE_KEY: string; CORE_DB: D1Database },
+    cookie: string,
+    body: unknown,
+  ) {
+    return app.request(
+      INSTALL_URL,
+      { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify(body) },
+      env,
+    );
+  }
+
+  it('普通成员 403：装配是管理员动作', async () => {
+    const { env, cookie } = await envFor('user');
+    const res = await install(env, cookie, { npmSpec: 'hello', cfToken: 't', accountId: 'a' });
+    expect(res.status).toBe(403);
+  });
+
+  it('入参不全 400：缺 cfToken/accountId 不发请求', async () => {
+    const { env, cookie } = await envFor('admin');
+    const res = await install(env, cookie, { npmSpec: 'hello' });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: 'invalid install request' });
+  });
+
+  it('happy path：上传成功 → registry 落 mode=cloudflare + 三列；响应不回显 token', async () => {
+    const { env, db, cookie } = await envFor('admin');
+    const { vi } = await import('vitest');
+    const tar = await import('./helpers/fake-npm-package');
+    const stub = tar.stubNpmFetch({
+      'package/manifest.json': JSON.stringify({
+        id: 'hello',
+        route: '/m/hello',
+        entry: 'https://team.example.com/m/hello/',
+        runtimes: ['worker'],
+        version: '1.2.3',
+        permissions: ['storage'],
+      }),
+      'package/worker.js': 'export default {}',
+    });
+    vi.stubGlobal('fetch', stub.impl);
+    try {
+      const res = await install(env, cookie, {
+        npmSpec: '@unself/hello@1.2.3',
+        cfToken: 'cf-secret-token',
+        accountId: 'acc-1',
+        storageLevel: 'dedicated',
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body).toMatchObject({ id: 'hello', mode: 'cloudflare', storage_level: 'dedicated' });
+      expect(JSON.stringify(body)).not.toContain('cf-secret-token');
+
+      const row = db.first<{ mode: string; storage_level: string | null; credential_hash: string | null }>(
+        'SELECT mode, storage_level, credential_hash FROM module_registry WHERE id = ?',
+        'hello',
+      );
+      expect(row).toEqual({ mode: 'cloudflare', storage_level: 'dedicated', credential_hash: null });
+      // 审计只记模块 id
+      expect(db.first<{ action: string; target: string }>('SELECT action, target FROM audit_log')).toMatchObject({
+        action: 'module_upserted',
+        target: 'hello',
+      });
+      expect(JSON.stringify(db.query('SELECT * FROM audit_log'))).not.toContain('cf-secret-token');
+      // 凭证没有被任何一跳带串（元数据/tarball 不带 auth，只有 CF 上传带）
+      expect(stub.calls.filter((c) => c.auth).length).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
