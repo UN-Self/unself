@@ -13,6 +13,18 @@
 import { makeApiError, request, statusOnlyMessage } from './api-client'
 import type { AdminModule } from './admin-api'
 
+/**
+ * 端点路径单点（防前后端漂移）：服务端路由表在
+ * app/workbench/test/registry.test.ts「端点路径与客户端单点一致」用例里对拍——
+ * 曾经把记账端点写成非管理路径，单测全绿、真浏览器 404（#279 的同一个坑）。
+ */
+export const ADD_MODULE_PATHS = {
+  register: '/api/admin/modules/connect-register',
+  status: '/api/modules/connect-status',
+  activate: '/api/admin/modules',
+  install: '/api/admin/modules/install',
+} as const
+
 /** 生成 32 字节随机 key（base64url）与其 SHA-256 hex——两者都只在浏览器内存里。 */
 export async function generateConnectKey(): Promise<{ key: string; keyHash: string }> {
   const bytes = new Uint8Array(32)
@@ -40,7 +52,7 @@ export function registerConnectModule(input: {
   keyHash: string
   storageLevel?: AdminModule['storage_level']
 }): Promise<{ id: string; mode: string; enabled: boolean }> {
-  return request('/api/modules/connect-register', {
+  return request(ADD_MODULE_PATHS.register, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
@@ -50,7 +62,7 @@ export function registerConnectModule(input: {
 /** 隧道在线状态（「测试连接」的数据源；在线 ≠ 已启用）。 */
 export function fetchConnectStatus(moduleId: string): Promise<{ moduleId: string; online: boolean; reason?: string }> {
   return request(
-    `/api/modules/connect-status?moduleId=${encodeURIComponent(moduleId)}`,
+    `${ADD_MODULE_PATHS.status}?moduleId=${encodeURIComponent(moduleId)}`,
     undefined,
     { messagePolicy: statusOnlyMessage },
   )
@@ -64,7 +76,7 @@ export async function activateConnectModule(moduleId: string): Promise<AdminModu
   const modules = await fetchAdminModulesSafe()
   const row = modules.find((m) => m.id === moduleId)
   if (!row) throw makeApiError(404, '记账行不存在，请重新生成接入码')
-  return request<AdminModule>('/api/admin/modules', {
+  return request<AdminModule>(ADD_MODULE_PATHS.activate, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -87,7 +99,7 @@ export function installCloudflareModule(input: {
   accountId: string
   storageLevel?: AdminModule['storage_level']
 }): Promise<AdminModule> {
-  return request<AdminModule>('/api/admin/modules/install', {
+  return request<AdminModule>(ADD_MODULE_PATHS.install, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
