@@ -449,6 +449,11 @@ describe('SetupView OIDC 校验与测试失效', () => {
     expect(wrapper.find('[data-testid="confirm-clear"]').exists()).toBe(false)
     expect(wrapper.get('input[name="issuer"]').element.closest('[inert]')).not.toBeNull()
     expect(requests(SAVE)).toHaveLength(2)
+    // 清空成功：三输入框同步置空（不只徽标，输入本身也回到初始态）
+    await editBranch(wrapper, 'oidc')
+    for (const name of ['issuer', 'client_id', 'client_secret']) {
+      expect((wrapper.get(`input[name="${name}"]`).element as HTMLInputElement).value).toBe('')
+    }
     expectNoCompletion()
   })
 

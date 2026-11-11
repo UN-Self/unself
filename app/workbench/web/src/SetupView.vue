@@ -167,8 +167,12 @@ async function confirmClear() {
   clearOidcError.value = null
   try {
     await clearOidcConfig(token.value)
-    // 服务端已无配置：本地回到初始态，徽标回「可选」
+    // 服务端已无配置：本地回到初始态，徽标回「可选」。
+    // 显式清空三输入框（不只依赖「弹确认必三点全空」这个隐式前提），本地态与服务端一致。
     oidcSaved.value = false
+    issuer.value = ''
+    clientId.value = ''
+    clientSecret.value = ''
     oidcBaseline.value = { issuer: '', clientId: '', clientSecret: '' }
     oidcSaveError.value = null
     testResult.value = null
@@ -526,7 +530,7 @@ async function onLoginCreatedAdmin() {
               >
                 <p id="setup-clear-title" class="setup-clear-title">删除已保存的 OIDC 配置？</p>
                 <p id="setup-clear-desc" class="setup-clear-desc">
-                  服务器上的 OIDC 登录配置会被删除，之后只能用本地账号登录，删除后无法恢复。
+                  向导里保存的 OIDC 配置会被清除，且删除后无法恢复。
                 </p>
                 <UErrorCard
                   v-if="clearOidcError"
