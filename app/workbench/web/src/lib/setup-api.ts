@@ -63,6 +63,22 @@ export function saveOidcConfig(
   )
 }
 
+/**
+ * 清空已保存的 OIDC 配置（#345）：向导里清空三字段后离开配置面时调用。
+ * 与写入同一端点、同一门禁（setup 未封箱 + token 有效，只验不消费）。
+ */
+export function clearOidcConfig(token: string): Promise<{ ok: boolean; loginUrl: string }> {
+  return request<{ ok: boolean; loginUrl: string }>(
+    `/api/setup/oidc-config?token=${encodeURIComponent(token)}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clear: true }),
+    },
+    { messagePolicy: humanize },
+  )
+}
+
 /** 服务端错误 → 人话（§6.5：不暴露堆栈/内部错误码）。 */
 function humanize(status: number, serverMessage?: string): string {
   switch (status) {
