@@ -70,6 +70,7 @@
   --unself-duration-normal: 250ms;
   --unself-duration-slow: 400ms;
   --unself-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* #345 收编进契约（unself.ease.page-turn）：此前仅工作台本地声明，模块页通道注入拿不到 */
   --unself-ease-page-turn: cubic-bezier(0.4, 0, 0.2, 1);
   /* 内部翻页进度：数值插值注册由 UFlipCard 自带，折线与页背共享进度。 */
   --unself-page-turn-progress: 0;

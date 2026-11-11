@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -28,7 +29,7 @@ const SPEC_OTHER = ['focus-ring'] as const;
 
 /** SPEC §6.5.2 动效数值骨架清单（#307 起进契约，修订 #43/#95 口径：数值集中、用法归模块）。 */
 const SPEC_MOTION = ['fast', 'normal', 'slow', 'shake', 'spin', 'shimmer', 'wave'] as const;
-const SPEC_EASES = ['out', 'spring'] as const;
+const SPEC_EASES = ['out', 'page-turn', 'spring'] as const;
 const SPEC_MOTION_PARAMS = ['press-scale', 'lift-y'] as const;
 
 function specKeys(): string[] {
@@ -121,7 +122,8 @@ describe('默认主题包 = SPEC §6.5.2 清单逐项一致（只增不改铁律
 describe('tokens.css ↔ 默认主题包同值（唯一一次改名窗口后不再漂移）', () => {
   it('tokens.css 的 :root 令牌全部 --unself- 前缀，且契约令牌值与默认包逐项一致', async () => {
     const css = await readFile(
-      new URL(join(findRepoRoot(), 'app/workbench/web/src/tokens.css'), import.meta.url),
+      // findRepoRoot() 是原生 Windows 路径，new URL() 只认 file:// —— 经 pathToFileURL 转
+      pathToFileURL(join(findRepoRoot(), 'app/workbench/web/src/tokens.css')),
       'utf8',
     );
     // 只取 :root 块（@theme inline 块是 Tailwind 命名空间映射：--color-x: var(--unself-*) 允许存在）
