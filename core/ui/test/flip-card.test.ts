@@ -98,8 +98,11 @@ describe('UFlipCard 分页交互边界', () => {
       const wrapper = mount(UFlipCard, { slots: { front: '前', back: '后' } })
       try {
         expect(FakeResizeObserver.instances).toHaveLength(1)
+        const observer = FakeResizeObserver.instances[0]
+        expect(observer).toBeDefined()
+        if (!observer) return
         vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(rectAt(640, 480))
-        FakeResizeObserver.instances[0].fire()
+        observer.fire()
         await nextTick()
         expect(pageEl(wrapper).style.getPropertyValue('--unself-page-width')).toBe('640px')
         expect(pageEl(wrapper).style.getPropertyValue('--unself-page-height')).toBe('480px')
@@ -111,6 +114,8 @@ describe('UFlipCard 分页交互边界', () => {
     it('卸载时断开 ResizeObserver，不留观察器泄漏', () => {
       const wrapper = mount(UFlipCard, { slots: { front: '前', back: '后' } })
       const observer = FakeResizeObserver.instances[0]
+      expect(observer).toBeDefined()
+      if (!observer) return
       expect(observer.disconnectCalled).toBe(false)
       wrapper.unmount()
       expect(observer.disconnectCalled).toBe(true)
