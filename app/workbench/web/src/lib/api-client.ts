@@ -57,11 +57,12 @@ export function fallbackMessage(status: number): string {
 
 /**
  * 判断 ApiError 的 message 是否是客户端自造的兜底文案（而非后端 error 字段透传）。
- * 调用方据此区分「服务端说了什么」与「服务端没说、文案是客户端拼的」——
+ * 只判断 HTTP 状态兜底（`请求失败（<status>）`）；网络不可用（status 0，message 为
+ * NETWORK_UNAVAILABLE 而非状态兜底）在此恒返回 false，调用方须先按 status===0 单独处理。
  * 判断逻辑单点在这，改兜底格式不会让调用方的反推失明。
  */
 export function isFallbackMessage(err: ApiError): boolean {
-  return err.status === 0 ? err.message === NETWORK_UNAVAILABLE : err.message === fallbackMessage(err.status)
+  return err.message === fallbackMessage(err.status)
 }
 
 /** 传给 request 的解析/错误构造配置（与历史实现逐一对齐）。 */
