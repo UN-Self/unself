@@ -1,0 +1,9 @@
+# docker compose 跑法（#111）：env_file 挂载配置，镜像内不落明文。
+# 用前：cp .env.example .env && pnpm pack（见 Dockerfile 注释）
+services:
+  hello:
+    build: .
+    env_file: .env
+    ports:
+      - "8790:8790"
+    restart: unless-stopped

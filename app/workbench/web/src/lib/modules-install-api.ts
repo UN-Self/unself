@@ -12,18 +12,11 @@
 
 import { makeApiError, request, statusOnlyMessage } from './api-client'
 import type { AdminModule } from './admin-api'
+import { ADD_MODULE_PATHS } from './modules-install-paths'
 
-/**
- * 端点路径单点（防前后端漂移）：服务端路由表在
- * app/workbench/test/registry.test.ts「端点路径与客户端单点一致」用例里对拍——
- * 曾经把记账端点写成非管理路径，单测全绿、真浏览器 404（#279 的同一个坑）。
- */
-export const ADD_MODULE_PATHS = {
-  register: '/api/admin/modules/connect-register',
-  status: '/api/modules/connect-status',
-  activate: '/api/admin/modules',
-  install: '/api/admin/modules/install',
-} as const
+// 路径单点零依赖单放（worker 测试安全 import，见 modules-install-paths.ts 头注）；
+// 这里 re-export 保住既有导入面。
+export { ADD_MODULE_PATHS }
 
 /** 生成 32 字节随机 key（base64url）与其 SHA-256 hex——两者都只在浏览器内存里。 */
 export async function generateConnectKey(): Promise<{ key: string; keyHash: string }> {

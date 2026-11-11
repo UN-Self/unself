@@ -18,6 +18,7 @@ app/installer/*.tgz
 .dev.vars
 .env
 .env.*
+!.env.example
 
 # 本地临时/个性化文件
 *.local
