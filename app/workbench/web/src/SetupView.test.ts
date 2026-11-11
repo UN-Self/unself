@@ -352,6 +352,23 @@ describe('SetupView OIDC 校验与测试失效', () => {
     expect(requests(SAVE)).toHaveLength(1)
   })
 
+  it('保存后清空三字段徽标回到（可选），填回原值回到已配置', async () => {
+    const wrapper = mount(SetupView)
+    const badge = () => wrapper.get('[data-testid="open-oidc"]').attributes('aria-label')
+    await prepareOidc(wrapper)
+    await submit(wrapper, 'oidc')
+    expect(badge()).toContain('已配置')
+    await editBranch(wrapper, 'oidc')
+    for (const name of ['issuer', 'client_id', 'client_secret']) {
+      await wrapper.get(`input[name="${name}"]`).setValue('')
+    }
+    // 空表单不可能保存，不能挂「待保存」
+    expect(badge()).toContain('（可选）')
+    await fillOidc(wrapper)
+    // 值回到上次保存的内容 → 没有待保存的差异
+    expect(badge()).toContain('已配置')
+  })
+
   it.each(['issuer', 'client_id', 'client_secret'])('测试通过后修改 %s，旧结果不能用于保存', async (field) => {
     const wrapper = mount(SetupView)
     await prepareOidc(wrapper)
