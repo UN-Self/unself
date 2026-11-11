@@ -59,7 +59,15 @@ const currentOidcValues = (): OidcValues => ({
 const valuesEqual = (a: OidcValues, b: OidcValues) =>
   a.issuer === b.issuer && a.clientId === b.clientId && a.clientSecret === b.clientSecret
 const oidcDirty = computed(() => !valuesEqual(currentOidcValues(), oidcBaseline.value))
-const oidcState = computed(() => oidcSaved.value && !oidcDirty.value ? '已配置' : oidcDirty.value ? '待保存' : '可选')
+// 三个字段全空 = 表单里没有 OIDC 配置：徽标回到「可选」（保存后清空也算），
+// 否则空表单会挂一个永远存不下去的「待保存」。
+const oidcEmpty = computed(() => {
+  const v = currentOidcValues()
+  return v.issuer.length === 0 && v.clientId.length === 0 && v.clientSecret.length === 0
+})
+const oidcState = computed(() =>
+  oidcEmpty.value ? '可选' : oidcSaved.value && !oidcDirty.value ? '已配置' : '待保存',
+)
 
 // 内置管理员表单（issue-A 默认分支）
 const adminUsername = ref('')
