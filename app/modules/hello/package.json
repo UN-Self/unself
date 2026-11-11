@@ -14,9 +14,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "node scripts/build.mjs",
+    "build": "pnpm --filter @unself/sdk run build && node scripts/build.mjs",
     "prepack": "pnpm run build && cp dist/worker.js worker.js",
-    "dev": "tsx --env-file=.env src/main.ts",
+    "dev": "pnpm --filter @unself/sdk run build && tsx --env-file=.env src/main.ts",
     "postpack": "rm -f worker.js"
   },
   "dependencies": {},
