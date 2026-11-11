@@ -539,9 +539,10 @@ async function onLoginCreatedAdmin() {
   position: absolute;
   top: 0;
   right: 0;
-  /* 热区只覆盖可见折角一带：整卡面热区会压住标题/表单上半区的点击 */
-  width: calc(var(--unself-space-8) * 3);
-  height: calc(var(--unself-space-8) * 3);
+  /* 热区与可见折角同一几何：尺寸取折角令牌，形状取折角的三角裁切，不覆盖卡面内容 */
+  width: var(--unself-page-fold-size, calc(var(--unself-space-8) * 4));
+  height: var(--unself-page-fold-size, calc(var(--unself-space-8) * 4));
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
   padding: 0;
   border-radius: 0 var(--unself-radius-lg) 0 0;
   background: transparent;
