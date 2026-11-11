@@ -452,6 +452,93 @@ describe('setup 流程（一次性 token + 首个管理员）', () => {
     expect(db.first('SELECT value FROM instance_config WHERE key = ?', 'oidc_issuer')).toBeNull();
   });
 
+  it('oidc-config：{ clear: true } 删除四个 oidc_* 键并审计，token 仍不消费', async () => {
+    const { env, db } = await envFor();
+    const token = issueSetupToken(db);
+    const configValue = (key: string) =>
+      db.first<{ value: string }>('SELECT value FROM instance_config WHERE key = ?', key)?.value ?? null;
+
+    await app.request(
+      `https://team.example.com/api/setup/oidc-config?token=${token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          issuer: 'https://idp.example.com',
+          clientId: 'c',
+          clientSecret: 's',
+          scope: 'openid',
+        }),
+      },
+      env,
+    );
+    for (const key of ['oidc_issuer', 'oidc_client_id', 'oidc_client_secret', 'oidc_scope']) {
+      expect(configValue(key)).not.toBeNull();
+    }
+
+    const cleared = await app.request(
+      `https://team.example.com/api/setup/oidc-config?token=${token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clear: true }),
+      },
+      env,
+    );
+    expect(cleared.status).toBe(200);
+    expect(((await cleared.json()) as { ok: boolean }).ok).toBe(true);
+    // 真库：四个键全部删除（含 scope），登录配置回到「未配置」
+    for (const key of ['oidc_issuer', 'oidc_client_id', 'oidc_client_secret', 'oidc_scope']) {
+      expect(configValue(key)).toBeNull();
+    }
+    // 只验不消费：清空后同一链接仍可重新配置
+    expect(
+      db.first<{ used_at: string | null }>('SELECT used_at FROM setup_tokens WHERE token = ?', token),
+    ).toEqual({ used_at: null });
+    const actions = db.query<{ action: string }>('SELECT action FROM audit_log').map((a) => a.action);
+    expect(actions).toContain('oidc_config_cleared');
+  });
+
+  it('oidc-config：clear 也受 token 门禁与封箱约束，无效 token 不清库', async () => {
+    const { env, db } = await envFor();
+    const token = issueSetupToken(db);
+    await app.request(
+      `https://team.example.com/api/setup/oidc-config?token=${token}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ issuer: 'https://idp.example.com', clientId: 'c', clientSecret: 's' }),
+      },
+      env,
+    );
+
+    const forged = await app.request(
+      'https://team.example.com/api/setup/oidc-config?token=forged-token',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clear: true }),
+      },
+      env,
+    );
+    expect(forged.status).toBe(403);
+    expect(db.first('SELECT value FROM instance_config WHERE key = ?', 'oidc_issuer')).not.toBeNull();
+
+    const usedToken = issueSetupToken(db);
+    await consumeSetupToken(db.d1, usedToken, 'u_owner');
+    const afterConsume = await app.request(
+      `https://team.example.com/api/setup/oidc-config?token=${usedToken}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clear: true }),
+      },
+      env,
+    );
+    expect(afterConsume.status).toBe(403);
+    expect(db.first('SELECT value FROM instance_config WHERE key = ?', 'oidc_issuer')).not.toBeNull();
+  });
+
   it('scope：按 discovery scopes_supported 过滤（Stalwart 无 email → 只发 openid；交集空只 openid；字段缺失三件）', async () => {
     const cases: Array<{ scopes?: string[]; expected: string }> = [
       // Stalwart 0.16 实测：无 profile/email，只有 openid 进交集

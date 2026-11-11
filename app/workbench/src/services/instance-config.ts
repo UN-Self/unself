@@ -91,6 +91,20 @@ export async function persistOidcConfig(
   return stored;
 }
 
+/**
+ * 清空向导写入的 OIDC 字段（#345：向导内清空表单 → 服务端同步撤销配置）。
+ * 返回删除行数（0 = 本来就没有配置），调用方据此决定是否审计。
+ */
+export async function clearOidcConfig(db: D1Database): Promise<number> {
+  const result = await db
+    .prepare(
+      `DELETE FROM instance_config WHERE key IN (${Object.values(OIDC_CONFIG_KEYS).map(() => '?').join(', ')})`,
+    )
+    .bind(...Object.values(OIDC_CONFIG_KEYS))
+    .run();
+  return result.meta.changes ?? 0;
+}
+
 /** setup 是否已完成（已完成后整条 setup 链路永久封死，§5.2）。 */
 export async function isSetupDone(db: D1Database): Promise<boolean> {
   const row = await db
