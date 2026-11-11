@@ -52,6 +52,17 @@ async function main() {
     external: ['jose'],
   });
 
+  // 1.5 node 宿主运行时（#110 @unself/sdk/host）：独立入口，**不进**包入口/浏览器 bundle
+  // （node:http 内建只在 platform=node 下外部化）。与 index.js 同为发布产物。
+  await build({
+    ...common,
+    entryPoints: ['src/host.ts'],
+    outfile: join(DIST, 'host.js'),
+    format: 'esm',
+    platform: 'node',
+    target: 'es2022',
+  });
+
   // 2. 浏览器侧资产：完全自包含（含 jose）——平台注入时不依赖 npm 运行期。
   await build({
     ...common,

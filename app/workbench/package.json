@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:web": "vite",
-    "build": "pnpm typecheck && pnpm build:worker && vite build",
+    "build": "pnpm --filter @unself/sdk run build && pnpm typecheck && pnpm build:worker && vite build",
     "build:web": "vite build",
     "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",

@@ -1,26 +1,33 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 反连客户端（issue #349，决策 #108 反连形态）：模块主动外连 core 完成注册与保活。
+ * 模块宿主运行时（决策 #110）：反连模块的「通用机器」单点——node HTTP 宿主 + dial-home
+ * 反连客户端 + env 契约。模块作者只写业务（Hono app），三行接入：
  *
- * 为什么模块侧要拨号：模块可以在 NAT 后、无公网入口、不在同一集群——只要它**能连上**
- * core 就行（决策 #108 第一条：拓扑自由，互通即可）。core 侧把 `/m/<id>/*` 的请求经隧道
- * 反向推到这条连接上（TunnelRoom DO / Node 纯 WS），模块只当普通 HTTP 服务应答。
+ *   import { startDialHome } from '@unself/sdk/host'
+ *   startDialHome({ handler: app.fetch })
  *
- * 凭证何时产生：**由部署者在管理台生成并预注册**（决策 #108：浏览器生成 key、core 只存
- * 哈希）。模块启动时只拿 env 里的明文 key 去**握手**——没有「模块自我注册」这一步，
- * 那等于绕开部署者的信任动作（管理台待连接行才是安装意图的载体）。
+ * env 契约（#108 两项，缺一不拨号；ADDR 可选）：
+ * - UNSELF_CORE_URL    core 可达地址（域名 / 局域网 IP / Tailscale IP 均可，模块能连到即可）
+ * - UNSELF_MODULE_KEY  浏览器生成的模块凭据明文（只在模块 env；core 只存哈希）
+ * - UNSELF_MODULE_ADDR 可选，本地 HTTP 监听地址（默认 127.0.0.1:8790）
  *
- * 帧协议（与 app/workbench/src/do/TunnelRoom.ts 同源定义，勿在此另造一套语义）：
+ * 契约纪律：本模块**只认进程 env，不读任何 .env 文件**——文件加载是调用方（`tsx
+ * --env-file`、docker env_file、systemd EnvironmentFile）的事，kit 保持干净边界。
+ *
+ * 帧协议（与 core 侧 do/TunnelRoom 同源语义，勿在此另造）：
  * - 入站 `{v:1,type:'request',requestId,method,path,query,headers,body}`
- * - 出站 `{v:1,type:'response',requestId,status,headers,body}`
- * - body 一律 base64（跨语言安全），无体 = null。
+ * - 出站 `{v:1,type:'response',requestId,status,headers,body}`；body 一律 base64，无体 = null。
+ *   core 侧已剥 `/m/<id>/` 前缀（#63「模块恒挂根路径」在隧道形态的落点），帧路径即根挂载路径。
  *
- * 凭证纪律（决策 #102/#108）：key 明文只活在模块自己的 env 里，连的只是**哈希**
- * （hex(SHA-256(key))）；core 侧比对 registry.credential_hash。壳永不生成、永不经手明文密钥。
+ * 凭证纪律（#165/#108）：key 明文只活在模块 env，过网只有 hex(SHA-256(key))；
+ * core 按 credential_hash 反查定位模块（模块不报 id）。
  *
- * 断线语义：任一断开都回到「重新握手」——每次重连都带哈希重新核验（core 不缓存会话）。
- * 指数退避（1s→2s→4s…上限 BACKOFF_MAX_MS），停止后不再重连。
+ * 断线语义：任一断开都回到「重新握手」，每次重连重新核哈希（core 不缓存会话）；
+ * 退避只惩罚失败（error）：1s→2s→4s…上限 60s；干净断开（close）立即重试不惩罚。
+ * stop() 后不再重连。
  */
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 
 /** 入站请求帧（core → 模块）。 */
 export interface TunnelRequestFrame {
@@ -44,21 +51,24 @@ export interface TunnelResponseFrame {
   body: string | null;
 }
 
-/** 最小 WebSocket 面（Workers / Node(ws) / 测试替身都满足；只用到这四个成员）。 */
+/** 反连客户端对底层 WS 的最小要求（node 原生 WebSocket 即满足；测试可注入替身）。 */
 export interface WebSocketLike {
-  send(data: string): void;
   close(): void;
   /** 单一签名（message 带事件、close/error 不带）——真 WebSocket 的重载形态可直接赋给它。 */
   addEventListener(type: string, handler: (event?: { data?: unknown }) => void): void;
+  /** 发送出站帧（JSON 字符串）。 */
+  send(data: string): void;
 }
 
-export interface DialHomeOptions {
-  /** core 可达地址（如 https://unself.example.com）；末尾斜杠容忍。 */
-  coreUrl: string;
-  /** 模块凭据明文（只在模块 env；只以哈希形态过网）。 */
-  moduleKey: string;
-  /** 模块自身的 HTTP 处理函数（hello 的 Hono app.fetch 直接传入——同一套路由，不造第二套）。 */
+export interface StartDialHomeOptions {
+  /** 模块自身的 HTTP 处理函数（Hono app.fetch 直接传入——同一套路由，不造第二套）。 */
   handler: (request: Request) => Promise<Response> | Response;
+  /** core 可达地址；默认读 `UNSELF_CORE_URL`。末尾斜杠容忍。 */
+  coreUrl?: string;
+  /** 模块凭据明文；默认读 `UNSELF_MODULE_KEY`。 */
+  moduleKey?: string;
+  /** 本地 HTTP 监听地址（`host:port`）；默认读 `UNSELF_MODULE_ADDR`，再缺省 127.0.0.1:8790。 */
+  moduleAddr?: string;
   webSocketImpl?: new (url: string) => WebSocketLike;
   /** 退避等待（测试注入，免真睡）。 */
   sleep?: (ms: number) => Promise<void>;
@@ -67,11 +77,13 @@ export interface DialHomeOptions {
   backoffMaxMs?: number;
 }
 
-/** 反连句柄：stop() 之后不再重连（进程退出/测试收尾用）。 */
 export interface DialHomeHandle {
-  stop(): void;
+  /** 停止重连并关掉本地 HTTP 服务；幂等。 */
+  stop: () => void;
   /** 当前是否已建立隧道（诊断用）。 */
-  isOnline(): boolean;
+  isOnline: () => boolean;
+  /** 本地 HTTP 服务实际地址（listen 完成后可用）。 */
+  addr: () => string | null;
 }
 
 /** 退避首档（毫秒）：core 重启/短断网的常见窗口，1s 起跳足够。 */
@@ -79,26 +91,63 @@ const DEFAULT_BACKOFF_BASE_MS = 1_000;
 /** 退避上限（毫秒）：再久也别让模块彻底躺平，1 分钟一探。 */
 const DEFAULT_BACKOFF_MAX_MS = 60_000;
 
+/** 字节 → base64（帧体统一 base64，跨语言安全）。 */
+const bytesToBase64 = (bytes: Uint8Array): string => Buffer.from(bytes).toString('base64');
+/** base64 → 字节。 */
+const base64ToBytes = (b64: string): Uint8Array => new Uint8Array(Buffer.from(b64, 'base64'));
+
+/** key 明文的唯一去处：算成哈希 → 过网。明文不出本文件。 */
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /**
- * 启动反连（幂等：调用一次，内部自管重连循环）。
- * 返回句柄；调用方负责把 handler 接到模块自己的 HTTP 面上（同一条路由）。
+ * 起 node 宿主 + 反连客户端，返回停止句柄。本函数不阻塞：宿主 listen 后立即返回，
+ * 反连在后台自维持（断线退避重连）。`UNSELF_CORE_URL` 与 `UNSELF_MODULE_KEY` 任一缺失
+ * = 只跑本地 HTTP 不拨号（零回归语义：hello 历史上无 core 也能单跑）。
  */
-export function startDialHome(options: DialHomeOptions): DialHomeHandle {
-  const WebSocketCtor = options.webSocketImpl ?? (globalThis.WebSocket as unknown as new (url: string) => WebSocketLike);
+export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
+  const env = process.env;
+  const coreUrl = (options.coreUrl ?? env.UNSELF_CORE_URL ?? '').replace(/\/+$/, '');
+  const moduleKey = options.moduleKey ?? env.UNSELF_MODULE_KEY ?? '';
+  const addrText = options.moduleAddr ?? env.UNSELF_MODULE_ADDR ?? '127.0.0.1:8790';
+  const [host, portText] = addrText.includes(':') ? addrText.split(/:(?=[^:]*$)/) : ['127.0.0.1', addrText];
+  const WebSocketCtor =
+    options.webSocketImpl ?? (globalThis.WebSocket as unknown as new (url: string) => WebSocketLike);
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const coreUrl = options.coreUrl.replace(/\/+$/, '');
   const backoffBase = options.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS;
   const backoffMax = options.backoffMaxMs ?? DEFAULT_BACKOFF_MAX_MS;
+
+  // ---- 本地 HTTP 宿主：模块业务的路，隧道帧也走同一 handler（同一条路由，不造第二套） ----
+  let server: Server | null = null;
+  let addrNow: string | null = null;
+  server = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    const body = chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+    const request = new Request(`http://${req.headers.host ?? addrText}${req.url ?? '/'}`, {
+      method: req.method ?? 'GET',
+      headers: req.headers as Record<string, string>,
+      body: req.method === 'GET' || req.method === 'HEAD' ? undefined : body,
+    });
+    const response = await options.handler(request);
+    res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+    res.end(Buffer.from(await response.arrayBuffer()));
+  });
+  server.listen(Number(portText), host, () => {
+    const { address, port } = server!.address() as AddressInfo;
+    addrNow = `${address}:${port}`;
+  });
+
+  // ---- 反连客户端：coreUrl+key 齐才拨号 ----
+  if (!(coreUrl && moduleKey && WebSocketCtor)) {
+    return { stop: () => server?.close(), isOnline: () => false, addr: () => addrNow };
+  }
 
   let stopped = false;
   let socket: WebSocketLike | null = null;
   let online = false;
-
-  /** key 明文的唯一去处：算成哈希 → 过网。明文不出本函数。 */
-  async function keyHash(): Promise<string> {
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(options.moduleKey));
-    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-  }
 
   /** 帧 → 真请求：core 侧已剥 /m/<id> 前缀（#63「模块恒挂根路径」，剥前缀是 core 的活）。 */
   function frameToRequest(frame: TunnelRequestFrame): Request {
@@ -153,7 +202,7 @@ export function startDialHome(options: DialHomeOptions): DialHomeHandle {
     }
   }
 
-  /** 一次连接尝试：注册 → 握手 → 保持到断开。任何失败都 reject（外层退避）。 */
+  /** 一次连接尝试：握手 → 保持到断开。干净断开 resolve、出错 reject（外层区分惩罚）。 */
   function attempt(hash: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       // 模块不报 id：core 凭 keyHash 反查定位（#108 env 契约 = 地址 + key 两项）
@@ -193,13 +242,13 @@ export function startDialHome(options: DialHomeOptions): DialHomeHandle {
     });
   }
 
-  async function loop(): Promise<void> {
+  void (async () => {
+    const hash = await sha256Hex(moduleKey);
     let delay = backoffBase;
     while (!stopped) {
       try {
-        const hash = await keyHash();
-        if (stopped) return;
         await attempt(hash);
+        if (stopped) return;
         // 正常断开（core 侧关闭）：立刻重试一次，不惩罚
         delay = backoffBase;
       } catch {
@@ -208,9 +257,7 @@ export function startDialHome(options: DialHomeOptions): DialHomeHandle {
         delay = Math.min(delay * 2, backoffMax);
       }
     }
-  }
-
-  void loop();
+  })();
 
   return {
     stop() {
@@ -222,25 +269,9 @@ export function startDialHome(options: DialHomeOptions): DialHomeHandle {
         // 关不上也无所谓：stopped 已置位，循环不会再连
       }
       socket = null;
+      server?.close();
     },
     isOnline: () => online,
+    addr: () => addrNow,
   };
-}
-
-/** base64 → 字节（帧体统一 base64，跨语言安全）。 */
-export function base64ToBytes(value: string): Uint8Array {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-/** 字节 → base64（分块，避免大响应体炸调用栈）。 */
-export function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
 }

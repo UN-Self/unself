@@ -8,7 +8,8 @@
  *   回答走 POST /api/modules/connect-respond，帧形状同 WS response 帧）；
  * - GET /api/modules/connect-status?moduleId= —— 「测试连接」查询在线状态（在线 ≠ enabled）。
  *
- * 验签纪律（决策 #51 照搬）：入站先验——upgrade/poll/respond 都过 verifyConnectCredential
+ * 验签纪律（决策 #51 照搬）：入站先验——upgrade/poll/respond 都过 lookupConnectModule
+ * （keyHash 反查，#110）；DO 层逐帧重验用 verifyConnectCredential（TunnelRoom.ts）。
  * （registry credential_hash 单点核对），核不过 404/403，不回明文原因给连接方（管理员排障
  * 走审计）。重连必重新核哈希：upgrade/poll/respond 路径均无会话缓存（测试锁定）。
  * 关闭码语义：1008 policy violation = 凭据不配/需重新配置；凭据被吊销（按帧重验败）也关 1008
@@ -17,7 +18,7 @@
 import { Hono } from 'hono';
 
 import { TUNNEL_INTERNAL_ORIGIN } from '../do/TunnelRoom';
-import { lookupConnectModule, verifyConnectCredential } from '../services/connect-registry';
+import { lookupConnectModule } from '../services/connect-registry';
 
 /** Bindings + 隧道 DO 绑定（生产 wrangler durable_objects；单测/Node 运行体注入 stub）。 */
 export interface ConnectBindings {

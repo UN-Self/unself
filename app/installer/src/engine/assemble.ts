@@ -207,20 +207,24 @@ export async function moduleWorkerEntry(moduleDir: string): Promise<string> {
   // 而 pnpm workspace 的 node_modules/<pkg> 是符号链接 —— 不取 realpath 时 esbuild 的路径注释
   // 会随符号链接路径变化，同一份源码在不同「打包路径」下产出不同字节（违反 #269 可复现要求）。
   const dir = existsSync(moduleDir) ? realpathSync(moduleDir) : resolvePath(moduleDir);
-  // 已打包形态（#245）：包根直接带预构建 worker.js（manifest.runtimes ∋ worker 的模块包标准入口）
-  const prebuilt = join(dir, 'worker.js');
-  if (existsSync(prebuilt)) return prebuilt;
   const fallback = join(dir, 'src/index.ts');
   const pkgPath = join(dir, 'package.json');
   if (!existsSync(pkgPath)) return fallback;
+  // 显式声明（package.json main）优先：源码态/工作区链接包的真相是 main（#219 规格）。
+  // 包根预构建 worker.js（#58 已打包形态标准入口）在 main 缺失或不可用时兜底——
+  // 远端解包目录没有 node_modules，只有预构建产物才能 bundle。
   try {
     const pkg = JSON.parse(await readFile(pkgPath, 'utf8')) as { main?: string };
-    if (!pkg.main) return fallback;
-    const main = join(dir, pkg.main);
-    if (!existsSync(main)) {
-      throw new Error(`模块包 package.json main 指向的文件不存在：${pkg.main}`);
+    const prebuilt = join(dir, 'worker.js');
+    if (pkg.main) {
+      const main = join(dir, pkg.main);
+      if (!existsSync(main)) {
+        throw new Error(`模块包 package.json main 指向的文件不存在：${pkg.main}`);
+      }
+      return main;
     }
-    return main;
+    if (existsSync(prebuilt)) return prebuilt;
+    return fallback;
   } catch (err) {
     if (err instanceof SyntaxError) {
       throw new Error(`模块包 package.json 不是合法 JSON：${pkgPath}`);

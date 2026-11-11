@@ -16,7 +16,11 @@
     },
     "./module-sdk.esm.js": "./dist/module-sdk.esm.js",
     "./module-sdk.js": "./dist/module-sdk.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.js"
+    }
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

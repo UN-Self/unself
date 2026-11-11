@@ -24,7 +24,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "build": "bash scripts/build-bin.sh",
+    "build": "pnpm --filter @unself/sdk run build && bash scripts/build-bin.sh",
     "build:bin": "bash scripts/build-bin.sh",
     "prepack": "pnpm run build"
   },

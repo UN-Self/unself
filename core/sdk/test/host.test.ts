@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 
-import { startDialHome, type WebSocketLike } from '../src/dial-home.js';
+import { startDialHome, type WebSocketLike } from '../src/host.js';
 
 /** 假 WebSocket：记录 send / close，测试用 emit 模拟 core 侧推帧。 */
 class FakeSocket implements WebSocketLike {

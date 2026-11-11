@@ -194,4 +194,21 @@ describe('moduleWorkerEntry（模块入口解析，#219）', () => {
     await expect(moduleWorkerEntry(dir)).rejects.toThrow(/main 指向的文件不存在/);
     await rm(dir, { recursive: true, force: true });
   });
+
+  it('main 与包根 worker.js 并存 → main 优先（#111：源码态真相是 main；worker.js 只是发布产物兜底）', async () => {
+    // 远端解包目录（无 main、只有 worker.js）走预构建入口——两分支都要钉住
+    const dir = await mkdtemp(join(tmpdir(), 'entry-pre-'));
+    await writeFile(join(dir, 'package.json'), JSON.stringify({}));
+    await writeFile(join(dir, 'worker.js'), 'export default {}');
+    await expect(moduleWorkerEntry(dir)).resolves.toBe(join(dir, 'worker.js'));
+    await rm(dir, { recursive: true, force: true });
+
+    const dir2 = await mkdtemp(join(tmpdir(), 'entry-main-'));
+    await writeFile(join(dir2, 'package.json'), JSON.stringify({ main: 'src/index.ts' }));
+    await mkdir(join(dir2, 'src'), { recursive: true });
+    await writeFile(join(dir2, 'src/index.ts'), 'export default {}');
+    await writeFile(join(dir2, 'worker.js'), 'export default {}');
+    await expect(moduleWorkerEntry(dir2)).resolves.toBe(join(dir2, 'src/index.ts'));
+    await rm(dir2, { recursive: true, force: true });
+  });
 });
