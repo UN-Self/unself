@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Check, KeyRound, Plug, PlugZap, UserRound } from 'lucide-vue-next'
 import { UButton, UInput, UCard, UErrorCard, UFlipCard } from '@unself/ui'
 import {
+  clearOidcConfig,
   saveOidcConfig,
   testOidcConnection,
   type ApiError,
@@ -69,6 +70,11 @@ const oidcState = computed(() =>
   oidcEmpty.value ? '可选' : oidcSaved.value && !oidcDirty.value ? '已配置' : '待保存',
 )
 
+// #345：已配置后清空表单再离开 = 撤销服务端配置；删除不可恢复，先二次确认。
+const confirmingClear = ref(false)
+const clearingOidc = ref(false)
+const clearOidcError = ref<ApiError | null>(null)
+
 // 内置管理员表单（issue-A 默认分支）
 const adminUsername = ref('')
 const adminPassword = ref('')
@@ -115,8 +121,65 @@ function openOidc() {
   if (!submitLocked.value) void flipTo('oidc')
 }
 
+/**
+ * 返回账号页：已保存过配置、但表单被清空时，服务端配置也要撤销（#345）。
+ * 删除不可恢复（secret 不回显），先弹二次确认；取消则留在本页。
+ */
 function returnToAdmin() {
-  if (face.value === 'oidc' && !submitting.value) void flipTo('admin')
+  if (face.value !== 'oidc' || submitting.value) return
+  if (confirmingClear.value) {
+    cancelClear()
+    return
+  }
+  if (oidcSaved.value && oidcEmpty.value) {
+    confirmingClear.value = true
+    clearOidcError.value = null
+    // 破坏性确认默认把焦点放在「取消」上，回车不会误删配置
+    void nextTick(() =>
+      setupShell.value?.querySelector<HTMLElement>('[data-testid="cancel-clear"]')?.focus({ preventScroll: true }),
+    )
+    return
+  }
+  void flipTo('admin')
+}
+
+function cancelClear() {
+  if (clearingOidc.value) return
+  confirmingClear.value = false
+  setupShell.value?.querySelector<HTMLElement>('[data-testid="return-admin"]')?.focus({ preventScroll: true })
+}
+
+/** 撤销本次清空：把字段恢复成上次保存的内容，配置保持不变并离场。 */
+function restoreSavedOidc() {
+  if (clearingOidc.value || !oidcSaved.value) return
+  const saved = oidcBaseline.value
+  issuer.value = saved.issuer
+  clientId.value = saved.clientId
+  clientSecret.value = saved.clientSecret
+  confirmingClear.value = false
+  clearOidcError.value = null
+  void flipTo('admin')
+}
+
+async function confirmClear() {
+  if (clearingOidc.value || !token.value) return
+  clearingOidc.value = true
+  clearOidcError.value = null
+  try {
+    await clearOidcConfig(token.value)
+    // 服务端已无配置：本地回到初始态，徽标回「可选」
+    oidcSaved.value = false
+    oidcBaseline.value = { issuer: '', clientId: '', clientSecret: '' }
+    oidcSaveError.value = null
+    testResult.value = null
+    verified.value = false
+    confirmingClear.value = false
+    await flipTo('admin')
+  } catch (err) {
+    clearOidcError.value = err as ApiError
+  } finally {
+    clearingOidc.value = false
+  }
 }
 
 function validate(): boolean {
@@ -373,83 +436,137 @@ async function onLoginCreatedAdmin() {
               :request-id="oidcSaveError.requestId"
               :detail="oidcSaveError.detail"
             />
-            <form
-              ref="oidcForm"
-              class="setup-form setup-oidc-form"
-              data-testid="oidc-form"
-              novalidate
-              @submit.prevent="onSaveOidcConfig"
-            >
-              <UInput
-                v-model="issuer"
-                label="OIDC Issuer 地址"
-                type="url"
-                name="issuer"
-                placeholder="https://idp.example.com"
-                autocomplete="url"
-                required
-                :disabled="submitLocked"
-                :error="fieldErrors.issuer ?? false"
-                reserve-error-line
-              />
-              <UInput
-                v-model="clientId"
-                label="Client ID"
-                name="client_id"
-                placeholder="请输入 Client ID"
-                autocomplete="off"
-                required
-                :disabled="submitLocked"
-                :error="fieldErrors.clientId ?? false"
-                reserve-error-line
-              />
-              <UInput
-                v-model="clientSecret"
-                label="Client Secret"
-                type="password"
-                name="client_secret"
-                placeholder="请输入 Client Secret"
-                autocomplete="off"
-                required
-                :disabled="submitLocked"
-                :error="fieldErrors.clientSecret ?? false"
-                reserve-error-line
-              />
-              <div class="setup-oidc-actions">
-                <p
-                  v-if="testResult"
-                  class="setup-test-result"
-                  :class="testResult.ok ? 'setup-success' : 'setup-inline-error'"
-                  role="status"
-                >
-                  <Check v-if="testResult.ok" :size="16" aria-hidden="true" />
-                  {{ testResult.text }}
+            <div class="setup-oidc-editor" :class="{ 'setup-oidc-editor-confirming': confirmingClear }">
+              <form
+                ref="oidcForm"
+                class="setup-form setup-oidc-form"
+                data-testid="oidc-form"
+                novalidate
+                :inert="confirmingClear || undefined"
+                :aria-hidden="confirmingClear || undefined"
+                @submit.prevent="onSaveOidcConfig"
+              >
+                <UInput
+                  v-model="issuer"
+                  label="OIDC Issuer 地址"
+                  type="url"
+                  name="issuer"
+                  placeholder="https://idp.example.com"
+                  autocomplete="url"
+                  required
+                  :disabled="submitLocked"
+                  :error="fieldErrors.issuer ?? false"
+                  reserve-error-line
+                />
+                <UInput
+                  v-model="clientId"
+                  label="Client ID"
+                  name="client_id"
+                  placeholder="请输入 Client ID"
+                  autocomplete="off"
+                  required
+                  :disabled="submitLocked"
+                  :error="fieldErrors.clientId ?? false"
+                  reserve-error-line
+                />
+                <UInput
+                  v-model="clientSecret"
+                  label="Client Secret"
+                  type="password"
+                  name="client_secret"
+                  placeholder="请输入 Client Secret"
+                  autocomplete="off"
+                  required
+                  :disabled="submitLocked"
+                  :error="fieldErrors.clientSecret ?? false"
+                  reserve-error-line
+                />
+                <div class="setup-oidc-actions">
+                  <p
+                    v-if="testResult"
+                    class="setup-test-result"
+                    :class="testResult.ok ? 'setup-success' : 'setup-inline-error'"
+                    role="status"
+                  >
+                    <Check v-if="testResult.ok" :size="16" aria-hidden="true" />
+                    {{ testResult.text }}
+                  </p>
+                  <UButton
+                    v-if="!verified"
+                    data-testid="oidc-test"
+                    variant="outline"
+                    class="setup-oidc-action"
+                    :loading="testing"
+                    :disabled="submitLocked"
+                    @click="onTestConnection"
+                  >
+                    <PlugZap :size="16" aria-hidden="true" />
+                    测试 Issuer 可达
+                  </UButton>
+                  <UButton
+                    v-else
+                    data-testid="oidc-save"
+                    type="submit"
+                    variant="outline"
+                    class="setup-oidc-action"
+                    :loading="savingOidc"
+                    :disabled="submitLocked"
+                  >
+                    保存配置
+                  </UButton>
+                </div>
+              </form>
+              <!-- 确认面板顶替编辑区原位置，卡片高宽不变 -->
+              <div
+                v-if="confirmingClear"
+                class="setup-clear-confirm"
+                role="alertdialog"
+                aria-labelledby="setup-clear-title"
+                aria-describedby="setup-clear-desc"
+              >
+                <p id="setup-clear-title" class="setup-clear-title">删除已保存的 OIDC 配置？</p>
+                <p id="setup-clear-desc" class="setup-clear-desc">
+                  服务器上的 OIDC 登录配置会被删除，之后只能用本地账号登录，删除后无法恢复。
                 </p>
-                <UButton
-                  v-if="!verified"
-                  data-testid="oidc-test"
-                  variant="outline"
-                  class="setup-oidc-action"
-                  :loading="testing"
-                  :disabled="submitLocked"
-                  @click="onTestConnection"
-                >
-                  <PlugZap :size="16" aria-hidden="true" />
-                  测试 Issuer 可达
-                </UButton>
-                <UButton
-                  v-else
-                  data-testid="oidc-save"
-                  type="submit"
-                  variant="outline"
-                  class="setup-oidc-action"
-                  :loading="savingOidc"
-                  :disabled="submitLocked"
-                >
-                  保存配置
-                </UButton>
+                <UErrorCard
+                  v-if="clearOidcError"
+                  title="没有删除成功"
+                  :message="clearOidcError.message"
+                  :request-id="clearOidcError.requestId"
+                  :detail="clearOidcError.detail"
+                />
+                <div class="setup-oidc-actions">
+                  <UButton
+                    variant="ghost"
+                    size="sm"
+                    data-testid="cancel-clear"
+                    :disabled="clearingOidc"
+                    @click="cancelClear"
+                  >
+                    取消
+                  </UButton>
+                  <UButton
+                    variant="primary"
+                    size="sm"
+                    data-testid="restore-saved"
+                    :disabled="clearingOidc"
+                    @click="restoreSavedOidc"
+                  >
+                    恢复已保存配置
+                  </UButton>
+                  <UButton
+                    variant="outline"
+                    size="sm"
+                    class="setup-clear-danger"
+                    data-testid="confirm-clear"
+                    :loading="clearingOidc"
+                    @click="confirmClear"
+                  >
+                    删除配置
+                  </UButton>
+                </div>
               </div>
-            </form>
+            </div>
           </div>
         </template>
       </UFlipCard>
@@ -654,6 +771,47 @@ async function onLoginCreatedAdmin() {
   margin: 0;
   font-size: var(--unself-font-size-sm);
   color: var(--unself-color-danger);
+}
+/* 编辑区留在原位占高：确认面板顶替它，卡片尺寸不跳。 */
+.setup-oidc-editor {
+  position: relative;
+}
+.setup-oidc-editor-confirming .setup-oidc-form {
+  visibility: hidden;
+}
+.setup-clear-confirm {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: var(--unself-space-3);
+  padding: var(--unself-space-4);
+  border: 1px solid var(--unself-color-danger);
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-bg);
+}
+.setup-clear-title {
+  margin: 0;
+  font-size: var(--unself-font-size-base);
+  font-weight: 600;
+  color: var(--unself-color-text);
+}
+/* 破坏性动作单列到底色，主按钮（恢复）之外的唯一红色出口。 */
+.setup-clear-danger.u-btn {
+  color: var(--unself-color-danger);
+  border-color: var(--unself-color-danger);
+}
+.setup-clear-danger.u-btn:hover:not(:disabled) {
+  background: var(--unself-color-danger-soft);
+}
+.setup-clear-desc {
+  margin: 0;
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
 }
 .setup-oidc-actions {
   display: flex;
