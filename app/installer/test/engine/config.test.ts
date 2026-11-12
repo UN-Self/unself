@@ -33,7 +33,7 @@ describe('parseUnselfConfigText', () => {
 
   it('s3 变体通过（endpoint/bucket 必填，region 默认 auto）', () => {
     const cfg = parseUnselfConfigText(
-      '{"domain":"team.example.com","modules":[{"id":"chat","source":"npm:@unself/chat@0.1.0"}],"storage":{"provider":"s3","endpoint":"https://s3.example","bucket":"b"}}',
+      '{"domain":"team.example.com","modules":[{"id":"chat","source":"npm:@unself/chat@0.1.1"}],"storage":{"provider":"s3","endpoint":"https://s3.example","bucket":"b"}}',
     );
     expect(cfg.storage).toEqual({ provider: 's3', endpoint: 'https://s3.example', bucket: 'b', region: 'auto' });
     expect(cfg.domain).toBe('team.example.com');

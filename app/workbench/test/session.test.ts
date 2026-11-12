@@ -66,11 +66,22 @@ describe('会话 token（HMAC 签名 Cookie）', () => {
     expect(await verifySessionToken('e30.C3fA1aKE', SECRET_PEM)).toBeNull();
   });
 
-  it('Cookie 参数：HttpOnly + SameSite=Lax + Secure', () => {
+  it('Cookie 参数：HttpOnly + SameSite=Lax；Secure 按请求协议（无请求默认 Secure）', () => {
     const opts = sessionCookieOptions();
     expect(opts.httpOnly).toBe(true);
     expect(opts.sameSite).toBe('Lax');
     expect(opts.secure).toBe(true);
     expect(opts.maxAge).toBeGreaterThan(0);
+
+    // https 请求 → Secure；http 请求（局域网走查/自托管）→ 不带（浏览器会丢弃 http 下发的 Secure cookie）
+    expect(sessionCookieOptions(new Request('https://team.example.com/')).secure).toBe(true);
+    expect(sessionCookieOptions(new Request('http://192.168.1.10:8787/')).secure).toBe(false);
+    // 反代终结 TLS：X-Forwarded-Proto 优先于 URL 协议
+    expect(
+      sessionCookieOptions(new Request('http://192.168.1.10:8787/', { headers: { 'x-forwarded-proto': 'https' } })).secure,
+    ).toBe(true);
+    expect(
+      sessionCookieOptions(new Request('https://team.example.com/', { headers: { 'x-forwarded-proto': 'http,https' } })).secure,
+    ).toBe(false);
   });
 });

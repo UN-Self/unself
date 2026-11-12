@@ -104,9 +104,41 @@ export async function verifySessionToken(token: string, jwtPrivateKeyPem: string
   return payload;
 }
 
-/** 会话 Cookie 参数：HttpOnly + SameSite=Lax + Secure，只在实例域名路径下。 */
-export function sessionCookieOptions(): { path: '/'; httpOnly: true; sameSite: 'Lax'; secure: true; maxAge: number } {
-  return { path: '/', httpOnly: true, sameSite: 'Lax', secure: true, maxAge: SESSION_TTL_SECONDS };
+/**
+ * 请求是否 https：URL 协议 + X-Forwarded-Proto（反代终结 TLS 的标准头，取首个跳值）。
+ * Cookie 的 Secure 由此决定：https 才带 Secure；纯 http（局域网 IP 走查、http 自托管）
+ * 不带——浏览器按规范丢弃 http 页面下发的 Secure cookie（#349 走查实锤：局域网登录
+ * 死循环，成功分支不发 login_failed 审计、会话却永远立不起来）。
+ */
+export function requestIsSecure(request: Request): boolean {
+  const forwarded = request.headers.get('x-forwarded-proto');
+  if (forwarded) return forwarded.split(',')[0]?.trim() === 'https';
+  try {
+    return new URL(request.url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 会话 Cookie 参数：HttpOnly + SameSite=Lax，只在实例域名路径下；Secure 按请求协议
+ * （https / 反代头判定）。不传请求 = 默认 Secure（部署态 workers.dev/自定义域恒 https，
+ * 安全默认；单元调用与测试无请求时保持原语义）。
+ */
+export function sessionCookieOptions(request?: Request): {
+  path: '/';
+  httpOnly: true;
+  sameSite: 'Lax';
+  secure: boolean;
+  maxAge: number;
+} {
+  return {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'Lax',
+    secure: request === undefined ? true : requestIsSecure(request),
+    maxAge: SESSION_TTL_SECONDS,
+  };
 }
 
 /** 从请求读会话；无 Cookie 或无效返回 null（供 API 与 shell 共用）。 */

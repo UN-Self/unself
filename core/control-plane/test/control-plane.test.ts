@@ -32,7 +32,7 @@ describe('SqliteControlPlane（真 sqlite）', () => {
     const first = await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST });
     expect(first).toMatchObject({ mode: 'cloudflare', entry: null, storage_level: null });
     // 管理接口路径写入用户选择
-    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, storage_level: 'dedicated', mode: 'connect', entry: 'https://bridge.example.com/m/bridge/' });
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, storage_level: 'core', mode: 'connect', entry: 'https://bridge.example.com/m/bridge/' });
     // 模块升级（重新装配）三列全未写 → 旧值保留，快照刷新
     await cp.upsertModule({ id: 'hello', enabled: true, manifest: { ...MANIFEST, version: '0.2.0' } });
     const rows = await cp.readRegistry();
@@ -41,11 +41,11 @@ describe('SqliteControlPlane（真 sqlite）', () => {
       version: '0.2.0',
       mode: 'connect',
       entry: 'https://bridge.example.com/m/bridge/',
-      storage_level: 'dedicated',
+      storage_level: 'core',
     });
     // 显式传值仍可覆盖（下次装配路径变化时）
-    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, mode: 'cloudflare', storage_level: 'core' });
-    expect((await cp.readRegistry())[0]).toMatchObject({ mode: 'cloudflare', entry: null, storage_level: 'core' });
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, mode: 'cloudflare', storage_level: 'self' });
+    expect((await cp.readRegistry())[0]).toMatchObject({ mode: 'cloudflare', entry: null, storage_level: 'self' });
   });
 
   it('credential_hash（#349）：合并语义同落点三列——未写保留旧值、显式传值覆盖、首插直写', async () => {

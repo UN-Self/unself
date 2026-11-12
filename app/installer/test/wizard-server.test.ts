@@ -935,15 +935,15 @@ describe('#309 ③ storageOptions 快照重算（③½ 卡片集合 == 选中集
         // 启动快照含「曾加过又取消的 legacy」——refresh 重算后必须消失（幽灵卡回归）
         storageOptions: [
           { id: 'hello', accepts: ['core'] },
-          { id: 'chat', accepts: ['dedicated'] },
+          { id: 'chat', accepts: ['core'] },
           { id: 'legacy', accepts: ['core'] },
         ],
         refreshStorageOptions: async (moduleIds): Promise<WizardStorageOption[]> =>
           (
             [
               // 模拟「真重算」与启动快照的漂移：hello 的声明在重算后变了（快照过期）
-              { id: 'hello', accepts: ['dedicated'] as StorageLevel[] },
-              { id: 'chat', accepts: ['dedicated'] as StorageLevel[] },
+              { id: 'hello', accepts: ['core'] as StorageLevel[] },
+              { id: 'chat', accepts: ['core'] as StorageLevel[] },
             ] as WizardStorageOption[]
           ).filter((o) => moduleIds.includes(o.id)),
       },
@@ -966,7 +966,7 @@ describe('#309 ③ storageOptions 快照重算（③½ 卡片集合 == 选中集
       // 首次：hello+chat 都勾（refresh 重算生效：hello.accepts 来自重算而非过期快照）
       await post3('/api/step3', { modules: 'hello, chat' });
       expect(h.state.storageOptions.map((o) => o.id).sort()).toEqual(['chat', 'hello']);
-      expect(h.state.storageOptions.find((o) => o.id === 'hello')?.accepts).toEqual(['dedicated']);
+      expect(h.state.storageOptions.find((o) => o.id === 'hello')?.accepts).toEqual(['core']);
       // 回③改选：只留 hello
       const r = await post3('/api/step3', { modules: 'hello' });
       expect(r.status).toBe(200);
@@ -989,7 +989,7 @@ describe('#309 ③ storageOptions 快照重算（③½ 卡片集合 == 选中集
         hasEnvToken: false,
         envHint: { ...HINT },
         deploy: async () => ({ baseUrl: 'https://x', setupToken: null }),
-        storageOptions: [{ id: 'chat', accepts: ['dedicated'] }],
+        storageOptions: [{ id: 'chat', accepts: ['core'] }],
       },
     });
     try {
@@ -1082,7 +1082,7 @@ describe('#309 ③½ accepts 单项 = 作者声明说明卡（数据面；渲染
       modules: ['hello', 'chat'],
       storageOptions: [
         { id: 'hello', accepts: ['core'], preferred: 'core' },
-        { id: 'chat', accepts: ['dedicated'], preferred: 'dedicated' },
+        { id: 'chat', accepts: ['core'], preferred: 'core' },
       ],
     }),
     hasToken: true,
@@ -1091,24 +1091,24 @@ describe('#309 ③½ accepts 单项 = 作者声明说明卡（数据面；渲染
 
   it('step3b 提交单项声明模块（无 radio 可选）：服务端 accepts 校验通过唯一 accepts', async () => {
     holder.state = baseState();
-    const r = await post('/api/step3b', { choices: { hello: 'core', chat: 'dedicated' }, sharedConsent: false });
+    const r = await post('/api/step3b', { choices: { hello: 'core', chat: 'core' }, sharedConsent: false });
     expect(r.status).toBe(200);
     expect(r.json.step).toBe('ready');
-    expect(holder.state.storageChoices).toMatchObject({ hello: 'core', chat: 'dedicated' });
+    expect(holder.state.storageChoices).toMatchObject({ hello: 'core', chat: 'core' });
   });
 
   it('选声明之外的落点 → 400（accepts 校验挡住）', async () => {
     holder.state = baseState();
-    const r = await post('/api/step3b', { choices: { chat: 'shared' }, sharedConsent: false });
+    const r = await post('/api/step3b', { choices: { chat: 'self' }, sharedConsent: false });
     expect(r.status).toBe(400);
     expect(holder.state.step).toBe('storage');
   });
 
-  it('shared 选择需知情同意（consent=false → 400）', async () => {
-    holder.state = { ...baseState(), storageOptions: [{ id: 'demo', accepts: ['core', 'shared'], preferred: 'core' }] };
+  it('选两值词表外的值 → 400（词表挡住，#349 U5）', async () => {
+    holder.state = { ...baseState(), storageOptions: [{ id: 'demo', accepts: ['core', 'self'], preferred: 'core' }] };
     const r = await post('/api/step3b', { choices: { demo: 'shared' }, sharedConsent: false });
     expect(r.status).toBe(400);
-    const r2 = await post('/api/step3b', { choices: { demo: 'shared' }, sharedConsent: true });
+    const r2 = await post('/api/step3b', { choices: { demo: 'self' }, sharedConsent: false });
     expect(r2.status).toBe(200);
   });
 });

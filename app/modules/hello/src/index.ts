@@ -17,8 +17,8 @@ import { createCoreApiStorage, verifyModuleToken, type ModuleStorage } from '@un
  */
 
 export interface Bindings {
-  /** core-api worker 的 Service Binding（同名 worker：unself-core-api）。core 级数据的唯一通道。 */
-  CORE_API: Fetcher;
+  /** core-api worker 的 Service Binding。CF 态才有；npm / docker 走 UNSELF_CORE_URL。 */
+  CORE_API?: Fetcher;
   /** Core 公钥 JWKS 的 JSON 序列化（部署期注入，§5.2 B 方案：模块本地验签，零运行时网络）。 */
   CORE_JWKS_JSON?: string;
   /** Core issuer（可选校验；M0 以 aud 锁定为主）。 */
@@ -35,13 +35,33 @@ const CORE_API_ORIGIN = 'https://core-api.internal';
  * 构造 core 级存储客户端（#248 收敛（a)）：token 取当前请求的模块 token（原样转交 core-api 验签），
  * 传输走 Service Binding（不经公网、不受同 zone fetch 禁令影响）。
  */
+function coreUrlFromEnv(): string {
+  return (process.env.UNSELF_CORE_URL ?? '').replace(/\/+$/, '');
+}
+
+/** CF 走 Service Binding；npm / docker 用同一套 /api/module-api/storage，只是 fetch 到 UNSELF_CORE_URL。 */
 function storeFor(c: Context<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }>): ModuleStorage {
   const bearer = (c.req.header('authorization') ?? '').slice(7);
+  if (c.env.CORE_API) {
+    return createCoreApiStorage({
+      coreApiOrigin: CORE_API_ORIGIN,
+      getToken: () => bearer,
+      fetchImpl: (url, init) => c.env.CORE_API!.fetch(url, init),
+    });
+  }
+  const coreUrl = coreUrlFromEnv();
   return createCoreApiStorage({
-    coreApiOrigin: CORE_API_ORIGIN,
+    coreApiOrigin: coreUrl,
     getToken: () => bearer,
-    fetchImpl: (url, init) => c.env.CORE_API.fetch(url, init),
+    fetchImpl: (url, init) => {
+      const target = new URL(url);
+      return fetch(`${coreUrl}${target.pathname}${target.search}`, init);
+    },
   });
+}
+
+function storageReady(c: Context<{ Bindings: Bindings }>): boolean {
+  return Boolean(c.env.CORE_API) || coreUrlFromEnv() !== '';
 }
 
 /** 计数键：SDK 键为模块子域裸键（core-api 侧落 module_kv(module_id='hello', key='counter')）。 */
@@ -120,7 +140,8 @@ app.get('/', (c) => {
 
     async function refresh() {
       const res = await fetch('api/count', { headers: { authorization: 'Bearer ' + (window.__helloToken ?? '') } });
-      if (!res.ok) { fail(res.status === 401 ? '登录已过期，请刷新页面' : '计数加载失败'); return; }
+      if (res.status === 401) { fail('登录已过期，请刷新页面'); return; }
+      if (!res.ok) return;
       count.textContent = String((await res.json()).count ?? 0);
     }
 
@@ -158,27 +179,103 @@ app.get('/', (c) => {
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'module-hello' }));
 
-// SDK 静态文件（页面 import /sdk/module-sdk.js）：开发期直映 node_modules 源；
-// 部署期由 wrangler 构建打包（#14 装配脚本职责）。
-app.get('/sdk/*', (c) => c.json({ error: 'sdk asset served by deploy bundler (M0 dev: vite alias)' }, 501));
+/** greeting 缺省链尾：无声明/无值/default 时的人话兜底。 */
+const GREETING_FALLBACK = 'Hello';
+
+/** config 响应里的 greeting 取值链：values.greeting → 声明 default → 兜底。 */
+function greetingFromConfig(state: { config?: Array<{ key: string; default?: unknown }>;
+  values?: Record<string, unknown> }): string {
+  const value = state.values?.greeting;
+  if (typeof value === 'string' && value !== '') return value;
+  const fallback = state.config?.find((f) => f.key === 'greeting')?.default;
+  if (typeof fallback === 'string' && fallback !== '') return fallback;
+  return GREETING_FALLBACK;
+}
+
+/** key 明文的唯一去处：算成哈希 → 过网（host.ts 同款，明文不出本函数）。 */
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * 读配置态（#349 U8 ⑤）：两种运行体两条轨道，同一响应形状 { config, values }。
+ * - worker 态：Service Binding CORE_API 代理（Bearer 原样转交，同 storeFor 通道）；
+ * - node 态（反连宿主，无 binding）：keyHash 即凭证（同 WS 握手），内联 fetch 到
+ *   UNSELF_CORE_URL 的 /api/module-api/config?keyHash=——SDK fetchConfig 是浏览器/宿主
+ *   两用形状，node 态此处直连（少一层封装，行为与 fetchConfig(keyHash) 等价）。
+ */
+async function fetchConfigState(
+  c: Context<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }>,
+): Promise<{ config: Array<{ key: string; default?: unknown }>; values: Record<string, unknown> } | null> {
+  if (c.env.CORE_API) {
+    const bearer = (c.req.header('authorization') ?? '').slice(7);
+    const res = await c.env.CORE_API.fetch('https://core-api.internal/api/module-api/config', {
+      headers: { authorization: `Bearer ${bearer}` },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as { config: Array<{ key: string; default?: unknown }>; values: Record<string, unknown> };
+  }
+  const coreUrl = (process.env.UNSELF_CORE_URL ?? '').replace(/\/+$/, '');
+  const moduleKey = process.env.UNSELF_MODULE_KEY ?? '';
+  if (!coreUrl || !moduleKey) return null;
+  const keyHash = await sha256Hex(moduleKey);
+  const res = await fetch(`${coreUrl}/api/module-api/config?keyHash=${keyHash}`);
+  if (!res.ok) return null;
+  return (await res.json()) as { config: Array<{ key: string; default?: unknown }>; values: Record<string, unknown> };
+}
+
+/**
+ * 问候语（#349 U8 ③ hello 闭环演示）：设 greeting → 模块页/接口返回新值。
+ * worker 态在模块 token 门禁内（同 /api/count 规）；node 态（keyHash 轨）无 token 通道，
+ * 凭证即 keyHash——与反连握手同一安全模型。取值链见 greetingFromConfig。
+ */
+app.get('/api/greeting', async (c) => {
+  if (!c.env.CORE_API && !(process.env.UNSELF_CORE_URL && process.env.UNSELF_MODULE_KEY)) {
+    return c.json({ error: 'config not available: missing CORE_API binding or UNSELF_CORE_URL / UNSELF_MODULE_KEY' }, 503);
+  }
+  if (c.env.CORE_API) {
+    const authError = await requireAuth(c);
+    if (authError) return authError;
+  }
+  const state = await fetchConfigState(c);
+  if (!state) {
+    return c.json({ error: 'config unreachable' }, 502);
+  }
+  return c.json({ greeting: greetingFromConfig(state) });
+});
+
+// SDK 静态文件（页面 import /sdk/module-sdk.esm.js）：不再在这里兜 501——host 态由
+// @unself/sdk/host 自供（先于业务，serveSdkAssetsFrom），部署态由装配资产拦截；
+// 资产缺失（sdk 未构建）时 host 返回不认领，业务侧自然 404，不再伪装「未实现」。
 
 /** 计数读取（验签后）。 */
-app.get('/api/count', async (c) => {
-  if (!c.env.CORE_API) {
+/** CF 本地验签；npm / docker 没有 JWKS，把模块 token 原样交给 core（与 worker 同一存储接口）。 */
+async function openCount(
+  c: Context<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }>,
+): Promise<Response | null> {
+  if (!storageReady(c)) {
     return c.json({ error: 'storage binding missing' }, 503);
   }
-  const authError = await requireAuth(c);
-  if (authError) return authError;
+  if (c.env.CORE_API) {
+    return requireAuth(c);
+  }
+  if (!c.req.header('authorization')?.startsWith('Bearer ')) {
+    return c.json({ error: 'missing bearer token', requestId: c.req.header('x-request-id') }, 401);
+  }
+  return null;
+}
+
+app.get('/api/count', async (c) => {
+  const blocked = await openCount(c);
+  if (blocked) return blocked;
   return c.json({ count: await readCount(storeFor(c)) });
 });
 
 /** 计数 +1（验签后；读改写原子性在 M0 单实例串行下可接受）。 */
 app.post('/api/count', async (c) => {
-  if (!c.env.CORE_API) {
-    return c.json({ error: 'storage binding missing' }, 503);
-  }
-  const authError = await requireAuth(c);
-  if (authError) return authError;
+  const blocked = await openCount(c);
+  if (blocked) return blocked;
   const store = storeFor(c);
   const next = (await readCount(store)) + 1;
   await writeCount(store, next);

@@ -3,18 +3,23 @@
 /**
  * 「新增模块」双模式弹窗（#349 决策 #108/#109）。
  *
- * 壳沿用设置页水舱弹窗的同一套外壳与动线（#99/#100）：测试连接 → 保存；水位仍纯装饰。
+ * 壳沿用设置页水舱弹窗的同一套外壳与动线（#99/#100）：测试连接 → 保存；水位随测试状态联动
+ * （testing→波动、在线→满灌、其余→静息；仅反连 tab 出水，纯装饰恒 aria-hidden）。
  * 两种模式是两个 tab，不共用状态机：
- * - 反连（connect）：生成接入码 → 展示 env 两行（**明文只此一次**）→ 测试连接（查隧道在线）
- *   → 保存（激活记账行）。壳从不持有明文 key：只有 SHA-256 哈希过网（决策 #108）。
+ * - 反连（connect）：生成接入码（问号收进按钮，UNSELF_CORE_URL 说明走其 hover/focus tooltip）→ 生成即复制
+ *   （明文立刻进剪贴板）→ env 展示框**默认打码**（点框=复制明文；右侧内嵌眼睛切打码/明文）→ 测试连接（查隧道在线）
+ *   → 保存（激活记账行）。壳从不持有明文 key 的常驻视图：打码是默认，明文只活在剪贴板与显式的显示态（#349 验收定案）。
  * - CF 部署：npm 规格 + CF token + 账号 → 一次请求完成部署与注册（token 用后即焚，#165）。
  *
  * 为什么不做「模式一先测试再保存」：运行时装配本身就是部署动作（拉包→校验→上传），
  * 没有「半成品可保存态」；失败即什么都没发生，重试即重跑（决策 #109 的语义）。
  */
 import { computed, ref, watch } from 'vue'
+import { CircleHelp, Eye, EyeOff } from 'lucide-vue-next'
 
 import { UButton, UMotionSelect, type SelectOption } from '@unself/ui'
+
+import WaveFill from '../components/wave-fill.vue'
 
 import {
   activateConnectModule,
@@ -23,7 +28,6 @@ import {
   installCloudflareModule,
   registerConnectModule,
 } from '../lib/modules-install-api'
-import type { AdminModule } from '../lib/admin-api'
 
 const props = defineProps<{
   modelValue: boolean
@@ -43,35 +47,52 @@ const busy = ref(false)
 
 // ---- 反连模式状态 ----
 const connectId = ref('')
-const connectStorage = ref<'' | NonNullable<AdminModule['storage_level']>>('')
 /** 已生成的接入码（明文只在本次开窗内可见；关闭即清）。 */
 const connectKey = ref<string | null>(null)
 const connectStatus = ref<'idle' | 'testing' | 'online' | 'offline'>('idle')
+/** env 区默认打码；右侧内嵌眼睛是显式切换，明文只在此刻渲染进 DOM。 */
+const keyVisible = ref(false)
+/** 复制反馈：「已复制」约 2s；不透明 span 稳定占位，测试不查瞬时 DOM。 */
+const copied = ref(false)
+/** clipboard 不可用 / 被拒（纯 http 等）→ 降级：选中文本让用户手动 Ctrl+C。 */
+const copyFallback = ref(false)
+/** UNSELF_CORE_URL 说明 tooltip：hover / focus 时可见。 */
+const coreUrlTip = ref(false)
+let copyTimer: ReturnType<typeof setTimeout> | undefined
 
 // ---- 模式一状态 ----
 const npmSpec = ref('')
 const cfToken = ref('')
 const accountId = ref('')
-const cfStorage = ref<'' | NonNullable<AdminModule['storage_level']>>('')
 
-const connectStorageOptions: SelectOption[] = [
-  { value: '', label: '不指定（模块自管存储）' },
-  { value: 'core', label: 'core（经核心代理）' },
+// 存储落点收敛为两档：core（经核心代理）/ self（自托管，默认）。undefined 即 self（#349 验收定案）；
+// AdminModule['storage_level'] 契约尚未并入 'self'（另一 worker 负责契约层 enum('core','self')），先用本地类型
+const storageOptions: SelectOption[] = [
+  { value: 'self', label: '自托管' },
+  { value: 'core', label: 'Core' },
 ]
-const cfStorageOptions: SelectOption[] = [
-  { value: '', label: '不指定（保留现状）' },
-  { value: 'core', label: 'core（经核心代理）' },
-  { value: 'shared', label: 'shared（共享库）' },
-  { value: 'dedicated', label: 'dedicated（核心代供）' },
-  { value: 'external', label: 'external（模块自备）' },
-]
-// env 只展示 key 一项（#108 决策原样）；core 可达地址由用户按部署拓扑自填，
-// 浏览器地址 ≠ 模块可达地址时猜 origin 反而是误导（#349 验收反馈收敛）
-const envLines = computed(() => [`UNSELF_MODULE_KEY=${connectKey.value ?? ''}`])
+const connectStorageOptions = storageOptions
+const cfStorageOptions = storageOptions
+
+/** 本组件的存储落点取值：契约层收敛期间，'self' 用 undefined（=默认）承载。 */
+type StorageChoice = 'core' | 'self'
+const connectStorage = ref<StorageChoice>('self')
+const cfStorage = ref<StorageChoice>('self')
+
+/** 展示行：默认打码占位，显示态才渲染明文。 */
+const envLines = computed(() => [`UNSELF_MODULE_KEY=${keyVisible.value ? connectKey.value : '••••••••'}`])
+const envText = computed(() => envLines.value.join('\n'))
 
 const canTest = computed(() => Boolean(connectKey.value) && !busy.value)
 const canSave = computed(() => connectStatus.value === 'online' && !busy.value)
 const canInstall = computed(() => Boolean(npmSpec.value.trim() && cfToken.value.trim() && accountId.value.trim()) && !busy.value)
+
+/** 水位派生（设置弹窗同款，#100）：反连 tab 才有水；testing→波动、在线→满灌、其余→静息。 */
+const waveLevel = computed(() => {
+  if (tab.value !== 'connect') return 'rest'
+  if (connectStatus.value === 'testing') return 'testing'
+  return connectStatus.value === 'online' ? 'full' : 'rest'
+})
 
 /** 换 tab / 关窗都清结果态（重开回到初始态，#100 同规）。 */
 watch(
@@ -85,6 +106,11 @@ watch(
       connectKey.value = null
       cfToken.value = ''
       connectStatus.value = 'idle'
+      keyVisible.value = false
+      copied.value = false
+      copyFallback.value = false
+      coreUrlTip.value = false
+      if (copyTimer !== undefined) clearTimeout(copyTimer)
     }
   },
 )
@@ -102,15 +128,47 @@ async function onGenerate(): Promise<void> {
     await registerConnectModule({
       moduleId,
       keyHash,
-      storageLevel: connectStorage.value === '' ? undefined : connectStorage.value,
+      storageLevel: connectStorage.value === 'core' ? 'core' : undefined,
     })
     connectKey.value = key
+    keyVisible.value = false
+    copied.value = false
+    copyFallback.value = false
     connectStatus.value = 'idle'
+    // 生成即复制（#349 验收定案）：明文 key 立刻进剪贴板，用户不必再找复制按钮
+    await copyKey()
   } catch (err) {
     errorText.value = (err as Error).message
   } finally {
     busy.value = false
   }
+}
+
+/** 复制明文 key：成功→「已复制」约 2s；失败（纯 http / 权限被拒）→ 选中 env 文本提示手动 Ctrl+C。 */
+async function copyKey(): Promise<void> {
+  if (!connectKey.value) return
+  try {
+    await navigator.clipboard.writeText(connectKey.value)
+    copied.value = true
+    copyFallback.value = false
+    if (copyTimer !== undefined) clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => {
+      copied.value = false
+    }, 2000)
+  } catch {
+    // 纯 http / 权限被拒：降级为选中文本，提示手动 Ctrl+C（明文不落状态之外）
+    selectEnvText()
+    copied.value = false
+    copyFallback.value = true
+  }
+}
+
+function selectEnvText(): void {
+  document.getSelection()?.selectAllChildren(document.querySelector('[data-test="connect-env"]') ?? document.body)
+}
+
+function onToggleKey(): void {
+  keyVisible.value = !keyVisible.value
 }
 
 async function onTest(): Promise<void> {
@@ -120,7 +178,7 @@ async function onTest(): Promise<void> {
     const status = await fetchConnectStatus(connectId.value.trim())
     connectStatus.value = status.online ? 'online' : 'offline'
     if (!status.online) {
-      errorText.value = '模块还没连上来：确认模块已按上面两行 env 启动并保持运行'
+      errorText.value = '模块还没连上来：确认模块已按 env 启动并保持运行'
     }
   } catch (err) {
     connectStatus.value = 'offline'
@@ -150,7 +208,7 @@ async function onInstall(): Promise<void> {
       npmSpec: npmSpec.value.trim(),
       cfToken: cfToken.value.trim(),
       accountId: accountId.value.trim(),
-      storageLevel: cfStorage.value === '' ? undefined : cfStorage.value,
+      storageLevel: cfStorage.value === 'core' ? 'core' : undefined,
     })
     emit('done')
     close()
@@ -217,36 +275,67 @@ function close(): void {
           <input v-model="connectId" class="add-field-input" data-test="connect-id" placeholder="如 bridge" />
         </label>
         <div class="add-field">
-          <span class="add-field-label" id="connect-storage-label">存储落点（可选）</span>
+          <span class="add-field-label" id="connect-storage-label">存储落点</span>
           <UMotionSelect
             v-model="connectStorage"
             :options="connectStorageOptions"
             label="存储落点"
             aria-labelledby="connect-storage-label"
-            placeholder="不指定（模块自管存储）"
+            placeholder="自托管"
             data-test="connect-storage"
           />
         </div>
 
-        <UButton
-          v-if="!connectKey"
-          variant="outline"
-          :loading="busy"
-          data-test="connect-generate"
-          @click="onGenerate"
-        >
-          生成接入码
-        </UButton>
+        <span v-if="!connectKey" class="add-help-row">
+          <UButton
+            variant="outline"
+            :loading="busy"
+            data-test="connect-generate"
+            aria-describedby="core-url-tip"
+            @click="onGenerate"
+            @focus="coreUrlTip = true"
+            @blur="coreUrlTip = false"
+            @mouseenter="coreUrlTip = true"
+            @mouseleave="coreUrlTip = false"
+          >
+            <!-- 问号收进生成按钮（#349 验收定案）：UNSELF_CORE_URL 说明只挂它的 hover/focus -->
+            <CircleHelp aria-hidden="true" :size="16" />
+            生成接入码
+          </UButton>
+          <span v-show="coreUrlTip" id="core-url-tip" role="tooltip" class="add-tooltip" data-test="connect-env-help-tip">
+            模块 env 另需 UNSELF_CORE_URL=core 的可达地址
+          </span>
+        </span>
 
         <template v-else>
-          <p class="add-dialog-hint" data-test="connect-key-notice">
-            这串接入码只显示这一次，关闭后不可再查看。请写入模块的 env：
-          </p>
-          <pre class="add-dialog-env" data-test="connect-env">{{ envLines.join('\n') }}</pre>
-          <p class="add-dialog-hint">
-            模块 env 另需 UNSELF_CORE_URL：填 core 的可达地址（域名 / 局域网 IP / Tailscale IP 均可，
-            以模块所在机器能连到为准），模块凭它主动连回 core。
-          </p>
+          <!-- 展示框本体=复制（生成已自动复制过一次，点框补手动）；右侧内嵌眼睛切打码/明文 -->
+          <div class="add-env-box">
+            <pre
+              class="add-dialog-env"
+              data-test="connect-env"
+              role="button"
+              tabindex="0"
+              aria-label="接入码 env：点击复制"
+              @click="copyKey"
+              @keydown.enter.prevent="copyKey"
+              @keydown.space.prevent="copyKey"
+            >{{ envText }}</pre>
+            <button
+              type="button"
+              class="add-env-eye"
+              :aria-pressed="keyVisible"
+              :aria-label="keyVisible ? '隐藏接入码' : '显示接入码'"
+              data-test="connect-toggle-key"
+              @click="onToggleKey"
+            >
+              <Eye v-if="!keyVisible" aria-hidden="true" :size="16" />
+              <EyeOff v-else aria-hidden="true" :size="16" />
+            </button>
+          </div>
+          <!-- 稳定占位：复制 / 降级反馈共用一个不透明 span，测试不查瞬时 DOM -->
+          <span class="add-env-feedback" data-test="connect-copy-feedback" aria-live="polite">
+            {{ copied ? '已复制' : copyFallback ? '已选中 env：请按 Ctrl+C 复制' : '' }}
+          </span>
         </template>
       </div>
 
@@ -265,20 +354,16 @@ function close(): void {
           <input v-model="cfToken" type="password" class="add-field-input" data-test="cf-token" autocomplete="off" />
         </label>
         <div class="add-field">
-          <span class="add-field-label" id="cf-storage-label">存储落点（可选）</span>
+          <span class="add-field-label" id="cf-storage-label">存储落点</span>
           <UMotionSelect
             v-model="cfStorage"
             :options="cfStorageOptions"
             label="存储落点"
             aria-labelledby="cf-storage-label"
-            placeholder="不指定（保留现状）"
+            placeholder="自托管"
             data-test="cf-storage"
           />
         </div>
-        <p class="add-dialog-hint">
-          凭证只用于本次部署，不写入实例数据，也不进日志（会话凭证纪律）。带 Durable Object / 资产 / 迁移的模块
-          仍走安装器装配期路径。
-        </p>
       </div>
 
       <p v-if="errorText" class="add-dialog-alert" role="alert" data-test="add-module-alert">{{ errorText }}</p>
@@ -299,6 +384,9 @@ function close(): void {
           部署并注册
         </UButton>
       </footer>
+
+      <!-- 装饰水面（复用设置弹窗的 WaveFill，#100）：内容层 z-index 压在其上 -->
+      <WaveFill :level="waveLevel" />
     </section>
   </div>
 </template>
@@ -372,6 +460,8 @@ function close(): void {
   gap: var(--unself-space-3);
 }
 .add-field {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: var(--unself-space-1);
@@ -389,20 +479,77 @@ function close(): void {
   color: var(--unself-color-text);
   font-size: var(--unself-font-size-base);
 }
-.add-dialog-hint {
-  margin: 0;
-  font-size: var(--unself-font-size-sm);
-  color: var(--unself-color-text-secondary);
+.add-env-box {
+  position: relative;
 }
 .add-dialog-env {
   margin: 0;
   padding: var(--unself-space-3);
+  padding-right: calc(28px + var(--unself-space-3));
   border: 1px solid var(--unself-color-border);
   border-radius: var(--unself-radius-md);
   background: var(--unself-color-bg);
   font-size: var(--unself-font-size-sm);
   white-space: pre-wrap;
   word-break: break-all;
+  cursor: pointer;
+}
+.add-dialog-env:focus-visible {
+  outline: var(--unself-focus-ring);
+  outline-offset: 2px;
+}
+.add-env-feedback {
+  font-size: var(--unself-font-size-sm);
+  color: var(--unself-color-text-secondary);
+}
+.add-help-row {
+  position: relative;
+  z-index: 0;
+  display: flex;
+  width: 100%;
+}
+.add-help-row :deep(button) {
+  width: 100%;
+  justify-content: center;
+}
+.add-env-eye {
+  position: absolute;
+  top: 50%;
+  right: var(--unself-space-2);
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--unself-radius-full);
+  background: none;
+  cursor: pointer;
+  color: var(--unself-color-text-secondary);
+}
+.add-env-eye:hover {
+  color: var(--unself-color-text);
+}
+.add-env-eye:focus-visible {
+  outline: var(--unself-focus-ring);
+  outline-offset: 2px;
+}
+.add-tooltip {
+  position: absolute;
+  top: calc(100% + var(--unself-space-2));
+  left: 0;
+  z-index: 1;
+  width: max-content;
+  max-width: 320px;
+  padding: var(--unself-space-2) var(--unself-space-3);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-md);
+  background: var(--unself-color-surface);
+  color: var(--unself-color-text);
+  font-size: var(--unself-font-size-sm);
+  box-shadow: var(--unself-shadow-pop);
 }
 .add-dialog-alert {
   margin: 0;
@@ -418,5 +565,20 @@ function close(): void {
   display: flex;
   justify-content: flex-end;
   gap: var(--unself-space-3);
+}
+
+/* 水舱装饰层 WaveFill 绝对铺满弹窗（inset:0）；内容块统一抬层压在水面上（设置弹窗同规）。 */
+.add-dialog-head,
+.add-dialog-tabs,
+.add-dialog-fields,
+.add-dialog-alert,
+.add-dialog-status,
+.add-dialog-actions {
+  position: relative;
+  z-index: 1;
+}
+/* 字段块压过下方校验行，说明气泡才能盖住那行字；气泡本身不抬高按钮。 */
+.add-dialog-fields {
+  z-index: 2;
 }
 </style>

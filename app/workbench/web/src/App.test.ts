@@ -22,15 +22,15 @@ const { TOKEN, MODULE, REJECTED } = vi.hoisted(() => {
       exp: 1_700_000_600,
     },
   }
-  /** enabled 模块：manifest.entry 同域路径（§5.3 单域名路径制）。 */
+  /** enabled 模块：entry 列同域路径（§5.3 单域名路径制；#349 U9 地址在条目 entry，不在 manifest）。 */
   const MODULE = {
     id: 'hello',
     enabled: true,
     name: 'hello',
+    entry: '/m/hello/',
     manifest: {
       id: 'hello',
       route: '/m/hello/',
-      entry: '/m/hello/',
       runtimes: ['worker'],
       version: '0.1.0',
     },

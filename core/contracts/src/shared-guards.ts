@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * shared 三护栏之③（决策 #55，docs/modules.md §4/§6）：表名 `<模块id>_` 前缀 + 禁止跨模块外键。
+ * 分表隔离护栏③（决策 #55 → #349 U5 两值收敛，docs/modules.md §4/§6）：core（核心代管）
+ * 模块在专属库内建表，禁止外键指向本模块申报清单之外的表（库级隔离已由专属库承载，
+ * 表名前缀不再是硬规则——原 dedicated 形态存量实例零迁移）。
  *
  * **单一实现**：#248 装配期的硬校验（app/installer/src/engine/migrate.ts）与发布期
  * `unself module validate` 共用这一份——两处各写一套必然漂移，而漂移只在装到一半时才暴露。
  *
- * schema 层只兜护栏②（accepts 含 shared 必申报 tables）；护栏③（前缀/外键）是迁移文本级检查，
+ * schema 层只兜护栏②（tables 申报只存在于 core 形态）；护栏③（外键）是迁移文本级检查，
  * 归这里与 validate。
  */
 import { parseSqlStructure } from './sql-tables';
@@ -19,7 +21,7 @@ export interface SharedGuardMigration {
   sql: string;
 }
 
-/** 护栏③问题分类：prefix=表名缺模块前缀；undeclared=建了未申报的表；cross-module-fk=外键指向清单外；sql-parse=不支持/矟形的语法。 */
+/** sharedGuardProblems 问题分类（分表隔离护栏③；#349 U5 收敛后 core 自建表落点专用）。 */
 export type SharedGuardProblemKind = 'prefix' | 'undeclared' | 'cross-module-fk' | 'sql-parse';
 
 /** 一条护栏问题：带分类、表名、迁移文件与人话消息（消息文案保持与 #248 装配期一致）。 */
@@ -32,7 +34,7 @@ export interface SharedGuardProblem {
   message: string;
 }
 
-/** shared 护栏③：表名必须以 `<模块id>_` 开头（模块 id 内的 - 转 _）。 */
+/** 护栏③：表名必须以 `<模块id>_` 开头（模块 id 内的 - 转 _）。 */
 export function tablePrefixFor(moduleId: string): string {
   return `${moduleId.replaceAll('-', '_')}_`;
 }
@@ -49,7 +51,6 @@ export function sharedGuardProblems(input: {
   migrations: SharedGuardMigration[];
 }): SharedGuardProblem[] {
   const problems: SharedGuardProblem[] = [];
-  const prefix = tablePrefixFor(input.moduleId);
   const declared = new Set(input.tables);
   const push = (kind: SharedGuardProblemKind, table: string, file: string, message: string): void => {
     problems.push({ kind, table, file, message });
@@ -62,22 +63,14 @@ export function sharedGuardProblems(input: {
     for (const problem of parsed.problems) {
       push('sql-parse', '', file.name, `${input.moduleId} / ${file.name}：${problem}`);
     }
-    // ① 前缀硬校验：CREATE TABLE 的表名必须带模块前缀
+    // ① 表名形状校验（前缀不是硬规则：core 专属库库级隔离，原 dedicated 形态零迁移，#349 U5）
     for (const name of parsed.tables) {
-      if (!name.startsWith(prefix)) {
-        push(
-          'prefix',
-          name,
-          file.name,
-          `${input.moduleId} / ${file.name}：表 ${name} 不带模块前缀 ${prefix}（shared 护栏③，docs/modules.md §6 规则3）`,
-        );
-      }
       if (!declared.has(name)) {
         push(
           'undeclared',
           name,
           file.name,
-          `${input.moduleId} / ${file.name}：表 ${name} 不在 tables 申报清单内（护栏②「共享库不接收未经申报的表」）`,
+          `${input.moduleId} / ${file.name}：表 ${name} 不在 tables 申报清单内（护栏②「core 库不接收未经申报的表」）`,
         );
       }
     }
@@ -98,7 +91,6 @@ export function sharedGuardProblems(input: {
 
 /**
  * 人话消息形态（#248 装配期既有接口）：`sharedGuardProblems().map(message)`。
- * 保留它是为了装配期错误文案与既有测试零改动。
  */
 export function checkSharedGuards(input: {
   moduleId: string;

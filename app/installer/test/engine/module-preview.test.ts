@@ -41,7 +41,6 @@ const MANIFEST = {
   version: '1.2.0',
   runtimes: ['worker'],
   route: '/m/todo',
-  entry: 'http://localhost:8791/',
   description: '预览测试模块',
   permissions: ['storage'],
 };
@@ -153,7 +152,7 @@ describe('previewModuleSource：file: 目录形态', () => {
       join(dir, 'manifest.json'),
       manifestText({
         description: '目录预览模块',
-        storage: { accepts: ['core', 'shared'], preferred: 'shared' },
+        storage: { accepts: ['core', 'self'], preferred: 'core' },
         permissions: ['storage', 'notify'],
         tables: ['todos'],
       }),
@@ -163,7 +162,7 @@ describe('previewModuleSource：file: 目录形态', () => {
     expect(preview.id).toBe('todo');
     expect(preview.version).toBe('1.2.0');
     expect(preview.permissions).toEqual(['storage', 'notify']);
-    expect(preview.storage).toEqual({ accepts: ['core', 'shared'], preferred: 'shared' });
+    expect(preview.storage).toEqual({ accepts: ['core', 'self'], preferred: 'core' });
     expect(preview.kind).toBe('file');
     expect(preview.integrity).toBeUndefined(); // 目录形态无下载字节
     expect(preview.manifestText).toContain('"id": "todo"');

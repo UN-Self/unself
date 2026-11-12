@@ -125,7 +125,9 @@ describe('#284 B1/B4：npm 本地命中 与 同内容 tarball 的安装结果逐
     expect(manifestA.permissions).toEqual(['storage']);
     expect(manifestA.id).toBe('hello');
     expect(manifestA.version).toBe('0.1.0');
-    expect(manifestA.entry).toBe('https://unself-module-hello.test-subdomain.workers.dev/');
+    // #349 U9：快照不含地址；地址真值面 = 注册表 entry 列
+    expect(manifestA).not.toHaveProperty('entry');
+    expect(rowA!.entry).toBe('https://unself-module-hello.test-subdomain.workers.dev/');
 
     // ---- 路由/子域：workers.dev 形态 = 模块自有子域（无 zone 路由） ----
     expect([...fakeB.state.workersDevEnabled].sort()).toEqual([...fakeA.state.workersDevEnabled].sort());
@@ -168,7 +170,7 @@ describe('#284 B1/B4：npm 本地命中 与 同内容 tarball 的安装结果逐
 });
 
 describe('#284 B5：卸载一视同仁（官方/第三方同口径，零残留）', () => {
-  /** shared 落点 fixture 包（表清单 + 迁移），落点由 manifest 声明。 */
+  /** core（自建表）落点 fixture 包（表清单 + 迁移），落点由 manifest 声明。 */
   async function writeSharedFixture(dir: string, id: string, version = '0.1.0'): Promise<void> {
     await mkdir(join(dir, 'migrations', id), { recursive: true });
     const table = `${id.replaceAll('-', '_')}_items`;
@@ -180,9 +182,8 @@ describe('#284 B5：卸载一视同仁（官方/第三方同口径，零残留�
           version,
           runtimes: ['worker'],
           route: `/m/${id}`,
-          entry: 'http://localhost:9999/',
           permissions: ['storage'],
-          storage: { accepts: ['shared'], preferred: 'shared' },
+          storage: { accepts: ['core'], preferred: 'core' },
           tables: [table],
         },
         null,
@@ -230,7 +231,7 @@ describe('#284 B5：卸载一视同仁（官方/第三方同口径，零残留�
         http: SMOKE_OK,
         reporter: { step: () => {}, log: () => {} },
       });
-      // 装好了：注册表有行、清单表已建（shared → modules 库）
+      // 装好了：注册表有行、清单表已建（core → 专属库）
       expect(fake.state.registry.get('todo')?.enabled).toBe(1);
 
       const removed = await removeModule({
@@ -246,7 +247,7 @@ describe('#284 B5：卸载一视同仁（官方/第三方同口径，零残留�
       });
       results.push({ rootDir, fake });
       // 与来源无关的卸载结果（同口径）
-      expect(removed.level).toBe('shared');
+      expect(removed.level).toBe('core');
       expect(removed.tablesDropped).toEqual(['todo_items']);
       expect(removed.ledgerTable).toBe('unself_migrations_todo');
       expect(removed.removedFromRegistry).toBe(true);

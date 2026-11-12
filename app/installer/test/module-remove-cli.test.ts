@@ -66,7 +66,7 @@ describe('#270 module remove（真引擎 + REST 替身）', () => {
     const { RestClient } = await import('../src/engine/index');
     const { createCoreControlPlane } = await import('../src/engine/index');
     const fake = makeCfRestFake({
-      existingD1: ['unself-core', 'unself-modules'],
+      existingD1: ['unself-core', 'unself-modules', 'unself-hello'],
       existingWorkers: ['unself-module-hello'],
       existingLedger: { unself_migrations_hello: ['0001_init.sql'] },
     });
@@ -82,8 +82,7 @@ describe('#270 module remove（真引擎 + REST 替身）', () => {
         version: '0.1.0',
         runtimes: ['worker'],
         route: '/m/hello',
-        entry: 'https://team.example.com/m/hello/',
-        storage: { accepts: ['shared'], declaration: 'shared' },
+        storage: { accepts: ['core'], declaration: 'core' },
         tables: ['hello_counter'],
       },
     });
@@ -177,7 +176,6 @@ describe('#270 module validate', () => {
           version: '1.0.0',
           runtimes: ['worker'],
           route: '/m/demo',
-          entry: 'https://demo.example.com/',
           permissions: ['storage'],
         },
         null,
@@ -240,7 +238,7 @@ describe('#270 module validate', () => {
     writeFileSync(
       join(dir, 'manifest.json'),
       `${JSON.stringify(
-        { id: 'demo', version: '1.0.0', runtimes: ['worker'], route: '/m/demo', entry: 'https://demo.example.com/' },
+        { id: 'demo', version: '1.0.0', runtimes: ['worker'], route: '/m/demo' },
         null,
         2,
       )}\n`,

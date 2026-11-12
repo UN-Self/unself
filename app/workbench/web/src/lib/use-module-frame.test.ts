@@ -49,10 +49,10 @@ describe('useModuleFrame 握手超时（#306）', () => {
     id: 'hello',
     enabled: true,
     name: 'hello',
+    entry: '/m/hello/',
     manifest: {
       id: 'hello',
       route: '/m/hello/',
-      entry: '/m/hello/',
       runtimes: ['worker'],
       version: '0.1.0',
     },
@@ -150,7 +150,7 @@ describe('useModuleFrame 握手超时（#306）', () => {
         enabled: true,
         name: '待办',
         entry: null,
-        manifest: { id: 'broken', route: '/m/broken/', entry: '', runtimes: ['worker'], version: '0.1.0' },
+        manifest: { id: 'broken', route: '/m/broken/', runtimes: ['worker'], version: '0.1.0' },
       } as RegistryModule
       const { wrapper, api } = mountHostWithModule(broken)
       await flushPromises()

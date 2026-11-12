@@ -21,9 +21,8 @@ const VALID_MANIFEST = {
   version: '1.2.0',
   runtimes: ['worker'],
   route: '/m/todo',
-  entry: 'https://todo.example.com',
   permissions: ['storage', 'notify'],
-  storage: { accepts: ['core', 'shared'], preferred: 'shared' },
+  storage: { accepts: ['core', 'self'], preferred: 'core' },
   tables: ['todo_items'],
   compat: { min: '1.0', max: '1.0' },
   description: '待办模块',
@@ -42,7 +41,7 @@ describe('#294 契约对外可见面：manifest 自校验', () => {
   it('parse 入口对合法 manifest 返回同一对象语义', () => {
     const parsed = ModuleManifestSchema.parse(VALID_MANIFEST);
     expect(parsed.id).toBe('todo');
-    expect(parsed.storage?.preferred).toBe('shared');
+    expect(parsed.storage?.preferred).toBe('core');
   });
 
   it('【红灯】非法 manifest → safeParse success=false 且 issue 点名出错字段', () => {
@@ -52,7 +51,6 @@ describe('#294 契约对外可见面：manifest 自校验', () => {
       version: '1.2',
       runtimes: [],
       route: '/todo',
-      entry: 'https://todo.example.com',
     };
     const result = ModuleManifestSchema.safeParse(bad);
     expect(result.success).toBe(false);
@@ -66,13 +64,11 @@ describe('#294 契约对外可见面：manifest 自校验', () => {
     expect(result.error.issues.length).toBeGreaterThan(0);
   });
 
-  it('【红灯】明文公网 http entry → 拒绝（决策 #63 强制 https，仅 localhost 豁免）', () => {
+  it('【#349 U9】清单带 entry → 剥离不报错（地址只由 core 定，真值面 = 注册表 entry 列）', () => {
     const result = ModuleManifestSchema.safeParse({ ...VALID_MANIFEST, entry: 'http://todo.example.com' });
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error.issues.some((issue) => String(issue.path[0]) === 'entry')).toBe(true);
-    // localhost 明文豁免：同一份 manifest 换成 localhost 即通过
-    expect(ModuleManifestSchema.safeParse({ ...VALID_MANIFEST, entry: 'http://localhost:8787' }).success).toBe(true);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).not.toHaveProperty('entry');
   });
 
   it('【红灯】未知能力 → safeParse 失败（schema 层即拦，不静默丢）', () => {
@@ -82,12 +78,16 @@ describe('#294 契约对外可见面：manifest 自校验', () => {
     expect(result.error.issues.some((issue) => String(issue.path[0]) === 'permissions')).toBe(true);
   });
 
-  it('storage.accepts 含 shared 但未申报 tables → schema 层拒绝（§4 护栏②）', () => {
-    const { tables: _drop, ...withoutTables } = VALID_MANIFEST;
-    const result = ModuleManifestSchema.safeParse(withoutTables);
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error.issues.some((issue) => String(issue.path[0]) === 'tables')).toBe(true);
+  it('两值词表：旧值 shared/dedicated/external 全拒；tables 申报但 accepts 不含 core → 拒（护栏②，#349 U5）', () => {
+    expect(ModuleManifestSchema.safeParse({ ...VALID_MANIFEST, storage: { accepts: ['shared'] } }).success).toBe(false);
+    expect(ModuleManifestSchema.safeParse({ ...VALID_MANIFEST, storage: { accepts: ['external'] } }).success).toBe(false);
+    // tableless 的 core（无 tables）合法（hello 形态）；tables + self 矛盾
+    expect(ModuleManifestSchema.safeParse({ ...VALID_MANIFEST, storage: { accepts: ['core'] } }).success).toBe(true);
+    const bad = ModuleManifestSchema.safeParse({ ...VALID_MANIFEST, storage: { accepts: ['self'] } });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      expect(bad.error.issues.some((issue) => String(issue.path[0]) === 'tables')).toBe(true);
+    }
   });
 
   it('coreOrigin 禁止 "*"（决策 #63）→ 拒绝', () => {
@@ -102,7 +102,6 @@ describe('#294 manifest.yaml 解析入口', () => {
       'id: todo',
       'version: 1.2.0',
       'route: /m/todo',
-      'entry: https://todo.example.com',
       'runtimes:',
       '  - worker',
       'permissions:',
@@ -111,6 +110,8 @@ describe('#294 manifest.yaml 解析入口', () => {
       '  accepts:',
       '    - core',
       '  preferred: core',
+      'tables:',
+      '  - todo_items',
     ].join('\n');
     const candidate = manifestFromYamlText(yaml);
     const result = ModuleManifestSchema.safeParse(candidate);

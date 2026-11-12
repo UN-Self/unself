@@ -24,8 +24,8 @@ import {
 } from './sources';
 import { readManifest } from './module-sources';
 
-/** 四级落点（契约 StorageLevelSchema 同源）。 */
-export type PreviewStorageLevel = 'core' | 'shared' | 'dedicated' | 'external';
+/** 两值落点（#349 U5；契约 StorageLevelSchema 同源）：core（核心代管，分表隔离）| self（自托管）。 */
+export type PreviewStorageLevel = 'core' | 'self';
 
 export interface ModulePreview {
   /** 生效的实例内 id（作者建议名；部署者可覆盖 —— 覆盖由调用方决定，本函数只报 manifest.id）。 */

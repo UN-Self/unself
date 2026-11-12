@@ -25,34 +25,24 @@ ON CONFLICT(id) DO UPDATE SET
 }
 
 /**
- * manifest.yaml 文本 → ModuleManifest（§5.5 快照 + §5.3 entry 重写为实例 URL）。
+ * manifest.yaml 文本 → ModuleManifest（§5.5 快照；#349 U9 起清单不含地址）。
  *
  * #243：YAML 解析与字段映射收口到 @unself/contracts（manifestFromYamlText），
  * 与 validate / 第三方 file: 安装共用同一份（防解析分叉致校验/授牌错位）。
  * 未知能力词在 schema 层直接抛错（安装时拒绝，不静默忽略）。
+ * 地址不再进快照（U9）：模块可达 URL 走注册表 entry 列（upsertModule 的 entry 参数）。
  */
 export function buildManifestSnapshot(input: {
   manifestText: string;
   moduleId: string;
-  /** 实例 base URL（https://domain 或 workers.dev）；空字符串 = workers.dev 占位。 */
-  baseUrl: string;
-  /**
-   * 模块真实 entry（#273 按形态）：domain → `https://<domain>/m/<id>/`；
-   * workers.dev → `https://<module-worker>.<sub>.workers.dev/`（模块自有子域）。
-   * 缺省 = 回落旧的 `${baseUrl}/m/<id>/`（存量调用方/测试兼容）。
-   */
-  entry?: string;
   /** 已解析的 manifest（sourced 模块，#245）；缺省 = 从 manifestText（YAML）解析。 */
   manifest?: ModuleManifest;
 }): ModuleManifest {
-  const host = input.baseUrl || 'https://unself-module-placeholder.workers.dev';
-  const entry = input.entry ?? `${host}/m/${input.moduleId}/`;
   if (input.manifest) {
     return ModuleManifestSchema.parse({
       ...input.manifest,
       id: input.manifest.id ?? input.moduleId,
       route: input.manifest.route ?? `/m/${input.moduleId}`,
-      entry,
       version: input.manifest.version ?? '0.0.0',
     });
   }
@@ -61,8 +51,6 @@ export function buildManifestSnapshot(input: {
     ...candidate,
     id: candidate.id ?? input.moduleId,
     route: candidate.route ?? `/m/${input.moduleId}`,
-    // 部署后模块实际从实例根相对路径装载（同域路径制 §5.3）；workers.dev 形态为模块自有子域（#273）
-    entry,
     version: candidate.version ?? '0.0.0',
   });
 }
@@ -126,9 +114,9 @@ export function registryCommands(input: {
     const manifest = buildManifestSnapshot({
       manifestText: input.manifestTexts[mod.id] ?? '',
       moduleId: mod.id,
-      baseUrl: input.baseUrl,
     });
-    const cmd = registryUpsertCommand({ manifest });
+    // #349 U9：地址写注册表 entry 列（真值面），快照不再携带 entry。
+    const cmd = registryUpsertCommand({ manifest, entry: `${input.baseUrl}/m/${mod.id}/` });
     commands.push({ kind: 'upsert', description: `upsert ${mod.id}（enabled=1，快照刷新）`, ...cmd });
   }
   for (const mod of input.modules) {

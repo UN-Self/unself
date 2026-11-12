@@ -459,13 +459,11 @@ async function listMigrations(packageDir: string): Promise<Record<string, string
   const direct = await readSqls(migRoot);
   if (Object.keys(direct).length > 0) return direct;
   const id = await manifestIdOf(packageDir);
-  // #310：同时收 `<id>/`（dedicated/默认）与 `<id>-shared/`（shared 物理表集），
-  // 键带子目录以区分两套迁移集（validate 按 `<id>-shared/` 归类 shared）。
+  // 迁移集：migrations/<id>/（core 自建表；#349 U5 后无 <id>-shared/ 物理表集），
+  // 键带子目录以区分模块与平台迁移。
   const out: Record<string, string> = {};
-  for (const dir of [id, `${id}-shared`]) {
-    const files = await readSqls(join(migRoot, dir));
-    for (const [name, sql] of Object.entries(files)) out[`${dir}/${name}`] = sql;
-  }
+  const files = await readSqls(join(migRoot, id));
+  for (const [name, sql] of Object.entries(files)) out[`${id}/${name}`] = sql;
   return out;
 }
 

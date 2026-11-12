@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * chat 专属资源供给与部署配置（#219，决策 #50；#248 存储面去豁免）：
- * chat 落点 = **dedicated 普通实例**（storage.declaration=dedicated，决策 #55/#74）：
- * 数据落自己的库 `unself-chat`，迁移走标准链（migrations/chat/ + 独立记账 unself_migrations_chat），
- * 与任何 dedicated 模块同一套装配路径——存储面不再有 chat 专属分支。
+ * chat 专属资源供给与部署配置（#219，决策 #50；#248 存储面去豁免；#349 U5 两值收敛）：
+ * chat 落点 = **core 唯一代管形态**（storage.declaration=core，分表隔离）：
+ * 数据落自己的库 `unself-chat`，迁移走标准链（migrations/chat/ + 独立记账 unself_migrations_chat）。
  * 本文件保留的 chat 专属面只有**模块资源**（与存储落点无关）：
  * - D1 `unself-chat`：迁移链（app/modules/chat/migrations/chat/0001_baseline.sql，逐文件记账应用；
  *   上游 23 个 migration 不搬，无「已应用迁移文件」记账问题）；
@@ -58,15 +57,16 @@ const KV_BINDING = 'SESSIONS';
 /**
  * 确保 chat 专属 D1/KV 存在，返回 id（REST 查漏补建，幂等）。
  */
+/**
+ * 确保 chat 专属 D1/KV 存在，返回 id（REST 查漏补建，幂等）。
+ * #349 U5：chat 归 core 唯一代管形态，专属 D1 恒建（分表隔离的承载库）。
+ */
 export async function ensureChatResources(
   client: RestClient,
   accountId: string,
   log: (msg: string) => void,
-  opts: { createD1?: boolean } = {},
 ): Promise<{ dbId: string | null; kvId: string }> {
   const kvId = await ensureKvNamespace(client, accountId, chatKvName(), log);
-  // shared 落点把 chat 的表建在共享 modules 库，不建专属 D1（#310：shared 的动机之一就是省配额）。
-  if (opts.createD1 === false) return { dbId: null, kvId };
   const dbId = await ensureD1(client, accountId, chatDbName(), log);
   return { dbId, kvId };
 }
@@ -149,24 +149,18 @@ export function chatWranglerConfig(input: {
   pkg: ChatPackageConfig;
   /** 前端产物目录（相对配置文件所在目录 modules/）。 */
   assetsDir: string;
-  /** 数据落点（#310）；缺省 dedicated（保持既有行为/测试）。 */
-  storageLevel?: 'core' | 'shared' | 'dedicated' | 'external';
   /** FILES 来源（#310）；缺省模块独立桶（既有行为）。 */
   files?: FilesSource;
 }): string {
   const { config, dbIds, kvId, jwksJson, zoneName, pkg, assetsDir } = input;
-  const storageLevel = input.storageLevel ?? 'dedicated';
   const files: FilesSource = input.files ?? {
     kind: 'r2',
     binding: 'FILES',
     origin: 'module',
     bucket: moduleFilesBucket(CHAT_MODULE_ID),
   };
-  // shared 落点：chat 的 D1 绑定指共享 modules 库，worker 靠 DB_TABLE_PREFIX 映射到 chat_ 前缀表。
-  const d1Binding =
-    storageLevel === 'shared'
-      ? { binding: pkg.d1Binding, database_name: chatDbName(), database_id: dbIds.modules }
-      : { binding: pkg.d1Binding, database_name: chatDbName(), database_id: dbIds.chat };
+  // chat 归 core：D1 绑定指专属库（chat_ 前缀分表隔离的承载库；#349 U5 后无 shared 共享库形态）。
+  const d1Binding = { binding: pkg.d1Binding, database_name: chatDbName(), database_id: dbIds.chat };
   return JSON.stringify(
     {
       $schema: 'node_modules/wrangler/config-schema.json',
@@ -202,8 +196,6 @@ export function chatWranglerConfig(input: {
       ...(pkg.migrations.length > 0 ? { migrations: pkg.migrations } : {}),
       vars: {
         MODULE_ID: CHAT_MODULE_ID,
-        // shared 落点：worker 表名前缀（单一注入点，见 worker/src/db-tables.js）
-        ...(storageLevel === 'shared' ? { DB_TABLE_PREFIX: 'chat_' } : {}),
         ...filesSourceVars(files),
         // 部署期注入公钥 JWKS（模块本地验签零运行时网络），其余 vars 包配置直通
         ...pkg.vars,

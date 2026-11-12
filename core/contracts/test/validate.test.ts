@@ -30,7 +30,6 @@ function helloPackageInput(): {
     version: '0.1.0',
     runtimes: ['worker'],
     route: '/m/hello',
-    entry: 'https://team.example.com/m/hello/',
     description: 'hello world 演示模块：SDK 存储计数器',
     permissions: ['storage'],
   };
@@ -55,10 +54,9 @@ function chatPackageInput(): {
     version: '0.1.0',
     runtimes: ['worker'],
     route: '/m/chat',
-    entry: 'https://team.example.com/m/chat/',
     description: 'EdgeChat：频道聊天模块',
     permissions: ['storage', 'notify'],
-    storage: { accepts: ['dedicated'], preferred: 'dedicated' },
+    storage: { accepts: ['core'], preferred: 'core' },
     tables: [
       'users',
       'channels',
@@ -99,7 +97,6 @@ function minimalInput(): Parameters<typeof validateModulePackage>[0] {
       version: '1.0.0',
       runtimes: ['worker'],
       route: '/m/todo',
-      entry: 'https://team.example.com/m/todo/',
     }),
     packageName: 'todo',
     workerText: 'export default {}',
@@ -140,8 +137,8 @@ describe('护栏③与真 SQLite 对照（#310 实测退回：括号/注释形�
   function sharedPkgWith(migrationSql: string): Parameters<typeof validateModulePackage>[0] {
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
-    manifest.storage = { accepts: ['shared'] };
-    manifest.tablesShared = ['todo_items'];
+    manifest.storage = { accepts: ['core'] };
+    manifest.tables = ['todo_items'];
     return { ...base, manifestText: JSON.stringify(manifest), migrations: { '0001_init.sql': migrationSql } };
   }
 
@@ -298,10 +295,10 @@ describe('六类硬错（docs/modules.md §7，每类红灯）', () => {
     expect(mismatch.errors.map((e) => e.check)).toContain('id');
   });
 
-  it('② storage.accepts 与实现用法不符（带 migrations 却只声明 core）→ error(storage)', () => {
+  it('② storage.accepts 与实现用法不符（带 migrations 却只声明 self）→ error(storage)（#349 U5）', () => {
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
-    manifest.storage = { accepts: ['core'] };
+    manifest.storage = { accepts: ['self'] };
     const result = validateModulePackage({
       ...base,
       manifestText: JSON.stringify(manifest),
@@ -314,8 +311,8 @@ describe('六类硬错（docs/modules.md §7，每类红灯）', () => {
   it('③ tables 与迁移不一致（建了未申报 / 申报未建）→ error(tables)', () => {
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
-    manifest.storage = { accepts: ['shared'], declaration: 'shared' };
-    manifest.tablesShared = ['todo_items'];
+    manifest.storage = { accepts: ['core'], declaration: 'core' };
+    manifest.tables = ['todo_items'];
     const undeclared = validateModulePackage({
       ...base,
       manifestText: JSON.stringify(manifest),
@@ -326,7 +323,7 @@ describe('六类硬错（docs/modules.md §7，每类红灯）', () => {
     expect(undeclared.ok).toBe(false);
     expect(undeclared.errors.some((e) => e.check === 'tables' && e.message.includes('todo_extra'))).toBe(true);
 
-    manifest.tablesShared = ['todo_items', 'todo_ghost'];
+    manifest.tables = ['todo_items', 'todo_ghost'];
     const ghost = validateModulePackage({
       ...base,
       manifestText: JSON.stringify(manifest),
@@ -389,8 +386,8 @@ describe('增量友好（#57）与附加检查', () => {
   it('迁移文件名不符合 000N_描述.sql → error(tables)', () => {
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
-    manifest.storage = { accepts: ['shared'], declaration: 'shared' };
-    manifest.tablesShared = ['todo_items'];
+    manifest.storage = { accepts: ['core'], declaration: 'core' };
+    manifest.tables = ['todo_items'];
     const result = validateModulePackage({
       ...base,
       manifestText: JSON.stringify(manifest),
@@ -407,7 +404,7 @@ describe('增量友好（#57）与附加检查', () => {
   });
 });
 
-describe('护栏③（决策 #55）：shared 前缀 + 禁跨模块外键——发布期与装配期同一份实现', () => {
+describe('护栏③（#55 → #349 U5 分表隔离）：core 自建表前缀 + 禁跨模块外键——发布期与装配期同一份实现', () => {
   function sharedPkg(
     manifestPatch: Record<string, unknown>,
     migrations: Record<string, string>,
@@ -418,20 +415,18 @@ describe('护栏③（决策 #55）：shared 前缀 + 禁跨模块外键——�
     return { ...base, manifestText: JSON.stringify(manifest), migrations };
   }
 
-  it('accepts 含 shared 但迁移表名无模块前缀 → error(tables)，点名缺失前缀', () => {
+  it('core（自建表）迁移表名无模块前缀 → 不报护栏（专属库库级隔离，原 dedicated 零迁移，#349 U5）；未申报才报', () => {
     const result = validateModulePackage(sharedPkg(
-      { storage: { accepts: ['shared'] }, tablesShared: ['todo_items'] },
+      { storage: { accepts: ['core'] }, tables: ['todo_items'] },
       { '0001_init.sql': 'CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY);' },
     ));
     expect(result.ok).toBe(false);
-    expect(
-      result.errors.some((e) => e.check === 'tables' && e.message.includes('items') && e.message.includes('todo_')),
-    ).toBe(true);
+    expect(result.errors.some((e) => e.check === 'tables' && e.message.includes('items') && e.message.includes('申报'))).toBe(true);
   });
 
-  it('accepts 含 shared 且外键指向清单之外的表 → error(tables)，点名跨模块外键', () => {
+  it('core（自建表）外键指向清单之外的表 → error(tables)，点名跨模块外键', () => {
     const result = validateModulePackage(sharedPkg(
-      { storage: { accepts: ['shared'] }, tablesShared: ['todo_items'] },
+      { storage: { accepts: ['core'] }, tables: ['todo_items'] },
       {
         '0001_init.sql':
           'CREATE TABLE IF NOT EXISTS todo_items (other_id INTEGER, FOREIGN KEY (other_id) REFERENCES other_module_table);',
@@ -445,9 +440,9 @@ describe('护栏③（决策 #55）：shared 前缀 + 禁跨模块外键——�
     ).toBe(true);
   });
 
-  it('合规 shared 包（前缀 + 模块内互引）→ 护栏③零报错', () => {
+  it('合规 core 自建表包（前缀 + 模块内互引）→ 护栏③零报错', () => {
     const result = validateModulePackage(sharedPkg(
-      { storage: { accepts: ['shared'] }, tablesShared: ['todo_items', 'todo_tags'] },
+      { storage: { accepts: ['core'] }, tables: ['todo_items', 'todo_tags'] },
       {
         '0001_init.sql': 'CREATE TABLE IF NOT EXISTS todo_items (id INTEGER PRIMARY KEY);',
         '0002_tags.sql': 'CREATE TABLE IF NOT EXISTS todo_tags (item_id INTEGER, FOREIGN KEY (item_id) REFERENCES todo_items);',
@@ -457,10 +452,10 @@ describe('护栏③（决策 #55）：shared 前缀 + 禁跨模块外键——�
     expect(result.ok).toBe(true);
   });
 
-  it('纯 dedicated 模块不受前缀约束（护栏③只针对 shared）→ 无前缀也不报护栏', () => {
+  it('self（自托管）模块不受前缀约束（护栏③只针对 core 自建表）→ 无前缀也不报护栏', () => {
     const result = validateModulePackage(sharedPkg(
-      { storage: { accepts: ['dedicated'], preferred: 'dedicated' }, tables: ['items'] },
-      { '0001_init.sql': 'CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY);' },
+      { storage: { accepts: ['self'], preferred: 'self' } },
+      {},
     ));
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
@@ -468,12 +463,12 @@ describe('护栏③（决策 #55）：shared 前缀 + 禁跨模块外键——�
 });
 
 describe('迁移静态检查（决策 #61，#248）：逐条幂等 + 只写增量安全语句', () => {
-  /** shared 级合法最小包（带迁移入口）。 */
+  /** core 自建表级合法最小包（带迁移入口）。 */
   function sharedInput(migrations: Record<string, string>): Parameters<typeof validateModulePackage>[0] {
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
-    manifest.storage = { accepts: ['shared'], declaration: 'shared' };
-    manifest.tablesShared = ['todo_items'];
+    manifest.storage = { accepts: ['core'], declaration: 'core' };
+    manifest.tables = ['todo_items'];
     return { ...base, manifestText: JSON.stringify(manifest), migrations };
   }
 
@@ -558,13 +553,12 @@ describe('storage.declaration（#55 增量字段：安装时用户选定）', ()
     return { ...base, manifestText: JSON.stringify(manifest) };
   }
 
-  it('declaration 在 accepts 内 → 绿（shared 带 tables+迁移）', () => {
-    // shared 选择：需带 tables + 迁移（自建表的既有硬护栏不回退；accepts 含 shared 时
-    // 作者侧缺迁移仍拦——但 core 选择不触发任何建表路径，走 declaration-not-shared 分支）
+  it('declaration=core（自建表）带 tables+迁移 → 绿；declaration=self 与 tables 共存 → schema 拒', () => {
+    // core 选择：tables + 迁移齐备（自建表硬护栏不回退）。
     const base = minimalInput();
     const manifest = JSON.parse(base.manifestText) as Record<string, unknown>;
-    manifest.storage = { accepts: ['core', 'shared'], preferred: 'core', declaration: 'shared' };
-    manifest.tablesShared = ['todo_items'];
+    manifest.storage = { accepts: ['core', 'self'], preferred: 'core', declaration: 'core' };
+    manifest.tables = ['todo_items'];
     const result = validateModulePackage({
       ...base,
       manifestText: JSON.stringify(manifest),
@@ -574,36 +568,81 @@ describe('storage.declaration（#55 增量字段：安装时用户选定）', ()
     expect(result.ok).toBe(true);
   });
 
-  it('declaration=core 且包内无迁移 → 绿（装 core 不建表；accepts 含 shared 的表清单归作者侧）', () => {
-    // 旧路径拦「accepts 含 shared 但无迁移」；用户选 core 时不建表，不应拦安装
-    const ok = validateModulePackage(baseWithStorage({ accepts: ['core', 'shared'], declaration: 'core' }));
+  it('declaration=self 且无 tables/迁移 → 绿（自托管，接线归模块）', () => {
+    const ok = validateModulePackage(baseWithStorage({ accepts: ['core', 'self'], declaration: 'self' }));
     expect(ok.errors.filter((e) => e.check === 'tables')).toEqual([]);
     expect(ok.ok).toBe(true);
   });
 
   it('declaration 不在 accepts 内 → schema 层 error（选了声明之外的模式即拒绝安装，#55）', () => {
-    const result = validateModulePackage(baseWithStorage({ accepts: ['core'], declaration: 'dedicated' }));
+    const result = validateModulePackage(baseWithStorage({ accepts: ['core'], declaration: 'self' }));
     expect(result.ok).toBe(false);
     expect(result.errors.map((e) => e.check)).toContain('storage');
-    expect(result.errors.some((e) => e.message.includes('declaration') && e.message.includes('dedicated'))).toBe(true);
+    expect(result.errors.some((e) => e.message.includes('declaration') && e.message.includes('self'))).toBe(true);
   });
 
   it('manifest.yaml 形态：storage.declaration 解析进候选（yaml 三字段齐备）', () => {
     const yaml = [
       'id: demo',
       'route: /m/demo',
-      'entry: https://team.example.com/m/demo/',
       'runtimes:',
       '  - worker',
       'version: 1.0.0',
       'storage:',
       '  accepts:',
-      '    - dedicated',
-      '  preferred: dedicated',
-      '  declaration: dedicated',
+      '    - core',
+      '  preferred: core',
+      '  declaration: core',
     ].join('\n');
     const parsed = ModuleManifestSchema.parse(manifestFromYamlText(yaml));
-    expect(parsed.storage).toEqual({ accepts: ['dedicated'], preferred: 'dedicated', declaration: 'dedicated' });
+    expect(parsed.storage).toEqual({ accepts: ['core'], preferred: 'core', declaration: 'core' });
+  });
+});
+
+describe('manifest.config YAML 轨（#349 U8 模块可配置选项）', () => {
+  /** 带 config 块的最小 yaml。 */
+  const configYaml = [
+    'id: demo',
+    'version: 1.0.0',
+    'runtimes:',
+    '  - external',
+    'route: /m/demo',
+    'config:',
+    '  - key: greeting',
+    '    label: 问候语',
+    '    type: string',
+    '    required: true',
+    '  - key: level',
+    '    label: 档位',
+    '    type: enum',
+    '    options:',
+    '      - low',
+    '      - high',
+    '  - key: apiKey',
+    '    label: 密钥',
+    '    type: secret',
+  ].join('\n');
+
+  it('config list-of-maps 解析：声明序保留、required 字符串转布尔、过契约 schema', () => {
+    const parsed = ModuleManifestSchema.parse(manifestFromYamlText(configYaml));
+    expect(parsed.config).toHaveLength(3);
+    expect(parsed.config?.[0]).toEqual({ key: 'greeting', label: '问候语', type: 'string', required: true });
+    expect(parsed.config?.[1]).toMatchObject({ key: 'level', type: 'enum', options: ['low', 'high'] });
+    expect(parsed.config?.[2]).toMatchObject({ key: 'apiKey', type: 'secret' });
+  });
+
+  it('非法 config（type 词表外 / required: maybe）→ schema 拒（解析层只转形不校验）', () => {
+    const badType = configYaml.replace('type: string', 'type: dropdown');
+    expect(() => ModuleManifestSchema.parse(manifestFromYamlText(badType))).toThrow();
+
+    const badRequired = configYaml.replace('required: true', 'required: maybe');
+    expect(() => ModuleManifestSchema.parse(manifestFromYamlText(badRequired))).toThrow();
+  });
+
+  it('空 config 块（config: 无项）→ 等同省略，不带空数组出（空态是合法状态）', () => {
+    const bare = configYaml.split('config:')[0]!.trimEnd();
+    const parsed = ModuleManifestSchema.parse(manifestFromYamlText(bare));
+    expect(parsed.config).toBeUndefined();
   });
 });
 
@@ -665,7 +704,6 @@ describe('manifest.license（SPDX 声明，issue #292）', () => {
     const yaml = [
       'id: demo',
       'route: /m/demo',
-      'entry: https://team.example.com/m/demo/',
       'runtimes:',
       '  - worker',
       'version: 1.0.0',
@@ -685,7 +723,6 @@ describe('manifest.license（SPDX 声明，issue #292）', () => {
       'runtimes:',
       '  - worker',
       'route: /m/todo',
-      'entry: https://team.example.com/m/todo/',
       ...licenseLines,
       '',
     ].join('\n');

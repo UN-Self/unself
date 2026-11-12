@@ -129,9 +129,9 @@
 - **基准点（钉死不变）**：上游 `aozorae/Edgechat@29978c221ee3ae641ce0b9b97851656c00714a5d`（v2.7.0，GPL-3.0-only），出处登记见 `third_party/components.yaml`。
 - **同步策略**：默认不跟上游；上游出现值得移植的安全修复时**人工 port**（逐条评估 + 走本仓门禁），不做 merge/rebase，不新建 GitHub fork 关系（沿用决策 #50）。
 - **现状更正（#248 后）**：chat schema 已从搬运期的 `worker/schema-baseline.sql` 迁入标准迁移链 `migrations/chat/0001_baseline.sql`，按 `unself_migrations_chat` 独立记账重放；上文提及 `worker/schema-baseline.sql` 的段落是 #216 搬运时点记录，该文件已不存在，以本节为准。
-- **shared 化的额外影响（#310）**：若 chat 采用 `storage=shared`，表名须加 `chat_` 前缀并改写全部 `REFERENCES`（上游原名 → `chat_*`），与上游 diff 进一步扩大，更不可能自动合并——这正是「事实接管」的落点；改名实现与验收边界见 #310 拆出的实现 issue。
+- **两值收敛（#349 U5）**：shared 落点已废除——`migrations/chat-shared/` 与 `tablesShared` 申报、`DB_TABLE_PREFIX` 注入全部下架，chat 恒为 core（核心代管，专属库分表隔离）。下文 shared 段落为 #310 时点记录，仅存档。
 
-## shared 落点与 FILES 统一来源（#310 实现）
+## shared 落点与 FILES 统一来源（#310 实现；shared 面 #349 U5 已废，存档）
 
 ### 新增文件（均为 unself 集成层，非上游件）
 

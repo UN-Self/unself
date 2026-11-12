@@ -47,7 +47,6 @@ const PKG_MANIFEST = {
   version: '1.2.0',
   runtimes: ['worker'],
   route: '/m/todo',
-  entry: 'http://localhost:8791/',
   description: '打包形态测试模块',
   permissions: ['storage'],
 };
@@ -132,7 +131,6 @@ async function writeLocalModule(root: string): Promise<void> {
       '# SPDX-License-Identifier: AGPL-3.0-only',
       'id: todo',
       'route: /m/todo',
-      'entry: http://localhost:8791/',
       'runtimes:',
       '  - worker',
       'version: 2.0.0',

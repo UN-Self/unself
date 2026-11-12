@@ -10,7 +10,6 @@ import { createCoreDb, type CoreTestDb } from './test-factory';
 const helloManifest = {
   id: 'hello',
   route: '/m/hello',
-  entry: 'https://team.example.com/m/hello/',
   runtimes: ['worker'],
   version: '1.0.0',
   icon: 'inbox',
@@ -80,14 +79,14 @@ describe('registry CRUD 与启停语义（#7）', () => {
       manifest: helloManifest,
       mode: 'connect',
       entry: 'https://bridge.example.com/m/bridge/',
-      storage_level: 'dedicated',
+      storage_level: 'core',
       credential_hash: 'a'.repeat(64),
     });
     expect(first.status).toBe(201);
     await expect(first.json()).resolves.toMatchObject({
       mode: 'connect',
       entry: 'https://bridge.example.com/m/bridge/',
-      storage_level: 'dedicated',
+      storage_level: 'core',
       credential_hash: 'a'.repeat(64),
     });
     // 重新注册（装配路径：只刷新快照，落点/凭证四列全未写）→ 旧值保留；响应是 RETURNING 真行，不回显请求值
@@ -96,7 +95,7 @@ describe('registry CRUD 与启停语义（#7）', () => {
     await expect(second.json()).resolves.toMatchObject({
       mode: 'connect',
       entry: 'https://bridge.example.com/m/bridge/',
-      storage_level: 'dedicated',
+      storage_level: 'core',
       credential_hash: 'a'.repeat(64),
     });
     // mode 显式给出而 entry 缺失 → 400（不变式照旧）；mode 未写则不参与核对（列中旧值入库时已过 CHECK）
@@ -186,13 +185,14 @@ describe('registry CRUD 与启停语义（#7）', () => {
     >;
     // 只回 enabled 行
     expect(memberList.map((m) => m.id)).toEqual(['hello']);
-    // 收窄面：id/enabled/name/manifest（壳 iframe 与 nav 图标的数据源），敏感面一个不外泄
-    expect(Object.keys(memberList[0]!).sort()).toEqual(['enabled', 'id', 'manifest', 'name']);
-    expect(memberList[0]).toMatchObject({ enabled: true, name: '信箱' });
+    // 收窄面（#349 U9）：id/enabled/name/manifest + entry（壳 iframe 装载的唯一地址源，
+    // 值 = 注册表 entry 列）；mode/storage_level/credential_hash 继续不外泄
+    expect(Object.keys(memberList[0]!).sort()).toEqual(['enabled', 'entry', 'id', 'manifest', 'name']);
+    expect(memberList[0]).toMatchObject({ enabled: true, name: '信箱', entry: 'https://bridge.example.com/m/bridge/' });
     expect(memberList[0]!.manifest).toMatchObject({ id: 'hello', icon: 'inbox' });
+    expect((memberList[0]!.manifest as Record<string, unknown>).entry).toBeUndefined();
     const serialized = JSON.stringify(memberList);
-    // registry 落点三列与凭证哈希不出现在成员面（独立域 URL 与 64 位 hex 均不外泄）
-    expect(serialized).not.toContain('bridge.example.com');
+    // 64 位哈希与落点两列不出现在成员面；entry 是刻意的例外面（地址不是凭证）
     expect(serialized).not.toContain('a'.repeat(64));
     expect(serialized).not.toContain('"mode"');
     expect(serialized).not.toContain('"storage_level"');
@@ -242,13 +242,13 @@ describe('registry CRUD 与启停语义（#7）', () => {
       manifest: helloManifest,
       mode: 'connect',
       entry: 'https://self.example.com/hello/',
-      storage_level: 'dedicated',
+      storage_level: 'core',
     });
     expect(created.status).toBe(201);
     expect(await created.json()).toMatchObject({
       mode: 'connect',
       entry: 'https://self.example.com/hello/',
-      storage_level: 'dedicated',
+      storage_level: 'core',
     });
 
     // 缺省：不带落点字段 → mode=cloudflare，entry/storage_level 均空
@@ -283,6 +283,7 @@ describe('registry CRUD 与启停语义（#7）', () => {
       'storage_level',
       'mode',
       'credential_hash',
+      'config_values',
     ]);
     await register(env, cookie, { id: 'hello', manifest: helloManifest });
 
@@ -375,9 +376,11 @@ describe('反连接入：POST /api/admin/modules/connect-register（#349，决�
       entry: 'https://t.example/m/hello/',
       storage_level: null,
     });
-    // 占位 manifest 不含哈希/明文（凭证只走 credential_hash 列）；entry = core 隧道路由
+    // 占位 manifest 不含哈希/明文（凭证只走 credential_hash 列）；地址只在 entry 列（U9：快照不承载地址）
     expect(row!.manifest_json).not.toContain(KEY_HASH);
-    expect(JSON.parse(row!.manifest_json as string)).toMatchObject({ id: 'hello', route: '/m/hello', entry: 'https://t.example/m/hello/' });
+    const pendingManifest = JSON.parse(row!.manifest_json as string) as Record<string, unknown>;
+    expect(pendingManifest).toMatchObject({ id: 'hello', route: '/m/hello' });
+    expect(pendingManifest.entry).toBeUndefined();
     // 记账动作留审计
     expect(db.query('SELECT action, target FROM audit_log')).toContainEqual({
       action: 'module_connect_registered',
@@ -418,7 +421,7 @@ describe('反连接入：POST /api/admin/modules/connect-register（#349，决�
     const { env, db, cookie } = await envFor('admin');
     // 第一次记账：带存储选择
     expect(
-      (await connectRegister(env, cookie, { moduleId: 'hello', keyHash: 'a'.repeat(64), storageLevel: 'dedicated' })).status,
+      (await connectRegister(env, cookie, { moduleId: 'hello', keyHash: 'a'.repeat(64), storageLevel: 'core' })).status,
     ).toBe(201);
     // 重放：换哈希、不带存储 → 覆盖哈希，保留旧存储，仍只一行
     const again = await connectRegister(env, cookie, { moduleId: 'hello', keyHash: 'b'.repeat(64) });
@@ -428,7 +431,7 @@ describe('反连接入：POST /api/admin/modules/connect-register（#349，决�
       'hello',
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toEqual({ credential_hash: 'b'.repeat(64), storage_level: 'dedicated', enabled: 0 });
+    expect(rows[0]).toEqual({ credential_hash: 'b'.repeat(64), storage_level: 'core', enabled: 0 });
   });
 
   it('两段式：保存（既有 POST /api/admin/modules upsert，未写 credential_hash）激活且哈希保留', async () => {
@@ -478,7 +481,7 @@ describe('反连接入：POST /api/admin/modules/connect-register（#349，决�
     await register(env, cookie, { id: 'hello', enabled: true, manifest: helloManifest, mode: 'connect', entry: 'https://bridge.example.com/m/bridge/' });
     memberList = (await (await app.request('https://t.example/api/modules', {}, env)).json()) as Array<Record<string, unknown>>;
     expect(memberList).toHaveLength(1);
-    expect(Object.keys(memberList[0]!).sort()).toEqual(['enabled', 'id', 'manifest', 'name']);
+    expect(Object.keys(memberList[0]!).sort()).toEqual(['enabled', 'entry', 'id', 'manifest', 'name']);
   });
 });
 
@@ -606,7 +609,6 @@ describe('运行时装配端点 POST /api/admin/modules/install（#349）', () =
       'package/manifest.json': JSON.stringify({
         id: 'hello',
         route: '/m/hello',
-        entry: 'https://team.example.com/m/hello/',
         runtimes: ['worker'],
         version: '1.2.3',
         permissions: ['storage'],
@@ -619,18 +621,18 @@ describe('运行时装配端点 POST /api/admin/modules/install（#349）', () =
         npmSpec: '@unself/hello@1.2.3',
         cfToken: 'cf-secret-token',
         accountId: 'acc-1',
-        storageLevel: 'dedicated',
+        storageLevel: 'core',
       });
       expect(res.status).toBe(201);
       const body = await res.json() as Record<string, unknown>;
-      expect(body).toMatchObject({ id: 'hello', mode: 'cloudflare', storage_level: 'dedicated' });
+      expect(body).toMatchObject({ id: 'hello', mode: 'cloudflare', storage_level: 'core' });
       expect(JSON.stringify(body)).not.toContain('cf-secret-token');
 
       const row = db.first<{ mode: string; storage_level: string | null; credential_hash: string | null }>(
         'SELECT mode, storage_level, credential_hash FROM module_registry WHERE id = ?',
         'hello',
       );
-      expect(row).toEqual({ mode: 'cloudflare', storage_level: 'dedicated', credential_hash: null });
+      expect(row).toEqual({ mode: 'cloudflare', storage_level: 'core', credential_hash: null });
       // 审计只记模块 id
       expect(db.first<{ action: string; target: string }>('SELECT action, target FROM audit_log')).toMatchObject({
         action: 'module_upserted',

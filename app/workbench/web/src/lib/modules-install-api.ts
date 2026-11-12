@@ -98,3 +98,17 @@ export function installCloudflareModule(input: {
     body: JSON.stringify(input),
   }, { messagePolicy: statusOnlyMessage })
 }
+
+/**
+ * 移除模块（#349 U10）：注册表删行 = 接入码立即作废（已签 token 换发过不了注册表门禁）。
+ * 服务端幂等语义：未注册即 404（不伪造成功），错误沿 ApiError 行内提示。
+ * 路径与后端 app.delete('/api/admin/modules/:id') 对拍（ADD_MODULE_PATHS 对拍表未覆盖
+ * DELETE；改动时两头同改，见 web/src/lib/modules-install-api.remove.test.ts）。
+ */
+export function removeModule(moduleId: string): Promise<{ id: string; removed: boolean }> {
+  return request<{ id: string; removed: boolean }>(
+    `/api/admin/modules/${encodeURIComponent(moduleId)}`,
+    { method: 'DELETE' },
+    { messagePolicy: statusOnlyMessage },
+  )
+}

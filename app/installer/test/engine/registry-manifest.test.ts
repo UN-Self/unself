@@ -21,7 +21,6 @@ describe('buildManifestSnapshot（§5.5 快照 · list 形式 YAML · 契约 v1�
     const manifest = buildManifestSnapshot({
       manifestText: DEMO_MANIFEST,
       moduleId: 'demo-mod',
-      baseUrl: 'https://team.example.com',
     });
     expect(manifest.permissions).toEqual(['storage', 'notify']);
     expect(manifest.runtimes).toEqual(['worker']);
@@ -30,16 +29,15 @@ describe('buildManifestSnapshot（§5.5 快照 · list 形式 YAML · 契约 v1�
     expect(manifest.version).toBe('1.2.3');
     expect(manifest.icon).toBe('chart-bar');
     expect(manifest.description).toBe('计数器演示');
-    // entry 仍重写为实例 URL（§5.3 同域路径制）
-    expect(manifest.entry).toBe('https://team.example.com/m/demo-mod/');
+    // #349 U9：快照不承载地址（真值面 = 注册表 entry 列）
+    expect((manifest as unknown as Record<string, unknown>).entry).toBeUndefined();
   });
 
-  it('最小清单回退：id/route/moduleId 兜底、entry 重写、runtimes 缺失即拒（#243 必填）', () => {
+  it('最小清单回退：id/route/moduleId 兜底、runtimes 缺失即拒（#243 必填）', () => {
     expect(() =>
       buildManifestSnapshot({
         manifestText: 'id: bare\nroute: /m/bare\nversion: 0.1.0\n',
         moduleId: 'bare',
-        baseUrl: 'https://team.example.com',
       }),
     ).toThrow(/runtimes/);
   });
@@ -51,16 +49,14 @@ runtimes:
   - worker
 storage:
   accepts:
-    - shared
-    - dedicated
-  preferred: shared
+    - core
+  preferred: core
 tables:
   - demo_items
 `,
       moduleId: 'demo-mod',
-      baseUrl: 'https://x.example',
     });
-    expect(manifest.storage).toEqual({ accepts: ['shared', 'dedicated'], preferred: 'shared' });
+    expect(manifest.storage).toEqual({ accepts: ['core'], preferred: 'core' });
     expect(manifest.tables).toEqual(['demo_items']);
   });
 
@@ -74,7 +70,6 @@ permissions:
   - notify
 `,
       moduleId: 'demo-mod',
-      baseUrl: 'https://x.example',
     });
     expect(manifest.id).toBe('demo-mod');
     expect(manifest.permissions).toEqual(['storage', 'notify']);
@@ -87,13 +82,11 @@ describe('flow 式 list 防御（#64：静默丢 → 当场报错）', () => {
       buildManifestSnapshot({
         manifestText: `id: demo-mod
 route: /m/demo
-entry: https://x.example/m/demo/
 runtimes: [worker]
 permissions: [storage]
 version: 1.0.0
 `,
         moduleId: 'demo-mod',
-        baseUrl: 'https://x.example',
       }),
     ).toThrow(/flow 式/);
   });
@@ -103,7 +96,6 @@ version: 1.0.0
       buildManifestSnapshot({
         manifestText: 'permissions: [storage]\n',
         moduleId: 'demo-mod',
-        baseUrl: 'https://x.example',
       });
       expect.unreachable('应已抛错');
     } catch (err) {
@@ -123,7 +115,6 @@ permissions:
   - chat
 `,
         moduleId: 'demo-mod',
-        baseUrl: 'https://x.example',
       }),
     ).toThrow(/permissions/);
   });

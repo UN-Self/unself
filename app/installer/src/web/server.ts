@@ -108,7 +108,7 @@ export interface WizardDeps {
      * TODO(#307 后续)：引擎侧消费（写进模块 wrangler vars / wrangler secret），另开任务。
      */
     configValues?: Record<string, Record<string, string>>;
-    /** ③½ 用户存储选择（#55）：模块 id → 四级之一；缺省模块 = preferred ?? core。 */
+    /** ③½ 用户存储选择（#55/#349 U5）：模块 id → 两值（core|self）之一；缺省模块 = preferred ?? self。 */
     storageChoices?: Record<string, string>;
     storage: { provider: 'r2'; bucket: string };
     onEvent: (text: string) => void;
@@ -602,7 +602,7 @@ export function createWizardServer(opts: ServeOptions): Server {
           json(res, 200, r);
           return;
         }
-        // ③½ 存储选择（#55）：逐模块从 accepts 里选，选外即拒绝；shared 需知情同意。
+        // ③½ 存储选择（#55/#349 U5）：逐模块从 accepts 里选，选外即拒绝（两值词表 core|self）。
         if (req.method === 'POST' && url.pathname === '/api/step3b') {
           if (!state.hasToken) {
             json(res, 400, { problem: '请先完成①凭证' });

@@ -13,7 +13,7 @@ import {
   type CallbackResult,
   type DiscoveredMetadata,
 } from '../oidc';
-import { createSessionToken, SESSION_COOKIE, sessionCookieOptions } from '../session';
+import { createSessionToken, requestIsSecure, SESSION_COOKIE, sessionCookieOptions } from '../session';
 import { audit } from '../services/audit';
 import { getOidcConfig } from '../services/instance-config';
 import { consumeApprovedInviteByEmail } from '../services/invites';
@@ -127,7 +127,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       secret,
     );
     await clearLoginFailures(db, username, ip);
-    setCookie(c, SESSION_COOKIE, token, sessionCookieOptions());
+    setCookie(c, SESSION_COOKIE, token, sessionCookieOptions(c.req.raw));
     await audit(db, user.id, 'login_success', ip);
     return c.json({ ok: true, user: { id: user.id, name: user.display_name ?? username } });
   });
@@ -180,7 +180,8 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       path: '/',
       httpOnly: true,
       sameSite: 'Lax',
-      secure: true,
+      // Secure 按请求协议：http 下发 Secure 会被浏览器丢弃（SSO 登录同死，#349 走查实锤）
+      secure: requestIsSecure(c.req.raw),
       maxAge: FLOW_TTL_SECONDS,
     });
     return c.redirect(flow.authorizeUrl);
@@ -290,7 +291,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Bindings }>): void {
       { uid, iss: config.issuer, sub: String(result.claims.sub), name: (await getDisplayName(c.env.CORE_DB, uid)) ?? name },
       secret,
     );
-    setCookie(c, SESSION_COOKIE, token, sessionCookieOptions());
+    setCookie(c, SESSION_COOKIE, token, sessionCookieOptions(c.req.raw));
     // #186 S5：登录成功留痕（actor=用户 id，target=来源 IP）
     await audit(c.env.CORE_DB, uid, 'login_success', clientIp(c));
     return c.redirect(next ?? '/');

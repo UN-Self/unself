@@ -19,6 +19,11 @@
  * - 出站 `{v:1,type:'response',requestId,status,headers,body}`；body 一律 base64，无体 = null。
  *   core 侧已剥 `/m/<id>/` 前缀（#63「模块恒挂根路径」在隧道形态的落点），帧路径即根挂载路径。
  *
+ * SDK 浏览器资产（/sdk/module-sdk.esm.js 等）：host 自供、先于模块业务——对齐部署态
+ * 「静态资产先于 worker」优先级（assemble 拷 assets/sdk/，CF 资产机制拦截）。查找用
+ * import.meta.resolve 定位 @unself/sdk 包内产物（工作区符号链接 / tarball 安装都成立），
+ * 模块包里没有这份文件（main.js 全内联，兄弟目录是模块自己的 dist）。
+ *
  * 凭证纪律（#165/#108）：key 明文只活在模块 env，过网只有 hex(SHA-256(key))；
  * core 按 credential_hash 反查定位模块（模块不报 id）。
  *
@@ -27,6 +32,7 @@
  * stop() 后不再重连。
  */
 import { createServer, type Server } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 
 /** 入站请求帧（core → 模块）。 */
@@ -69,9 +75,20 @@ export interface StartDialHomeOptions {
   moduleKey?: string;
   /** 本地 HTTP 监听地址（`host:port`）；默认读 `UNSELF_MODULE_ADDR`，再缺省 127.0.0.1:8790。 */
   moduleAddr?: string;
+  /**
+   * 模块连接清单（issue #349 U8：模块可配置选项）。模块方传入**已解析好的对象**
+   * （sdk 不做 yaml/json 解析——解析是模块的活）。连接建立（ready 帧后）由 sdk POST 到
+   * `${coreUrl}/api/modules/connect-manifest?keyHash=<hash>` 自报一次：失败不阻塞隧道
+   * （catch 后 warn，不重试——下次重连再报）；**缺省 = 零行为**（不发任何 HTTP）。
+   */
+  manifest?: unknown;
   webSocketImpl?: new (url: string) => WebSocketLike;
   /** 退避等待（测试注入，免真睡）。 */
   sleep?: (ms: number) => Promise<void>;
+  /** 自定义 fetch（测试注入用）；缺省用全局 fetch。 */
+  fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+  /** SDK 资产目录覆写（测试注入；默认 import.meta.resolve 定位 @unself/sdk 包内产物）。 */
+  sdkAssetBase?: URL | null;
   /** 退避首档/上限（毫秒）。 */
   backoffBaseMs?: number;
   backoffMaxMs?: number;
@@ -90,6 +107,49 @@ export interface DialHomeHandle {
 const DEFAULT_BACKOFF_BASE_MS = 1_000;
 /** 退避上限（毫秒）：再久也别让模块彻底躺平，1 分钟一探。 */
 const DEFAULT_BACKOFF_MAX_MS = 60_000;
+
+/** host 认领的 SDK 浏览器资产（allowlist：无路径拼接，天然免疫目录穿越）。 */
+const SDK_ASSET_TYPES = new Map<string, string>([
+  ['module-sdk.esm.js', 'text/javascript; charset=utf-8'],
+  ['module-sdk.js', 'text/javascript; charset=utf-8'],
+]);
+
+/**
+ * SDK 资产供应器：/sdk/<已知名> → 吐 @unself/sdk 包内产物字节；其余不认领（返回 null，
+ * 落回模块业务）。base = 资产所在目录；null = 供应器整体停用（定位不到包时优雅降级）。
+ * 首读后缓存在内存——资产是构建产物，进程生命周期内不变。
+ */
+export function serveSdkAssetsFrom(
+  base: URL | null,
+): (path: string) => Promise<Response | null> {
+  const cache = new Map<string, ArrayBuffer>();
+  return async (path) => {
+    if (!base || !path.startsWith('/sdk/')) return null;
+    const name = path.slice('/sdk/'.length);
+    const contentType = SDK_ASSET_TYPES.get(name);
+    if (!contentType) return null; // allowlist 外（含任何 .. 拼接）一律不认领：名字必须精确等于已知名，无路径拼接
+    let bytes = cache.get(name);
+    if (!bytes) {
+      try {
+        const u8 = new Uint8Array(await readFile(new URL(name, base)));
+        bytes = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;
+      } catch {
+        return null; // 包里没这份产物（如未构建）：不认领，让模块业务自己接
+      }
+      cache.set(name, bytes);
+    }
+    return new Response(bytes, { headers: { 'content-type': contentType } });
+  };
+}
+
+/** 默认资产目录：@unself/sdk 包内产物（dist/）的真实落点；解析不到返回 null（停用）。 */
+function defaultSdkAssetBase(): URL | null {
+  try {
+    return new URL('./', new URL(import.meta.resolve('@unself/sdk/module-sdk.esm.js')));
+  } catch {
+    return null;
+  }
+}
 
 /** 字节 → base64（帧体统一 base64，跨语言安全）。 */
 const bytesToBase64 = (bytes: Uint8Array): string => Buffer.from(bytes).toString('base64');
@@ -118,6 +178,27 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const backoffBase = options.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS;
   const backoffMax = options.backoffMaxMs ?? DEFAULT_BACKOFF_MAX_MS;
+  const sdkAssets = serveSdkAssetsFrom(options.sdkAssetBase ?? defaultSdkAssetBase());
+  /** manifest 自报用 fetch（测试注入；缺省全局 fetch）。 */
+  const reportFetch: (input: string, init?: RequestInit) => Promise<Response> =
+    options.fetchImpl ?? ((input, init) => fetch(input, init));
+
+  /**
+   * manifest 自报（#349 U8）：ready 后把模块配置清单 POST 给 core（keyHash 定位模块）。
+   * 尽力而为：失败 warn 不阻塞隧道、不重试（下次重连再报）；缺省 manifest = 不发任何 HTTP。
+   */
+  async function reportManifest(hash: string, manifest: unknown): Promise<void> {
+    try {
+      const res = await reportFetch(`${coreUrl}/api/modules/connect-manifest?keyHash=${hash}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(manifest),
+      });
+      if (!res.ok) console.warn(`module-sdk: manifest 上报未成功（HTTP ${res.status}），将在下次重连时再报`);
+    } catch (error) {
+      console.warn(`module-sdk: manifest 上报失败，将在下次重连时再报：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   // ---- 本地 HTTP 宿主：模块业务的路，隧道帧也走同一 handler（同一条路由，不造第二套） ----
   let server: Server | null = null;
@@ -131,7 +212,8 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
       headers: req.headers as Record<string, string>,
       body: req.method === 'GET' || req.method === 'HEAD' ? undefined : body,
     });
-    const response = await options.handler(request);
+    // SDK 资产先于模块业务（部署态同优先级：静态资产先于 worker）
+    const response = (await sdkAssets(new URL(request.url).pathname)) ?? (await options.handler(request));
     res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
     res.end(Buffer.from(await response.arrayBuffer()));
   });
@@ -175,7 +257,9 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
     if (frame?.v !== 1 || frame.type !== 'request' || !frame.requestId) return;
     let response: TunnelResponseFrame;
     try {
-      const res = await options.handler(frameToRequest(frame));
+      // SDK 资产先于模块业务（与本地 HTTP 同优先级；core 已剥前缀，帧路径即根路径）
+      const asset = await sdkAssets(frame.path || '/');
+      const res = asset ?? (await options.handler(frameToRequest(frame)));
       const buffer = await res.arrayBuffer();
       response = {
         v: 1,
@@ -216,6 +300,7 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
       }
       socket = ws;
       let settled = false;
+      let reported = false;
       const settle = (fn: () => void) => {
         if (settled) return;
         settled = true;
@@ -227,6 +312,11 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
         const data = typeof event?.data === 'string' ? event.data : '';
         if (data === '' || data.includes('"type":"ready"')) {
           online = true;
+          // manifest 自报（#349 U8）：ready 即报、每条连接至多一次；不 await（不阻塞帧处理）
+          if (options.manifest !== undefined && !reported) {
+            reported = true;
+            void reportManifest(hash, options.manifest);
+          }
           return;
         }
         void handleFrame(ws, data);

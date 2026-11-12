@@ -28,7 +28,7 @@ const FIXED_JWKS = JSON.stringify({
   }],
 });
 
-/** 造一个 shared 落点的坏迁移模块：第 2 条语句就是服务端会拒的那条。 */
+/** 造一个 core（自建表）落点的坏迁移模块：第 2 条语句就是服务端会拒的那条。 */
 async function makeBrokenModule(rootDir: string): Promise<void> {
   const dir = join(rootDir, 'app', 'modules', 'broken');
   await mkdir(join(dir, 'migrations', 'broken'), { recursive: true });
@@ -37,7 +37,6 @@ async function makeBrokenModule(rootDir: string): Promise<void> {
     [
       'id: broken',
       'route: /m/broken',
-      'entry: http://localhost:8799/',
       'runtimes:',
       '  - worker',
       'version: 0.1.0',
@@ -46,8 +45,8 @@ async function makeBrokenModule(rootDir: string): Promise<void> {
       '  - storage',
       'storage:',
       '  accepts:',
-      '    - shared',
-      '  preferred: shared',
+      '    - core',
+      '  preferred: core',
       'tables:',
       '  - broken_seed',
       '  - broken_box',

@@ -56,8 +56,8 @@ describe('lock 模型（roundtrip）', () => {
 
 describe('manifestHash（稳定序）', () => {
   it('键序无关：同一 manifest 两种键序同哈希', () => {
-    const a = { id: 'todo', version: '1.2.0', runtimes: ['worker'], route: '/m/todo', entry: 'http://x/' };
-    const b = { entry: 'http://x/', route: '/m/todo', runtimes: ['worker'], version: '1.2.0', id: 'todo' };
+    const a = { id: 'todo', version: '1.2.0', runtimes: ['worker'], route: '/m/todo' };
+    const b = { route: '/m/todo', runtimes: ['worker'], version: '1.2.0', id: 'todo' };
     expect(manifestHashOf(a)).toBe(manifestHashOf(b));
   });
   it('内容变了（哪怕版本没变）哈希必变', () => {
@@ -136,7 +136,7 @@ function driftOf(plan: { items: Array<{ action: string }>; removed: unknown[] })
 }
 
 describe('verifyLockIntegrity（哈希不匹配直接拒绝）', () => {
-  const manifest = { id: 'todo', version: '1.2.0', route: '/m/todo', entry: 'http://x/', runtimes: ['worker'] };
+  const manifest = { id: 'todo', version: '1.2.0', route: '/m/todo', runtimes: ['worker'] };
   const files = {
     'manifest.json': Buffer.from(JSON.stringify(manifest)),
     'worker.js': Buffer.from('export default {};'),

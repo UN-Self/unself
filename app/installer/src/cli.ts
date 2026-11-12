@@ -360,7 +360,7 @@ async function exec(opts: RunOptions): Promise<number> {
       log(
         r.tablesDropped.length > 0
           ? `已删表（按 tables 清单）：${r.tablesDropped.join('、')}`
-          : '清单内无表可删（core/external 落点或未申报）',
+          : '清单内无表可删（self 落点或未申报）',
       );
       if (r.ledgerTable) log(`已清记账表：${r.ledgerTable}`);
       log(`路由：${r.routeRemoved ? '已撤' : '未涉及'}；Worker：${r.workerDeleted ? '已删' : '本不存在'}；注册表：${r.removedFromRegistry ? '已移除' : '本无'}`);

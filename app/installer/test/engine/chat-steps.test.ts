@@ -68,7 +68,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       yes: true,
-      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.1' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -77,12 +77,16 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     expect(fake.state.d1.has(chatDbName())).toBe(true);
     expect(fake.state.kv.has(chatKvName())).toBe(true);
     expect(fake.state.buckets.has(chatR2Name())).toBe(true);
-    // ② #248 存储面去豁免：chat 与任何 dedicated 模块同一条链——独立记账表 unself_migrations_chat
-    //    + 基线 schema（migrations/chat/0001_baseline.sql）按文件 import，记账名即模块 id。
+    // ② #248 存储面去豁免（#349 U5 归 core）：chat 与任何 core 自建表模块同一条链——独立记账表 unself_migrations_chat
+    //    + 迁移链（migrations/chat/0001..0005）按文件 import，记账名即模块 id。
     expect(fake.state.ledgerTables.has('unself_migrations_chat')).toBe(true);
     // 同一张账表：SQL 文件 + DO 迁移 tag（#255 归一）
     expect([...(fake.state.ledgerRows.get('unself_migrations_chat') ?? [])].sort()).toEqual([
       '0001_baseline.sql',
+      '0002_core_profile_revision.sql',
+      '0003_core_avatar.sql',
+      '0004_message_deletion_audit.sql',
+      '0005_message_blocks.sql',
       'do-migration:v1',
     ]);
     expect(fake.state.importEtags.size).toBeGreaterThanOrEqual(1);
@@ -95,7 +99,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       yes: true,
-      configOverride: { domain: 'demo.handywote.top', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      configOverride: { domain: 'demo.handywote.top', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.1' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -128,7 +132,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     await expect(readFile(join(ROOT, '.deploy/cloudflare/modules/chat/worker.js'), 'utf8')).resolves.toContain("const PREFIX = '/m/chat'");
   });
 
-  it('注册表三态之一（启用）：chat upsert enabled=1 且 entry=模块自有子域（#273）；hello 未选 disable', { timeout: 120_000 }, async () => {
+  it('注册表三态之一（启用）：chat upsert enabled=1 且 entry 列=模块自有子域（#273/#349 U9）；hello 未选 disable', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules'], existingSecrets: { 'unself-workbench': ['JWT_PRIVATE_KEY'] } });
     // #284：未选 = config 删了但 lock 里还记着（目录扫描已废）
     const preLock = JSON.stringify({
@@ -141,7 +145,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       yes: true,
       preLock,
-      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.1' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -150,7 +154,9 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     const chatRow = fake.state.registry.get('chat');
     expect(chatRow).toBeDefined();
     expect(chatRow!.enabled).toBe(1);
-    expect(JSON.parse(chatRow!.manifest_json)).toMatchObject({ id: 'chat', entry: 'https://unself-module-chat.test-subdomain.workers.dev/' });
+    // 快照不含地址；地址真值面 = entry 列（U9），值仍是模块自有子域（#273 形态决策）
+    expect(JSON.parse(chatRow!.manifest_json)).not.toHaveProperty('entry');
+    expect(chatRow!.entry).toBe('https://unself-module-chat.test-subdomain.workers.dev/');
     // hello 未选 → disable（行不在库 → UPDATE 照发，changes=0；真库同语义）
     expect(
       fake.calls.some((c) => (c.body as { sql?: string; params?: unknown[] } | undefined)?.sql?.startsWith('UPDATE module_registry') &&
@@ -166,7 +172,7 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: first.fetchImpl }),
       yes: true,
-      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.1' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -190,7 +196,7 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: second.fetchImpl }),
       yes: true,
-      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.1' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -207,7 +213,7 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fresh.fetchImpl }),
       yes: true,
-      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.1' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -220,7 +226,7 @@ describe('#219 幂等与密钥环（二跑收敛）', () => {
 describe('#219 模块面断言参数化（验收第 5 条）', () => {
   it('discoverModules 只认 config 条目：给什么返回什么（不再扫目录）', async () => {
     const entries = [
-      { id: 'chat', source: 'npm:@unself/chat@0.1.0' },
+      { id: 'chat', source: 'npm:@unself/chat@0.1.1' },
       { id: 'hello', source: 'npm:@unself/hello@0.1.0' },
     ];
     const all = await discoverIds(ROOT, entries);
@@ -252,7 +258,7 @@ describe('#219 模块面断言参数化（验收第 5 条）', () => {
       generatedAt: '2026-09-19T00:00:00.000Z',
       modules: {
         hello: { source: 'npm:@unself/hello@0.1.0', version: '0.1.0', manifestHash: 'a'.repeat(64), contractVersion: '1.0' },
-        chat: { source: 'npm:@unself/chat@0.1.0', version: '0.1.0', manifestHash: 'b'.repeat(64), contractVersion: '1.0' },
+        chat: { source: 'npm:@unself/chat@0.1.1', version: '0.1.0', manifestHash: 'b'.repeat(64), contractVersion: '1.0' },
       },
     });
     const all = ['chat', 'hello'];
@@ -283,7 +289,7 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       yes: true,
-      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.1' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -304,7 +310,7 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
       yes: true,
-      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.1' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),
@@ -343,7 +349,7 @@ describe('#255 DO 迁移判定 = 记账事实（不再靠 isWorkerNew / 脚本�
       rootDir: ROOT,
       client: new RestClient({ token: 't', fetchImpl: second.fetchImpl }),
       yes: true,
-      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.0' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
+      configOverride: { domain: '', modules: [{ id: 'chat', source: 'npm:@unself/chat@0.1.1' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
       http: SMOKE_OK,
       workbenchDir: WB,
       buildChatFrontend: async (i) => fakeChatFrontend(i.outDir),

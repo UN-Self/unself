@@ -115,22 +115,29 @@ describe('normalizeFrameOrigin / registryFrameOrigins（注册表 → 白名单�
     expect(normalizeFrameOrigin('not a url')).toBeNull();
   });
 
-  it('注册表启用模块的 entry origin 进白名单；同域 entry 被剔除；坏快照跳过', async () => {
+  it('注册表 entry 列 origin 进白名单（#349 U9 真值源 = 列，非清单）；同域剔除；坏值/空清单跳过', async () => {
     const db = createCoreDb();
-    const upsert = (id: string, entry: string, enabled = 1): void => {
+    const upsert = (id: string, entry: string | null, enabled = 1): void => {
       db.run(
-        'INSERT INTO module_registry (id, enabled, version, manifest_json) VALUES (?, ?, ?, ?)',
+        'INSERT INTO module_registry (id, enabled, version, manifest_json, entry) VALUES (?, ?, ?, ?, ?)',
         id,
         enabled,
         '1.0.0',
-        JSON.stringify({ id, entry }),
+        JSON.stringify({ id }), // 快照不含 entry（U9 后清单不承载地址）
+        entry,
       );
     };
     upsert('todo', 'https://todo.example.org/m/todo/');
     upsert('same', 'https://team.example.com/m/same/'); // 同域 → 不进白名单（self 已覆盖）
     upsert('disabled', 'https://off.example.com/', 0); // 停用 → 不进白名单
+    upsert('bare', null); // entry 列 NULL（存量 CF 行）→ 跳过
     db.run(
       "INSERT INTO module_registry (id, enabled, version, manifest_json) VALUES ('broken', 1, '1.0.0', '{not json')",
+    );
+    // 快照里写 entry 也不再有效力（U9：只读列）——被拒装不进快照，这里直插 DB 验证读侧忽略它
+    db.run(
+      "INSERT INTO module_registry (id, enabled, version, manifest_json, entry) VALUES ('legacy', 1, '1.0.0', ?, 'https://todo.example.org/m/todo/')",
+      JSON.stringify({ id: 'legacy', entry: 'https://legacy-not-used.example/' }),
     );
     const origins = await registryFrameOrigins(db.d1, { selfOrigin: 'https://team.example.com' });
     expect(origins).toEqual(['https://todo.example.org']);
@@ -169,13 +176,8 @@ describe('GET /api/modules/frame-origins（外壳动态 CSP 数据源）', () =>
         body: JSON.stringify({
           id: 'todo',
           enabled: true,
-          manifest: {
-            id: 'todo',
-            route: '/m/todo',
-            entry: 'https://todo.example.org/',
-            runtimes: ['external'],
-            version: '1.0.0',
-          },
+          manifest: { id: 'todo', route: '/m/todo', runtimes: ['external'], version: '1.0.0' },
+          entry: 'https://todo.example.org/',
         }),
       },
       env,
@@ -208,7 +210,7 @@ async function envWithAdmin() {
   return { env: { JWT_PRIVATE_KEY: pair.privateKeyPem, CORE_DB: db.d1 }, cookie: `unself_session=${token}` };
 }
 
-/** 以管理员身份注册一个 external 模块（entry 即给定 origin）。 */
+/** 以管理员身份注册一个 external 模块（地址走注册表 entry 列，#349 U9）。 */
 function regExternal(env: { CORE_DB: D1Database; JWT_PRIVATE_KEY: string }, cookie: string, origin: string) {
   return app.request(
     'https://t.example/api/admin/modules',
@@ -218,7 +220,8 @@ function regExternal(env: { CORE_DB: D1Database; JWT_PRIVATE_KEY: string }, cook
       body: JSON.stringify({
         id: 'todo',
         enabled: true,
-        manifest: { id: 'todo', route: '/m/todo', entry: origin, runtimes: ['external'], version: '1.0.0' },
+        manifest: { id: 'todo', route: '/m/todo', runtimes: ['external'], version: '1.0.0' },
+        entry: origin,
       }),
     },
     env,

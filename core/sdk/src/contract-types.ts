@@ -35,20 +35,18 @@ export interface ModuleManifest {
   runtimes: ('worker' | 'docker' | 'external')[];
   /** 挂载路由建议值，以 `/m/` 开头。 */
   route: string;
-  /** 模块入口 URL（http(s)）。 */
-  entry: string;
   /** 权限门禁声明（词表见 MODULE_PERMISSIONS）；省略 = 不调用需授权的 Core API。 */
   permissions?: ModulePermission[];
-  /** 数据落点声明（决策 #55）；省略等价于只支持 core。 */
+  /** 数据落点声明（#349 U5 两值：core=核心代管，分表隔离）；省略等价于只支持 self。 */
   storage?: {
-    /** 支持的数据落点（至少一项）。 */
-    accepts: ('core' | 'shared' | 'dedicated' | 'external')[];
+    /** 支持的数据落点（至少一项）：core（分表隔离，自建表）| self（自托管）。 */
+    accepts: ('core' | 'self')[];
     /** 安装器默认勾选偏好；必须是 accepts 成员。 */
-    preferred?: 'core' | 'shared' | 'dedicated' | 'external';
-    /** 安装时实际选择（决策 #55）；必须是 accepts 成员。 */
-    declaration?: 'core' | 'shared' | 'dedicated' | 'external';
+    preferred?: 'core' | 'self';
+    /** 安装时实际选择；必须是 accepts 成员；缺省 = self。 */
+    declaration?: 'core' | 'self';
   };
-  /** 表名清单（accepts 含 shared 时必需）。 */
+  /** 表名清单（accepts 含 core 自建表时必需）。 */
   tables?: string[];
   /** 配置页字段声明（决策 #53/#66）。 */
   config?: ModuleConfigField[];
