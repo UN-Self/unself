@@ -6,7 +6,6 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { coreWranglerConfig, moduleWranglerConfig } from '../../src/engine/assemble';
-import { buildManifestSnapshot } from '../../src/engine/registry';
 import { smokeCheck } from '../../src/engine/smoke';
 import { moduleBaseUrl, moduleEntryUrl, moduleRoutePattern } from '../../src/engine/module-url';
 import type { UnselfConfig } from '../../src/engine/config';
@@ -17,8 +16,6 @@ const CONFIG = {
   modules: [{ id: 'hello', source: 'npm:@unself/hello@0.1.0' }],
   storage: { provider: 'r2', bucket: 'unself-storage' },
 } as UnselfConfig;
-
-const MANIFEST = 'id: hello\nruntimes:\n  - worker\nversion: 0.1.0\n';
 
 /** 合法公钥 JWKS 字符串（模块 vars.CORE_JWKS_JSON 注入值；测试只关心路由三方一致，不做验签）。 */
 const JWKS_JSON = JSON.stringify({
@@ -58,12 +55,9 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
       moduleId: 'hello',
       moduleWorkerName: 'unself-module-hello',
     };
-    const entry = buildManifestSnapshot({
-      manifestText: MANIFEST,
-      moduleId: 'hello',
-      baseUrl: `https://${DOMAIN}`,
-      entry: moduleEntryUrl(urlInput),
-    });
+    // #349 U9：地址真值面 = 注册表 entry 列（装配器写入），快照不再承载；
+    // 三方一致性改为 entry 列值 ↔ 路由 pattern ↔ 冒烟探测对拍
+    const entryUrl = moduleEntryUrl(urlInput);
 
     const probed: string[] = [];
     vi.stubGlobal('fetch', async (input: string | URL) => {
@@ -82,10 +76,10 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
     expect(routeCfg.routes).toEqual([{ pattern: moduleRoutePattern(DOMAIN, 'hello'), zone_name: 'handywote.top' }]);
 
     const route = normalizeRoutePattern(routeCfg.routes[0]!.pattern);
-    const entryUrl = new URL(entry.entry);
+    const entry = new URL(entryUrl);
     const probe = new URL(smoke.find((r) => r.name === 'module:hello')!.url);
 
-    expect({ host: entryUrl.host, prefix: entryUrl.pathname }).toEqual(route);
+    expect({ host: entry.host, prefix: entry.pathname }).toEqual(route);
     expect({ host: probe.host, prefix: probe.pathname.slice(0, route.prefix.length) }).toEqual(route);
     expect(probed).toContain(`https://${DOMAIN}/m/hello/api/health`);
   });
@@ -97,13 +91,8 @@ describe('三方一致性（#59 §5.3：entry 装载点 == route 路由点 == sm
       moduleId: 'hello',
       moduleWorkerName: 'unself-module-hello',
     };
-    const entry = buildManifestSnapshot({
-      manifestText: MANIFEST,
-      moduleId: 'hello',
-      baseUrl: 'https://unself-workbench.test-subdomain.workers.dev',
-      entry: moduleEntryUrl(urlInput),
-    });
-    expect(entry.entry).toBe('https://unself-module-hello.test-subdomain.workers.dev/');
+    const entryUrl = moduleEntryUrl(urlInput);
+    expect(entryUrl).toBe('https://unself-module-hello.test-subdomain.workers.dev/');
 
     const probed: string[] = [];
     vi.stubGlobal('fetch', async (input: string | URL) => {

@@ -34,7 +34,7 @@ export interface RegistryEntry {
   mode: DeployMode;
   /** connect 模式的接入 URL（其余模式 NULL）；connect 必填由 0012 CHECK 承载。 */
   entry: string | null;
-  /** 存储四级（决策 #55）：core/shared/dedicated/external；NULL = 未选。 */
+  /** 存储落点（#349 U5 两值）：core（核心代管，分表隔离）| self（自托管）；NULL = 未选（undefined = self）。 */
   storage_level: StorageLevel | null;
   /**
    * 反连凭证哈希（#349，决策 #108）：SHA-256 hex（64 位小写），core 验证用、明文不落库；
@@ -47,8 +47,8 @@ export interface RegistryEntry {
 export const DEPLOY_MODES = ['cloudflare', 'docker', 'connect'] as const;
 export type DeployMode = (typeof DEPLOY_MODES)[number];
 
-/** 存储四级枚举（决策 #55；0012 列值域同源清单）。 */
-export const STORAGE_LEVELS = ['core', 'shared', 'dedicated', 'external'] as const;
+/** 存储落点两值枚举（#349 U5 定案；0014 映射后的列值域同源清单）。 */
+export const STORAGE_LEVELS = ['core', 'self'] as const;
 export type StorageLevel = (typeof STORAGE_LEVELS)[number];
 
 /**
@@ -84,9 +84,9 @@ export interface ModuleRegistration {
   version?: string;
   /** 落点形态；未写 = 保留旧值（#348 review 定案）。 */
   mode?: DeployMode | null;
-  /** connect 模式接入 URL；未写 = 保留旧值。 */
+  /** connect 模式接入 URL；未写 = 保留旧值。#349 U9：本列是全形态地址真值面（CF=装配器写、connect=core 隧道路由）。 */
   entry?: string | null;
-  /** 存储四级；未写 = 保留旧值（NULL = 未选）。 */
+  /** 存储落点两值；未写 = 保留旧值（NULL = 未选，undefined = self）。 */
   storage_level?: StorageLevel | null;
   /** 反连凭证哈希（#349）；未写 = 保留旧值（合并语义同落点三列）。 */
   credential_hash?: string | null;

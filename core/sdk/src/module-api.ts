@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { ModuleConfigField } from './contract-types.js';
 
 /**
  * 浏览器侧模块 API 客户端（决策 #63：跨域模块的「模块 → core」通道）：
@@ -15,6 +16,21 @@ export type ModuleApiPath = `/api/module-api/${string}`;
 
 /** 最小 fetch 面（node 侧测试注入；浏览器原生 fetch 天然满足）。 */
 export type ModuleApiFetcher = (input: string, init?: RequestInit) => Promise<Response>;
+
+/**
+ * fetchConfig 的凭据两形状（issue #349 U8）：
+ * - `{ token }`：浏览器面（模块页）用握手投递的模块 token → Authorization: Bearer；
+ * - `{ keyHash }`：模块后端 / node 宿主只有 key（明文不出 env）→ ?keyHash=<hash> 查询参数。
+ */
+export type FetchConfigAuth = { token: string } | { keyHash: string };
+
+/** fetchConfig 响应形状（对拍 workbench GET /api/module-api/config：字段声明 + 已存值）。 */
+export interface ModuleConfigSnapshot {
+  /** 配置页字段声明（镜像契约包 ModuleConfigFieldSchema；manifest 未声明 = 空数组）。 */
+  config: ModuleConfigField[];
+  /** 已存配置值（secret 对模块自己不打码；未存 = 空对象）。 */
+  values: Record<string, unknown>;
+}
 
 export interface CreateModuleApiOptions {
   /** 壳页面 origin（如 https://team.example.com）：全部请求的基准（决策 #63 必填、禁 '*'）。 */
@@ -103,5 +119,50 @@ export function createModuleApi(options: CreateModuleApiOptions): ModuleApi {
       const body = (await res.json()) as { keys?: unknown };
       return Array.isArray(body.keys) ? body.keys.filter((k): k is string => typeof k === 'string') : [];
     },
+  };
+}
+
+/**
+ * 拉取本模块的配置声明与已存值（issue #349 U8：模块可配置选项）。
+ * 端点：GET `${coreUrl}/api/module-api/config`（对拍 workbench 模块面路由，响应
+ * `{ config: [...字段声明...], values: {...} }`）。
+ *
+ * 与浏览器面 `assertCoreOrigin` 的差别（刻意不照搬）：本函数服务 node 宿主 / 模块后端——
+ * coreUrl 常是 `http://localhost`（决策 #63 的 localhost 明文豁免在 node dev 场景的延伸），
+ * 故只做「非 '*'、可解析」的最小校验，不强制 https。
+ * 非 ok（含 404）一律 throw 人话错误：manifest 未声明 config 时服务端回空数组而非 404，
+ * 404 意味着模块定位失败/路由不通，调用方自行兜 fallback。
+ */
+export async function fetchConfig(
+  coreUrl: string,
+  auth: FetchConfigAuth,
+  fetchImpl: ModuleApiFetcher = (input, init) => fetch(input, init),
+): Promise<ModuleConfigSnapshot> {
+  if (coreUrl === '*') {
+    throw new Error('module-sdk: coreUrl 禁止为 "*"（决策 #63）：本函数只打确切地址');
+  }
+  let base: URL;
+  try {
+    base = new URL(coreUrl);
+  } catch {
+    throw new Error(`module-sdk: coreUrl=${coreUrl} 不是可解析的地址`);
+  }
+  const url = new URL('/api/module-api/config', base);
+  const headers: Record<string, string> = {};
+  if ('token' in auth) {
+    headers.authorization = `Bearer ${auth.token}`;
+  } else {
+    url.searchParams.set('keyHash', auth.keyHash);
+  }
+  const res = await fetchImpl(url.toString(), { headers });
+  if (!res.ok) {
+    throw new Error(`module-sdk: 拉取配置失败：HTTP ${res.status}`);
+  }
+  const body = (await res.json()) as { config?: unknown; values?: unknown };
+  return {
+    config: Array.isArray(body.config) ? (body.config as ModuleConfigField[]) : [],
+    values: body.values && typeof body.values === 'object' && !Array.isArray(body.values)
+      ? (body.values as Record<string, unknown>)
+      : {},
   };
 }

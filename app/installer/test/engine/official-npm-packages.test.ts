@@ -278,20 +278,16 @@ describe('#284 B1/B4：npm 本地命中 与 同内容 tarball 安装结果一致
     expect(lockA.source).toBe(HELLO_SOURCE);
     expect(lockB.source).toBe(b.source);
 
-    // 注册表快照投影（entry 由装配器覆写为实例内地址）：逐项一致
+    // 注册表快照投影（#349 U9：快照不含地址，地址走 entry 列）：逐项一致
     const snapshotA = buildManifestSnapshot({
       manifestText: a.manifestText,
       manifest: a.manifest,
       moduleId: 'hello',
-      baseUrl: 'https://team.example.com',
-      entry: 'https://team.example.com/m/hello/',
     });
     const snapshotB = buildManifestSnapshot({
       manifestText: b.manifestText,
       manifest: b.manifest,
       moduleId: 'hello',
-      baseUrl: 'https://team.example.com',
-      entry: 'https://team.example.com/m/hello/',
     });
     expect(snapshotA).toEqual(snapshotB);
     // 权限投影（门禁依据）也一致

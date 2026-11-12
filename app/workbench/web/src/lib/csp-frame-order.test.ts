@@ -26,10 +26,10 @@ const CROSS_MODULE: RegistryModule = {
   id: 'todo',
   enabled: true,
   name: '待办',
+  entry: 'https://todo.example.org/',
   manifest: {
     id: 'todo',
     route: '/m/todo/',
-    entry: 'https://todo.example.org/',
     runtimes: ['external'],
     version: '0.1.0',
   },

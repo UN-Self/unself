@@ -90,7 +90,7 @@ export function coreDbName(env?: Record<string, string | undefined>): string {
 export function modulesDbName(env?: Record<string, string | undefined>): string {
   return resourceName('modules', env);
 }
-/** 便捷：core Worker 名（同时是模块的 CORE_API service binding 目标；#303 起 base = workbench）。 */
+/** 便捷：core Worker 名（壳 + Core API 同一 worker；#303 起 base = workbench）。 */
 export function coreWorkerName(env?: Record<string, string | undefined>): string {
   return resourceName('workbench', env);
 }

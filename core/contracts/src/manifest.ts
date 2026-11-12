@@ -6,8 +6,10 @@ import { isValidSpdxExpression } from './spdx';
  * 模块清单（manifest.json）契约 v1：字段冻结（决策 #56/#57，2026-09-17 定稿）。
  * 权威字段表：docs/modules.md §3；本文件是词表与契约版本的权威去处。
  *
- * 冻结字段：id / version / route / entry / runtimes / storage / config / tables / compat / icon / description / permissions
+ * 冻结字段：id / version / route / runtimes / storage / config / tables / compat / icon / description / permissions
  * 已删除（#56）：capabilities（「模块提供什么功能」不属 core 契约，放错层）与 requires（恒定值、无消费者）。
+ * 已收敛（#349 U9）：entry 移出清单——地址只由 core 定（注册表 entry 列；反连 = core 在
+ * connect-register 写 /m/<id>/，CF = 装配器写实例地址）。清单里声明 entry 直接拒绝（防双源漂移）。
  */
 
 /**
@@ -34,17 +36,22 @@ export const ModulePermissionSchema = z.enum(MODULE_PERMISSIONS);
 /** 运行时类型：worker（workerd）、docker 容器、external（自托管外部服务）。 */
 export const ModuleRuntimeSchema = z.enum(['worker', 'docker', 'external']);
 
-/** 数据落点四级（决策 #55）：core（经 Core API 代理）/ shared / dedicated / external。 */
-export const StorageLevelSchema = z.enum(['core', 'shared', 'dedicated', 'external']);
+const STORAGE_LEVEL_VALUES = ['core', 'self'] as const;
+
+/** 数据落点两值（#349 U5 定案，收敛原四级）：core（核心代管，分表隔离）| self（自托管）。 */
+export const StorageLevelSchema = z.enum(STORAGE_LEVEL_VALUES);
+
+/** 存储落点类型；storage 声明省略/declaration 缺省 = self（自托管，接线归模块）。 */
+export type StorageLevel = (typeof STORAGE_LEVEL_VALUES)[number];
 
 /** storage 声明：accepts 非空子集 + 可选偏好；部署者从 accepts 里选，选外即拒绝安装。 */
 export const ModuleStorageSchema = z.object({
-  /** 本模块支持的数据落点（至少一项）。 */
+  /** 本模块支持的数据落点（至少一项）；省略 storage = 只支持 self（自托管）。 */
   accepts: z.array(StorageLevelSchema).min(1),
   /** 安装器默认勾选的偏好；必须是 accepts 的成员。 */
   preferred: StorageLevelSchema.optional(),
   /**
-   * 安装时的存储选择（部署者选定，#55；增量字段，缺省 = preferred ?? core）。
+   * 安装时的存储选择（部署者选定；增量字段，缺省 = preferred ?? self）。
    * 只允许 accepts 的成员——选了声明之外的模式在 schema 层直接拒绝（不靠安装器二次校验）。
    */
   declaration: StorageLevelSchema.optional(),
@@ -88,12 +95,12 @@ export function compareContractVersion(a: string, b: string): number {
   return (aMajor ?? 0) - (bMajor ?? 0) || (aMinor ?? 0) - (bMinor ?? 0);
 }
 
-/** 表名声明清单：shared 模式必需（卸载/备份按清单执行）；dedicated 建议申报。 */
+/** 表名声明清单：core（分表隔离）模式必需（卸载/备份按清单执行）。 */
 const TableNameSchema = z.string().regex(/^[a-z][a-z0-9_]*$/);
 
 /**
  * 模块清单契约 v1（docs/modules.md §3 字段冻结表）。
- * 硬护栏（schema 层直接拒绝）：storage.accepts 含 shared 时必须申报 tables；
+ * 硬护栏（schema 层直接拒绝）：storage.accepts 含 core（分表隔离，模块自建表）时必须申报 tables；
  * preferred 必须是 accepts 成员；coreOrigin 禁止 '*'/空串且跨域时必须 https（决策 #63）。
  * 其余语义检查（六类）在 validate 模块。
  */
@@ -107,20 +114,12 @@ export const ModuleManifestSchema = z
     runtimes: z.array(ModuleRuntimeSchema).min(1),
     /** 挂载路由建议值，必须以 /m/ 开头；同域路径制下由装配器生成 /m/<id>/*。 */
     route: z.string().startsWith('/m/'),
-    /** 模块入口 URL：external 为模块自身地址；其他运行时由装配器覆写为实例内地址。 */
-    entry: z.url(),
     /** 权限门禁声明（词表见 MODULE_PERMISSIONS）；省略 = 不调用任何需授权的 Core API。 */
     permissions: z.array(ModulePermissionSchema).optional(),
-    /** 数据落点声明；省略等价于只支持 core（#55）。 */
+    /** 数据落点声明（core=核心代管 / self=自托管）；省略等价于只支持 self。 */
     storage: ModuleStorageSchema.optional(),
-    /** 本模块的表名清单：accepts 含 shared 时必需（硬护栏）。 */
+    /** 本模块的表名清单：accepts 含 core（自建表）时必需（硬护栏）。 */
     tables: z.array(TableNameSchema).optional(),
-    /**
-     * shared 落点的**物理**表名清单（#310，决策 #55 护栏②）：必须带 `<模块id>_` 前缀。
-     * 与 `tables` 分开的理由：双形态模块（chat）dedicated 用不带前缀的逻辑名、shared 用带前缀的物理名，
-     * 单一 `tables` 列表无法同时表达；卸载按生效落点择一（lifecycle.platformUninstallPlan）。
-     */
-    tablesShared: z.array(TableNameSchema).optional(),
     /** 配置页字段声明（#53/#66）。 */
     config: ModuleConfigSchema.optional(),
     /** 契约版本区间（#57）；省略 = 接受任意版本。 */
@@ -154,23 +153,22 @@ export const ModuleManifestSchema = z
   .superRefine((manifest, ctx) => {
     const accepts = manifest.storage?.accepts;
     const declared = manifest.storage?.declaration;
-    const declaresTables = (manifest.tables?.length ?? 0) > 0 || (manifest.tablesShared?.length ?? 0) > 0;
-    // 护栏②（#55/#310）：声明支持 shared（且实际不是装 core）时必须申报表清单。
-    // 单形态模块用 tables（shared 物理名本身须带前缀）；双形态模块（chat）额外用 tablesShared。
-    if (accepts?.includes('shared') && declared !== 'core' && !declaresTables) {
+    const declaresTables = (manifest.tables?.length ?? 0) > 0;
+    // 护栏②（#55/#349 U5）：tables 清单只在 core（自建表）形态有意义——声明了 tables 就必须
+    // 支持 core，且实际选定 self 时自相矛盾，都直接拒绝（two-value 后无 shared 触发词，
+    // 「是否自建」由 tables 申报表达；tableless 的 core（如 hello）不申报 tables，合法）。
+    if (declaresTables && accepts && !accepts.includes('core')) {
       ctx.addIssue({
         code: 'custom',
         path: ['tables'],
-        message:
-          'storage.accepts 含 shared 时必须申报 tables（或双形态用 tablesShared）（shared 表清单，须带模块前缀；docs/modules.md §4 护栏②）',
+        message: 'declared tables 但 storage.accepts 不含 core——自建表只存在于 core（核心代管，分表隔离）形态（docs/modules.md §4 护栏②）',
       });
     }
-    // 用户实际选了 shared → 表清单同样必需（装的是哪一级，就执行哪一级的护栏）
-    if (declared === 'shared' && !declaresTables) {
+    if (declaresTables && declared === 'self') {
       ctx.addIssue({
         code: 'custom',
         path: ['tables'],
-        message: 'storage.declaration=shared（用户选定）时必须申报 tables 或 tablesShared（shared 表清单）',
+        message: 'storage.declaration=self（自托管）与 tables 申报矛盾——自建表落点须选 core',
       });
     }
     if (manifest.storage?.preferred && accepts && !accepts.includes(manifest.storage.preferred)) {
@@ -208,34 +206,11 @@ export const ModuleManifestSchema = z
         });
       }
     }
-    // 跨域模块的入口必须 https（决策 #63 publicUrl 强制 https 的 schema 层锚点）：
-    // entry 非 http(s)/不可解析 → 拒；entry 是 http:// 非 localhost（自托管公网明文）→ 拒
-    const entry = normalizeOrigin(manifest.entry);
-    if (entry === null) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['entry'],
-        message: `entry=${manifest.entry} 不是可解析的 http(s) URL`,
-      });
-    } else if (!entry.startsWith('https://')) {
-      let host: string;
-      try {
-        host = new URL(manifest.entry).hostname;
-      } catch {
-        host = '';
-      }
-      const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
-      if (!isLocal) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['entry'],
-          message: `entry=${manifest.entry} 非 https（决策 #63 publicUrl 强制 https；仅 localhost/127.0.0.1 明文豁免）`,
-        });
-      }
-    }
+    // #349 U9 地址只由 core 定：清单不再承载 entry（字段已从 schema 移除，zod 对象层
+    // 自动剥离）——自报/装配链路靠「parse 后落库」自然剥掉地址，真值面只剩注册表 entry 列。
   });
 
-/** URL → origin 归一化：非 http(s)/解析失败 → null（供 coreOrigin/entry 校验共用）。 */
+/** URL → origin 归一化：非 http(s)/解析失败 → null（供 coreOrigin 校验共用）。 */
 function normalizeOrigin(raw: string): string | null {
   try {
     const url = new URL(raw);

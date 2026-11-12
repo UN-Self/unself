@@ -347,13 +347,13 @@ export function moduleWranglerConfig(input: {
   jwksJson: string;
   /** zone 路由必填（wrangler schema：routes[] 元素需 zone_id|zone_name）；部署脚本经 API 探测注入。 */
   zoneName?: string;
-  /** 数据落点（#248 四级）：shared/external → 绑 MODULES_DB（external 建表归模块自身库，这里仅共用绑定名）；
-   *  dedicated → 额外绑专属库 `<id>_DB`（unself-<id>）；core → 仅 MODULES_DB（SDK 走 Core API 代理）。 */
-  storageLevel?: 'core' | 'shared' | 'dedicated' | 'external';
-  /** dedicated 专属库 id（storageLevel=dedicated 时必填）。 */
+  /** 数据落点（#349 U5 两值）：core（核心代管，分表隔离）→ 额外绑专属库 `<id>_DB`（unself-<id>），
+   *  无自建表时仅 MODULES_DB；self（自托管）→ 绑 MODULES_DB（建表归模块自己的库，这里仅共用绑定名）。 */
+  storageLevel?: 'core' | 'self';
+  /** core（自建表）专属库 id（storageLevel=core 且模块自建表时必填）。 */
   dedicatedDbId?: string;
 }): string {
-  const { config, dbIds, mod, jwksJson, zoneName, storageLevel = 'core', dedicatedDbId } = input;
+  const { config, dbIds, mod, jwksJson, zoneName, storageLevel = 'self', dedicatedDbId } = input;
   return JSON.stringify(
     {
       $schema: 'node_modules/wrangler/config-schema.json',
@@ -381,7 +381,7 @@ export function moduleWranglerConfig(input: {
           database_name: modulesDbName(),
           database_id: dbIds.modules,
         },
-        ...(storageLevel === 'dedicated'
+        ...(storageLevel === 'core'
           ? [
               {
                 binding: `${mod.id.toUpperCase().replaceAll('-', '_')}_DB`,
@@ -391,13 +391,10 @@ export function moduleWranglerConfig(input: {
             ]
           : []),
       ],
-      // core 级（#248 收敛（a)）：模块唯一数据通道 = Core API 代理；与 core-api 的跨 worker 调用
-      // 只能走 Service Binding（同 zone 明文 fetch 被 CF 平台禁，见 #71 根因①）。steps.ts 上传时
-      // 也注入同名绑定——配置产物与真实部署面保持一致（生成物可核对，不是唯一输入源）。
-      ...(storageLevel === 'core' ? { services: [{ binding: 'CORE_API', service: coreWorkerName() }] } : {}),
+      // 数据落点（#349 U5 两值）：模块 SDK/路由据此判落点；core（自建表）直连专属绑定，
+      // self 无接线（连接串走配置页）。
       vars: {
         MODULE_ID: mod.id,
-        // 数据落点（#248）：模块 SDK 据此决定存储通道（core=Core API 代理；shared/dedicated=直连建表；external=外部连接串）
         STORAGE_LEVEL: storageLevel,
         // 部署期注入公钥 JWKS：模块本地验签零运行时网络（#71 根因①：跨 Worker 拉 core JWKS)
         // 被 CF 同 zone 禁令拦截 → 恒 401。换钥 = core secret 更新后重跑部署同步。

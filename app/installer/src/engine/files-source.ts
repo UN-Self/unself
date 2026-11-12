@@ -38,7 +38,7 @@ export function moduleFilesBucket(moduleId: string): string {
 }
 
 /**
- * 解析 FILES 来源。落点 core/external 无对象存储通道（FILES 依赖自建表落点或实例 S3），
+ * 解析 FILES 来源。落点 self（自托管）无对象存储通道（FILES 依赖 core 自建表落点或实例 S3），
  * 直接失败而非回退到另一种存储。
  */
 export function resolveFilesSource(input: {
@@ -64,14 +64,11 @@ export function resolveFilesSource(input: {
       bucket: config.storage.bucket,
     };
   }
-  if (level === 'shared') {
-    return { kind: 'r2', binding: 'FILES', origin: 'instance', bucket: config.storage.bucket };
-  }
-  if (level === 'dedicated') {
+  if (level === 'core') {
     return moduleR2();
   }
   throw new Error(
-    `模块 ${moduleId} 落点 ${level} 没有对象存储通道（FILES 需 shared/dedicated 或 storage.provider=s3）——` +
+    `模块 ${moduleId} 落点 ${level} 没有对象存储通道（FILES 需 core 落点或 storage.provider=s3）——` +
       '拒绝静默回退到另一种来源',
   );
 }

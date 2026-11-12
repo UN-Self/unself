@@ -77,12 +77,12 @@ describe('带前缀的九步（隔离探针口径）', () => {
       expect(fake.state.uploads.some((u) => u.worker === 'unself-probe-257-workbench')).toBe(true);
       expect(fake.state.uploads.some((u) => u.worker === 'unself-probe-257-module-hello')).toBe(true);
       expect(fake.state.uploads.some((u) => u.worker.startsWith('unself-module-'))).toBe(false);
-      // core 级模块的 CORE_API service binding 指向同前缀 core worker（否则绑定悬空）
+      // 模块 worker 无 service 绑定（#349 U5：core 代理形态已砍，模块面只有 D1/assets/vars）
       const coreUpload = fake.state.uploads.find((u) => u.worker === 'unself-probe-257-workbench');
       expect(coreUpload).toBeDefined();
       const modUpload = fake.state.uploads.find((u) => u.worker === 'unself-probe-257-module-hello');
       const bindings = (modUpload!.metadata.bindings ?? []) as Array<{ type: string; service?: string }>;
-      expect(bindings.find((b) => b.type === 'service')?.service).toBe('unself-probe-257-workbench');
+      expect(bindings.find((b) => b.type === 'service')).toBeUndefined();
     } finally {
       await rm(rootDir, { recursive: true, force: true });
       await rm(artifacts, { recursive: true, force: true });

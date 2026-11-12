@@ -61,8 +61,13 @@ export interface AdminModule {
   mode: 'cloudflare' | 'docker' | 'connect'
   /** connect 模式接入 URL；其余模式 NULL。 */
   entry: string | null
-  /** 存储四级（#55）；NULL = 未选。 */
-  storage_level: 'core' | 'shared' | 'dedicated' | 'external' | null
+  /** 存储落点两值（#349 U5：core|self；旧值由迁移 0014 映射，NULL = 未选）。 */
+  storage_level: 'core' | 'self' | null
+  /**
+   * manifest 快照（#349 U8 行内设置入口的真值）：结构由 contracts ModuleManifestSchema
+   * 定；前端只读 config 字段数组判断「有没有暴露配置项」。快照损坏/缺失为 null（后端 rowToEntry 同口径）。
+   */
+  manifest?: { config?: ModuleConfigField[] } | null
 }
 
 export function fetchAdminModules(): Promise<AdminModule[]> {
@@ -74,6 +79,48 @@ export function toggleModule(id: string, enabled: boolean): Promise<unknown> {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ enabled }),
+  }, { messagePolicy: statusOnlyMessage })
+}
+
+// ---------------------------------------------------------------------------
+// 模块配置域（#349 U8：manifest.config 声明 + config_values 存值）
+// ---------------------------------------------------------------------------
+
+/**
+ * 配置页字段声明（U8 消费面）：结构镜像 @unself/contracts ModuleConfigFieldSchema
+ * （决策 #53/#66 词表；单点在 contracts，前端只读不改）。
+ */
+export interface ModuleConfigField {
+  key: string
+  label: string
+  type: 'string' | 'secret' | 'number' | 'boolean' | 'enum' | 'url' | 'json' | 'oauth'
+  required?: boolean
+  default?: string | number | boolean
+  options?: string[]
+  test?: string
+}
+
+/** GET /api/admin/modules/:id/config 的形状：字段声明 + 当前值（secret 已打码 '***'）。 */
+export interface ModuleConfigState {
+  config: ModuleConfigField[]
+  values: Record<string, unknown>
+}
+
+/** 读模块配置（manifest 无 config → 空数组 + 空对象，不 404）。 */
+export function fetchModuleConfig(id: string): Promise<ModuleConfigState> {
+  return request<ModuleConfigState>(
+    `/api/admin/modules/${encodeURIComponent(id)}/config`,
+    undefined,
+    { messagePolicy: statusOnlyMessage },
+  )
+}
+
+/** 存模块配置：values 里 secret 传 '***' = 保持不变（后端语义，与设置域掩码一致）。 */
+export function saveModuleConfig(id: string, values: Record<string, unknown>): Promise<unknown> {
+  return request(`/api/admin/modules/${encodeURIComponent(id)}/config`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ values }),
   }, { messagePolicy: statusOnlyMessage })
 }
 

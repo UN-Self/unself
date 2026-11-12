@@ -80,49 +80,50 @@ async function run(fake: ReturnType<typeof makeCfRestFake>, config: ReturnType<t
   });
 }
 
-describe('#310 装配入口前置校验（云写入前）', () => {
-  it('declaration=external（不在 chat accepts）→ 前置拒绝，账户零副作用', { timeout: 120_000 }, async () => {
+describe('#310 装配入口前置校验（云写入前；#349 U5 两值）', () => {
+  it('declaration=旧值（external，两值词表外）→ schema 层拒绝，账户零副作用', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake();
-    await expect(run(fake, configWith('external'))).rejects.toThrow(/accepts|不在.*内|manifest 非法/);
+    await expect(run(fake, configWith('external'))).rejects.toThrow(/manifest 非法|Invalid option|core.*self/);
     expectNoCloudWrites(fake);
   });
 
-  it('declaration=core（不在 chat accepts）→ 前置拒绝，账户零副作用', { timeout: 120_000 }, async () => {
+  it('declaration=shared（两值词表外）→ schema 层拒绝，账户零副作用', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake();
-    await expect(run(fake, configWith('core'))).rejects.toThrow(/accepts|不在.*内|manifest 非法/);
+    await expect(run(fake, configWith('shared'))).rejects.toThrow(/manifest 非法|Invalid option|core.*self/);
     expectNoCloudWrites(fake);
   });
 
-  it('declaration=shared（合法）→ 推进装配', { timeout: 120_000 }, async () => {
+  it('declaration=core（chat accepts 含 core）→ 推进装配', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake();
-    await run(fake, configWith('shared'));
+    await run(fake, configWith('core'));
     expect(fake.state.d1.size).toBeGreaterThan(0);
     expect(fake.state.buckets.has('unself-storage')).toBe(true);
   });
 
-  it('declaration=dedicated（合法）→ 推进装配', { timeout: 120_000 }, async () => {
+  it('declaration=self（chat accepts 不含 self）→ 前置拒绝，账户零副作用', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake();
-    await run(fake, configWith('dedicated'));
-    expect(fake.state.d1.size).toBeGreaterThan(0);
+    await expect(run(fake, configWith('self'))).rejects.toThrow(/accepts|不在.*内|manifest 非法/);
+    expectNoCloudWrites(fake);
   });
 
-  it('既有 dedicated 落点（旧 lock 有 unself-chat）改选 shared → 前置拒绝，不静默重绑', { timeout: 120_000 }, async () => {
+  it('既有 core（自建表）落点（旧 lock 有 unself-chat）改选 self → 前置拒绝，不静默弃管', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake();
     const preLock = JSON.stringify({
       ...emptyLock(),
       resources: { d1: [{ name: 'unself-chat', id: 'old-chat-db' }], kv: [], r2: [], workers: [] },
     });
-    await expect(run(fake, configWith('shared'), preLock)).rejects.toThrow(/仅新装|manual|备份|旧数据/);
+    // self 不在 chat accepts → 先被 accepts 检查拦（两值下这条守卫由 accepts 承载）
+    await expect(run(fake, configWith('self'), preLock)).rejects.toThrow(/accepts|不在.*内|manifest 非法/);
     expectNoCloudWrites(fake);
   });
 
-  it('既有 dedicated 落点仍选 dedicated → 正常推进（不误伤）', { timeout: 120_000 }, async () => {
+  it('既有 core 落点仍选 core → 正常推进（不误伤）', { timeout: 120_000 }, async () => {
     const fake = makeCfRestFake({ existingD1: ['unself-core', 'unself-modules', 'unself-chat'] });
     const preLock = JSON.stringify({
       ...emptyLock(),
       resources: { d1: [{ name: 'unself-chat', id: 'old-chat-db' }], kv: [], r2: [{ name: 'unself-chat-files' }], workers: [] },
     });
-    await run(fake, configWith('dedicated'), preLock);
+    await run(fake, configWith('core'), preLock);
     expect(fake.state.d1.has('unself-chat')).toBe(true);
   });
 });

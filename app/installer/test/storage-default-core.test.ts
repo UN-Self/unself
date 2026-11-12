@@ -41,7 +41,7 @@ const FIXED_JWKS = JSON.stringify({
 });
 
 /** 向导④输入（与 web/state.ts 的 chooseStorage 产出同形）：模块 id → 四级之一。 */
-type StorageChoices = Record<string, 'core' | 'shared' | 'dedicated' | 'external'>;
+type StorageChoices = Record<string, 'core' | 'self'>;
 
 let workDir: string;
 
@@ -115,42 +115,46 @@ async function deployViaWizard(
   }
 }
 
-describe('#336 manifest 省略 storage 时，向导默认落点 core 必须装通', () => {
-  it('向导③½ 默认 core（storageChoices.hello=core）→ 装通，终态 = core 落点，快照记 accepts:[core]', { timeout: 120_000 }, async () => {
+describe('#336 manifest 省略 storage 时缺省落点装通（#349 U5：undefined = self）', () => {
+  it('向导③½ 选 core（storageChoices.hello=core）→ 装通，终态 = core（tableless）落点，快照记 accepts:[core]', { timeout: 120_000 }, async () => {
     const r = await deployViaWizard('wizard', [{ id: 'hello', source: `file:${HELLO_DIR}` }], { hello: 'core' });
-    if (!r.ok) console.log(`[#336] 向导默认 core 抛出：\n${r.errorMessage}`);
+    if (!r.ok) console.log(`[#336] 向导选 core 抛出：\n${r.errorMessage}`);
     expect(r.errorMessage).toBeNull();
     expect(r.baseUrl).toContain('workers.dev');
 
-    // 终态 = core 落点：不建专属库、不建模块记账表、模块 worker 绑 CORE_API 代理
+    // 终态 = core（tableless）落点：无自建表 → 不建专属库、不建模块记账表、无代理 service 绑定
     expect(r.state.d1.has('unself-hello')).toBe(false);
     expect(r.state.ledgerTables.has('unself_migrations_hello')).toBe(false);
     const bindings = (r.state.uploads.find((u) => u.worker === 'unself-module-hello')?.metadata as {
       bindings?: Array<{ type: string; name: string }>;
     })?.bindings ?? [];
-    expect(bindings.map((b) => `${b.type}:${b.name}`)).toContain('service:CORE_API');
+    expect(bindings.map((b) => `${b.type}:${b.name}`)).not.toContain('service:CORE_API');
+    expect(bindings.map((b) => `${b.type}:${b.name}`)).not.toContain('d1:HELLO_DB');
 
     // 快照（注册表 = 「这台实例上模块数据在哪」的权威记录）必须是一份**合法**有效 manifest：
-    // 省略 storage 按契约物化成 accepts:['core']，而不是空 accepts 或凭空追认用户选择。
+    // 用户选定 core 按契约物化进 declaration，而不是空 accepts 或凭空追认用户选择。
     const snapshot = JSON.parse(r.state.registry.get('hello')!.manifest_json) as {
       storage?: { accepts?: string[]; declaration?: string };
     };
-    expect(snapshot.storage).toEqual({ accepts: ['core'], declaration: 'core' });
+    expect(snapshot.storage).toEqual({ accepts: ['core'], declaration: 'core', preferred: 'core' });
   });
 
-  it('CLI 路径（不传 storageChoices）→ 装通且快照不凭空补字段（不误伤）', { timeout: 120_000 }, async () => {
+  it('CLI 路径（不传 storageChoices）→ 装通且快照不凭空补 declaration（不误伤）', { timeout: 120_000 }, async () => {
     const r = await deployViaWizard('cli', [{ id: 'hello', source: `file:${HELLO_DIR}` }]);
     if (!r.ok) console.log(`[#336] CLI 路径抛出：\n${r.errorMessage}`);
     expect(r.errorMessage).toBeNull();
-    const snapshot = JSON.parse(r.state.registry.get('hello')!.manifest_json) as { storage?: unknown };
-    // 省略 storage + 无用户选择 → 快照保持省略（引擎侧回落 core），不凭空补字段
-    expect(snapshot.storage).toBeUndefined();
+    const snapshot = JSON.parse(r.state.registry.get('hello')!.manifest_json) as {
+      storage?: { accepts?: string[]; preferred?: string; declaration?: string };
+    };
+    // 无用户选择 → 快照保留 manifest 声明（accepts/preferred），不凭空补 declaration
+    expect(snapshot.storage).toEqual({ accepts: ['core'], preferred: 'core' });
+    expect(snapshot.storage?.declaration).toBeUndefined();
   });
 
-  it('省略 storage 的模块选 shared → 前置拒绝，且账户零云写入（护栏不误放行）', { timeout: 120_000 }, async () => {
-    const r = await deployViaWizard('shared', [{ id: 'hello', source: `file:${HELLO_DIR}` }], { hello: 'shared' });
+  it('选两值词表外的值（shared）→ 前置拒绝，且账户零云写入（护栏不误放行）', { timeout: 120_000 }, async () => {
+    const r = await deployViaWizard('shared', [{ id: 'hello', source: `file:${HELLO_DIR}` }], { hello: 'shared' as never });
     if (!r.ok) console.log(`[#336] 选 shared 抛出：\n${r.errorMessage}`);
-    expect(r.errorMessage).toContain('accepts');
+    expect(r.errorMessage).toContain('两值词表');
     // 拒绝发生在任何云资源写入之前：库/桶/KV/上传全空
     expect(r.state.d1.size).toBe(0);
     expect(r.state.buckets.size).toBe(0);
@@ -158,7 +162,7 @@ describe('#336 manifest 省略 storage 时，向导默认落点 core 必须装�
     expect(r.state.uploads).toHaveLength(0);
   });
 
-  it('显式 accepts:[core] 的模块选 core → 照常装通（显式声明不受兜底影响）', { timeout: 120_000 }, async () => {
+  it('显式 accepts:[core] 的模块选 core → 照常装通（显式声明不受缺省影响）', { timeout: 120_000 }, async () => {
     // 与真 hello 同一份 manifest，只是补上显式声明：走 base.storage 已存在那一支
     const dir = join(workDir, 'mod-explicit');
     mkdirSync(join(dir, 'src'), { recursive: true });
@@ -167,7 +171,6 @@ describe('#336 manifest 省略 storage 时，向导默认落点 core 必须装�
       [
         'id: explicit',
         'route: /m/explicit',
-        'entry: http://localhost:8799/',
         'runtimes:',
         '  - worker',
         'version: 0.1.0',

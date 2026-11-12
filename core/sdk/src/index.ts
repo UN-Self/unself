@@ -23,7 +23,15 @@ export type { VerifyModuleTokenOptions } from './verify.js';
 export type { ModuleStorage, CoreApiProxyBinding } from './storage.js';
 export { createCoreApiStorage, createModuleStorage, createD1Storage } from './storage.js';
 // 跨域模块的「模块 → core」通道（决策 #63）：coreOrigin 必填禁 '*'，fetch 以壳 origin 为基准。
-export { createModuleApi, assertCoreOrigin } from './module-api.js';
-export type { CreateModuleApiOptions, ModuleApi, ModuleApiFetcher, ModuleApiPath } from './module-api.js';
+// fetchConfig（#349 U8）：模块拉自己的配置声明与已存值；凭据双形状 token / keyHash。
+export { createModuleApi, assertCoreOrigin, fetchConfig } from './module-api.js';
+export type {
+  CreateModuleApiOptions,
+  ModuleApi,
+  ModuleApiFetcher,
+  ModuleApiPath,
+  FetchConfigAuth,
+  ModuleConfigSnapshot,
+} from './module-api.js';
 // 壳 origin 解析（#277）：workers.dev 跨子域 iframe 下模块据此取 coreOrigin，不再写死 location.origin。
 export { resolveShellOrigin, SHELL_ORIGIN_META_NAME } from './shell-origin.js';

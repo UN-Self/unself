@@ -7,9 +7,9 @@
  *
  * 卸载（W4 验收④「卸载走生命周期端点导出与清理，验完库里无残留表」）由**平台**执行，
  * 依据注册表快照里的 `storage.declaration` + `manifest.tables` 清单：
- *   - shared  → 共享 modules 库 `DROP TABLE` 清单内每张表；
- *   - dedicated → 该模块专属 D1 做同样清理；
- *   - core / external → 平台不碰数据（core 的表归 core，external 归模块自己）；
+ *   - core → 该模块专属 D1 `DROP TABLE` 清单内每张表（#349 U5 定案：核心代管 = 分表隔离，
+ *     原 dedicated 供给形态；无自建表的 tableless 模块清单为空，同归 core 值）;
+ *   - self → 平台不碰数据（自托管，数据归模块自己）；
  *   随后清理该模块的迁移记账表 `unself_migrations_<id>`（#248/#255 同一套记账，见
  *   `platformUninstallPlan()` 的返回）。
  * 引擎只持有「上传 Worker」通道，无法调用模块入口对象；且存量模块（如 chat）并未实现
@@ -93,49 +93,44 @@ export const MODULE_UNINSTALL_STRATEGY: ModuleUninstallStrategy = 'platform-tabl
 /** 平台卸载计划：由 manifest 快照算出「该删哪些表」，是卸载的**唯一**删表依据。 */
 export interface PlatformUninstallPlan {
   moduleId: string;
-  /** 生效数据落点（declaration ?? preferred ?? core）；决定清理哪个库。 */
-  level: 'core' | 'shared' | 'dedicated' | 'external';
+  /** 生效数据落点（declaration ?? preferred ?? self）；决定清理哪个库。 */
+  level: 'core' | 'self';
   /**
    * 要 `DROP` 的表名——**只来自 manifest.tables 清单，绝不推断/前缀扫描**（「不许误删」硬规则）。
-   * core / external 落点为空（平台不碰数据）。
+   * self 落点为空（平台不碰数据）；core 落点取自申报清单（未申报 = 空清单，宁可不删也不猜）。
    */
   tables: string[];
 }
 
-/** 生效数据落点：用户选定（declaration）优先，其次作者偏好（preferred），最后 core。 */
+/** 生效数据落点：用户选定（declaration）优先，其次作者偏好（preferred），最后 self。 */
 export function effectiveStorageLevel(manifest: {
   storage?: { declaration?: string; preferred?: string };
 }): PlatformUninstallPlan['level'] {
   const declared = manifest.storage?.declaration;
-  if (declared === 'shared' || declared === 'dedicated' || declared === 'external' || declared === 'core') {
+  if (declared === 'core' || declared === 'self') {
     return declared;
   }
   const preferred = manifest.storage?.preferred;
-  if (preferred === 'shared' || preferred === 'dedicated' || preferred === 'external') {
+  if (preferred === 'core' || preferred === 'self') {
     return preferred;
   }
-  return 'core';
+  return 'self';
 }
 
 /**
- * 平台卸载计划（#270）：落点 + 待删表清单。
- * shared / dedicated 才返回非空 tables（取自 manifest.tables）；core / external 无表可删。
+ * 平台卸载计划（#270，两值语义见 #349 U5 定案）：落点 + 待删表清单。
+ * core（自建表）返回非空 tables（取自 manifest.tables）；self 平台不碰数据、无表可删。
  * 未申报 tables 的自建表落点 → 空清单（宁可不删，也绝不按前缀猜表名误删）。
  */
 export function platformUninstallPlan(manifest: {
   id?: string;
   storage?: { declaration?: string; preferred?: string };
   tables?: string[];
-  /** shared 落点的物理表清单（#310）；生效落点为 shared 时用它，dedicated 用 `tables`。 */
-  tablesShared?: string[];
 }): PlatformUninstallPlan {
   const level = effectiveStorageLevel(manifest);
-  const selfBuilt = level === 'shared' || level === 'dedicated';
-  // shared 物理表清单优先（带模块前缀，护栏③）；单形态模块回落 tables；缺申报时回落空清单（宁可不删也不猜）。
-  const declared = level === 'shared' ? (manifest.tablesShared ?? manifest.tables) : manifest.tables;
   return {
     moduleId: manifest.id ?? '',
     level,
-    tables: selfBuilt ? [...(declared ?? [])] : [],
+    tables: level === 'core' ? [...(manifest.tables ?? [])] : [],
   };
 }

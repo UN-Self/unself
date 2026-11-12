@@ -522,9 +522,10 @@ describe('#273 workers.dev 模块可达 / 自有域回归', () => {
     });
     // 模块自有子域已启用（core 与模块各自一个）
     expect([...fake.state.workersDevEnabled].sort()).toEqual(['unself-module-hello', 'unself-workbench']);
-    // 注册表 entry = 模块真实 URL（模块自有 workers.dev 子域）
-    const manifest = JSON.parse(fake.state.registry.get('hello')!.manifest_json) as { entry: string };
-    expect(manifest.entry).toBe('https://unself-module-hello.test-subdomain.workers.dev/');
+    // 注册表 entry 列 = 模块真实 URL（模块自有 workers.dev 子域；#349 U9 起地址只在列，快照不承载）
+    const manifest = JSON.parse(fake.state.registry.get('hello')!.manifest_json) as Record<string, unknown>;
+    expect(manifest).not.toHaveProperty('entry');
+    expect(fake.state.registry.get('hello')!.entry).toBe('https://unself-module-hello.test-subdomain.workers.dev/');
     // ⑨ 冒烟拿到就是模块自有子域 target（不是 core 的 /m/hello）
     expect(seen).toEqual([{ id: 'hello', baseUrl: 'https://unself-module-hello.test-subdomain.workers.dev' }]);
     expect(summary.baseUrl).toBe('https://unself-workbench.test-subdomain.workers.dev');
@@ -551,8 +552,9 @@ describe('#273 workers.dev 模块可达 / 自有域回归', () => {
     });
     // zone 路径路由逐字不变；entry 仍为同域 /m/<id>/；探测点同域
     expect(fake.state.routes.get('demo.handywote.top/m/hello/*')).toBe('unself-module-hello');
-    const manifest = JSON.parse(fake.state.registry.get('hello')!.manifest_json) as { entry: string };
-    expect(manifest.entry).toBe('https://demo.handywote.top/m/hello/');
+    const manifest = JSON.parse(fake.state.registry.get('hello')!.manifest_json) as Record<string, unknown>;
+    expect(manifest).not.toHaveProperty('entry');
+    expect(fake.state.registry.get('hello')!.entry).toBe('https://demo.handywote.top/m/hello/');
     expect(seen).toEqual([{ id: 'hello', baseUrl: 'https://demo.handywote.top/m/hello' }]);
     // 自有域形态不涉及 workers.dev 子域（零启用请求）
     expect([...fake.state.workersDevEnabled]).toEqual([]);

@@ -13,7 +13,7 @@
  * 硬规则说明：
  * - schema 层已拦「未知权限」（ModulePermissionSchema 拒绝词表外的值），这里作为
  *   独立检查项再报一次人话错误——validate 的输入允许先 raw-parse 出诊断再给检查清单。
- * - 表名硬护栏 `<模块id>_` 前缀与 shared 护栏在 schema（superRefine）与 checkTables 两处
+ * - 表名硬护栏 `<模块id>_` 前缀与分表隔离护栏在 schema（superRefine）与 tables 检查两处
  *   落地，validate 汇总报告。
  * - 未知字段出 warning 不拦人（决策 #57：增量变更不拦——新字段有默认值即可）。
  */
@@ -64,11 +64,6 @@ export interface ValidateResult {
 
 /** 迁移文件命名：000N_描述.sql（docs/modules.md §6，只增不改）。 */
 const MIGRATION_FILE_RE = /^0\d{3}_[A-Za-z0-9_-]+\.sql$/;
-
-/** 正则元字符转义（用于把模块 id 拼进迁移目录匹配）。 */
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-};
 
 /**
  * 迁移静态检查诊断（决策 #61：逐条幂等 + 只写增量安全语句，进 validate）。
@@ -316,7 +311,7 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
   const errors: ValidateDiagnostic[] = [];
   const warnings: ValidateDiagnostic[] = [];
 
-  // manifest 本体：raw-parse + schema（含未知权限 / shared 缺 tables 等硬护栏）
+  // manifest 本体：raw-parse + schema（含未知权限 / core 自建表缺 tables 等硬护栏）
   const { diagnostics: schemaDiagnostics, manifest } = parseManifestWithDiagnostics(input.manifestText);
   errors.push(...schemaDiagnostics);
 
@@ -341,45 +336,36 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
       });
     }
 
-    // ② storage.accepts 与实现用法一致性：core 级走 Core API 代理，SDK 层本身直连数据库
-    //    （shared/dedicated 直连 MODULES_DB，external 直连外部库），
-    //    因此「包内自带迁移」却未声明 core 之外任一级 = 声明与实现不符。
+    // ② storage.accepts 与实现用法一致性：self（自托管）模块连自己的库（连接串走配置页），
+    //    core（分表隔离）模块的 schema 由包内 migrations/ 建——「包内自带迁移」却只声明 self =
+    //    声明与实现不符（迁移没人执行，表永远建不出来）。
     const hasMigrations = Object.keys(input.migrations ?? {}).length > 0;
-    const accepts = manifest.storage?.accepts ?? (['core'] as const);
-    if (hasMigrations && accepts.length === 1 && accepts[0] === 'core') {
+    const accepts = manifest.storage?.accepts ?? (['self'] as const);
+    if (hasMigrations && accepts.length === 1 && accepts[0] === 'self') {
       errors.push({
         level: 'error',
         check: 'storage',
         message:
-          '包内携带 migrations/ 但 storage.accepts 只有 core——core 级 schema 归 core，模块不得自建表（docs/modules.md §4）',
+          '包内携带 migrations/ 但 storage.accepts 只有 self——core（自建表）落点才执行包内迁移，声明与实现不符（docs/modules.md §4）',
       });
     }
 
-    // ③ tables 清单 vs 迁移建表：模块**实际会自建表**时（用户 declaration=shared/dedicated，
-    //    或安装时未带 declaration 的作者侧发布检查——accepts 含 shared/dedicated）逐一对照。
-    //    declaration=core 的安装检查不拦表清单/迁移缺失：装 core 不建表，作者侧 publish-time
-    //    validate（无 declaration）仍兜住「accepts 含 shared 必带迁移与清单」。
+    // ③ tables 清单 vs 迁移建表：core（自建表）形态——带 tables 申报或包内有迁移——逐一对照。
+    //    declaration=self 的安装检查不拦表清单/迁移缺失：自托管接线归模块，作者侧
+    //    publish-time validate（无 declaration）仍兜住「core 自建表必带迁移与清单」。
     const declaration = manifest.storage?.declaration;
-    const selfBuilt = accepts.includes('shared') || accepts.includes('dedicated')
-      ? declaration !== 'core'
-      : false;
+    const coreForm = accepts.includes('core');
+    const selfBuilt = coreForm && declaration !== 'self' &&
+      ((manifest.tables?.length ?? 0) > 0 || hasMigrations);
     if (selfBuilt) {
       const migrationEntries = Object.entries(input.migrations ?? {});
       if (migrationEntries.length === 0) {
         errors.push({
           level: 'error',
           check: 'tables',
-          message: 'storage.accepts 含 shared/dedicated（自建表）但包内没有 migrations/',
+          message: 'storage.accepts 含 core（自建表）但包内没有 migrations/',
         });
       }
-      // 迁移集按落点分类（#310）：键含 `<模块id>-shared/` = shared 集（物理名带模块前缀）；
-      // 单形态模块（声明 shared 但无独立 shared 目录）= 全部迁移都算 shared 集。
-      const sharedKeyRe = new RegExp(`(^|/)${escapeRegExp(manifest.id)}-shared/`);
-      const markedShared = migrationEntries.filter(([k]) => sharedKeyRe.test(k));
-      const sharedIsWholePackage = accepts.includes('shared') && markedShared.length === 0;
-      const sharedEntries = sharedIsWholePackage ? migrationEntries : markedShared;
-      const sharedKeys = new Set(sharedEntries.map(([k]) => k));
-      const dedicatedEntries = migrationEntries.filter(([k]) => !sharedKeys.has(k));
       const createdOf = (entries: Array<[string, string]>): Set<string> => {
         const set = new Set<string>();
         for (const [, sql] of entries) for (const name of tableNamesFromSql(sql)) set.add(name);
@@ -392,7 +378,7 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
           errors.push({
             level: 'error',
             check: 'tables',
-            message: `迁移建了未申报的表：${undeclared.join(', ')}（「共享库不接收未经申报的表」是硬规则）`,
+            message: `迁移建了未申报的表：${undeclared.join(', ')}（core 库不接收未经申报的表，硬规则）`,
           });
         }
         if (missing.length > 0) {
@@ -403,35 +389,27 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
           });
         }
       };
-      // 不支持/矟形的语法位置：发布期明确拒绝（不能静默跳过）。shared 集的这部分已由
-      // sharedGuardProblems 的 sql-parse 报告；这里只补 dedicated/默认集，防重复。
-      for (const [name, sql] of dedicatedEntries) {
+      // 不支持/矟形的语法位置：发布期明确拒绝（不能静默跳过）。
+      for (const [name, sql] of migrationEntries) {
         for (const problem of parseSqlStructure(sql).problems) {
           errors.push({ level: 'error', check: 'tables', message: `${name}：${problem}` });
         }
       }
-      // dedicated/默认集 ↔ manifest.tables（逻辑名=物理名）。
-      // 单形态 shared 模块（迁移全归 shared 集）没有 dedicated 集，不拿空集去报「未建」。
-      if (dedicatedEntries.length > 0 || !accepts.includes('shared')) {
-        reportMismatch(createdOf(dedicatedEntries), new Set(manifest.tables ?? []));
-      }
-      // shared 集 ↔ manifest.tablesShared（物理名，带模块前缀）
-      if (accepts.includes('shared')) {
-        reportMismatch(createdOf(sharedEntries), new Set(manifest.tablesShared ?? manifest.tables ?? []));
-        // 护栏③（决策 #55）：前缀 + 禁跨模块外键；与装配期 `checkSharedGuards` 共用同一份实现。
-        for (const problem of sharedGuardProblems({
-          moduleId: manifest.id,
-          tables: manifest.tablesShared ?? manifest.tables ?? [],
-          migrations: sharedEntries.map(([name, sql]) => ({ name, sql })),
-        })) {
-          // 护栏②（未申报的表）上面已有更贴切的人话诊断，这里只补护栏③两类，防重复报。
-          if (problem.kind === 'undeclared') continue;
-          errors.push({ level: 'error', check: 'tables', message: problem.message });
-        }
+      // 迁移建表 ↔ manifest.tables（逻辑名=物理名）；护栏③（前缀 + 禁跨模块外键）与装配期
+      // `checkSharedGuards` 共用同一份实现（分表隔离的两类护栏，#55→#349 U5 同一套）。
+      reportMismatch(createdOf(migrationEntries), new Set(manifest.tables ?? []));
+      for (const problem of sharedGuardProblems({
+        moduleId: manifest.id,
+        tables: manifest.tables ?? [],
+        migrations: migrationEntries.map(([name, sql]) => ({ name, sql })),
+      })) {
+        // 护栏②（未申报的表）上面已有更贴切的人话诊断，这里只补护栏③两类，防重复报。
+        if (problem.kind === 'undeclared') continue;
+        errors.push({ level: 'error', check: 'tables', message: problem.message });
       }
 
       for (const file of Object.keys(input.migrations ?? {})) {
-        // 键可能带迁移目录前缀（如 `chat-shared/0001_baseline.sql`）；命名规范只看文件名。
+        // 键可能带迁移目录前缀（如 `chat/0001_baseline.sql`）；命名规范只看文件名。
         const baseName = file.split('/').pop() ?? file;
         if (!MIGRATION_FILE_RE.test(baseName)) {
           errors.push({
@@ -504,7 +482,6 @@ export function validateModulePackage(input: ModulePackageInput): ValidateResult
       'version',
       'runtimes',
       'route',
-      'entry',
       'permissions',
       'storage',
       'tables',

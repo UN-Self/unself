@@ -482,3 +482,115 @@ describe('0013 credential_hash 列（老库 0001-0012 已应用 + 0013，#349）
     expect(stmts(pg)).toEqual(stmts(core));
   });
 });
+
+/**
+ * #349 U5 0014 storage_level 两值收敛：硬性走「存量老库升级」路径——0001-0013 已应用、
+ * 种旧值行后再跑 0014（createCoreDb 是全新库，测不到存量值映射语义）。
+ */
+function legacyCoreDb0013(): DatabaseSync {
+  const dir = fileURLToPath(new URL('../migrations/core/', import.meta.url));
+  const sqlite = new DatabaseSync(':memory:');
+  const applied = readdirSync(dir)
+    .map((file) => ({ file, prefix: /^(\d{4})_/.exec(file)?.[1] }))
+    .filter(({ file, prefix }) => prefix !== undefined && Number(prefix) <= 13 && file.endsWith('.sql'))
+    .sort((a, b) => a.file.localeCompare(b.file));
+  for (const { file } of applied) {
+    sqlite.exec(readFileSync(`${dir}/${file}`, 'utf8'));
+  }
+  return sqlite;
+}
+
+function apply0014(sqlite: DatabaseSync): void {
+  sqlite.exec(readFileSync(fileURLToPath(new URL('../migrations/core/0014_storage_level_two_values.sql', import.meta.url)), 'utf8'));
+}
+
+describe('0014 storage_level 两值收敛（老库 0001-0013 已应用 + 0014，#349 U5）', () => {
+  it('存量值映射：dedicated/shared/core→core、external→self、NULL 不动', () => {
+    const sqlite = legacyCoreDb0013();
+    try {
+      const seed = (id: string, level: string | null): void => {
+        sqlite
+          .prepare('INSERT INTO module_registry (id, enabled, version, manifest_json, storage_level) VALUES (?, 1, ?, ?, ?)')
+          .run(id, '0.1.0', '{}', level);
+      };
+      seed('m-dedicated', 'dedicated');
+      seed('m-shared', 'shared');
+      seed('m-core', 'core');
+      seed('m-external', 'external');
+      seed('m-unset', null);
+
+      apply0014(sqlite);
+
+      const rows = sqlite
+        .prepare('SELECT id, storage_level FROM module_registry ORDER BY id')
+        .all() as Array<{ id: string; storage_level: string | null }>;
+      expect(rows).toEqual([
+        { id: 'm-core', storage_level: 'core' },
+        { id: 'm-dedicated', storage_level: 'core' },
+        { id: 'm-external', storage_level: 'self' },
+        { id: 'm-shared', storage_level: 'core' },
+        { id: 'm-unset', storage_level: null },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it('重放幂等：首跑后无旧值行，再次 UPDATE 零命中（行值不变）', () => {
+    const sqlite = legacyCoreDb0013();
+    try {
+      sqlite
+        .prepare('INSERT INTO module_registry (id, enabled, version, manifest_json, storage_level) VALUES (?, 1, ?, ?, ?)')
+        .run('m-external', '0.1.0', '{}', 'external');
+      apply0014(sqlite);
+      const after = sqlite.prepare("SELECT storage_level FROM module_registry WHERE id = 'm-external'").get();
+      expect(after).toEqual({ storage_level: 'self' });
+      apply0014(sqlite);
+      expect(sqlite.prepare("SELECT storage_level FROM module_registry WHERE id = 'm-external'").get()).toEqual(after);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it('两值可写：core/self 落库（迁移后列接受新词表；旧值不再从正门产生，词表归 API zod）', () => {
+    const sqlite = legacyCoreDb0013();
+    try {
+      apply0014(sqlite);
+      sqlite
+        .prepare('INSERT INTO module_registry (id, enabled, version, manifest_json, storage_level) VALUES (?, 1, ?, ?, ?)')
+        .run('fresh', '0.1.0', '{}', 'self');
+      sqlite
+        .prepare('INSERT INTO module_registry (id, enabled, version, manifest_json, storage_level) VALUES (?, 1, ?, ?, ?)')
+        .run('managed', '0.1.0', '{}', 'core');
+      const rows = sqlite
+        .prepare("SELECT id, storage_level FROM module_registry WHERE id IN ('fresh','managed') ORDER BY id")
+        .all() as Array<{ id: string; storage_level: string }>;
+      expect(rows).toEqual([
+        { id: 'fresh', storage_level: 'self' },
+        { id: 'managed', storage_level: 'core' },
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it('PG 变体与 SQLite 同构（#103①：可移植子集重合处共用，分歧前防漂移）', () => {
+    const core = readFileSync(
+      fileURLToPath(new URL('../migrations/core/0014_storage_level_two_values.sql', import.meta.url)),
+      'utf8',
+    );
+    const pg = readFileSync(
+      fileURLToPath(new URL('../migrations/pg/0014_storage_level_two_values.pg.sql', import.meta.url)),
+      'utf8',
+    );
+    const stmts = (text: string) =>
+      text
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('--'))
+        .join('\n')
+        .split(';')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    expect(stmts(pg)).toEqual(stmts(core));
+  });
+});

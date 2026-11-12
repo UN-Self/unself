@@ -17,14 +17,14 @@ import { makeCfRestFake } from './helpers/cf-rest-fake';
 import { createCoreControlPlane } from '../../src/engine/control-plane';
 import { RestClient, d1List } from '../../src/engine/rest';
 import { emptyLock, serializeLock } from '../../src/engine/lock';
-import { removeModule } from '../../src/engine/uninstall';
+import { assertDroppable, removeModule } from '../../src/engine/uninstall';
 
 const ACCOUNT = 'f7351bdd-acc0-0000-0000-000000000001';
 
 /** 造一个「已装模块」的账户态：registry 快照（+ 调用方预置 Worker/ledger/route）。 */
 async function seed(input: {
   id: string;
-  level: 'core' | 'shared' | 'dedicated';
+  level: 'core' | 'self';
   tables: string[];
   fake: ReturnType<typeof makeCfRestFake>;
 }): Promise<{ client: RestClient; coreUuid: string }> {
@@ -61,10 +61,10 @@ async function makeInstance(tag: string, lockText?: string): Promise<string> {
   return dir;
 }
 
-describe('#270 引擎卸载：按 tables 清单清理', () => {
-  it('shared 模块：只 DROP 清单表 + 记账表；别的模块/平台表不动', async () => {
+describe('#270 引擎卸载：按 tables 清单清理（#349 U5 两值）', () => {
+  it('core（自建表）模块：只 DROP 专属库清单表 + 记账表；别的库不动', async () => {
     const fake = makeCfRestFake({
-      existingD1: ['unself-core', 'unself-modules'],
+      existingD1: ['unself-core', 'unself-modules', 'unself-todo'],
       existingWorkers: ['unself-module-todo'],
       existingLedger: {
         unself_migrations_todo: ['0001_init.sql'],
@@ -73,13 +73,13 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
       zones: { 'team.example.com': 'zone-1' },
       routes: [['team.example.com/m/todo/*', 'unself-module-todo']],
     });
-    const { client, coreUuid } = await seed({ id: 'todo', level: 'shared', tables: ['todo_items', 'todo_lists'], fake });
-    const modulesUuid = await dbUuid(client, 'unself-modules');
+    const { client, coreUuid } = await seed({ id: 'todo', level: 'core', tables: ['todo_items', 'todo_lists'], fake });
+    const notesUuid = await dbUuid(client, 'unself-todo');
     const rootDir = await makeInstance('shared');
 
     const result = await removeModule({ rootDir, moduleId: 'todo', client });
 
-    expect(result.level).toBe('shared');
+    expect(result.level).toBe('core');
     expect(result.tablesDropped).toEqual(['todo_items', 'todo_lists']);
     expect(result.ledgerTable).toBe('unself_migrations_todo');
     expect(result.removedFromRegistry).toBe(true);
@@ -90,8 +90,8 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
     expect(fake.state.droppedTables.sort()).toEqual(['todo_items', 'todo_lists', 'unself_migrations_todo']);
     expect(fake.state.droppedTables).not.toContain('unself_migrations_other');
     expect(fake.state.droppedTables).not.toContain('module_kv');
-    // 全部落在 modules 库（shared 落点），core 库一个表都没删
-    expect(fake.state.droppedByDb.get(modulesUuid)?.sort()).toEqual([
+    // 全部落在专属库（unself-todo），core 库一个表都没删
+    expect(fake.state.droppedByDb.get(notesUuid)?.sort()).toEqual([
       'todo_items',
       'todo_lists',
       'unself_migrations_todo',
@@ -107,18 +107,18 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
     await rm(rootDir, { recursive: true, force: true });
   });
 
-  it('dedicated 模块：DROP 落专属库（表名无需模块前缀，chat 形态）', async () => {
+  it('core（自建表，chat 形态逻辑表名）：DROP 落专属库', async () => {
     const fake = makeCfRestFake({
       existingD1: ['unself-core', 'unself-modules', 'unself-notes'],
       existingWorkers: ['unself-module-notes'],
       existingLedger: { unself_migrations_notes: ['0001_init.sql'] },
     });
-    const { client } = await seed({ id: 'notes', level: 'dedicated', tables: ['notes_a', 'notes_b'], fake });
+    const { client } = await seed({ id: 'notes', level: 'core', tables: ['notes_a', 'notes_b'], fake });
     const notesUuid = await dbUuid(client, 'unself-notes');
     const rootDir = await makeInstance('dedicated');
     const result = await removeModule({ rootDir, moduleId: 'notes', client });
 
-    expect(result.level).toBe('dedicated');
+    expect(result.level).toBe('core');
     expect(result.tablesDropped).toEqual(['notes_a', 'notes_b']);
     expect(fake.state.droppedByDb.get(notesUuid)?.sort()).toEqual(['notes_a', 'notes_b', 'unself_migrations_notes']);
     expect(fake.state.droppedByDb.size).toBe(1);
@@ -127,17 +127,17 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
     await rm(rootDir, { recursive: true, force: true });
   });
 
-  it('core 模块：无表可删（平台不碰 core 的表）', async () => {
+  it('self 模块：无表可删（平台不碰自托管数据）', async () => {
     const fake = makeCfRestFake({
       existingD1: ['unself-core', 'unself-modules'],
       existingWorkers: ['unself-module-hello'],
       existingLedger: { unself_migrations_core: ['0001_init.sql'] },
     });
-    const { client, coreUuid } = await seed({ id: 'hello', level: 'core', tables: [], fake });
+    const { client, coreUuid } = await seed({ id: 'hello', level: 'self', tables: [], fake });
     const rootDir = await makeInstance('core');
     const result = await removeModule({ rootDir, moduleId: 'hello', client });
 
-    expect(result.level).toBe('core');
+    expect(result.level).toBe('self');
     expect(result.tablesDropped).toEqual([]);
     expect(fake.state.droppedTables).toEqual([]);
     expect(result.removedFromRegistry).toBe(true);
@@ -153,7 +153,7 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
       zones: { 'team.example.com': 'zone-1' },
       routes: [['team.example.com/m/todo/*', 'unself-module-todo']],
     });
-    const { client } = await seed({ id: 'todo', level: 'shared', tables: ['todo_items'], fake });
+    const { client } = await seed({ id: 'todo', level: 'core', tables: ['todo_items'], fake });
     const rootDir = await makeInstance('idem');
     await removeModule({ rootDir, moduleId: 'todo', client });
     const first = [...fake.state.droppedTables];
@@ -170,12 +170,12 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
 
   it('清记账：卸完后重装（applyMigrations）会重建表，而不是被记账跳过', async () => {
     const fake = makeCfRestFake({
-      existingD1: ['unself-core', 'unself-modules'],
+      existingD1: ['unself-core', 'unself-modules', 'unself-todo'],
       existingWorkers: ['unself-module-todo'],
       existingLedger: { unself_migrations_todo: ['0001_init.sql'] },
     });
-    const { client } = await seed({ id: 'todo', level: 'shared', tables: ['todo_items'], fake });
-    const modulesUuid = await dbUuid(client, 'unself-modules');
+    const { client } = await seed({ id: 'todo', level: 'core', tables: ['todo_items'], fake });
+    const modulesUuid = await dbUuid(client, 'unself-todo');
     const rootDir = await makeInstance('reinstall');
     await removeModule({ rootDir, moduleId: 'todo', client });
 
@@ -197,7 +197,7 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
       zones: { 'team.example.com': 'zone-1' },
       routes: [['team.example.com/m/evil/*', 'unself-module-evil']],
     });
-    const { client, coreUuid } = await seed({ id: 'evil', level: 'shared', tables: ['module_kv'], fake });
+    const { client, coreUuid } = await seed({ id: 'evil', level: 'core', tables: ['module_kv'], fake });
     const rootDir = await makeInstance('reserved');
     await expect(removeModule({ rootDir, moduleId: 'evil', client })).rejects.toThrow(/保留表/);
     // 拒绝发生在删表之前：注册表行仍在、无任何 DROP
@@ -206,15 +206,10 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
     await rm(rootDir, { recursive: true, force: true });
   });
 
-  it('shared 落点表名不带模块前缀 → 拒绝卸载（护栏③）', async () => {
-    const fake = makeCfRestFake({
-      existingD1: ['unself-core', 'unself-modules'],
-      existingWorkers: ['unself-module-todo'],
-    });
-    const { client } = await seed({ id: 'todo', level: 'shared', tables: ['other_items'], fake });
-    const rootDir = await makeInstance('prefix');
-    await expect(removeModule({ rootDir, moduleId: 'todo', client })).rejects.toThrow(/不带模块前缀/);
-    await rm(rootDir, { recursive: true, force: true });
+  it('assertDroppable：非法表名/保留表直接拒（清单写坏在删表前拦住）', () => {
+    expect(() => assertDroppable({ moduleId: 'todo', level: 'core', tables: ['Todo_Items'] })).toThrow(/非法表名/);
+    expect(() => assertDroppable({ moduleId: 'todo', level: 'core', tables: ['module_kv'] })).toThrow(/保留表/);
+    expect(() => assertDroppable({ moduleId: 'todo', level: 'core', tables: ['todo_items'] })).not.toThrow();
   });
 
   it('更新 unself.lock：去模块条目与 worker 台账，保留其它资源', async () => {
@@ -222,7 +217,7 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
       existingD1: ['unself-core', 'unself-modules'],
       existingWorkers: ['unself-module-todo', 'unself-workbench'],
     });
-    const { client, coreUuid } = await seed({ id: 'todo', level: 'shared', tables: ['todo_items'], fake });
+    const { client, coreUuid } = await seed({ id: 'todo', level: 'core', tables: ['todo_items'], fake });
     const lock = emptyLock();
     lock.modules.todo = {
       source: 'builtin:todo',
@@ -258,16 +253,16 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
     await rm(rootDir, { recursive: true, force: true });
   });
 
-  it('资源命名空间：注册表与删表都落到 <ns>-core / <ns>-modules', async () => {
+  it('资源命名空间：注册表落 <ns>-core，core（自建表）删表落专属库 <ns>-todo', async () => {
     const fake = makeCfRestFake({
-      existingD1: ['probe270-core', 'probe270-modules'],
+      existingD1: ['probe270-core', 'probe270-modules', 'probe270-todo'],
       existingWorkers: ['probe270-module-todo'],
       existingLedger: { unself_migrations_todo: ['0001_init.sql'] },
     });
     const client = new RestClient({ token: 't', fetchImpl: fake.fetchImpl });
     // 命名空间实例的注册表：core uuid 按 probe270-core 派生
     const nsCoreUuid = (await d1List(client, ACCOUNT)).find((d) => d.name === 'probe270-core')!.uuid;
-    const nsModulesUuid = (await d1List(client, ACCOUNT)).find((d) => d.name === 'probe270-modules')!.uuid;
+    const nsTodoUuid = (await d1List(client, ACCOUNT)).find((d) => d.name === 'probe270-todo')!.uuid;
     await createCoreControlPlane(client, ACCOUNT, nsCoreUuid).upsertModule({
       id: 'todo',
       enabled: true,
@@ -277,7 +272,7 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
         runtimes: ['worker'],
         route: '/m/todo',
         entry: 'https://team.example.com/m/todo/',
-        storage: { accepts: ['shared'], declaration: 'shared' },
+        storage: { accepts: ['core'], declaration: 'core' },
         tables: ['todo_items'],
       },
     });
@@ -294,7 +289,7 @@ describe('#270 引擎卸载：按 tables 清单清理', () => {
       },
     });
     expect(result.tablesDropped).toEqual(['todo_items']);
-    expect(fake.state.droppedByDb.get(nsModulesUuid)?.sort()).toEqual(['todo_items', 'unself_migrations_todo']);
+    expect(fake.state.droppedByDb.get(nsTodoUuid)?.sort()).toEqual(['todo_items', 'unself_migrations_todo']);
     expect(fake.state.droppedByDb.get(nsCoreUuid)).toBeUndefined();
     await rm(rootDir, { recursive: true, force: true });
   });

@@ -11,19 +11,21 @@ import { request, type ApiError } from './api-client'
 export type { ApiError }
 
 /**
- * 注册表条目（core-api RegistryEntry 的成员侧子集，#348 遗留收窄 / #349）：
- * GET /api/modules 回 id/enabled/name/manifest——不回落点三列（mode/entry/storage_level）
- * 与 credential_hash（凭证敏感面，管理员视角才有，GET /api/admin/modules）。
+ * 注册表条目（core-api RegistryEntry 的成员侧子集，#348 遗留收窄 / #349）。
+ * GET /api/modules 回 id/enabled/name/manifest + **entry**（#349 U9：清单不再承载地址后，
+ * 这是壳 iframe 装载的唯一地址源，值 = 注册表 entry 列）；mode/storage_level/credential_hash
+ * 继续不回（落点形态/存储选择管理员视角才有，凭证敏感面在 GET /api/admin/modules）。
  */
 export interface RegistryModule {
   id: string
   enabled: boolean
   /** 可读名（manifest.description ?? id，服务端填）。 */
   name: string
+  /** 装载地址（#349 U9 唯一落点字段）：注册表 entry 列原值；未写 → null（不渲染装载入口）。 */
+  entry: string | null
   manifest: {
     id: string
     route: string
-    entry: string
     runtimes: string[]
     permissions?: string[]
     version: string
@@ -48,12 +50,12 @@ export async function fetchFrameOrigins(): Promise<string[]> {
 }
 
 /**
- * manifest.entry → iframe 装载地址。
+ * 条目 entry（注册表 entry 列，#349 U9）→ iframe 装载地址。
  * 同域完整 URL → 相对路径（单域名路径制 §5.3）；独立域名 → 绝对 URL（第三方逃生口）。
  * baseURL 仅测试注入用；运行时以当前页面 origin 为基准。
  */
 export function moduleFrameSrc(mod: RegistryModule, baseURL?: string): string | null {
-  const entry = mod.manifest?.entry
+  const entry = mod.entry
   if (!entry) return null
   try {
     const base = baseURL ?? globalThis.location?.origin ?? 'https://unself.invalid'

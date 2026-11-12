@@ -16,8 +16,12 @@
  * ——客户端两种码都应触发「重新核验再连」，1018 的区分度归模块 SDK（测试锁定 1008 语义）。
  */
 import { Hono } from 'hono';
+import { z } from 'zod';
+
+import { ModuleManifestSchema } from '@unself/contracts';
 
 import { TUNNEL_INTERNAL_ORIGIN } from '../do/TunnelRoom';
+import { updateModuleManifest } from '../registry';
 import { lookupConnectModule } from '../services/connect-registry';
 
 /** Bindings + 隧道 DO 绑定（生产 wrangler durable_objects；单测/Node 运行体注入 stub）。 */
@@ -126,6 +130,30 @@ export function registerConnectRoutes(app: Hono<{ Bindings: ConnectBindings }>):
         headers: { 'content-type': 'application/json' },
       }),
     );
+  });
+
+  /**
+   * 模块自报 manifest（#349 U8 ①）：connect 模块连接成功后把完整清单快照 POST 上来，
+   * 覆盖 connect-register 记账的 0.0.0 占位（version 随真清单落库，测试锁定非 0.0.0）。
+   * 认证同 WS 握手：keyHash 即凭证（lookupConnectModule 反查定位模块）；body 里的 id
+   * 不信任——moduleId 以反查为准。schema 过 ModuleManifestSchema 才落库（非法 400 带
+   * detail）；SDK 侧失败只 warn 不重试，下次重连再报（幂等覆盖）。
+   */
+  connect.post('/api/modules/connect-manifest', async (c) => {
+    const keyHash = c.req.query('keyHash') ?? '';
+    const gate = await lookupConnectModule(c.env.CORE_DB, keyHash);
+    if (!gate.ok) {
+      return c.json({ error: gate.error }, gate.status);
+    }
+    const parsed = ModuleManifestSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json({ error: 'invalid manifest', detail: z.prettifyError(parsed.error) }, 400);
+    }
+    const updated = await updateModuleManifest(c.env.CORE_DB, gate.moduleId, parsed.data);
+    if (!updated) {
+      return c.json({ error: 'module not found' }, 404);
+    }
+    return c.json({ id: gate.moduleId, version: parsed.data.version }, 200);
   });
 
   /**

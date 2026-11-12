@@ -44,8 +44,8 @@ const PREVIEW: WizardModuleAdd = {
   version: '1.2.0',
   integrity: 'sha512-AAAABBBBCCCCDDDDEEEEFFFF',
   permissions: ['storage', 'notify'],
-  storageAccepts: ['shared', 'core'],
-  storagePreferred: 'shared',
+  storageAccepts: ['core', 'self'],
+  storagePreferred: 'core',
   manifestHash: 'a'.repeat(64),
 };
 
@@ -113,7 +113,7 @@ describe('#269 ③ 来源入口（向导）', () => {
 
       // 状态：模块并入 + 落点单选可渲染 + 资源名重算（③ 改模块后不再沿用启动快照）
       expect(holder.state.moduleAdds.map((m) => m.id)).toEqual(['todo']);
-      expect(holder.state.storageOptions.find((o) => o.id === 'todo')?.accepts).toEqual(['shared', 'core']);
+      expect(holder.state.storageOptions.find((o) => o.id === 'todo')?.accepts).toEqual(['core', 'self']);
       expect(previewCalls.at(-1)).toEqual(['hello', 'todo']);
       expect(holder.state.resourceNames).toEqual([{ kind: 'Worker', name: 'demo-hello-todo' }]);
 
@@ -132,7 +132,7 @@ describe('#269 ③ 来源入口（向导）', () => {
         integrity: 'sha512-AAAABBBBCCCCDDDDEEEEFFFF',
       });
       expect(st.moduleAdds[0]!.permissions).toEqual(['storage', 'notify']);
-      expect(st.moduleAdds[0]!.storageAccepts).toEqual(['shared', 'core']);
+      expect(st.moduleAdds[0]!.storageAccepts).toEqual(['core', 'self']);
     } finally {
       srv.close();
     }
@@ -319,7 +319,7 @@ describe('#269 状态机纯函数', () => {
     const r = addModule(s, { ...PREVIEW, storageAccepts: [...PREVIEW.storageAccepts] });
     expect(r.problem).toBeNull();
     expect(r.state.modules).toEqual(['hello', 'todo']);
-    expect(r.state.storageOptions).toEqual([{ id: 'todo', accepts: ['shared', 'core'], preferred: 'shared' }]);
+    expect(r.state.storageOptions).toEqual([{ id: 'todo', accepts: ['core', 'self'], preferred: 'core' }]);
     const again = addModule(r.state, { ...PREVIEW, storageAccepts: [...PREVIEW.storageAccepts] });
     expect(again.problem).toMatch(/已在本次装配清单/);
     expect(again.state).toBe(r.state);

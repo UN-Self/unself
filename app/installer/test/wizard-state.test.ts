@@ -158,7 +158,7 @@ describe('④ 进度事件 + ⑤ 收尾 + ⑥ 幂等重跑', () => {
 
   it('⑥ reset：清事件/错误/结果并保留部署配置，回到可直接重跑的 ready', () => {
     let s = initialWizardState(instancePath, { modules: ['chat'] });
-    s = { ...s, domainChoice: 'custom', domain: 'team.example.com', storageChoices: { chat: 'dedicated' }, sharedConsent: true };
+    s = { ...s, domainChoice: 'custom', domain: 'team.example.com', storageChoices: { chat: 'core' }, sharedConsent: true };
     s = beginDeploy(s);
     pushEvent(s, { kind: 'log', text: 'x' });
     s = failDeploy(s, { cause: 'x', owner: 'code', fix: 'y' });
@@ -172,7 +172,7 @@ describe('④ 进度事件 + ⑤ 收尾 + ⑥ 幂等重跑', () => {
     expect(r.modules).toEqual(['chat']);
     expect(r.domainChoice).toBe('custom');
     expect(r.domain).toBe('team.example.com');
-    expect(r.storageChoices).toEqual({ chat: 'dedicated' });
+    expect(r.storageChoices).toEqual({ chat: 'core' });
     expect(r.sharedConsent).toBe(true);
   });
 });
@@ -201,7 +201,7 @@ describe('needsTotalTls / apexZone（#246 决策 #66 内联判定，语义同 st
 describe('chooseStorage（③½ 存储选择，#55）', () => {
   const OPTS: WizardStorageOption[] = [
     { id: 'hello', accepts: ['core'] },
-    { id: 'demo', accepts: ['core', 'shared'], preferred: 'core' },
+    { id: 'demo', accepts: ['core', 'self'], preferred: 'core' },
   ];
 
   function stateWith(): ReturnType<typeof initialWizardState> {
@@ -209,28 +209,28 @@ describe('chooseStorage（③½ 存储选择，#55）', () => {
     return s;
   }
 
-  it('默认选择 = preferred ?? core；合法选择进 ready', () => {
-    const r = chooseStorage(stateWith(), {}, false);
+  it('默认选择 = preferred ?? self（缺省回 self，无 storage 声明的模块需显式选）；合法选择进 ready', () => {
+    const r = chooseStorage(stateWith(), { hello: 'core' }, false);
     expect(r.problem).toBeNull();
     expect(r.state.step).toBe('ready');
     expect(r.state.storageChoices).toEqual({ hello: 'core', demo: 'core' });
+    // hello 未传选择 → 缺省回 self，但 hello accepts 只有 core → 拒绝（accepts 校验挡住缺省）
+    const r2 = chooseStorage(stateWith(), {}, false);
+    expect(r2.problem).toMatch(/不支持.*self/);
   });
 
   it('选了 accepts 之外的模式 → 拒绝（不进 ④）', () => {
-    const r = chooseStorage(stateWith(), { hello: 'shared' }, true);
-    expect(r.problem).toMatch(/不支持.*shared.*accepts 之外/);
+    const r = chooseStorage(stateWith(), { hello: 'self' }, true);
+    expect(r.problem).toMatch(/不支持.*self.*accepts 之外/);
     expect(r.state.step).toBe('storage');
-    const r2 = chooseStorage(stateWith(), { demo: 'dedicated' }, false);
-    expect(r2.problem).toMatch(/不支持.*dedicated/);
   });
 
-  it('shared 需知情同意：未勾选拒绝；勾选后通过且 consent 落状态', () => {
-    const no = chooseStorage(stateWith(), { demo: 'shared' }, false);
-    expect(no.problem).toMatch(/知情同意/);
-    const yes = chooseStorage(stateWith(), { demo: 'shared' }, true);
+  it('两值词表外的值 → 拒绝；accepts 内值通过且 consent 落状态', () => {
+    const no = chooseStorage(stateWith(), { hello: 'core', demo: 'shared' }, false);
+    expect(no.problem).toMatch(/两值词表/);
+    const yes = chooseStorage(stateWith(), { hello: 'core', demo: 'self' }, false);
     expect(yes.problem).toBeNull();
-    expect(yes.state.storageChoices.demo).toBe('shared');
-    expect(yes.state.sharedConsent).toBe(true);
+    expect(yes.state.storageChoices.demo).toBe('self');
   });
 });
 

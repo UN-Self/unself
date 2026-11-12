@@ -223,6 +223,47 @@ describe('内置身份（issue-A）', () => {
     expect(after.status).toBe(401);
   });
 
+  it('http 访问（局域网走查）登录成功：Set-Cookie 不带 Secure，且该 cookie 能立会话（#349 走查实锤）', async () => {
+    const app = appWith();
+    const { env, adminCookie } = await envFor();
+
+    // 全链建一个内置用户（同 https 链路；差别只在登录请求打 http URL）
+    const token = await createInviteVia(app, env, adminCookie);
+    expect((await submit(app, env, token, { username: 'alice', password: 'password123' })).status).toBe(200);
+    const approved = await app.request(
+      `https://team.example.com/api/admin/invites/${await hashOneTimeToken(token)}/approve`,
+      { method: 'POST', headers: { cookie: adminCookie } },
+      env,
+    );
+    expect(approved.status).toBe(200);
+
+    // 登录请求打 http URL：本次 bug 的形态（局域网 IP + 纯 http；派生同 login helper）
+    const saltRes = await app.request('http://192.168.1.10:8787/api/auth/salt?username=alice', {}, env);
+    expect(saltRes.status).toBe(200);
+    const { salt } = (await saltRes.json()) as { salt: string };
+    const { proof } = await clientDerive('password123', salt);
+    const res = await app.request(
+      'http://192.168.1.10:8787/api/auth/login',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'alice', proof }),
+      },
+      env,
+    );
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    expect(setCookie).toContain('unself_session=');
+    // 只看属性区：token 值（b64url）可能巧合含 "Secure" 字样，不能整头断言
+    expect(setCookie.split(';').slice(1).join(';')).not.toMatch(/secure/i);
+
+    // 同一 cookie 在 https 形态下也能立会话（token 本身与传输无关）
+    const cookie = setCookie.split(';')[0]!;
+    const me = await app.request('https://team.example.com/api/me', { headers: { cookie } }, env);
+    expect(me.status).toBe(200);
+    expect(((await me.json()) as { authenticated: boolean }).authenticated).toBe(true);
+  });
+
   it('唯一性软闸：users 与 invites 双表查重，重名（含大小写变体）注册即 409', async () => {
     const app = appWith();
     const { env, db, adminCookie } = await envFor();

@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 模块迁移与四级数据落点（#248，决策 #55/#61/#74）：
+ * 模块迁移与两值数据落点（#248，决策 #55/#61/#74 → #349 U5 两值收敛）：
  *
- * 四级落点（storage.declaration，用户安装时选定）：
- * - core      ：数据经 Core API 代理（/api/module-api/storage/* 四形状），无模块建表，无迁移；
- * - shared    ：共享 modules 库自建表——独立记账表（#55 护栏①）+ tables 申报（护栏②）
- *               + 命名/跨模块外键硬校验（护栏③）；
- * - dedicated ：装配器供给独立 D1（`unself-<模块id>`），记账迁移照跑；
- * - external  ：自备外部库，装配器只声明不接线（连接串走配置页）。
+ * 落点（storage.declaration，用户安装时选定；缺省 = preferred ?? self）：
+ * - core ：核心代管（分表隔离）——模块数据落核心分配的库，包内迁移建表（表名 `<模块id>_`
+ *          前缀 + 独立记账表）；无自建表的 tableless 模块同归 core 值（数据经代理/绑定，无迁移）；
+ * - self ：自托管（原 external）——自备外部库，装配器只声明不接线（连接串走配置页），无迁移。
  *
  * 失败处理（#61 硬）：停住并指出「模块 / 文件 / 第几条语句」，不自动重试、不自动回滚。
  *
@@ -21,15 +19,15 @@ import { splitSqlStatements } from '@unself/contracts';
 import type { ModuleManifest } from '@unself/contracts';
 import { resourceName } from './naming';
 
-/** 数据四级（决策 #55）。 */
-export type StorageLevel = 'core' | 'shared' | 'dedicated' | 'external';
+/** 数据落点两值（#349 U5）：core（核心代管，分表隔离）| self（自托管）。 */
+export type StorageLevel = 'core' | 'self';
 
-/** 模块存储决定（装配输入）：declaration 缺省 = preferred ?? core。 */
+/** 模块存储决定（装配输入）：declaration 缺省 = preferred ?? self（undefined = self）。 */
 export function storageLevelFor(mod: { manifest?: ModuleManifest; id: string }): StorageLevel {
   const declared = mod.manifest?.storage?.declaration;
   if (declared) return declared;
   const preferred = mod.manifest?.storage?.preferred;
-  return preferred ?? 'core';
+  return preferred ?? 'self';
 }
 
 /** dedicated 独立库名（chat 普通化后同规：unself-<模块id>；带 UNSELF_RESOURCE_PREFIX 时随前缀，#257）。 */
@@ -102,7 +100,7 @@ export function planDoMigrations(input: {
 }
 
 /**
- * shared 护栏③（决策 #55）的硬校验：**单一实现住 @unself/contracts**
+ * 分表隔离护栏③（决策 #55 → #349 U5）的硬校验：**单一实现住 @unself/contracts**
  * （`shared-guards.ts`），发布期 `unself module validate` 与装配期这里共用一份，防两处漂移。
  *
  * 装配时执行，违者停住：表名必须 `<模块id>_` 前缀 + 外键不得指向本模块申报清单之外的表。
@@ -121,14 +119,9 @@ export async function readSqlFiles(dir: string): Promise<Array<{ name: string; s
   return files;
 }
 
-/** 迁移模块目录：migrations/<模块id>/（包布局 §2）。
- * #310：shared 落点优先用 `migrations/<模块id>-shared/`（带前缀的物理表集）；不存在时回落
- * `<模块id>/`（单形态模块，其迁移本身即须满足护栏③）。dedicated 恒用 `<模块id>/`。 */
-export function migrationDirFor(moduleDir: string, moduleId: string, level: StorageLevel = 'dedicated'): string {
-  const base = join(moduleDir, 'migrations', moduleId);
-  if (level !== 'shared') return base;
-  const sharedDir = join(moduleDir, 'migrations', `${moduleId}-shared`);
-  return existsSync(sharedDir) ? sharedDir : base;
+/** 迁移模块目录：migrations/<模块id>/（包布局 §2；core 自建表落点用，self 无迁移）。 */
+export function migrationDirFor(moduleDir: string, moduleId: string): string {
+  return join(moduleDir, 'migrations', moduleId);
 }
 
 /**

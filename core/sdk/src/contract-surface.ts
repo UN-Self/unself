@@ -94,7 +94,8 @@ export function isKnownPermission(permission: unknown): boolean {
 /**
  * 模块清单（manifest）契约校验器（§3 字段冻结表）。
  * 硬护栏（schema 层直接拒绝）：storage.accepts 含 shared 必须申报 tables；preferred/declaration
- * 必须是 accepts 成员；coreOrigin 禁止 `'*'`；entry 非 https 仅 localhost 豁免。
+ * 必须是 accepts 成员；coreOrigin 禁止 `'*'`。entry 已移出清单（#349 U9：地址只由 core 定，
+ * schema 对象层自动剥离；https 纪律移到注册面 entry 列锚点，见 workbench registry）。
  *
  * 结构性赋值（不是 `as` 断言）保证契约对象形状确实满足本公开方法面。
  */

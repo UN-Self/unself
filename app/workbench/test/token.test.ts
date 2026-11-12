@@ -173,6 +173,7 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
       'storage_level',
       'mode',
       'credential_hash',
+      'config_values',
     ]);
     seedHello(db);
 

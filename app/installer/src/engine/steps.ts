@@ -125,19 +125,19 @@ export async function discoverModules(
 }
 
 /**
- * 模块存储落点（#248）：只认 config 条目的 storage.declaration（用户选定）→ 无则按 manifest 声明。
- * 解析前 mod.dir 为空 → 按 core 处理；来源解析后（步骤②½）按 resolved.manifest 重算。
+ * 模块存储落点（#248/#349 U5）：只认 config 条目的 storage.declaration（用户选定）→ 无则按 manifest 声明。
+ * 解析前 mod.dir 为空 → 按 self 处理（undefined = self）；来源解析后（步骤②½）按 resolved.manifest 重算。
  * 结果缓存：步骤②（迁移）与步骤④（绑定/生成配置）必须用同一个落点，避免两处各读一次走偏。
  */
 interface StoragePlan {
   level: StorageLevel;
-  /** 模块 manifest（#284 起必来自来源解析产物）；shared 护栏②的 tables 从这里取。 */
+  /** 模块 manifest（#284 起必来自来源解析产物）；护栏②的 tables 从这里取。 */
   manifest?: ModuleManifest;
 }
 
-/** 从解析产物推落点（无 resolved → core：解析前调用方用，解析后一律有 resolved）。 */
+/** 从解析产物推落点（无 resolved → self：undefined = self；解析前调用方用，解析后一律有 resolved）。 */
 function storagePlanOf(mod: ModuleRef, declaration?: string): StoragePlan {
-  if (!mod.resolved) return { level: 'core' };
+  if (!mod.resolved) return { level: 'self' };
   // 用户选定（config 条目 storage.declaration）覆写 manifest 声明后才进 level 判定（#248/#310）。
   const base = mod.resolved.manifest;
   const manifest = declaration
@@ -154,8 +154,8 @@ function storagePlanOf(mod: ModuleRef, declaration?: string): StoragePlan {
  * manifest 声明。落点判定（`storagePlanOf`）与注册表快照（步骤⑤）共用这一份——
  * 两处各写各的兜底会分叉，而分叉出来的兜底一旦被 schema 重建校验就会把契约默认值判成非法。
  *
- * manifest **省略** storage 时按契约物化为 `accepts: ['core']`（docs/modules.md §3：省略等价于
- * 只支持 core，数据经 Core API 代理）。不能兜底成空数组——`accepts` 是模块的授权面，
+ * manifest **省略** storage 时按契约物化为 `accepts: ['self']`（docs/modules.md §3：省略等价于
+ * 只支持 self；undefined = self）。不能兜底成空数组——`accepts` 是模块的授权面，
  * 空数组与「declaration ∈ accepts」自相矛盾（#336 实障：向导对每个模块都写 declaration，
  * 省略 storage 的模块被兜底成 `{ accepts: [], declaration: 'core' }`，装配前置校验直接拒绝安装）。
  */
@@ -163,7 +163,7 @@ function storageWithDeclaration(
   storage: ModuleManifest['storage'],
   declaration: StorageLevel,
 ): ModuleManifest['storage'] {
-  return { ...(storage ?? { accepts: ['core'] }), declaration };
+  return { ...(storage ?? { accepts: ['self'] }), declaration };
 }
 
 function storagePlansFor(modules: ModuleRef[], entries: NormalizedModuleEntry[]): Map<string, StoragePlan> {
@@ -331,7 +331,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   const credentialSource = resolved.source;
 
   // ②½ 来源解析（#245/#284）——**必须在步骤①之前**：
-  // ① 要读 chat 包配置（dir）与各模块存储落点（dedicated 目标名），那些都得先取到包。
+  // ① 要读 chat 包配置（dir）与各模块存储落点（core 自建表目标名），那些都得先取到包。
   // 全部模块都走这条路（#77：官方模块也是 npm 包，npm: 本地命中则零网络）；
   // 漂移未确认/哈希不匹配在此直接报错，不产生任何 CF 资源（fail before side effect）。
   // outDir 由 provisionAll 在步骤③建——本步先手动建（module-sources 暂存区要落盘）。
@@ -358,11 +358,11 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
    * 不再靠「扫目录扫出未选中的 builtin 模块」（#284：目录扫描已删）；lock 是实例已装模块的权威记录。
    */
   const removedIds = resolution.removed;
-  // 数据落点（#248 四级）：声明来自来源解析产物（manifest），用户选择覆写 config 条目的 storage.declaration。
+  // 数据落点（#349 U5 两值）：声明来自来源解析产物（manifest），用户选择覆写 config 条目的 storage.declaration。
   const storagePlans = storagePlansFor(selected, entries);
   // 任何云资源写入前的前置校验（#310 验收退回）——不得依赖后续步骤偶然报错：
   // 1) 覆写后的有效 manifest 重建校验（含 declaration ∈ accepts，由 schema superRefine 拦）；
-  // 2) 「仅新装 shared」：既有 dedicated 落点 + 用户改选 shared → 拒绝（避免静默重绑空 modules 库、旧数据不可见）。
+  // 2) 「仅新装 core 自建表」：既有专属库已有台账而 manifest 声明不含 core → 拒绝（避免静默重绑、旧数据不可见）。
   for (const mod of selected) {
     const plan = storagePlans.get(mod.id);
     if (!plan?.manifest) continue;
@@ -371,17 +371,17 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       const detail = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('；');
       throw new Error(`模块 ${mod.id} 有效 manifest 非法（含用户 storage 覆写）——拒绝安装：${detail}`);
     }
-    const accepts = parsed.data.storage?.accepts ?? [];
-    if (plan.level !== 'core' && !accepts.includes(plan.level)) {
+    const accepts = parsed.data.storage?.accepts ?? ['self'];
+    if (!accepts.includes(plan.level)) {
       throw new Error(
         `模块 ${mod.id} 用户选定 storage=${plan.level} 不在 accepts=[${accepts.join(', ')}] 内（#55）——拒绝安装`,
       );
     }
     const existingDedicated = lock.resources?.d1?.some((r) => r.name === dedicatedDbNameFor(mod.id)) ?? false;
-    if (existingDedicated && plan.level === 'shared') {
+    if (existingDedicated && plan.level === 'self') {
       throw new Error(
-        `模块 ${mod.id} 既有 dedicated 数据在 ${dedicatedDbNameFor(mod.id)}，改选 shared 会静默重绑空 modules 库、旧数据不可见` +
-          '——仅新装可首选 shared；既有实例请走备份+重装的手工迁移（issue 310）',
+        `模块 ${mod.id} 既有 core（自建表）数据在 ${dedicatedDbNameFor(mod.id)}，改选 self 会静默弃管旧库、旧数据不可见` +
+          '——既有实例请走备份+重装的手工迁移（issue 310 口径）',
       );
     }
   }
@@ -406,7 +406,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       moduleIds: selected.map((m) => m.id),
       ...(config.storage.provider === 'r2' ? { bucket: config.storage.bucket } : {}),
       dedicatedModuleIds: selected
-        .filter((m) => storagePlans.get(m.id)?.level === 'dedicated')
+        .filter((m) => storagePlans.get(m.id)?.level === 'core')
         .map((m) => m.id),
       chatSelected: selected.some((m) => m.id === CHAT_MODULE_ID),
     });
@@ -436,26 +436,23 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   const chatMod = selected.find((m) => m.id === CHAT_MODULE_ID);
   let chatResources: { dbId: string | null; kvId: string } | null = null;
   let chatPkg: Awaited<ReturnType<typeof readChatPackageConfig>> | null = null;
-  /** chat 生效落点（#310）：shared 走共享库（chat_ 前缀），dedicated 保持专属库。 */
-  let chatLevel: StorageLevel = 'dedicated';
-  /** chat FILES 来源（#310）：共享实例桶 / 模块独立桶 / 自备 S3。 */
+  /** chat FILES 来源（#310）：模块独立桶 / 自备 S3。 */
   let chatFiles: FilesSource | null = null;
   if (chatMod) {
     chatPkg = await readChatPackageConfig(chatMod.dir);
-    chatLevel = storagePlans.get(CHAT_MODULE_ID)?.level ?? 'dedicated';
-    // shared 落点把 chat 表建进共享 modules 库，不建专属 D1（省配额，决策 #55/#310）。
-    chatResources = await ensureChatResources(client, accountId, rep.log, { createD1: chatLevel === 'dedicated' });
+    // chat 归 core 唯一代管形态：专属 D1 恒建（分表隔离的承载库）。
+    chatResources = await ensureChatResources(client, accountId, rep.log);
     // 既有实例兼容（#310）：旧 lock 台账里有 chat 模块 R2 桶 → 保留原附件落点，不被 provider 切换改道。
     const existingModuleBucket = lock.resources?.r2?.some((r) => r.name === moduleFilesBucket(CHAT_MODULE_ID)) ?? false;
-    chatFiles = resolveFilesSource({ config, moduleId: CHAT_MODULE_ID, level: chatLevel, existingModuleBucket });
+    chatFiles = resolveFilesSource({ config, moduleId: CHAT_MODULE_ID, level: 'core', existingModuleBucket });
     // 模块独立桶才由 chat 供给；共享实例桶归步骤⑥，自备 S3 不建桶。
     if (chatFiles.kind === 'r2' && chatFiles.origin === 'module') {
       await ensureChatR2Bucket(client, accountId, rep.log);
     }
   }
 
-  // ② 迁移与数据落点（#248 四级）：core→无迁移；shared→共享库建表（三护栏硬校验）；
-  //    dedicated→独立 D1 建表；external→接线归模块（连接串走配置页），装配器不碰。
+  // ② 迁移与数据落点（#349 U5 两值）：core→包内迁移建表（专属库，分表隔离护栏）；
+  //    self→接线归模块（连接串走配置页），装配器不碰、无迁移。
   //    记账隔离：applyMigrations(module, …) → unself_migrations_<module>（#55 护栏①）。
   //    失败处理（#61）：停住并指出「模块 / 文件 / 第几条语句」，不自动重试、不自动回滚。
   rep.step(2, '跑核心迁移与选中模块迁移（按模块独立记账，REST import）');
@@ -463,7 +460,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
   const coreMigrationDir = platform.coreMigrationsDir;
   await coreCp.applyMigrations('core', await readSqlFiles(coreMigrationDir));
   rep.log(`core 迁移已应用（${coreDbName()}，记账 unself_migrations_core）`);
-  /** dedicated 模块的独立 D1 id（步骤①补建；摘要与绑定共用）。 */
+  /** core（自建表）模块的专属 D1 id（步骤②补建；摘要与绑定共用）。 */
   const dedicatedDbIds = new Map<string, string>();
   /**
    * 模块记账表所在 D1（#255）：与步骤②里模块迁移落点**同一个库**——DO 迁移 tag 的
@@ -499,61 +496,56 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     }
   }
   /**
-   * 单个模块的落点迁移（#248）：core/external 无事；shared 走三护栏 + 共享库；dedicated 走专属库。
+   * 单个模块的落点迁移（#349 U5）：self 无事；core 走专属库 + 分表隔离护栏（前缀/申报/外键）。
    * 抽成闭包是为了 sourced 模块能在**来源解析之后**补跑一趟（解析前 mod.dir 还空，读不到 manifest 与 migrations/）。
    */
   const applyModuleStorage = async (mod: ModuleRef): Promise<void> => {
     const plan = storagePlans.get(mod.id) ?? storagePlanOf(mod, entries.find((e) => e.id === mod.id)?.storage?.declaration);
-    const level: StorageLevel = plan?.level ?? 'core';
-    if (mod.id === CHAT_MODULE_ID && chatResources && level === 'dedicated' && chatResources.dbId) {
-      // chat（#74/#248 普通化）：专属库在步骤①建（`unself-chat`），这里把 id 记进落点表——
-      // 之后与任何 dedicated 模块走**同一条**通用迁移链（migrations/chat/0001_baseline.sql +
+    const level: StorageLevel = plan?.level ?? 'self';
+    if (mod.id === CHAT_MODULE_ID && chatResources && chatResources.dbId) {
+      // chat（#74/#248 普通化，#349 U5 归 core）：专属库在步骤①建（`unself-chat`），这里把 id 记进落点表——
+      // 之后与任何 core 自建表模块走**同一条**通用迁移链（migrations/chat/0001_baseline.sql +
       // 独立记账 unself_migrations_chat），不再有「一次性灌 schema」的存储豁免。
-      // shared 落点不建专属库：表建在共享 modules 库，见步骤④的 D1 绑定与 DB_TABLE_PREFIX。
       dedicatedDbIds.set(mod.id, chatResources.dbId);
     }
-    if (level === 'core') {
-      rep.log(`模块 ${mod.id} 落点 core：数据经 Core API 代理，无模块建表`);
+    if (level === 'self') {
+      rep.log(`模块 ${mod.id} 落点 self：自托管，自备外部库，装配器不接线（连接串走配置页）`);
       return;
     }
-    if (level === 'external') {
-      rep.log(`模块 ${mod.id} 落点 external：自备外部库，装配器不接线（连接串走配置页）`);
-      return;
-    }
-    const migDir = migrationDirFor(mod.dir, mod.id, level);
+    const migDir = migrationDirFor(mod.dir, mod.id);
     const files = await readSqlFiles(migDir);
     if (files.length === 0) {
+      // 无自建表（tableless）模块：合法的 core 形态，无迁移可跑。
+      const tables = plan?.manifest?.tables ?? [];
+      if (tables.length === 0) {
+        rep.log(`模块 ${mod.id} 落点 core（tableless）：无自建表，无迁移`);
+        return;
+      }
       throw new Error(
-        `模块 ${mod.id} 落点 ${level}（自建表）但包内没有 migrations/${mod.id}/ 迁移文件——装一半的库没人受益，先补迁移再装`,
+        `模块 ${mod.id} 落点 core（自建表）但包内没有 migrations/${mod.id}/ 迁移文件——装一半的库没人受益，先补迁移再装`,
       );
     }
     const manifest = plan?.manifest;
-    // shared 用物理表清单（带模块前缀；双形态用 tablesShared，单形态回落 tables），dedicated 用逻辑名清单（#310）。
-    const tables = level === 'shared' ? (manifest?.tablesShared ?? manifest?.tables ?? []) : (manifest?.tables ?? []);
-    if (level === 'shared') {
-      // shared 三护栏③：命名前缀 + 禁止跨模块外键（装配时硬校验，违者停住）。
-      // 注意：这是**命名空间**护栏，不是权限隔离——共享库对模块零隔离，护栏只防表名碰撞与误引用。
-      // 护栏②（tablesShared 申报）在契约 schema 已拦，这里对实际建的表再兜一道。
-      if (tables.length === 0) {
-        throw new Error(
-          `模块 ${mod.id} 落点 shared 但未申报 tablesShared 物理表清单（护栏②）——共享库不接收未经申报的表`,
-        );
-      }
-      const problems = checkSharedGuards({ moduleId: mod.id, tables, migrations: files });
-      if (problems.length > 0) {
-        throw new Error(
-          `模块 ${mod.id} 未通过 shared 三护栏硬校验：\n${problems.map((p) => `  - ${p}`).join('\n')}`,
-        );
-      }
+    // 表清单（物理名=逻辑名；分表隔离必须带模块前缀，护栏③）。
+    const tables = manifest?.tables ?? [];
+    // 分表隔离护栏③：命名前缀 + 禁止跨模块外键（装配时硬校验，违者停住）。
+    // 注意：这是**命名空间**护栏，不是权限隔离——核心代管库对模块零权限隔离，护栏只防表名碰撞与误引用。
+    // 护栏②（tables 申报）在契约 schema 已拦，这里对实际建的表再兜一道。
+    if (tables.length === 0) {
+      throw new Error(
+        `模块 ${mod.id} 落点 core（自建表）但未申报 tables（护栏②）——核心代管库不接收未经申报的表`,
+      );
+    }
+    const problems = checkSharedGuards({ moduleId: mod.id, tables, migrations: files });
+    if (problems.length > 0) {
+      throw new Error(
+        `模块 ${mod.id} 未通过分表隔离护栏硬校验：\n${problems.map((p) => `  - ${p}`).join('\n')}`,
+      );
     }
     let targetDbId = dbIds.modules;
-    if (level === 'dedicated') {
-      targetDbId = dedicatedDbIds.get(mod.id) ?? (await ensureD1(client, accountId, dedicatedDbNameFor(mod.id), rep.log));
-      dedicatedDbIds.set(mod.id, targetDbId);
-      rep.log(`模块 ${mod.id} 落点 dedicated：独立库 ${dedicatedDbNameFor(mod.id)}（${targetDbId}）`);
-    } else {
-      rep.log(`模块 ${mod.id} 落点 shared：共享 modules 库建表（独立记账 ${`unself_migrations_${mod.id.replaceAll('-', '_')}`}）`);
-    }
+    targetDbId = dedicatedDbIds.get(mod.id) ?? (await ensureD1(client, accountId, dedicatedDbNameFor(mod.id), rep.log));
+    dedicatedDbIds.set(mod.id, targetDbId);
+    rep.log(`模块 ${mod.id} 落点 core：专属库 ${dedicatedDbNameFor(mod.id)}（${targetDbId}，分表隔离，独立记账 unself_migrations_${mod.id.replaceAll('-', '_')}）`);
     // 记账库登记（步骤④的 DO 迁移判定/写入必须用同一个库同一张表）
     moduleLedgerDbIds.set(mod.id, targetDbId);
     const targetCp = createCoreControlPlane(client, accountId, targetDbId);
@@ -787,8 +779,8 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       : undefined;
     // chat 包配置（DO 绑定 + 首部署 DO migrations 元数据）；readChatPackageConfig 已在步骤①通过形状检查
     const chatPkgMeta = isChat && chatPkg ? chatPkg : null;
-    // 数据落点（#248）：shared 走 modules 库绑定；dedicated 额外绑专属库；core/external 仅 MODULES_DB
-    const modLevel: StorageLevel = storagePlans.get(mod.id)?.level ?? 'core';
+    // 数据落点（#349 U5）：core（自建表）额外绑专属库；self（tableless 的 core 同理）仅 MODULES_DB
+    const modLevel: StorageLevel = storagePlans.get(mod.id)?.level ?? 'self';
     await writeConfig(
       join(provisioned.outDir, `modules/${mod.id}.wrangler.jsonc`),
       isChat && chatResources && chatPkg
@@ -800,7 +792,6 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
             zoneName: resolvedZone?.name,
             pkg: chatPkg,
             assetsDir: chatAssetsDir!,
-            storageLevel: chatLevel,
             files: chatFiles!,
           })
         : moduleWranglerConfig({
@@ -810,7 +801,7 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
             jwksJson,
             zoneName: resolvedZone?.name,
             storageLevel: modLevel,
-            ...(modLevel === 'dedicated' ? { dedicatedDbId: dedicatedDbIds.get(mod.id) } : {}),
+            ...(modLevel === 'core' ? { dedicatedDbId: dedicatedDbIds.get(mod.id) } : {}),
           }),
     );
     await writeConfig(
@@ -835,13 +826,8 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       { type: 'plain_text', name: 'MODULE_ID', text: mod.id },
       { type: 'plain_text', name: 'CORE_JWKS_JSON', text: jwksJson },
     ];
-    if (modLevel === 'core') {
-      // core 级（#248 收敛（a)）：模块唯一数据通道 = Core API 代理；跨 worker 用 Service Binding
-      // （同 zone 明文 fetch 被 CF 平台禁 → 只有绑定这条路能在生产成立）。
-      moduleBindings.push({ type: 'service', name: 'CORE_API', service: coreWorkerName() });
-    }
-    if (modLevel === 'dedicated' && dedicatedDbIds.has(mod.id)) {
-      // dedicated 专属库绑定（#248）：unself-<id>，绑定名 <ID>_DB（chat 的 DB 绑定走包配置同名兼容）
+    if (modLevel === 'core' && dedicatedDbIds.has(mod.id)) {
+      // core 自建表专属库绑定（#349 U5 分表隔离）：unself-<id>，绑定名 <ID>_DB（chat 的 DB 绑定走包配置同名兼容）
       moduleBindings.push({
         type: 'd1',
         name: `${mod.id.toUpperCase().replaceAll('-', '_')}_DB`,
@@ -850,13 +836,11 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     }
     // STORAGE_LEVEL 入 vars（由 moduleWranglerConfig 生成，模块 SDK 据此选通道）
     if (chatPkgMeta && chatResources && chatFiles) {
-      // chat 绑定（#310）：落点 shared → D1 指共享 modules 库 + DB_TABLE_PREFIX=chat_；
-      // 落点 dedicated → 专属库（不变）。FILES 按统一来源：R2 绑桶，或自备 S3 的 FILES_S3_* vars。
-      const chatD1Id = modLevel === 'shared' ? dbIds.modules : chatResources.dbId;
+      // chat 绑定（#349 U5 归 core）：D1 指专属库（chat_ 前缀分表隔离）。FILES 按统一来源：R2 绑桶，或自备 S3 的 FILES_S3_* vars。
+      const chatD1Id = chatResources.dbId;
       moduleBindings.push(
         { type: 'd1', name: chatPkgMeta.d1Binding, id: chatD1Id },
         { type: 'kv_namespace', name: 'SESSIONS', namespace_id: chatResources.kvId },
-        ...(modLevel === 'shared' ? [{ type: 'plain_text', name: 'DB_TABLE_PREFIX', text: 'chat_' }] : []),
         ...(chatFiles.kind === 'r2'
           ? [{ type: 'r2_bucket', name: 'FILES', bucket_name: chatFiles.bucket }]
           : Object.entries(filesSourceVars(chatFiles)).map(([name, text]) => ({ type: 'plain_text', name, text }))),
@@ -876,8 +860,8 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
       const ledgerDbId = moduleLedgerDbIds.get(mod.id);
       if (!ledgerDbId) {
         throw new Error(
-          `模块 ${mod.id} 声明了 DO 迁移（migrations）但落点 core/external（无模块记账库）：` +
-            'DO 迁移的「已应用」判定必须有落脚账表，先声明 shared/dedicated 落点',
+          `模块 ${mod.id} 声明了 DO 迁移（migrations）但落点 self（无模块记账库）：` +
+            'DO 迁移的「已应用」判定必须有落脚账表，先声明 core 落点（自建表）',
         );
       }
       doMigrationCp = createCoreControlPlane(client, accountId, ledgerDbId);
@@ -1011,34 +995,33 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     const manifest = buildManifestSnapshot({
       manifestText: manifestTexts[mod.id] ?? '',
       moduleId: mod.id,
-      baseUrl,
-      // #273：entry 按形态写模块**真实**可达 URL（workers.dev = 模块自有子域；domain = zone 路径）
-      entry: moduleEntryUrl({
-        domain: config.domain ?? '',
-        workersDevSubdomain: workersDevAccountSubdomain,
-        moduleId: mod.id,
-        moduleWorkerName: moduleWorkerName(mod.id),
-      }),
       ...(mod.resolved ? { manifest: mod.resolved.manifest } : {}),
     });
-    // 存储选择（#55）写进快照：declaration 由 config 条目覆写（向导③½ / CLI），注册表快照即
+    // 存储选择（#55/#349 U5）写进快照：declaration 由 config 条目覆写（向导③½ / CLI），注册表快照即
     // 「这台实例上该模块数据在哪」的权威记录（core-api 门禁与运行时可读）。
     const configEntry = entries.find((e) => e.id === mod.id);
     const declaration = configEntry?.storage?.declaration;
     const snapshot = declaration
       ? { ...manifest, storage: storageWithDeclaration(manifest.storage, declaration as StorageLevel) }
       : manifest;
-    // 落点三列（#348/#103②）：mode=cloudflare（CF 装配路径），storage_level=用户四级选择
-    // （同一 declaration，列与快照各司其职：列是用户选择，快照是 manifest 侧声明）。
+    // 落点三列（#348/#103②/#349 U9）：mode=cloudflare（CF 装配路径），entry=模块**真实**可达 URL
+    // （#273 形态决策：domain → zone 路径 /m/<id>/；workers.dev → 模块自有子域——moduleEntryUrl
+    // 是注册表 entry / 冒烟 / 主题体检共用的唯一真值源），storage_level=用户两值选择（同一
+    // declaration，列是用户选择 + 地址真值面，快照不再承载任何地址）。
     // 合并语义（#348 review 定案）：declaration 未选时不写该键——「未写 = 保留旧值」，
-    // 装配器不把用户此前通过管理接口选的落点冲成 NULL。entry 列语义 = connect 接入
-    // URL（0012），CF 装配路径不写；mode='cloudflare' 是本次装配的事实（worker 确实
-    // 重新部署在 CF），照旧显式写。
+    // 装配器不把用户此前通过管理接口选的落点冲成 NULL。entry 列每次显式写（U9：装配器是
+    // CF 形态地址的写入者），mode='cloudflare' 是本次装配的事实（worker 确实重新部署在 CF）。
     await coreCp.upsertModule({
       id: mod.id,
       enabled: true,
       manifest: snapshot,
       mode: 'cloudflare',
+      entry: moduleEntryUrl({
+        domain: config.domain ?? '',
+        workersDevSubdomain: workersDevAccountSubdomain,
+        moduleId: mod.id,
+        moduleWorkerName: moduleWorkerName(mod.id),
+      }),
       ...(declaration ? { storage_level: declaration as StorageLevel } : {}),
     });
     rep.log(`upsert ${mod.id}（enabled=1，快照刷新${declaration ? `，落点 ${declaration}` : ''}）`);

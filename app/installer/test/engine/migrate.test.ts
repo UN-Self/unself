@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 数据四级 + 迁移契约测试（#248，决策 #55/#61）：
- * - storageLevelFor：declaration → preferred → core 的缺省链；
- * - checkSharedGuards：前缀/申报/跨模块外键三护栏；
+ * 两值落点 + 迁移契约测试（#248/#349 U5，决策 #55/#61）：
+ * - storageLevelFor：declaration → preferred → self 的缺省链（undefined = self）；
+ * - checkSharedGuards：申报/跨模块外键护栏（专属库库级隔离，前缀不再是硬规则）；
  * - migrationFailure：模块/文件/第几条语句 三要素定位；
  * - SqliteControlPlane.applyMigrations：同名 0001 跨模块记账隔离（护栏①）。
  *   ——红灯锚点：把记账表改回共用（applyMigrations('core', …) 用同名文件）→ 该组必红。
@@ -23,60 +23,45 @@ import {
   tablePrefixFor,
 } from '../../src/engine/migrate';
 
-describe('migrationDirFor（#310：shared 用 <id>-shared/ 物理表集）', () => {
-  it('shared 优先 <id>-shared/；不存在时回落 <id>/；dedicated 恒用 <id>/', async () => {
+describe('migrationDirFor（#349 U5：core 自建表恒用 <id>/）', () => {
+  it('恒用 migrations/<id>/（shared 前缀集已废除）', async () => {
     const { mkdtemp, mkdir } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const dir = await mkdtemp(join(tmpdir(), 'unself-migdir-'));
     await mkdir(join(dir, 'migrations', 'demo'), { recursive: true });
-    // 单形态模块：无 shared 目录 → shared 回落 <id>/
-    expect(migrationDirFor(dir, 'demo', 'shared')).toBe(join(dir, 'migrations', 'demo'));
-    expect(migrationDirFor(dir, 'demo', 'dedicated')).toBe(join(dir, 'migrations', 'demo'));
-    // 双形态：建了 <id>-shared/ → shared 用它，dedicated 不受影响
-    await mkdir(join(dir, 'migrations', 'demo-shared'), { recursive: true });
-    expect(migrationDirFor(dir, 'demo', 'shared')).toBe(join(dir, 'migrations', 'demo-shared'));
-    expect(migrationDirFor(dir, 'demo', 'dedicated')).toBe(join(dir, 'migrations', 'demo'));
+    expect(migrationDirFor(dir, 'demo')).toBe(join(dir, 'migrations', 'demo'));
   });
 });
 
-describe('storageLevelFor（#55 四级缺省链）', () => {
+describe('storageLevelFor（#55 → #349 U5 两值缺省链）', () => {
   const M = (storage?: unknown) => ({ manifest: storage ? { storage } : undefined, id: 'demo' }) as Parameters<typeof storageLevelFor>[0];
 
-  it('declaration 优先；缺省 preferred；再缺省 core', () => {
-    expect(storageLevelFor(M({ declaration: 'dedicated', preferred: 'core' }))).toBe('dedicated');
-    expect(storageLevelFor(M({ preferred: 'shared' }))).toBe('shared');
-    expect(storageLevelFor(M(undefined))).toBe('core');
-    expect(storageLevelFor(M({ accepts: ['core', 'shared'] }))).toBe('core');
+  it('declaration 优先；缺省 preferred；再缺省 self（undefined = self）', () => {
+    expect(storageLevelFor(M({ declaration: 'self', preferred: 'core' }))).toBe('self');
+    expect(storageLevelFor(M({ preferred: 'core' }))).toBe('core');
+    expect(storageLevelFor(M(undefined))).toBe('self');
+    expect(storageLevelFor(M({ accepts: ['core', 'self'] }))).toBe('self');
   });
 });
 
-describe('checkSharedGuards（#55 三护栏③：命名 + 申报 + 跨模块外键）', () => {
-  it('合规：demo_ 前缀 + 清单内互引 → 零问题', () => {
+describe('checkSharedGuards（#55 → #349 U5 护栏：申报 + 跨模块外键；专属库库级隔离，前缀不是硬规则）', () => {
+  it('合规：清单内互引（表名不带前缀，原 dedicated 形态零迁移）→ 零问题', () => {
     const problems = checkSharedGuards({
       moduleId: 'demo',
-      tables: ['demo_items', 'demo_tags'],
+      tables: ['items', 'tags'],
       migrations: [
-        { name: '0001_init.sql', sql: 'CREATE TABLE IF NOT EXISTS demo_items (id INTEGER PRIMARY KEY);' },
+        { name: '0001_init.sql', sql: 'CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY);' },
         {
           name: '0002_tags.sql',
-          sql: 'CREATE TABLE IF NOT EXISTS demo_tags (item_id INTEGER, FOREIGN KEY (item_id) REFERENCES demo_items);',
+          sql: 'CREATE TABLE IF NOT EXISTS tags (item_id INTEGER, FOREIGN KEY (item_id) REFERENCES items);',
         },
       ],
     });
     expect(problems).toEqual([]);
   });
 
-  it('表名不带模块前缀 → 报问题（点名文件与表）', () => {
-    const problems = checkSharedGuards({
-      moduleId: 'demo',
-      tables: ['shared_items'],
-      migrations: [{ name: '0001_init.sql', sql: 'CREATE TABLE IF NOT EXISTS shared_items (id INTEGER);' }],
-    });
-    expect(problems.some((p) => p.includes('0001_init.sql') && p.includes('shared_items') && p.includes('demo_'))).toBe(true);
-  });
-
-  it('建了未申报的表 → 报问题（共享库不接收未经申报的表）', () => {
+  it('建了未申报的表 → 报问题（core 库不接收未经申报的表）', () => {
     const problems = checkSharedGuards({
       moduleId: 'demo',
       tables: ['demo_items'],

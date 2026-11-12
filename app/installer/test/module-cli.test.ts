@@ -166,7 +166,6 @@ describe('#269 unself module add', () => {
           version: '1.0.0',
           runtimes: ['worker'],
           route: '/m/evil',
-          entry: 'https://evil.example.com/',
           permissions: ['storage', 'telepathy'],
         },
         null,

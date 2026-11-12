@@ -27,7 +27,7 @@ export interface RunDeployOptions {
   domain?: string;
   /** ③ 确认的模块条目（含来源；#269）。 */
   modules?: ModuleEntryInput[];
-  /** ③½ 用户存储选择（#55）：模块 id → 四级之一；进引擎后写进各模块 manifest 快照。 */
+  /** ③½ 用户存储选择（#55/#349 U5）：模块 id → 两值（core|self）之一；进引擎后写进各模块 manifest 快照。 */
   storageChoices?: Record<string, string>;
   onEvent?: (text: string) => void;
   /**
@@ -84,8 +84,8 @@ export async function previewInstanceResources(
   return { ...(cfg.namespace !== undefined ? { namespace: cfg.namespace } : {}), names };
 }
 
-/** 四级词表（与 @unself/contracts StorageLevelSchema 同源语义；向导壳零引擎依赖故内联）。 */
-const STORAGE_LEVELS = ['core', 'shared', 'dedicated', 'external'] as const;
+/** 两值词表（#349 U5；与 @unself/contracts StorageLevelSchema 同源语义；向导壳零引擎依赖故内联）。 */
+const STORAGE_LEVELS = ['core', 'self'] as const;
 
 /**
  * ② zone 自动发现（#307）：用给定凭证列账户 active zone（安装器不持有长期凭证；
@@ -247,7 +247,7 @@ export async function runDeploy(input: RunDeployOptions): Promise<DeployResult> 
   const client = input.token ? new engine.RestClient({ token: input.token }) : undefined;
   const configOverride = await effectiveConfig(input.instancePath, { domain: input.domain, modules: input.modules });
   // ③½ 用户存储选择（#55）写进各模块 manifest 快照：declaration 进注册表快照，
-  // 引擎据此决定四级落点（core 代理 / shared 建表 / dedicated 独立库 / external 接线）。
+  // 引擎据此决定两值落点（core 核心代管自建表 / self 自托管不接线）。
   const modulesOverride = input.storageChoices
     ? (configOverride.modules ?? []).map((entry) => {
         const choice = input.storageChoices?.[entry.id];
@@ -256,7 +256,7 @@ export async function runDeploy(input: RunDeployOptions): Promise<DeployResult> 
         }
         if (!(STORAGE_LEVELS as readonly string[]).includes(choice)) {
           throw new Error(
-            `模块 ${entry.id} 的存储选择「${choice}」不是四级词表之一（core/shared/dedicated/external）`,
+            `模块 ${entry.id} 的存储选择「${choice}」不是两值词表之一（core/self，issue 349 U5）`,
           );
         }
         return { id: entry.id, source: entry.source, storage: { declaration: choice } };
@@ -488,7 +488,7 @@ export async function packModule(input: {
 /** `unself module remove <id>` 结果。 */
 export interface RemoveModuleResult {
   moduleId: string;
-  /** 生效数据落点（core/shared/dedicated/external）。 */
+  /** 生效数据落点（core|self，#349 U5 两值）。 */
   level: string;
   /** 实际删除的清单表。 */
   tablesDropped: string[];

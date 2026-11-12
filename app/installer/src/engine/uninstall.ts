@@ -14,7 +14,7 @@
  *
  * 「不许误删」硬规则：只删 `manifest.tables` 清单里的表 + 本模块记账表；
  * 保留表（module_registry / module_kv / setup_tokens / instance_config / sqlite_* /
- * _cf_* / 别人的 unself_migrations_*）一律拒绝；shared 落点额外要求 `<模块id>_` 前缀。
+ * _cf_* / 别人的 unself_migrations_*）一律拒绝。
  *
  * 幂等：路由不存在/Worker 不存在/库不存在/注册表无该行 → 记日志继续，不报错。
  */
@@ -35,7 +35,6 @@ import {
   activeResourceNamespace,
   coreDbName,
   moduleWorkerName,
-  modulesDbName,
   setResourceNamespace,
 } from './naming';
 import {
@@ -80,7 +79,6 @@ const RESERVED_TABLE_RE = /^(module_registry|module_kv|module_notify|setup_token
 
 /** 待删表名硬校验（防清单被写坏误删别的模块/平台表）。 */
 export function assertDroppable(input: { moduleId: string; level: string; tables: string[] }): void {
-  const prefix = `${input.moduleId.replaceAll('-', '_')}_`;
   for (const table of input.tables) {
     if (!/^[a-z][a-z0-9_]*$/.test(table)) {
       throw new Error(`模块 ${input.moduleId} 的 tables 清单含非法表名 "${table}"——拒绝卸载（宁停不住）`);
@@ -88,12 +86,6 @@ export function assertDroppable(input: { moduleId: string; level: string; tables
     if (RESERVED_TABLE_RE.test(table)) {
       throw new Error(
         `模块 ${input.moduleId} 的 tables 清单指向保留表 "${table}"——拒绝删除（模块不得申报平台/core 表）`,
-      );
-    }
-    if (input.level === 'shared' && !table.startsWith(prefix)) {
-      throw new Error(
-        `模块 ${input.moduleId} 落点 shared 的表 "${table}" 不带模块前缀 ${prefix}——` +
-          'shared 护栏③要求前缀；拒绝卸载（宁停不住）',
       );
     }
   }
@@ -182,11 +174,11 @@ async function removeModuleInner(input: RemoveModuleOptions, config: UnselfConfi
   // ---- ③④ 按 tables 清单删表 + 清本模块记账表（同一库：#248/#255 同一套记账） ----
   const tablesDropped: string[] = [];
   let ledgerTable: string | null = null;
-  if (plan.level === 'shared' || plan.level === 'dedicated') {
-    const targetName = plan.level === 'shared' ? modulesDbName() : dedicatedDbNameFor(moduleId);
+  if (plan.level === 'core') {
+    const targetName = dedicatedDbNameFor(moduleId);
     const target = dbs.find((db) => db.name === targetName);
     if (!target) {
-      log(`落点 ${plan.level} 的库 ${targetName} 不存在——跳过表清理（幂等）`);
+      log(`落点 core 的库 ${targetName} 不存在——跳过表清理（幂等）`);
     } else {
       for (const table of plan.tables) {
         await d1Query(client, accountId, target.uuid, `DROP TABLE IF EXISTS "${table}"`);
@@ -202,7 +194,7 @@ async function removeModuleInner(input: RemoveModuleOptions, config: UnselfConfi
       );
     }
   } else {
-    log(`落点 ${plan.level}：平台不碰模块数据（core 的表归 core，external 归模块自己），无表可删`);
+    log(`落点 self：自托管，平台不碰模块数据（归模块自己），无表可删`);
   }
 
   // ---- ⑤ 注册表删行（行没了 = checkTokenGate 404 = 该模块 token 失效） ----

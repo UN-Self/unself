@@ -9,11 +9,11 @@
  *   本 issue 收敛为 (a)：模块不再直连数据库；core 级数据一律走代理四形状
  *   （get/put/delete/list，不承诺关系表，决策 #55）。
  *
- * 落点与通道：
- * - core      ：本客户端（Core API 代理）——唯一承诺的通道；
- * - shared    ：模块在自己的库直连建表（MODULES_DB 绑定 + 独立记账迁移），不经本客户端；
- * - dedicated ：模块在专属库直连（<ID>_DB 绑定），不经本客户端；
- * - external  ：模块连自备外部库（连接串走配置页），不经本客户端。
+ * 落点与通道（#349 U5 两值收敛）：
+ * - core      ：核心代管。模块在核心分配的库里自建表（分表隔离：`<模块id>_` 前缀 + 独立记账），
+ *               直连自己的绑定（`<ID>_DB`）；无自建表时数据可走 Core API 代理（本客户端）；
+ *               自建表场景不经本客户端。
+ * - self      ：自托管。模块连自备外部库（连接串走配置页），不经本客户端。
  *
  * 兼容：createD1Storage 形状保留，但实现改为 Core API 代理绑定
  * （`db.prepare(...).bind(...).first/all/run` → HTTP 四形状）——老调用点零改动迁移。
@@ -137,7 +137,7 @@ export function createD1Storage(options: CoreApiProxyBinding & { moduleId?: stri
   if (maybeDb !== undefined) {
     throw new Error(
       'storage: createD1Storage 已收敛到 Core API 代理（本 issue，决策 #75）——模块不再直连 MODULES_DB。' +
-        '请改传 { coreApiOrigin, getToken, fetchImpl }（core 级），或声明 shared/dedicated 落点并直连自己的库。',
+        '请改传 { coreApiOrigin, getToken, fetchImpl }（代理通道），或声明 core 落点自建表并直连自己的绑定（issue 349 U5 两值）。',
     );
   }
   return createModuleStorage(options as CoreApiProxyBinding & { moduleId: string });

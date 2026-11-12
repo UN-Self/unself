@@ -46,3 +46,26 @@ await build({
 });
 
 console.log('▣ hello 产物就绪：dist/main.js（bin）+ dist/worker.js（CF 装配入口）');
+
+// ③ manifest 副本（#349 U8）：manifest.yaml → 契约候选 → schema 校验 → dist/manifest.json。
+// 发布形态（npm tarball）没有 yaml 轨，src/manifest.ts 双轨查找优先吃这份 json；
+// 校验在构建期完成——坏清单打不出包，比运行时 fail-fast 更早。
+// 经 tsx 加载 @unself/contracts（workspace 包，入口是无扩展名相对导入——node 原生解析炸，
+// tsx 与 vite 配置同一处理方式；本包 devDependencies 已有 tsx，零新增依赖）。
+const { execFileSync } = await import('node:child_process');
+const { createRequire } = await import('node:module');
+const require2 = createRequire(import.meta.url);
+execFileSync(
+  require2.resolve('tsx/cli'),
+  [
+    '--eval',
+    [
+      "import { readFileSync, writeFileSync } from 'node:fs';",
+      "import { ModuleManifestSchema, manifestFromYamlText } from '@unself/contracts';",
+      "const manifest = ModuleManifestSchema.parse(manifestFromYamlText(readFileSync('manifest.yaml', 'utf8')));",
+      "writeFileSync('dist/manifest.json', JSON.stringify(manifest, null, 2) + '\\n');",
+      "console.log('▣ dist/manifest.json 就绪（manifest.yaml 副本，schema 已校验）');",
+    ].join('\n'),
+  ],
+  { cwd: HERE, stdio: 'inherit' },
+);

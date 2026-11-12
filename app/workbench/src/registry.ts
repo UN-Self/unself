@@ -10,7 +10,7 @@ import {
   type DeployMode,
   type StorageLevel,
 } from '@unself/control-plane/types';
-import { ModuleManifestSchema } from '@unself/contracts';
+import { ModuleManifestSchema, type ModuleManifest } from '@unself/contracts';
 
 /**
  * 模块注册表（module_registry）API 契约：
@@ -38,7 +38,7 @@ export const ModuleRegistrationSchema = z
       (v) => (v === '' ? null : v),
       z.string().nullish(),
     ),
-    /** 存储四级（决策 #55）；显式 null/空串 = 清空（未选），缺字段 = 保留旧值。 */
+    /** 存储落点两值（#349 U5）；显式 null/空串 = 清空（未选，undefined = self），缺字段 = 保留旧值。 */
     storage_level: z.preprocess(
       (v) => (v === '' ? null : v),
       z.enum(STORAGE_LEVELS).nullish(),
@@ -49,10 +49,31 @@ export const ModuleRegistrationSchema = z
       z.string().regex(CREDENTIAL_HASH_PATTERN).nullish(),
     ),
   })
-  // 落点不变式与 0012 CHECK 同一规则（入口层给 400 人话，数据层是同一构成定义）：
-  // 错误文案单点在 control-plane checkProvisioning，这里只透传。mode 未写 = 保留旧值，
-  // 不参与本次核对（列中旧值在写入时已过 CHECK，不可能非法）。
+  // #349 U9：entry 列成为地址真值面后的 #63 锚点（原在清单 manifest.entry，U9 移出清单）。
+  // 公网明文 http 拒收（仅 localhost/127.0.0.1/[::1] 明文豁免）——external 模块经浏览器装载,
+  // 明文公网地址等于令牌裸华；非 http(s)/不可解析也拒（白名单/装载都消费不了）。
   .superRefine((data, ctx) => {
+    if (data.entry) {
+      let url: URL | null = null;
+      try {
+        url = new URL(data.entry);
+      } catch {
+        url = null;
+      }
+      if (!url || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
+        ctx.addIssue({ code: 'custom', path: ['entry'], message: `entry=${data.entry} 不是可解析的 http(s) URL` });
+      } else if (!url.protocol.startsWith('https')) {
+        const host = url.hostname;
+        const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+        if (!isLocal) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['entry'],
+            message: `entry=${data.entry} 非 https（决策 #63 publicUrl 强制 https；仅 localhost/127.0.0.1 明文豁免）`,
+          });
+        }
+      }
+    }
     if (data.mode === undefined) return;
     const problem = checkProvisioning(data.mode, data.entry ?? null);
     if (problem) {
@@ -65,7 +86,7 @@ export type ModuleRegistration = z.infer<typeof ModuleRegistrationSchema>;
 /**
  * 反连接入记账请求体（#349，决策 #108 两段式第①段）。
  * keyHash = 浏览器 hex(SHA-256(key))，形状单点在 control-plane CREDENTIAL_HASH_PATTERN；
- * storageLevel 可选（用户此时可能还没选存储，未写 = 保留列中旧值，合并语义同落点三列）。
+ * storageLevel 可选两值（core|self；#349 U5。用户此时可能还没选存储，未写 = 保留列中旧值，合并语义同落点三列）。
  */
 export const ConnectRegisterSchema = z.object({
   moduleId: z.string().regex(/^[a-z][a-z0-9-]+$/),
@@ -76,16 +97,15 @@ export const ConnectRegisterSchema = z.object({
 /**
  * connect 记账 pending 态的 manifest 占位快照（#349）：ModuleManifestSchema 的最小合法形状。
  * 决策 #108 两段式中本段不携带真清单（模块还没部署）；真快照由第②段「测试连接→保存」
- * 的 POST /api/admin/modules 写入并覆盖此占位。entry = core 侧隧道路由（与 registry entry
- * 同源，见 connect-register 路由注释）；credential_hash 列（非快照）才是凭证真值面。
+ * 的 POST /api/admin/modules 写入并覆盖此占位。地址面只在 entry 列（U9：清单不承载地址），
+ * credential_hash 列（非快照）才是凭证真值面。
  */
-export function connectPendingManifest(moduleId: string, entry: string): z.infer<typeof ModuleManifestSchema> {
+export function connectPendingManifest(moduleId: string): z.infer<typeof ModuleManifestSchema> {
   return ModuleManifestSchema.parse({
     id: moduleId,
     version: '0.0.0',
     runtimes: ['external'],
     route: `/m/${moduleId}`,
-    entry,
   });
 }
 
@@ -99,17 +119,18 @@ export interface RegistryEntry {
   mode: DeployMode;
   /** connect 模式接入 URL；其余模式 NULL。 */
   entry: string | null;
-  /** 存储四级；NULL = 未选。 */
+  /** 存储落点两值（core|self，#349 U5）；NULL = 未选。 */
   storage_level: StorageLevel | null;
   /** 反连凭证哈希（#349，决策 #108）；mode=connect 且完成保存后必有值。 */
   credential_hash: string | null;
 }
 
 /**
- * 成员侧模块条目（GET /api/modules，#348 遗留收窄，#349）：不回落点三列与 credential_hash。
- * 排除面 = 0012 落点三列（mode/entry/storage_level）+ 0013 credential_hash（凭证敏感面，
- * 任务书「不回 entry/credential_hash/落点三列」）。manifest 保留：壳的 iframe 装载
- * （moduleFrameSrc）与 nav 图标（manifest.icon）都消费它，收掉即壳耀瘫。
+ * 成员侧模块条目（GET /api/modules，#348 遗留收窄，#349）：不回 mode/storage_level/credential_hash。
+ * 排除面 = 0012 落点三列中的 mode/storage_level + 0013 credential_hash（凭证敏感面，
+ * 管理员视角才有，GET /api/admin/modules）。**entry 例外面（#349 U9）**：清单不再承载地址后
+ * 壳 iframe 装载（moduleFrameSrc）唯一地址源 = 本字段，回注册表 entry 列（core 隧道路由 /
+ * 装配器写入的实例地址）。manifest 保留：nav 图标（manifest.icon）等消费它。
  * name = manifest.description ?? id（描述缺省时给可读名；描述进 manifest 由 contracts schema 掌握）。
  */
 export interface MemberModuleEntry {
@@ -117,6 +138,8 @@ export interface MemberModuleEntry {
   enabled: boolean;
   name: string;
   manifest: unknown;
+  /** 装载地址（#349 U9 唯一落点字段）：注册表 entry 列原值；未写（如从未记账的 CF 存量行）→ null。 */
+  entry: string | null;
 }
 
 /** 启停响应。 */
@@ -157,6 +180,8 @@ export function rowToEntry(row: {
 /**
  * 注册或更新（upsert）：manifest 快照随注册刷新，enabled 按请求给；
  * 落点三列合并语义（#348 review 定案）：本次未写 = 保留列中旧值，RETURNING 回合并后的真行。
+ * #349 U9：快照不含地址（schema 已剥 entry 键）；entry 列才是地址真值面（CF=装配器写、
+ * connect=connect-register 写 core 隧道路由）。
  */
 export async function upsertModule(db: D1Database, reg: ModuleRegistration): Promise<RegistryEntry> {
   const manifestJson = JSON.stringify(reg.manifest);
@@ -185,6 +210,82 @@ export async function upsertModule(db: D1Database, reg: ModuleRegistration): Pro
   return rowToEntry(row);
 }
 
+// ---- 模块配置值（#349 U8 ④）：manifest.config 声明（快照内）与用户存值（0015 列）分存 ----
+
+/**
+ * 模块配置读态：字段声明（manifest.config）+ 已存值（config_values）。
+ * 无声明 / 无存值 / 快照或存值损坏 → 各自回落空（不 404，空态是合法状态）。
+ */
+export interface ModuleConfigState {
+  config: Array<{ key: string; type: string; required?: boolean; options?: string[]; [k: string]: unknown }>;
+  values: Record<string, unknown>;
+}
+
+/**
+ * 读模块配置（admin GET 与 module-api GET 共用单点）。
+ * manifest_json.config 损坏/非数组 → 空 config（fail-closed：没声明就没字段可校验可渲染）；
+ * config_values 为 NULL → 空对象；损坏 JSON → 空对象（不抛，空态语义同上）。
+ */
+export async function getModuleConfig(db: D1Database, id: string): Promise<ModuleConfigState | null> {
+  const row = await db
+    .prepare('SELECT manifest_json, config_values FROM module_registry WHERE id = ?')
+    .bind(id)
+    .first<{ manifest_json: string; config_values: string | null }>();
+  if (!row) return null;
+  type ConfigFieldRow = { key: string; type: string; required?: boolean; options?: string[]; [k: string]: unknown };
+  let config: ConfigFieldRow[] = [];
+  try {
+    const manifest = JSON.parse(row.manifest_json) as { config?: unknown };
+    if (Array.isArray(manifest.config)) {
+      // 快照在注册时已过 ModuleManifestSchema；这里只做形状容错（非对象/缺 key 元素丢弃）
+      config = manifest.config.filter(
+        (f): f is ConfigFieldRow => typeof f === 'object' && f !== null && typeof (f as { key?: unknown }).key === 'string',
+      );
+    }
+  } catch {
+    config = [];
+  }
+  let values: Record<string, unknown> = {};
+  if (row.config_values) {
+    try {
+      const parsed = JSON.parse(row.config_values) as unknown;
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        values = parsed as Record<string, unknown>;
+      }
+    } catch {
+      values = {};
+    }
+  }
+  return { config, values };
+}
+
+/**
+ * 存模块配置值（admin PUT 的写面）：整列覆盖写（调用方已按 manifest.config schema
+ * 校验过 values）。行不存在返回 false（调用方 404）；重放同一 values 幂等。
+ */
+export async function saveModuleConfig(db: D1Database, id: string, values: Record<string, unknown>): Promise<boolean> {
+  const result = await db
+    .prepare('UPDATE module_registry SET config_values = ? WHERE id = ?')
+    .bind(JSON.stringify(values), id)
+    .run();
+  return result.meta.changes > 0;
+}
+
+/**
+ * 模块自报 manifest（#349 U8 ①）：connect 模块 ready 后把完整清单快照 POST 上来，
+ * 覆盖 connect-register 记账的 0.0.0 占位。moduleId 以 keyHash 反查为准（调用方已查），
+ * body 里的 id 不信任；entry 同理丢弃（#349 U9：body 若带野 entry，schema 对象层剥掉，
+ * 落库快照不含地址，entry 列维持 core 隧道路由不被污染）。定向 UPDATE manifest_json + version，
+ * 不碰 enabled/落点列。返回 false = 行不存在（调用方 404）。
+ */
+export async function updateModuleManifest(db: D1Database, moduleId: string, manifest: ModuleManifest): Promise<boolean> {
+  const result = await db
+    .prepare('UPDATE module_registry SET manifest_json = ?, version = ? WHERE id = ?')
+    .bind(JSON.stringify(manifest), manifest.version, moduleId)
+    .run();
+  return result.meta.changes > 0;
+}
+
 /** 翻转启停（运行时秒级生效：边栏隐藏 + token 门禁拒发，§5.5）。 */
 export async function toggleModule(db: D1Database, id: string, enabled: boolean): Promise<ToggleResult | null> {
   const row = await db
@@ -207,20 +308,21 @@ export async function listModules(db: D1Database): Promise<RegistryEntry[]> {
 }
 
 /**
- * 成员侧启用清单（GET /api/modules，#348 遗留收窄，#349）：不回落点三列与 credential_hash。
- * 语义：只回 enabled 行；每行回 id/enabled/name/manifest（壳 iframe 与 nav 图标的数据源），
- * 不回 mode/entry/storage_level/credential_hash。需要完整条目走管理端 GET /api/admin/modules
- * （requireAdmin）。
+ * 成员侧启用清单（GET /api/modules，#348 遗留收窄，#349 U9）：不回 mode/storage_level/credential_hash。
+ * 语义：只回 enabled 行；每行回 id/enabled/name/manifest/entry——entry 是壳 iframe 装载
+ * 的唯一地址源（注册表 entry 列原值，U9 起清单不再承载地址）；mode/storage_level/credential_hash
+ * 继续不回。需要完整条目走管理端 GET /api/admin/modules（requireAdmin）。
  */
 export async function listMemberModules(db: D1Database): Promise<MemberModuleEntry[]> {
   const rows = await db
-    .prepare('SELECT id, enabled, manifest_json FROM module_registry WHERE enabled = 1 ORDER BY id')
-    .all<{ id: string; enabled: number; manifest_json: string }>();
+    .prepare('SELECT id, enabled, manifest_json, entry FROM module_registry WHERE enabled = 1 ORDER BY id')
+    .all<{ id: string; enabled: number; manifest_json: string; entry: string | null }>();
   return rows.results.map((row) => ({
     id: row.id,
     enabled: row.enabled === 1,
     name: memberModuleName(row.manifest_json) || row.id,
     manifest: memberModuleManifest(row.manifest_json),
+    entry: row.entry ?? null,
   }));
 }
 
@@ -259,27 +361,23 @@ export function normalizeFrameOrigin(raw: string): string | null {
 }
 
 /**
- * 注册表 → 外壳 frame-src 白名单 origin 集合（决策 #63/#73）：
- * 全模块 manifest.entry 的 origin，去掉实例自身 origin（同域路径制已由 'self' 覆盖）。
- * 只信「解析成功」的 http(s) entry；坏值/坏协议静默跳过——白名单宁可窄不可宽。
+ * 注册表 → 外壳 frame-src 白名单 origin 集合（决策 #63/#73，#349 U9 换真值源）：
+ * 只读注册表 entry 列（地址真值面；清单不再承载地址），去掉实例自身 origin
+ * （同域路径制已由 'self' 覆盖）。只信「解析成功」的 http(s) entry；
+ * 坏值/坏协议/空值静默跳过——白名单宁可窄不可宽。
  */
 export async function registryFrameOrigins(
   db: D1Database,
   options: { selfOrigin?: string | null } = {},
 ): Promise<string[]> {
   const rows = await db
-    .prepare('SELECT manifest_json FROM module_registry WHERE enabled = 1')
-    .all<{ manifest_json: string }>();
+    .prepare('SELECT entry FROM module_registry WHERE enabled = 1')
+    .all<{ entry: string | null }>();
   const origins = new Set<string>();
   for (const row of rows.results) {
-    try {
-      const manifest = JSON.parse(row.manifest_json) as { entry?: unknown };
-      if (typeof manifest.entry !== 'string') continue;
-      const origin = normalizeFrameOrigin(manifest.entry);
-      if (origin && origin !== options.selfOrigin) origins.add(origin);
-    } catch {
-      // 快照损坏 ≠ 放宽白名单：跳过该行
-    }
+    if (!row.entry) continue;
+    const origin = normalizeFrameOrigin(row.entry);
+    if (origin && origin !== options.selfOrigin) origins.add(origin);
   }
   return [...origins].sort();
 }

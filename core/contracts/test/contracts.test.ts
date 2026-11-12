@@ -19,7 +19,6 @@ import {
 const validManifest: ModuleManifest = {
   id: 'hello-world',
   route: '/m/hello-world',
-  entry: 'https://unself.example.com/hello-world/worker.js',
   runtimes: ['worker'],
   version: '1.0.0',
 };
@@ -127,20 +126,47 @@ describe('ModuleManifestSchema（契约 v1 字段冻结）', () => {
     expect(manifest.permissions).toEqual(['storage', 'notify']);
   });
 
-  it('shared 护栏：storage.accepts 含 shared 必须申报 tables', () => {
+  it('tables 申报只存在于 core 形态：accepts 不含 core 却申报 tables → 拒绝（#349 U5 护栏②）', () => {
     expect(() =>
       ModuleManifestSchema.parse({
         ...validManifest,
-        storage: { accepts: ['shared'] },
+        storage: { accepts: ['self'] },
+        tables: ['hello_x'],
       }),
     ).toThrow(/tables/);
+  });
+
+  it('declaration=self 与 tables 申报矛盾 → 拒绝；tableless core（无 tables）合法', () => {
+    expect(() =>
+      ModuleManifestSchema.parse({
+        ...validManifest,
+        storage: { accepts: ['core'], declaration: 'self' },
+        tables: ['hello_x'],
+      }),
+    ).toThrow(/自建表落点须选 core/);
+    const parsed = ModuleManifestSchema.parse({ ...validManifest, storage: { accepts: ['core'] } });
+    expect(parsed.storage?.accepts).toEqual(['core']);
+  });
+
+  it('storage 落点词表只有 core|self；旧四级值直接拒绝', () => {
+    expect(() =>
+      ModuleManifestSchema.parse({ ...validManifest, storage: { accepts: ['shared'], tables: ['hello_x'] } }),
+    ).toThrow(/core/);
+    expect(() =>
+      ModuleManifestSchema.parse({ ...validManifest, storage: { accepts: ['dedicated'], tables: ['hello_x'] } }),
+    ).toThrow();
+    expect(() =>
+      ModuleManifestSchema.parse({ ...validManifest, storage: { accepts: ['external'] } }),
+    ).toThrow();
+    const parsed = ModuleManifestSchema.parse({ ...validManifest, storage: { accepts: ['self'] } });
+    expect(parsed.storage?.accepts).toEqual(['self']);
   });
 
   it('preferred 不在 accepts 内 → 拒绝', () => {
     expect(() =>
       ModuleManifestSchema.parse({
         ...validManifest,
-        storage: { accepts: ['dedicated'], preferred: 'shared' },
+        storage: { accepts: ['self'], preferred: 'core' },
       }),
     ).toThrow(/preferred/);
   });
@@ -171,28 +197,20 @@ describe('ModuleManifestSchema（契约 v1 字段冻结）', () => {
     ).not.toThrow();
   });
 
-  it('跨域 http entry（公网明文）→ 拒绝；localhost/127.0.0.1 明文豁免；https entry 通过', () => {
-    expect(() =>
-      ModuleManifestSchema.parse({
-        ...validManifest,
-        entry: 'http://todo.example.org/',
-        runtimes: ['external'],
-      }),
-    ).toThrow(/https/);
-    expect(() =>
-      ModuleManifestSchema.parse({
-        ...validManifest,
-        entry: 'http://localhost:8788/',
-        runtimes: ['external'],
-      }),
-    ).not.toThrow();
-    expect(() =>
-      ModuleManifestSchema.parse({
-        ...validManifest,
-        entry: 'https://todo.example.org/',
-        runtimes: ['external'],
-      }),
-    ).not.toThrow();
+  // #349 U9 地址只由 core 定：entry 移出清单字段表，schema 对象层直接剥离（不报错不保留）。
+  // 自报/装配链路靠「parse 后落库」自然剥地址，真值面只剩注册表 entry 列。
+  it('清单携带 entry → 剥离不保留（地址真值面 = 注册表 entry 列，#349 U9）', () => {
+    const parsed = ModuleManifestSchema.parse({
+      ...validManifest,
+      entry: 'https://todo.example.org/',
+    }) as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty('entry');
+    // 垃圾值也一并剥（形状校验归零：字段已不在契约内）
+    const junk = ModuleManifestSchema.parse({ ...validManifest, entry: 'not-a-url' }) as Record<string, unknown>;
+    expect(junk).not.toHaveProperty('entry');
+    // ModuleManifest 类型不再含 entry（类型面编译期锁死）
+    const typed: ModuleManifest = { ...validManifest };
+    expect('entry' in typed).toBe(false);
   });
 });
 

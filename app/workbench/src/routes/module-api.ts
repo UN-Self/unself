@@ -15,8 +15,10 @@ import { Hono } from 'hono';
 
 import type { Bindings } from '../index';
 import { moduleApiCors } from '../middleware/module-api-cors';
+import { lookupConnectModule } from '../services/connect-registry';
+import { getModuleConfig } from '../registry';
 import { requireModuleAuth, requireModulePermission } from '../middleware/module-auth';
-import type { ModuleAuthVariables } from '../token';
+import { checkModuleGate, type ModuleAuthVariables } from '../token';
 import { deliverNotification } from '../services/notifications';
 
 /** 模块键值行（module_kv，平台基建表：app/workbench/migrations/modules/0001_module_kv.sql，#248）。 */
@@ -32,7 +34,37 @@ export function registerModuleApiRoutes(app: Hono<{ Bindings: Bindings; Variable
   // 白名单 = 注册表启用模块的 entry origin，现场查库（启停秒级生效）。
   moduleApi.use('*', moduleApiCors());
 
+  // --- config（#349 U8 ⑤）：模块读自己的配置声明与已存值（无需权限词） -------------
+  // 注册序刻意在 requireModuleAuth 之前：本端点自核双轨——① Bearer 模块 token（复用
+  // checkModuleGate 同一门禁）；② query keyHash（connect 模块无 token 时的同源凭证，
+  // lookupConnectModule 反查——与 WS 握手同口径）。两轨都不过 = 401/403/404 fail-closed。
+  moduleApi.get('/config', async (c) => {
+    const bearer = (c.req.header('authorization') ?? '').slice(7);
+    let moduleId: string | null = null;
+    if (bearer) {
+      const gate = await checkModuleGate(c.env.CORE_DB, c.env.JWT_PRIVATE_KEY, {
+        header: (name) => c.req.header(name),
+      });
+      if (!gate.ok) return c.json({ error: gate.error }, gate.status as 401 | 403 | 404 | 503);
+      moduleId = gate.auth.moduleId;
+    } else {
+      const keyHash = c.req.query('keyHash') ?? '';
+      if (!keyHash) {
+        return c.json({ error: 'missing bearer token or keyHash' }, 401);
+      }
+      const gate = await lookupConnectModule(c.env.CORE_DB, keyHash);
+      if (!gate.ok) return c.json({ error: gate.error }, gate.status);
+      moduleId = gate.moduleId;
+    }
+    const state = await getModuleConfig(c.env.CORE_DB, moduleId);
+    if (!state) {
+      return c.json({ error: 'module not found' }, 404);
+    }
+    return c.json({ config: state.config, values: state.values });
+  });
+
   // 门禁两段：① 模块 token（验签 + 注册表快照）；② 能力词按端点叠加
+  // （config 端点已在上文注册——免权限词 + keyHash 双轨，注册序在全局门禁之前）
   moduleApi.use('*', requireModuleAuth());
 
   // --- storage（真实现）：module_kv 的模块子域（module_id = token aud） ----------------

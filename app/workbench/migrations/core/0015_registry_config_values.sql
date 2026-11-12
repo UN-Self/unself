@@ -1,0 +1,23 @@
+-- SPDX-License-Identifier: AGPL-3.0-only
+-- unself-core：module_registry 增 config_values 列（issue #349 U8 模块可配置选项）
+--
+-- 背景：模块通过 manifest.config 声明配置项 schema（决策 #53/#66 词表：key/label/
+-- type∈string|secret|number|boolean|enum|url|json|oauth/options/required 等），部署者在
+-- 工作台「设置」里逐模块填值。声明（manifest 快照）与值（用户输入）分开存：本列存
+-- **值**（JSON 对象 {key:value}），声明仍在 manifest_json 快照里——改配置不用重注册，
+-- 读侧按 manifest.config 的 schema 逐 key 校验/回显（admin config 端点，U8 ④）。
+--
+-- 语义：
+--   config_values   JSON 文本 {key:value}；NULL = 该模块从未存过配置（读写端点按
+--                   空对象处理，不 404）。校验纪律在入口层（admin PUT 按 manifest.config
+--                   schema 逐 key 核），列级只存合法产物——unknown key / type 不配在
+--                   API 层 400，不靠数据层 CHECK（与 0013「流程事实不作列级约束」同口径）。
+--   secret          明文落库（issue #349 任务书定案：secret 不回显明文——GET 打码 '***'，
+--                   PUT '***'/空串 = 保持不变；工作台与 core 同域自托管场景，无跨域泄露面）。
+--
+-- 迁移安全性（#61 增量安全语句 + 按文件名记账）：纯 ADD COLUMN 可空列，无数据回填，
+-- 重放幂等（记账跳过）；与 0013/0014 同范式。
+--
+-- 实测版本：SQLite 3.54.1（node:sqlite；ADD COLUMN 可空列零回填）。
+
+ALTER TABLE module_registry ADD COLUMN config_values TEXT;

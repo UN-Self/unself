@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 四级数据落点各跑一个模块（#248 验收①）：core / shared / dedicated / external
- * 四份 manifest 声明在同一次装配里各就其位——落点判定、迁移、绑定三处一致。
+ * 两值数据落点各跑一个模块（#248 验收① → #349 U5 两值收敛）：core / self
+ * 两份 manifest 声明在同一次装配里各就其位——落点判定、迁移、绑定三处一致。
  *
  * 断言面（全部落在请求与账户态，不解析命令行）：
- * - shared：共享 modules 库建表，独立记账 unself_migrations_<id>；
- * - dedicated：专属 D1 `unself-<id>` 建库 + 独立记账 + 上传绑定 `<ID>_DB`；
- * - core：不建表、不建库、不记账；上传带 CORE_API service binding（代理唯一通道，收敛（a)）；
- * - external：装配器不接线（不建库、不记账、不建表）。
- * 平台基建（module_kv，modules 库）记账 unself_migrations_platform 与四者并存不互相覆盖。
+ * - core（自建表）：专属 D1 `unself-<id>` 建库 + 独立记账 unself_migrations_<id> + 上传绑定 `<ID>_DB`；
+ * - core（tableless，无 tables/迁移）：不建表、不建库、不记账（核心代管的键值形态）；
+ * - self：装配器不接线（不建库、不记账、不建表）。
+ * 平台基建（module_kv，modules 库）记账 unself_migrations_platform 与各落点并存不互相覆盖。
  */
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -33,7 +32,7 @@ const FIXED_JWKS = JSON.stringify({
 
 interface TierFixture {
   id: string;
-  level: 'core' | 'shared' | 'dedicated' | 'external';
+  level: 'core' | 'self';
   tables?: string[];
   migration?: string;
 }
@@ -45,7 +44,6 @@ async function writeFixture(rootDir: string, f: TierFixture): Promise<void> {
   const lines = [
     `id: ${f.id}`,
     `route: /m/${f.id}`,
-    `entry: http://localhost:8799/`,
     'runtimes:',
     '  - worker',
     'version: 0.1.0',
@@ -72,8 +70,8 @@ async function writeFixture(rootDir: string, f: TierFixture): Promise<void> {
   }
 }
 
-describe('四级数据落点各跑一个模块（#248 ①）', () => {
-  it('shared/dedicated 各建各的表与库并独立记账；core/external 不建表不记账', { timeout: 180_000 }, async () => {
+describe('两值数据落点各跑一个模块（#248 ① → #349 U5）', () => {
+  it('core（自建表）建专属库与独立记账；core（tableless）/self 不建表不记账', { timeout: 180_000 }, async () => {
     const rootDir = await makeFakeRepoRoot('unself-tiers-');
     try {
       await writeFixture(rootDir, {
@@ -81,18 +79,12 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
         level: 'core',
       });
       await writeFixture(rootDir, {
-        id: 'shared-mod',
-        level: 'shared',
-        tables: ['shared_mod_items'],
-        migration: 'CREATE TABLE IF NOT EXISTS shared_mod_items (id INTEGER PRIMARY KEY, note TEXT);\n',
+        id: 'built-mod',
+        level: 'core',
+        tables: ['built_mod_items'],
+        migration: 'CREATE TABLE IF NOT EXISTS built_mod_items (id INTEGER PRIMARY KEY, note TEXT);\n',
       });
-      await writeFixture(rootDir, {
-        id: 'ded-mod',
-        level: 'dedicated',
-        tables: ['ded_mod_items'],
-        migration: 'CREATE TABLE IF NOT EXISTS ded_mod_items (id INTEGER PRIMARY KEY);\n',
-      });
-      await writeFixture(rootDir, { id: 'ext-mod', level: 'external' });
+      await writeFixture(rootDir, { id: 'self-mod', level: 'self' });
 
       const fake = makeCfRestFake();
       const logs: string[] = [];
@@ -101,9 +93,9 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
         workbenchDir: workbenchDirOf(rootDir),
         client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
         yes: true,
-      configOverride: {
+        configOverride: {
           domain: '',
-          modules: ['core-mod', 'shared-mod', 'ded-mod', 'ext-mod'].map((id) => ({ id, source: `file:./app/modules/${id}` })),
+          modules: ['core-mod', 'built-mod', 'self-mod'].map((id) => ({ id, source: `file:./app/modules/${id}` })),
           storage: { provider: 'r2', bucket: 'unself-storage' },
         },
         fetchJwks: async () => FIXED_JWKS,
@@ -111,93 +103,51 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
         reporter: { step: () => {}, log: (m: string) => logs.push(m) },
       });
 
-      // 独立记账（#55 护栏①）：shared/dedicated 各一条，core/external 没有；
+      // 独立记账（#55 护栏①）：core 自建表一条，tableless/self 没有；
       // 平台基建（modules 库）另有一条，与模块记账互不覆盖。
-      expect(fake.state.ledgerTables.has('unself_migrations_shared_mod')).toBe(true);
-      expect(fake.state.ledgerTables.has('unself_migrations_ded_mod')).toBe(true);
+      expect(fake.state.ledgerTables.has('unself_migrations_built_mod')).toBe(true);
       expect(fake.state.ledgerTables.has('unself_migrations_core_mod')).toBe(false);
-      expect(fake.state.ledgerTables.has('unself_migrations_ext_mod')).toBe(false);
+      expect(fake.state.ledgerTables.has('unself_migrations_self_mod')).toBe(false);
       expect(fake.state.ledgerTables.has('unself_migrations_platform')).toBe(true);
-      expect([...fake.state.ledgerRows.get('unself_migrations_shared_mod') ?? []]).toEqual(['0001_init.sql']);
-      expect([...fake.state.ledgerRows.get('unself_migrations_ded_mod') ?? []]).toEqual(['0001_init.sql']);
+      expect([...fake.state.ledgerRows.get('unself_migrations_built_mod') ?? []]).toEqual(['0001_init.sql']);
       expect([...fake.state.ledgerRows.get('unself_migrations_platform') ?? []]).toEqual(['0001_module_kv.sql']);
 
-      // 库：只有 dedicated 建专属库（shared 用共享 modules 库；core/external 不建）
-      expect(fake.state.d1.has('unself-ded-mod')).toBe(true);
-      expect(fake.state.d1.has('unself-shared-mod')).toBe(false);
+      // 库：只有 core 自建表建专属库（tableless/self 不建）
+      expect(fake.state.d1.has('unself-built-mod')).toBe(true);
       expect(fake.state.d1.has('unself-core-mod')).toBe(false);
-      expect(fake.state.d1.has('unself-ext-mod')).toBe(false);
+      expect(fake.state.d1.has('unself-self-mod')).toBe(false);
 
-      // 上传绑定：dedicated 绑专属库；core 绑 CORE_API（代理唯一通道）；shared 两者都不需要
+      // 上传绑定：core 自建表绑专属库；tableless/self 两者都不需要
       const bindingsOf = (worker: string): Array<{ type: string; name: string }> =>
         ((fake.state.uploads.find((u) => u.worker === worker)?.metadata as { bindings?: Array<{ type: string; name: string }> })
           ?.bindings ?? []);
-      const dedNames = bindingsOf('unself-module-ded-mod').map((b) => `${b.type}:${b.name}`);
-      expect(dedNames).toContain('d1:DED_MOD_DB');
+      const builtNames = bindingsOf('unself-module-built-mod').map((b) => `${b.type}:${b.name}`);
+      expect(builtNames).toContain('d1:BUILT_MOD_DB');
       const coreNames = bindingsOf('unself-module-core-mod').map((b) => `${b.type}:${b.name}`);
-      expect(coreNames).toContain('service:CORE_API');
-      const sharedNames = bindingsOf('unself-module-shared-mod').map((b) => `${b.type}:${b.name}`);
-      expect(sharedNames).not.toContain('service:CORE_API');
-      expect(sharedNames).not.toContain('d1:SHARED_MOD_DB'); // shared 用共享库，不另建专属库
-      const extNames = bindingsOf('unself-module-ext-mod').map((b) => `${b.type}:${b.name}`);
-      expect(extNames).not.toContain('service:CORE_API');
-      expect(extNames).not.toContain('d1:EXT_MOD_DB'); // external 连自备库，装配器不接线
+      expect(coreNames).not.toContain('service:CORE_API');
+      expect(coreNames).not.toContain('d1:CORE_MOD_DB');
+      const selfNames = bindingsOf('unself-module-self-mod').map((b) => `${b.type}:${b.name}`);
+      expect(selfNames).not.toContain('service:CORE_API');
+      expect(selfNames).not.toContain('d1:SELF_MOD_DB'); // self 连自备库，装配器不接线
 
       // 落点日志（部署者可复核：这一台实例上每个模块的数据在哪）
+      expect(logs.some((l) => l.includes('模块 built-mod 落点 core'))).toBe(true);
       expect(logs.some((l) => l.includes('模块 core-mod 落点 core'))).toBe(true);
-      expect(logs.some((l) => l.includes('模块 shared-mod 落点 shared'))).toBe(true);
-      expect(logs.some((l) => l.includes('模块 ded-mod 落点 dedicated'))).toBe(true);
-      expect(logs.some((l) => l.includes('模块 ext-mod 落点 external'))).toBe(true);
+      expect(logs.some((l) => l.includes('模块 self-mod 落点 self'))).toBe(true);
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }
   });
 
-  it('shared 落点装到没申报的表 → 装配停住（护栏②：共享库不接收未经申报的表）', { timeout: 120_000 }, async () => {
+  it('core（自建表）装到没申报的表 → 装配停住（护栏②：核心代管库不接收未经申报的表）', { timeout: 120_000 }, async () => {
     const rootDir = await makeFakeRepoRoot('unself-tiers-bad-');
     try {
       await writeFixture(rootDir, {
         id: 'bad-mod',
-        level: 'shared',
+        level: 'core',
         tables: ['bad_mod_items'],
-        // 建的表名带前缀但**未申报**（护栏②），装配必须在跑迁移前停住
+        // 建的表**未申报**（护栏②），装配必须在跑迁移前停住
         migration: 'CREATE TABLE IF NOT EXISTS bad_mod_secret (id INTEGER PRIMARY KEY);\n',
-      });
-      const fake = makeCfRestFake();
-      let thrown: unknown;
-      try {
-        await runNineSteps({
-          rootDir,
-          workbenchDir: workbenchDirOf(rootDir),
-          client: new RestClient({ token: 't', fetchImpl: fake.fetchImpl }),
-          yes: true,
-      configOverride: { domain: '', modules: [{ id: 'bad-mod', source: 'file:./app/modules/bad-mod' }], storage: { provider: 'r2', bucket: 'unself-storage' } },
-          fetchJwks: async () => FIXED_JWKS,
-          http: { smoke: async () => [] },
-          reporter: { step: () => {}, log: () => {} },
-        });
-      } catch (err) {
-        thrown = err;
-      }
-      const message = thrown instanceof Error ? thrown.message : String(thrown);
-      expect(message).toContain('护栏');
-      expect(message).toContain('bad_mod_secret');
-      // 停住 = 表没建、也没记账（不会留下「装了一半」的库）
-      expect(fake.state.ledgerTables.has('unself_migrations_bad_mod')).toBe(false);
-    } finally {
-      await rm(rootDir, { recursive: true, force: true });
-    }
-  });
-
-  it('shared 落点装到无模块前缀的表 → 装配停住（护栏③：表名必须 <模块id>_）', { timeout: 120_000 }, async () => {
-    const rootDir = await makeFakeRepoRoot('unself-tiers-prefix-');
-    try {
-      await writeFixture(rootDir, {
-        id: 'bad-mod',
-        level: 'shared',
-        tables: ['items'],
-        // 表名不带 bad_mod_ 前缀（护栏③）：即使已申报，也必须在跑迁移前停住
-        migration: 'CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY);\n',
       });
       const fake = makeCfRestFake();
       let thrown: unknown;
@@ -217,20 +167,20 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
       }
       const message = thrown instanceof Error ? thrown.message : String(thrown);
       expect(message).toContain('护栏');
-      expect(message).toContain('bad_mod_');
-      // 停住 = 没静默回退到 dedicated/自己的库，也没留下「装了一半」的记账
+      expect(message).toContain('bad_mod_secret');
+      // 停住 = 表没建、也没记账（不会留下「装了一半」的库）
       expect(fake.state.ledgerTables.has('unself_migrations_bad_mod')).toBe(false);
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }
   });
 
-  it('shared 落点用括号引号 + 注释的跨模块外键 → 装配停住（护栏③不漏检）', { timeout: 120_000 }, async () => {
+  it('core（自建表）用括号引号 + 注释的跨模块外键 → 装配停住（护栏③不漏检）', { timeout: 120_000 }, async () => {
     const rootDir = await makeFakeRepoRoot('unself-tiers-fkpar-');
     try {
       await writeFixture(rootDir, {
         id: 'bad-mod',
-        level: 'shared',
+        level: 'core',
         tables: ['bad_mod_items'],
         // #310 实测退回形态：括号引号目标 + 关键字与表名之间夹注释；真 SQLite 会建出跳模块 FK
         migration:
@@ -262,12 +212,12 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
     }
   });
 
-  it('shared 落点用 Unicode 标识符外键（不得截断）→ 装配停住', { timeout: 120_000 }, async () => {
+  it('core（自建表）用 Unicode 标识符外键（不得截断）→ 装配停住', { timeout: 120_000 }, async () => {
     const rootDir = await makeFakeRepoRoot('unself-tiers-uni-');
     try {
       await writeFixture(rootDir, {
         id: 'bad-mod',
-        level: 'shared',
+        level: 'core',
         tables: ['bad_mod_items'],
         migration:
           'CREATE TABLE IF NOT EXISTS bad_mod_items外 (id INTEGER PRIMARY KEY);\n' +
@@ -297,12 +247,12 @@ describe('四级数据落点各跑一个模块（#248 ①）', () => {
     }
   });
 
-  it('shared 落点用 CREATE VIRTUAL TABLE（未支持）→ 装配停住，不静默跳过', { timeout: 120_000 }, async () => {
+  it('core（自建表）用 CREATE VIRTUAL TABLE（未支持）→ 装配停住，不静默跳过', { timeout: 120_000 }, async () => {
     const rootDir = await makeFakeRepoRoot('unself-tiers-vtab-');
     try {
       await writeFixture(rootDir, {
         id: 'bad-mod',
-        level: 'shared',
+        level: 'core',
         tables: ['bad_mod_items'],
         migration:
           'CREATE TABLE IF NOT EXISTS bad_mod_items (id INTEGER PRIMARY KEY);\n' +

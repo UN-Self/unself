@@ -32,6 +32,7 @@ const PKG_DIR = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const DEV_CONFIG = join(PKG_DIR, 'wrangler.dev.jsonc');
 const DIST_WEB = join(PKG_DIR, 'dist', 'web');
 const MIGRATIONS_DIR = join(PKG_DIR, 'migrations', 'core');
+const MODULES_MIGRATIONS_DIR = join(PKG_DIR, 'migrations', 'modules');
 const D1_STATE_DIR = join(PKG_DIR, '.wrangler', 'state', 'v3', 'd1', 'miniflare-D1DatabaseObject');
 const DEV_VARS_PATH = join(PKG_DIR, '.dev.vars');
 
@@ -196,6 +197,11 @@ function splitSqlStatements(sql) {
 async function migrate() {
   const dbPath = ensureCoreStateDb();
   const report = applyCoreMigrations(dbPath, MIGRATIONS_DIR);
+  // 本地两个 D1 的 database_id 都是 REPLACE_ME，miniflare 落在同一个 sqlite。
+  // module_kv 不建表时 /api/module-api/storage 直接 500。
+  const modulesReport = applyCoreMigrations(dbPath, MODULES_MIGRATIONS_DIR);
+  report.applied.push(...modulesReport.applied);
+  report.skipped.push(...modulesReport.skipped);
   if (report.applied.length > 0) {
     log(`迁移已应用 ${report.applied.length} 个：${report.applied.join('、')}`);
   }

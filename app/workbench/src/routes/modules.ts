@@ -5,9 +5,11 @@ import { z } from 'zod';
 
 import { getSigningRuntime } from '../keys';
 import { checkTokenGate, issueModuleToken, MODULE_TOKEN_ISSUER } from '../token';
-import { ConnectRegisterSchema, connectPendingManifest, listMemberModules, listModules, ModuleRegistrationSchema, registryFrameOrigins, toggleModule, upsertModule } from '../registry';
+import { ConnectRegisterSchema, connectPendingManifest, getModuleConfig, listMemberModules, listModules, ModuleRegistrationSchema, registryFrameOrigins, saveModuleConfig, toggleModule, upsertModule } from '../registry';
 import { audit } from '../services/audit';
+import { CONFIG_SECRET_MASK, ConfigValidationError, validateModuleConfigValues } from '../services/module-config';
 import { installNpmModule, RuntimeInstallError, wipeCredential } from '../services/runtime-install';
+import { configuredMailSender, deliverNotification } from '../services/notifications';
 import { DEPLOY_MODES, STORAGE_LEVELS } from '@unself/control-plane/types';
 
 /**
@@ -23,7 +25,6 @@ export const InstallRequestSchema = z.object({
   entry: z.string().max(2048).nullish(),
   storageLevel: z.enum(STORAGE_LEVELS).nullish(),
 });
-import { configuredMailSender, deliverNotification } from '../services/notifications';
 import { readSession } from '../session';
 import { profileAvatarUrl } from '../services/avatar-store';
 import { getProfileIdentity } from '../services/users';
@@ -204,7 +205,7 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
     const entry = await upsertModule(c.env.CORE_DB, {
       id: moduleId,
       enabled: false,
-      manifest: connectPendingManifest(moduleId, routeEntry),
+      manifest: connectPendingManifest(moduleId),
       mode: 'connect',
       entry: routeEntry,
       credential_hash: keyHash,
@@ -217,6 +218,61 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
   /** 全量列表（管理端，含停用）。 */
   app.get('/api/admin/modules', async (c) => {
     return c.json(await listModules(c.env.CORE_DB));
+  });
+
+  // ---- 模块配置（#349 U8 ④）：声明（manifest 快照）+ 存值（0015 config_values）----
+
+  /**
+   * 读模块配置（工作台行内「设置」表单的数据源）：字段声明 + 当前值。
+   * secret 已存值打码 '***'（人话提示「留空保持不变」由前端补）；无声明回空数组不 404
+   * （工作台只对 manifest.config 非空的行渲染入口，但直接打 API 也要有稳定形状）。
+   */
+  app.get('/api/admin/modules/:id/config', async (c) => {
+    const moduleId = c.req.param('id');
+    const state = await getModuleConfig(c.env.CORE_DB, moduleId);
+    if (!state) {
+      return c.json({ error: 'module not found' }, 404);
+    }
+    const values: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(state.values)) {
+      const field = state.config.find((f) => f.key === key);
+      values[key] = field?.type === 'secret' && value !== undefined && value !== null && value !== '' ? CONFIG_SECRET_MASK : value;
+    }
+    return c.json({ config: state.config, values });
+  });
+
+  /**
+   * 存模块配置（工作台「设置」保存）：values 逐 key 按 manifest.config schema 校验
+   * （校验单点 services/module-config.ts：unknown key 拒 / type 校验 / required 拒 /
+   * oauth 拒 / secret 掩码与空串 = 保持）。校验过才写 0015 config_values 列。
+   */
+  app.put('/api/admin/modules/:id/config', async (c) => {
+    const moduleId = c.req.param('id');
+    const body = (await c.req.json().catch(() => null)) as { values?: unknown } | null;
+    if (typeof body?.values !== 'object' || body.values === null || Array.isArray(body.values)) {
+      return c.json({ error: 'body must be { values: Record<string, unknown> }' }, 400);
+    }
+    const rawValues = body.values as Record<string, unknown>;
+    const state = await getModuleConfig(c.env.CORE_DB, moduleId);
+    if (!state) {
+      return c.json({ error: 'module not found' }, 404);
+    }
+    let saved: Record<string, unknown>;
+    try {
+      saved = validateModuleConfigValues(state.config, rawValues, state.values);
+    } catch (error) {
+      if (error instanceof ConfigValidationError) {
+        return c.json({ error: error.message }, 400);
+      }
+      throw error;
+    }
+    const ok = await saveModuleConfig(c.env.CORE_DB, moduleId, saved);
+    if (!ok) {
+      return c.json({ error: 'module not found' }, 404);
+    }
+    await audit(c.env.CORE_DB, (await readSession(c))!.uid, 'module_config_updated', moduleId);
+    // 响应只回 id：saved.values 可能含 secret 明文，不回显（读侧 GET 已打码）
+    return c.json({ id: moduleId });
   });
 
   /**

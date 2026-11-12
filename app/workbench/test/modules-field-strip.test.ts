@@ -114,10 +114,10 @@ describe('S6 /api/modules 字段剥离回归（#208）', () => {
     expect(res.status).toBe(200);
     const list = (await res.json()) as Array<Record<string, unknown>>;
     expect(list).toHaveLength(1);
-    // 成员可见面收窄（#349）：不回落点三列与凭证哈希；manifest 保留（壳 iframe 与 nav 数据源）
-    expect(Object.keys(list[0]!).sort()).toEqual(['enabled', 'id', 'manifest', 'name']);
+    // 成员可见面收窄（#349 U9）：不回 mode/storage_level/credential_hash；manifest 保留（nav 数据源）；
+    // **entry 是刻意的例外面**——清单不再承载地址后，它是壳 iframe 装载的唯一地址源（注册表 entry 列）
+    expect(Object.keys(list[0]!).sort()).toEqual(['enabled', 'entry', 'id', 'manifest', 'name']);
     expect(list[0]).not.toHaveProperty('mode');
-    expect(list[0]).not.toHaveProperty('entry');
     expect(list[0]).not.toHaveProperty('storage_level');
     expect(list[0]).not.toHaveProperty('credential_hash');
     // manifest 内部的未知键仍被注册时剥离（S6 原语义不变）

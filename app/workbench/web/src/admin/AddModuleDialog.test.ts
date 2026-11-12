@@ -17,8 +17,8 @@ import { fetchAdminModules, toggleModule, type AdminModule } from '../lib/admin-
 
 /**
  * 「新增模块」双模式弹窗行为测试（#349 决策 #108/#109）。
- * 断言用户可见结果（面板切换、env 两行、按钮可用性、错误提示、保存后列表刷新），
- * 不碰组件内部字段名。密钥相关只断言「明文只出现在 env 区、请求只带哈希」。
+ * 断言用户可见结果（面板切换、env 打码/明文、复制动作、tooltip、按钮可用性、错误提示、保存后列表刷新），
+ * 不碰组件内部字段名。密钥相关：明文默认不出现在 DOM，只在眼睛切换后可见；生成即复制、点框再复制；请求只带哈希。
  */
 
 vi.mock('../lib/modules-install-api', () => ({
@@ -44,9 +44,22 @@ const mod = (over: Partial<AdminModule> = {}): AdminModule => ({
   ...over,
 })
 
+/** clipboard 桩：jsdom 没有 navigator.clipboard，用可配置的 mock 替身；生成即复制/点框复制都走 writeText。 */
+const clipboardWriteText = vi.fn()
+
+async function generateKey(wrapper: ReturnType<typeof mount>) {
+  await wrapper.find('[data-test="connect-id"]').setValue('bridge')
+  await wrapper.find('[data-test="connect-generate"]').trigger('click')
+  await flushPromises()
+}
+
 describe('AddModuleDialog（#349 双模式）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // clipboard 默认成功：生成即复制会在每次生成时调用 writeText
+    clipboardWriteText.mockReset()
+    clipboardWriteText.mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: clipboardWriteText }, configurable: true })
     vi.mocked(generateConnectKey).mockResolvedValue({ key: 'plain-key-123', keyHash: 'f'.repeat(64) })
     vi.mocked(registerConnectModule).mockResolvedValue({ id: 'bridge', mode: 'connect', enabled: false })
     vi.mocked(fetchConnectStatus).mockResolvedValue({ moduleId: 'bridge', online: true })
@@ -66,38 +79,159 @@ describe('AddModuleDialog（#349 双模式）', () => {
     await wrapper.find('[data-test="add-module-tab-cloudflare"]').trigger('click')
     expect(wrapper.find('[data-test="add-module-cloudflare"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="add-module-connect"]').exists()).toBe(false)
+    // CF tab 不出水（水位只属于反连测试动线）
+    expect(wrapper.find('[data-level]').attributes('data-level')).toBe('rest')
   })
 
-  it('存储落点收敛（#349 验收）：反连只有 core/不指定，CF 保留四级', async () => {
-    // 反连 tab：core 不部署模块运行体，shared/dedicated「核心代供」语义不成立
+  it('存储落点收敛为 自托管/Core 两档，默认自托管（undefined=self）', async () => {
+    // 反连 tab
     const connect = mountDialog()
-    const connectOptions = connect.findComponent(UMotionSelect).props('options') as Array<{ value: string }>
-    expect(connectOptions.map((o) => o.value)).toEqual(['', 'core'])
+    const [connectSelect] = connect.findAllComponents(UMotionSelect)
+    const connectOptions = connectSelect!.props('options') as Array<{ value: string; label: string }>
+    expect(connectOptions.map((o) => o.value)).toEqual(['self', 'core'])
+    expect(connectOptions.map((o) => o.label)).toEqual(['自托管', 'Core'])
+    // 默认选 self：注册请求 storageLevel 即 undefined（undefined=self，#349 验收定案）
+    await generateKey(connect)
+    expect(registerConnectModule).toHaveBeenCalledWith(
+      expect.objectContaining({ storageLevel: undefined }),
+    )
 
+    // CF tab 同款收敛
     const cf = mountDialog()
     await cf.find('[data-test="add-module-tab-cloudflare"]').trigger('click')
-    const cfOptions = cf.findComponent(UMotionSelect).props('options') as Array<{ value: string }>
-    expect(cfOptions.map((o) => o.value)).toEqual(['', 'core', 'shared', 'dedicated', 'external'])
+    const [cfSelect] = cf.findAllComponents(UMotionSelect)
+    const cfOptions = cfSelect!.props('options') as Array<{ value: string; label: string }>
+    expect(cfOptions.map((o) => o.value)).toEqual(['self', 'core'])
+    await cf.find('[data-test="cf-npmspec"]').setValue('@unself/hello@0.1.0')
+    await cf.find('[data-test="cf-account"]').setValue('acc-1')
+    await cf.find('[data-test="cf-token"]').setValue('cf-plain-token')
+    await cf.find('[data-test="cf-install"]').trigger('click')
+    await flushPromises()
+    expect(installCloudflareModule).toHaveBeenCalledWith(
+      expect.objectContaining({ storageLevel: undefined }),
+    )
   })
 
-  it('生成接入码：只把哈希交给 core，明文 key 只出现在 env 区一次', async () => {
+  it('生成接入码：问号收进生成按钮；生成即复制明文；env 默认打码，明文不进 DOM', async () => {
     const wrapper = mountDialog()
-    await wrapper.find('[data-test="connect-id"]').setValue('bridge')
-    await wrapper.find('[data-test="connect-generate"]').trigger('click')
-    await flushPromises()
+
+    // 生成按钮自带问号图标 + UNSELF_CORE_URL tooltip 出处（aria-describedby）；独立问号按钮已删
+    const generateBtn = wrapper.find('[data-test="connect-generate"]')
+    expect(generateBtn.text()).toContain('生成接入码')
+    expect(generateBtn.attributes('aria-describedby')).toBe('core-url-tip')
+    expect(wrapper.find('[data-test="connect-env-help"]').exists()).toBe(false)
+
+    await generateKey(wrapper)
 
     expect(registerConnectModule).toHaveBeenCalledWith({
       moduleId: 'bridge',
       keyHash: 'f'.repeat(64),
       storageLevel: undefined,
     })
-    const env = wrapper.find('[data-test="connect-env"]').text()
-    // env 收敛为 key 一项（#108 决策原样；id 不下发——core 凭哈希反查，地址按拓扑自填）
-    expect(env).toContain('UNSELF_MODULE_KEY=plain-key-123')
-    expect(env).not.toContain('UNSELF_MODULE_ID')
-    expect(env).not.toContain('UNSELF_CORE_URL')
-    // 生成的请求体里没有明文
+    // 生成即复制：writeText 收到明文 key
+    expect(clipboardWriteText).toHaveBeenCalledWith('plain-key-123')
+    const env = wrapper.find('[data-test="connect-env"]')
+    // 打码态：占位圆点在，明文不在 DOM
+    expect(env.text()).toContain('UNSELF_MODULE_KEY=••••••••')
+    expect(wrapper.text()).not.toContain('plain-key-123')
+    // 请求体里没有明文
     expect(JSON.stringify(vi.mocked(registerConnectModule).mock.calls[0]![0])).not.toContain('plain-key-123')
+    // 独立复制按钮已删
+    expect(wrapper.find('[data-test="connect-copy"]').exists()).toBe(false)
+  })
+
+  it('点展示框=复制明文：再次 writeText，反馈「已复制」，2 秒后消退', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mountDialog()
+      await generateKey(wrapper)
+      clipboardWriteText.mockClear()
+
+      await wrapper.find('[data-test="connect-env"]').trigger('click')
+      await flushPromises()
+
+      expect(clipboardWriteText).toHaveBeenCalledTimes(1)
+      expect(clipboardWriteText).toHaveBeenCalledWith('plain-key-123')
+      expect(wrapper.find('[data-test="connect-copy-feedback"]').text()).toBe('已复制')
+      vi.advanceTimersByTime(2100)
+      await flushPromises()
+      expect(wrapper.find('[data-test="connect-copy-feedback"]').text()).toBe('')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clipboard 失败（生成时与点框时）：降级为选中 env 文本并提示手动 Ctrl+C，明文不出 DOM', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: clipboardWriteText.mockRejectedValue(new Error('NotAllowedError')) },
+      configurable: true,
+    })
+    const selectAllChildren = vi.spyOn(Selection.prototype, 'selectAllChildren').mockImplementation(() => {})
+    try {
+      const wrapper = mountDialog()
+      await generateKey(wrapper)
+      // 生成即复制的失败已进降级态
+      expect(wrapper.find('[data-test="connect-copy-feedback"]').text()).toContain('Ctrl+C')
+
+      await wrapper.find('[data-test="connect-env"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="connect-copy-feedback"]').text()).toContain('Ctrl+C')
+      expect(wrapper.find('[data-test="connect-env"]').text()).not.toContain('plain-key-123')
+      expect(selectAllChildren).toHaveBeenCalled()
+    } finally {
+      selectAllChildren.mockRestore()
+      clipboardWriteText.mockResolvedValue(undefined)
+    }
+  })
+
+  it('眼睛内嵌在展示框右侧：切换后明文出现/消失，独立「显示」按钮不存在', async () => {
+    const wrapper = mountDialog()
+    await generateKey(wrapper)
+
+    const eye = wrapper.find('[data-test="connect-toggle-key"]')
+    // 内嵌小眼睛：无文字，靠 aria-label 说明（不是带「显示/隐藏」文案的大按钮）
+    expect(eye.text()).toBe('')
+    expect(eye.attributes('aria-label')).toBe('显示接入码')
+    expect(wrapper.find('[data-test="connect-env"]').text()).toContain('••••••••')
+
+    await eye.trigger('click')
+    expect(eye.attributes('aria-label')).toBe('隐藏接入码')
+    expect(wrapper.find('[data-test="connect-env"]').text()).toContain('UNSELF_MODULE_KEY=plain-key-123')
+    expect(wrapper.text()).toContain('plain-key-123')
+
+    await eye.trigger('click')
+    expect(wrapper.find('[data-test="connect-env"]').text()).toContain('••••••••')
+    expect(wrapper.find('[data-test="connect-env"]').text()).not.toContain('plain-key-123')
+  })
+
+  it('UNSELF_CORE_URL 说明挂在生成按钮 hover/focus 的 tooltip 上，正文不再有长说明段', async () => {
+    const wrapper = mountDialog()
+
+    const help = wrapper.find('[data-test="connect-generate"]')
+    expect(help.attributes('aria-describedby')).toBe('core-url-tip')
+    const tipHidden = (): boolean => wrapper.find('[data-test="connect-env-help-tip"]').attributes('style')?.includes('display: none') ?? false
+    // 默认隐藏（v-show）
+    expect(tipHidden()).toBe(true)
+    await help.trigger('mouseenter')
+    expect(tipHidden()).toBe(false)
+    expect(wrapper.find('[data-test="connect-env-help-tip"]').text()).toContain('UNSELF_CORE_URL')
+    await help.trigger('mouseleave')
+    expect(tipHidden()).toBe(true)
+    // focus 也能唤出（键盘可达）
+    await help.trigger('focus')
+    expect(tipHidden()).toBe(false)
+    await help.trigger('blur')
+    expect(tipHidden()).toBe(true)
+    // 正文旧长说明段已删
+    expect(wrapper.text()).not.toContain('只显示这一次')
+    expect(wrapper.text()).not.toContain('以模块所在机器能连到为准')
+  })
+
+  it('CF 凭证说明段已删（只用于本次部署的段落不再出现）', async () => {
+    const wrapper = mountDialog()
+    await wrapper.find('[data-test="add-module-tab-cloudflare"]').trigger('click')
+    expect(wrapper.text()).not.toContain('凭证只用于本次部署')
   })
 
   it('模块 id 不合法：直接人话报错，不打接口', async () => {
@@ -112,14 +246,16 @@ describe('AddModuleDialog（#349 双模式）', () => {
 
   it('测试连接绿之前保存按钮不可用；绿了才能保存并通知页面刷新', async () => {
     const wrapper = mountDialog()
-    await wrapper.find('[data-test="connect-id"]').setValue('bridge')
-    await wrapper.find('[data-test="connect-generate"]').trigger('click')
-    await flushPromises()
+    await generateKey(wrapper)
     expect(wrapper.find('[data-test="connect-save"]').attributes('disabled')).toBeDefined()
 
+    // 水位联动（#100 同规）：静息 → 在线满灌。
+    // （testing「波动」帧只在真机网络往返可见；测试里 mock 同 tick resolve，DOM 只补最终态。）
+    expect(wrapper.find('[data-level]').attributes('data-level')).toBe('rest')
     await wrapper.find('[data-test="connect-test"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-test="add-module-status"]').text()).toContain('隧道在线')
+    expect(wrapper.find('[data-level]').attributes('data-level')).toBe('full')
     expect(wrapper.find('[data-test="connect-save"]').attributes('disabled')).toBeUndefined()
 
     await wrapper.find('[data-test="connect-save"]').trigger('click')
@@ -131,13 +267,12 @@ describe('AddModuleDialog（#349 双模式）', () => {
   it('模块没连上来：给可操作的人话，不伪造成功', async () => {
     vi.mocked(fetchConnectStatus).mockResolvedValue({ moduleId: 'bridge', online: false })
     const wrapper = mountDialog()
-    await wrapper.find('[data-test="connect-id"]').setValue('bridge')
-    await wrapper.find('[data-test="connect-generate"]').trigger('click')
-    await flushPromises()
+    await generateKey(wrapper)
     await wrapper.find('[data-test="connect-test"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-test="add-module-alert"]').text()).toContain('还没连上来')
+    expect(wrapper.find('[data-level]').attributes('data-level')).toBe('rest')
     expect(wrapper.find('[data-test="connect-save"]').attributes('disabled')).toBeDefined()
   })
 

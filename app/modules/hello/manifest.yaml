@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # 模块契约 v1（docs/modules.md §3 字段冻结；决策 #56/#57）
-# entry 为占位：M0 后由装配器覆写为实例内地址（§3）
+# 地址不在此声明（#349 U9）：壳装载与白名单只读注册表 entry 列
 id: hello
 route: /m/hello
-entry: http://localhost:8790/
 runtimes:
   - worker
 version: 0.1.0
@@ -11,4 +10,16 @@ description: hello world 演示模块（SDK 存储计数器）
 # 门禁词表见 @unself/contracts MODULE_PERMISSIONS；hello 只经 SDK 存储读写
 permissions:
   - storage
-# storage 省略 = 只支持 core（数据经 Core API 代理，#55）
+# 配置项（#349 U8 模块可配置选项）：greeting 显示在模块页，由部署者在工作台「设置」里改；
+# 声明（本文件）与存值（core module_registry.config_values，迁移 0015）分开存。
+config:
+  - key: greeting
+    label: 问候语
+    type: string
+    required: true
+# storage（#349 U5 两值）：core = 核心代管（计数键落 core 的 module_kv，无自建表）；
+# self = 自托管。hello 只支持 core。
+storage:
+  accepts:
+    - core
+  preferred: core

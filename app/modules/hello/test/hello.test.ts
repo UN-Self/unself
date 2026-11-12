@@ -252,3 +252,87 @@ describe('module-hello（#13 垂直切片载体）', () => {
     expect(html).toMatch(/from ['"]\.\/sdk\/module-sdk\.esm\.js['"]/);
   });
 });
+
+/**
+ * U8（#349）greeting 闭环：设 greeting → 模块 /api/greeting 返回新值。
+ * CORE_API 替身扩 /api/module-api/config 形状（{ config, values }，同 workbench 端点契约）；
+ * node 态（无 binding）用全局 fetch 替身假 core，断言请求 URL 带 keyHash=hex(SHA-256(key))。
+ */
+describe('GET /api/greeting（U8 模块可配置选项）', () => {
+  /** CORE_API 替身补 /api/module-api/config 形状（config + 可变 values）。 */
+  function stubConfig(stub: ReturnType<typeof makeCoreApiStub>, values: Record<string, unknown>): void {
+    const rawFetch = stub.fetch.bind(stub);
+    (stub as { fetch: unknown }).fetch = async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const url = new URL(String(input));
+      if (url.pathname === '/api/module-api/config') {
+        // config 调用同记进 calls（Bearer 转交断言与 storage 调用同一记录面）
+        stub.calls.push({
+          method: init?.method ?? 'GET',
+          path: url.pathname,
+          auth: (init?.headers as Record<string, string> | undefined)?.authorization,
+        });
+        return Response.json({
+          config: [{ key: 'greeting', label: '问候语', type: 'string', required: true, default: 'Hello' }],
+          values,
+        });
+      }
+      return rawFetch(input, init);
+    };
+  }
+
+  it('设 greeting → 返回新值；values 清空 → 声明 default（闭环+取值链）', async () => {
+    const env = await envFor();
+    const token = await makeToken();
+    const headers = { authorization: `Bearer ${token}` };
+
+    // ① 部署者在工作台设了 greeting='你好呀' → 模块返回新值（闭环）
+    stubConfig(env.stub, { greeting: '你好呀' });
+    const set = await app.request('https://m.example/api/greeting', { headers }, env);
+    expect(set.status).toBe(200);
+    expect(await set.json()).toEqual({ greeting: '你好呀' });
+    // token 原样转交（config 也是权限面：Bearer = 本请求的模块 token）
+    expect(env.stub.calls.some((c) => c.auth === `Bearer ${token}`)).toBe(true);
+
+    // ② 值被清 → 声明 default 兜底
+    stubConfig(env.stub, {});
+    const cleared = await app.request('https://m.example/api/greeting', { headers }, env);
+    expect(await cleared.json()).toEqual({ greeting: 'Hello' });
+  });
+
+  it('无 Bearer（worker 态）→ 401（同 /api/count 门禁规）', async () => {
+    const env = await envFor();
+    stubConfig(env.stub, {});
+    const res = await app.request('https://m.example/api/greeting', {}, env);
+    expect(res.status).toBe(401);
+  });
+
+  it('node 态（无 binding）：keyHash 即凭证，URL 带 hex(SHA-256(key))；缺 env → 503', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toBe('/api/module-api/config');
+      expect(url.searchParams.get('keyHash')).toMatch(/^[0-9a-f]{64}$/);
+      return Response.json({ config: [], values: { greeting: '哈希轨' } });
+    }));
+    const prevUrl = process.env.UNSELF_CORE_URL;
+    const prevKey = process.env.UNSELF_MODULE_KEY;
+    try {
+      process.env.UNSELF_CORE_URL = 'https://core.example.com/';
+      process.env.UNSELF_MODULE_KEY = 'node-track-key';
+      // env 显式空对象（Hono 的 app.request env 非缺省 {}；worker 态用例由 envFor 供）
+      const res = await app.request('https://m.example/api/greeting', {}, {});
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ greeting: '哈希轨' });
+      // 缺 env → 503（零依赖自检形态：config 不可用要人话，不白屏）
+      process.env.UNSELF_CORE_URL = '';
+      const unavailable = await app.request('https://m.example/api/greeting', {}, {});
+      expect(unavailable.status).toBe(503);
+    } finally {
+      process.env.UNSELF_CORE_URL = prevUrl;
+      process.env.UNSELF_MODULE_KEY = prevKey;
+      vi.unstubAllGlobals();
+    }
+  });
+});

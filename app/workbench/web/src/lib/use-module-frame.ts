@@ -167,7 +167,8 @@ export function useModuleFrame(module: Ref<RegistryModule | null>) {
    * 仅入口配置无效（frameOriginFor 为 null）才判 failed；iframe 未挂载则等挂载后再挂。
    */
   async function attachBridgeFor(mod: RegistryModule): Promise<void> {
-    const origin = frameOriginFor(mod.manifest?.entry ?? null)
+    // 地址源 = 条目 entry（注册表 entry 列，#349 U9；清单不再承载地址）
+    const origin = frameOriginFor(mod.entry)
     if (origin === null) {
       const error = Error('模块入口配置无效，请联系管理员') as ApiError
       error.status = 0

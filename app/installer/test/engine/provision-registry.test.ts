@@ -14,7 +14,6 @@ import { RestClient } from '../../src/engine/rest/client';
 const HELLO_MANIFEST = `# SPDX-License-Identifier: AGPL-3.0-only
 id: hello
 route: /m/hello
-entry: http://localhost:8790/ # 占位
 runtimes:
   - worker
 permissions:
@@ -59,26 +58,27 @@ describe('ensureDatabases（①幂等 · REST）', () => {
 });
 
 describe('registry（⑤ · 形状契约）', () => {
-  const manifest = buildManifestSnapshot({ manifestText: HELLO_MANIFEST, moduleId: 'hello', baseUrl: 'https://team.example.com' });
+  const manifest = buildManifestSnapshot({ manifestText: HELLO_MANIFEST, moduleId: 'hello' });
 
   it('sqlString：单引号翻倍转义', () => {
     expect(sqlString("o'brien")).toBe(`'o''brien'`);
   });
 
-  it('registryUpsertCommand：enabled=1 + manifest 快照 JSON + 落点三列（#348，upsert 语义随 ControlPlane 跑行为）', () => {
+  it('registryUpsertCommand：enabled=1 + manifest 快照 JSON + 落点三列（#348；U9 起 entry 列承载地址）', () => {
     const cmd = registryUpsertCommand({
       manifest: ModuleManifestSchema.parse(manifest),
       mode: 'cloudflare',
-      storage_level: 'dedicated',
+      entry: 'https://team.example.com/m/hello/',
+      storage_level: 'core',
     });
     expect(cmd.binds[0]).toBe('hello');
     expect(cmd.binds[1]).toBe(1);
     expect(cmd.binds[2]).toBe('0.1.0');
     expect(JSON.parse(String(cmd.binds[3]))).toMatchObject({ id: 'hello' });
-    // 落点三列（#348）：显式传参原样透传，缺省回落 cloudflare/空
+    // 落点三列（#348）：显式传参原样透传，缺省回落 cloudflare/空；entry（U9）= 装配器算的实例地址
     expect(cmd.binds[4]).toBe('cloudflare');
-    expect(cmd.binds[5]).toBeNull();
-    expect(cmd.binds[6]).toBe('dedicated');
+    expect(cmd.binds[5]).toBe('https://team.example.com/m/hello/');
+    expect(cmd.binds[6]).toBe('core');
     const bare = registryUpsertCommand({ manifest: ModuleManifestSchema.parse(manifest) });
     // 合并语义（#348 review 定案）：未写三列 binds 归一 NULL（= 保留旧值），
     // 首次插入的 mode 缺省 'cloudflare' 由 SQL 内 coalesce 承载，不在 binds 里补。
@@ -104,8 +104,8 @@ describe('registry（⑤ · 形状契约）', () => {
     expect(registryDisableCommand('hello')).toBe("UPDATE module_registry SET enabled = 0 WHERE id = 'hello'");
   });
 
-  it('buildManifestSnapshot：entry 重写为实例 URL（确定性）', () => {
-    expect(manifest.entry).toBe('https://team.example.com/m/hello/');
+  it('buildManifestSnapshot：快照确定性且不含地址（#349 U9：地址走 entry 列）', () => {
+    expect((manifest as unknown as Record<string, unknown>).entry).toBeUndefined();
     expect(manifest.version).toBe('0.1.0');
   });
 });

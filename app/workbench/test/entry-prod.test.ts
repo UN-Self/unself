@@ -25,8 +25,8 @@ function loadGeneratedEntry(options?: {
   assetsContentType?: string;
   /** 让页面路径先走 Worker 404，再命中显式 index.html 回退。 */
   deepLinkFallback?: boolean;
-  /** 注册表行（#273：frame-src 白名单真值源）；缺省 = 无 CORE_DB 绑定。 */
-  registryManifests?: Array<{ entry: string }>;
+  /** 注册表行（#273：frame-src 白名单真值源 = entry 列，#349 U9）；缺省 = 无 CORE_DB 绑定。 */
+  registryEntries?: Array<{ entry: string }>;
 }): LoadedEntry {
   const html = options?.assetsHtml === null ? undefined : (options?.assetsHtml ?? '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'self\'"></head><body>shell</body></html>');
   const body = options?.assetsBody ?? html;
@@ -40,12 +40,12 @@ function loadGeneratedEntry(options?: {
       },
     },
   };
-  if (options?.registryManifests) {
-    // 最小 D1 形状：registryFrameOrigins 只调 prepare(...).all() 读 manifest_json
+  if (options?.registryEntries) {
+    // 最小 D1 形状：registryFrameOrigins 只调 prepare(...).all() 读 entry 列（U9 真值面）
     env.CORE_DB = {
       prepare: () => ({
         all: async () => ({
-          results: options.registryManifests!.map((m) => ({ manifest_json: JSON.stringify(m) })),
+          results: options.registryEntries!,
         }),
       }),
     };
@@ -90,7 +90,7 @@ describe('生产组合根（@unself/workbench src/entry.prod.ts）：SPA 回退�
 
   it('workers.dev（#273）：壳 HTML 的 frame-src 含注册表里模块自有子域 origin（跨子域 iframe 放行口）', async () => {
     const app = loadGeneratedEntry({
-      registryManifests: [
+      registryEntries: [
         { entry: 'https://unself-module-hello.test-subdomain.workers.dev/' },
         { entry: 'https://unself-workbench.test-subdomain.workers.dev/' },
       ],
@@ -112,7 +112,7 @@ describe('生产组合根（@unself/workbench src/entry.prod.ts）：SPA 回退�
     // 按已知页面路径恢复类型；未知二进制及 JS/CSS 不按 Accept 冒充 HTML。
     const app = loadGeneratedEntry({
       assetsContentType: 'application/octet-stream',
-      registryManifests: [{ entry: 'https://unself-module-hello.test-subdomain.workers.dev/' }],
+      registryEntries: [{ entry: 'https://unself-module-hello.test-subdomain.workers.dev/' }],
     });
     const res = await app.fetch(
       new Request('https://unself-workbench.test-subdomain.workers.dev/', {

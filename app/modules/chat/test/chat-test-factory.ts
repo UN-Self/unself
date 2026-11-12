@@ -144,15 +144,10 @@ export const SCHEMA_BASELINE_PATH = fileURLToPath(
   new URL('../migrations/chat/0001_baseline.sql', import.meta.url),
 );
 
-/** shared 落点的物理表 schema（`chat_` 前缀基线，#310）。 */
-export const SHARED_SCHEMA_BASELINE_PATH = fileURLToPath(
-  new URL('../migrations/chat-shared/0001_baseline.sql', import.meta.url),
-);
-
 /**
  * 建一个加载真实 schema-baseline.sql 的内存库。
  * 每个用例各自建库，互不共享状态（并发/顺序都不串味）。
- * schemaPath 缺省 = dedicated 逻辑表名基线；shared 用例传 SHARED_SCHEMA_BASELINE_PATH。
+ * schemaPath 缺省 = 逻辑表名基线（core 专属库形态；#349 U5 后无 shared 前缀集）。
  */
 export function createChatDb(opts: { schemaPath?: string } = {}): ChatTestDb {
   const sqlite = new DatabaseSync(':memory:');
