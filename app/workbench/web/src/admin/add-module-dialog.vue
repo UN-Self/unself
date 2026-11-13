@@ -3,7 +3,9 @@
 /**
  * 「新增模块」双模式弹窗（#349 决策 #108/#109）。
  *
- * 壳沿用设置页水舱弹窗的同一套外壳与动线（#99/#100）：测试连接 → 保存；水位随测试状态联动
+ * 壳（遮罩/标题栏/✕/焦点三契约/装饰水面/入场动画）沿用设置页水舱弹窗同一外壳，已收进
+ * components/aqua-dialog.vue（#349 消融：外壳一次编写，两个弹窗共用）。
+ * 动线与设置弹窗同款（#99/#100）：测试连接 → 保存；水位随测试状态联动
  * （testing→波动、在线→满灌、其余→静息；仅反连 tab 出水，纯装饰恒 aria-hidden）。
  * 两种模式是两个 tab，不共用状态机：
  * - 反连（connect）：生成接入码（问号收进按钮，UNSELF_CORE_URL 说明走其 hover/focus tooltip）→ 生成即复制
@@ -19,7 +21,7 @@ import { CircleHelp, Eye, EyeOff } from 'lucide-vue-next'
 
 import { UButton, UMotionSelect, type SelectOption } from '@unself/ui'
 
-import WaveFill from '../components/wave-fill.vue'
+import AquaDialog from '../components/aqua-dialog.vue'
 
 import {
   activateConnectModule,
@@ -38,6 +40,12 @@ const emit = defineEmits<{
   /** 保存/部署成功：页面刷新列表。 */
   done: []
 }>()
+
+/** 可写 computed：壳内 Esc / ✕ 关闭走 update:modelValue（ConfirmDialog 同款）。 */
+const open = computed({
+  get: () => props.modelValue,
+  set: (v: boolean) => emit('update:modelValue', v),
+})
 
 type Tab = 'connect' | 'cloudflare'
 
@@ -227,215 +235,155 @@ function close(): void {
 </script>
 
 <template>
-  <div v-if="modelValue" class="add-dialog-scrim" @click.self="close">
-    <section
-      class="add-dialog"
-      role="dialog"
-      aria-modal="true"
-      aria-label="新增模块"
-      data-test="add-module-dialog"
-      @click.stop
-    >
-      <header class="add-dialog-head">
-        <h2 class="add-dialog-title">新增模块</h2>
-        <button type="button" class="add-dialog-close" aria-label="关闭" data-test="add-module-close" @click="close">
-          ✕
-        </button>
-      </header>
+  <AquaDialog v-model="open" title="新增模块" name="add-module-dialog" :level="waveLevel" max-width="560px">
+    <div class="add-dialog-tabs" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        class="add-dialog-tab"
+        :class="{ 'is-active': tab === 'connect' }"
+        :aria-selected="tab === 'connect'"
+        data-test="add-module-tab-connect"
+        @click="tab = 'connect'"
+      >
+        反连接入
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="add-dialog-tab"
+        :class="{ 'is-active': tab === 'cloudflare' }"
+        :aria-selected="tab === 'cloudflare'"
+        data-test="add-module-tab-cloudflare"
+        @click="tab = 'cloudflare'"
+      >
+        Cloudflare 部署
+      </button>
+    </div>
 
-      <div class="add-dialog-tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          class="add-dialog-tab"
-          :class="{ 'is-active': tab === 'connect' }"
-          :aria-selected="tab === 'connect'"
-          data-test="add-module-tab-connect"
-          @click="tab = 'connect'"
+    <!-- 反连：模块自己拨号回家，NAT 后也能接（决策 #108） -->
+    <div v-if="tab === 'connect'" class="add-dialog-fields" data-test="add-module-connect">
+      <label class="add-field">
+        <span class="add-field-label">模块 id</span>
+        <input v-model="connectId" class="add-field-input" data-test="connect-id" placeholder="如 bridge" />
+      </label>
+      <div class="add-field">
+        <span class="add-field-label" id="connect-storage-label">存储落点</span>
+        <UMotionSelect
+          v-model="connectStorage"
+          :options="connectStorageOptions"
+          label="存储落点"
+          aria-labelledby="connect-storage-label"
+          placeholder="自托管"
+          data-test="connect-storage"
+        />
+      </div>
+
+      <span v-if="!connectKey" class="add-help-row">
+        <UButton
+          variant="outline"
+          :loading="busy"
+          data-test="connect-generate"
+          aria-describedby="core-url-tip"
+          @click="onGenerate"
+          @focus="coreUrlTip = true"
+          @blur="coreUrlTip = false"
+          @mouseenter="coreUrlTip = true"
+          @mouseleave="coreUrlTip = false"
         >
-          反连接入
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="add-dialog-tab"
-          :class="{ 'is-active': tab === 'cloudflare' }"
-          :aria-selected="tab === 'cloudflare'"
-          data-test="add-module-tab-cloudflare"
-          @click="tab = 'cloudflare'"
-        >
-          Cloudflare 部署
-        </button>
-      </div>
-
-      <!-- 反连：模块自己拨号回家，NAT 后也能接（决策 #108） -->
-      <div v-if="tab === 'connect'" class="add-dialog-fields" data-test="add-module-connect">
-        <label class="add-field">
-          <span class="add-field-label">模块 id</span>
-          <input v-model="connectId" class="add-field-input" data-test="connect-id" placeholder="如 bridge" />
-        </label>
-        <div class="add-field">
-          <span class="add-field-label" id="connect-storage-label">存储落点</span>
-          <UMotionSelect
-            v-model="connectStorage"
-            :options="connectStorageOptions"
-            label="存储落点"
-            aria-labelledby="connect-storage-label"
-            placeholder="自托管"
-            data-test="connect-storage"
-          />
-        </div>
-
-        <span v-if="!connectKey" class="add-help-row">
-          <UButton
-            variant="outline"
-            :loading="busy"
-            data-test="connect-generate"
-            aria-describedby="core-url-tip"
-            @click="onGenerate"
-            @focus="coreUrlTip = true"
-            @blur="coreUrlTip = false"
-            @mouseenter="coreUrlTip = true"
-            @mouseleave="coreUrlTip = false"
-          >
-            <!-- 问号收进生成按钮（#349 验收定案）：UNSELF_CORE_URL 说明只挂它的 hover/focus -->
-            <CircleHelp aria-hidden="true" :size="16" />
-            生成接入码
-          </UButton>
-          <span v-show="coreUrlTip" id="core-url-tip" role="tooltip" class="add-tooltip" data-test="connect-env-help-tip">
-            模块 env 另需 UNSELF_CORE_URL=core 的可达地址
-          </span>
-        </span>
-
-        <template v-else>
-          <!-- 展示框本体=复制（生成已自动复制过一次，点框补手动）；右侧内嵌眼睛切打码/明文 -->
-          <div class="add-env-box">
-            <pre
-              class="add-dialog-env"
-              data-test="connect-env"
-              role="button"
-              tabindex="0"
-              aria-label="接入码 env：点击复制"
-              @click="copyKey"
-              @keydown.enter.prevent="copyKey"
-              @keydown.space.prevent="copyKey"
-            >{{ envText }}</pre>
-            <button
-              type="button"
-              class="add-env-eye"
-              :aria-pressed="keyVisible"
-              :aria-label="keyVisible ? '隐藏接入码' : '显示接入码'"
-              data-test="connect-toggle-key"
-              @click="onToggleKey"
-            >
-              <Eye v-if="!keyVisible" aria-hidden="true" :size="16" />
-              <EyeOff v-else aria-hidden="true" :size="16" />
-            </button>
-          </div>
-          <!-- 稳定占位：复制 / 降级反馈共用一个不透明 span，测试不查瞬时 DOM -->
-          <span class="add-env-feedback" data-test="connect-copy-feedback" aria-live="polite">
-            {{ copied ? '已复制' : copyFallback ? '已选中 env：请按 Ctrl+C 复制' : '' }}
-          </span>
-        </template>
-      </div>
-
-      <!-- 模式一：core 运行时拉包部署（装配后增补单模块，决策 #109） -->
-      <div v-else class="add-dialog-fields" data-test="add-module-cloudflare">
-        <label class="add-field">
-          <span class="add-field-label">npm 包</span>
-          <input v-model="npmSpec" class="add-field-input" data-test="cf-npmspec" placeholder="@unself/hello@0.1.0" />
-        </label>
-        <label class="add-field">
-          <span class="add-field-label">Cloudflare 账号 ID</span>
-          <input v-model="accountId" class="add-field-input" data-test="cf-account" placeholder="32 位十六进制" />
-        </label>
-        <label class="add-field">
-          <span class="add-field-label">API Token（用后即焚）</span>
-          <input v-model="cfToken" type="password" class="add-field-input" data-test="cf-token" autocomplete="off" />
-        </label>
-        <div class="add-field">
-          <span class="add-field-label" id="cf-storage-label">存储落点</span>
-          <UMotionSelect
-            v-model="cfStorage"
-            :options="cfStorageOptions"
-            label="存储落点"
-            aria-labelledby="cf-storage-label"
-            placeholder="自托管"
-            data-test="cf-storage"
-          />
-        </div>
-      </div>
-
-      <p v-if="errorText" class="add-dialog-alert" role="alert" data-test="add-module-alert">{{ errorText }}</p>
-      <p v-else-if="connectStatus === 'online'" class="add-dialog-status" role="status" data-test="add-module-status">
-        模块已连上来（隧道在线）
-      </p>
-
-      <footer class="add-dialog-actions">
-        <template v-if="tab === 'connect'">
-          <UButton variant="outline" :disabled="!canTest" :loading="connectStatus === 'testing'" data-test="connect-test" @click="onTest">
-            测试连接
-          </UButton>
-          <UButton variant="primary" :disabled="!canSave" :loading="busy" data-test="connect-save" @click="onSave">
-            保存
-          </UButton>
-        </template>
-        <UButton v-else variant="primary" :disabled="!canInstall" :loading="busy" data-test="cf-install" @click="onInstall">
-          部署并注册
+          <!-- 问号收进生成按钮（#349 验收定案）：UNSELF_CORE_URL 说明只挂它的 hover/focus -->
+          <CircleHelp aria-hidden="true" :size="16" />
+          生成接入码
         </UButton>
-      </footer>
+        <span v-show="coreUrlTip" id="core-url-tip" role="tooltip" class="add-tooltip" data-test="connect-env-help-tip">
+          模块 env 另需 UNSELF_CORE_URL=core 的可达地址
+        </span>
+      </span>
 
-      <!-- 装饰水面（复用设置弹窗的 WaveFill，#100）：内容层 z-index 压在其上 -->
-      <WaveFill :level="waveLevel" />
-    </section>
-  </div>
+      <template v-else>
+        <!-- 展示框本体=复制（生成已自动复制过一次，点框补手动）；右侧内嵌眼睛切打码/明文 -->
+        <div class="add-env-box">
+          <pre
+            class="add-dialog-env"
+            data-test="connect-env"
+            role="button"
+            tabindex="0"
+            aria-label="接入码 env：点击复制"
+            @click="copyKey"
+            @keydown.enter.prevent="copyKey"
+            @keydown.space.prevent="copyKey"
+          >{{ envText }}</pre>
+          <button
+            type="button"
+            class="add-env-eye"
+            :aria-pressed="keyVisible"
+            :aria-label="keyVisible ? '隐藏接入码' : '显示接入码'"
+            data-test="connect-toggle-key"
+            @click="onToggleKey"
+          >
+            <Eye v-if="!keyVisible" aria-hidden="true" :size="16" />
+            <EyeOff v-else aria-hidden="true" :size="16" />
+          </button>
+        </div>
+        <!-- 稳定占位：复制 / 降级反馈共用一个不透明 span，测试不查瞬时 DOM -->
+        <span class="add-env-feedback" data-test="connect-copy-feedback" aria-live="polite">
+          {{ copied ? '已复制' : copyFallback ? '已选中 env：请按 Ctrl+C 复制' : '' }}
+        </span>
+      </template>
+    </div>
+
+    <!-- 模式一：core 运行时拉包部署（装配后增补单模块，决策 #109） -->
+    <div v-else class="add-dialog-fields" data-test="add-module-cloudflare">
+      <label class="add-field">
+        <span class="add-field-label">npm 包</span>
+        <input v-model="npmSpec" class="add-field-input" data-test="cf-npmspec" placeholder="@unself/hello@0.1.0" />
+      </label>
+      <label class="add-field">
+        <span class="add-field-label">Cloudflare 账号 ID</span>
+        <input v-model="accountId" class="add-field-input" data-test="cf-account" placeholder="32 位十六进制" />
+      </label>
+      <label class="add-field">
+        <span class="add-field-label">API Token（用后即焚）</span>
+        <input v-model="cfToken" type="password" class="add-field-input" data-test="cf-token" autocomplete="off" />
+      </label>
+      <div class="add-field">
+        <span class="add-field-label" id="cf-storage-label">存储落点</span>
+        <UMotionSelect
+          v-model="cfStorage"
+          :options="cfStorageOptions"
+          label="存储落点"
+          aria-labelledby="cf-storage-label"
+          placeholder="自托管"
+          data-test="cf-storage"
+        />
+      </div>
+    </div>
+
+    <p v-if="errorText" class="add-dialog-alert" role="alert" data-test="add-module-alert">{{ errorText }}</p>
+    <p v-else-if="connectStatus === 'online'" class="add-dialog-status" role="status" data-test="add-module-status">
+      模块已连上来（隧道在线）
+    </p>
+
+    <footer class="add-actions-row">
+      <template v-if="tab === 'connect'">
+        <UButton variant="outline" :disabled="!canTest" :loading="connectStatus === 'testing'" data-test="connect-test" @click="onTest">
+          测试连接
+        </UButton>
+        <UButton variant="primary" :disabled="!canSave" :loading="busy" data-test="connect-save" @click="onSave">
+          保存
+        </UButton>
+      </template>
+      <UButton v-else variant="primary" :disabled="!canInstall" :loading="busy" data-test="cf-install" @click="onInstall">
+        部署并注册
+      </UButton>
+    </footer>
+  </AquaDialog>
 </template>
 
 <style scoped>
-.add-dialog-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--unself-space-4);
-  background: var(--unself-color-scrim);
-}
-.add-dialog {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--unself-space-4);
-  width: min(560px, 100%);
-  max-height: calc(100vh - var(--unself-space-8));
-  overflow: auto;
-  padding: var(--unself-space-6);
-  border: 1px solid var(--unself-color-border);
-  border-radius: var(--unself-radius-lg);
-  background: var(--unself-color-surface);
-  box-shadow: var(--unself-shadow-pop);
-}
-.add-dialog-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--unself-space-3);
-}
-.add-dialog-title {
-  margin: 0;
-  font-size: var(--unself-font-size-lg);
-  font-weight: 600;
-  color: var(--unself-color-text);
-}
-.add-dialog-close {
-  border: none;
-  background: none;
-  cursor: pointer;
-  color: var(--unself-color-text-secondary);
-  font-size: var(--unself-font-size-base);
-}
 .add-dialog-tabs {
+  position: relative;
+  z-index: 1;
   display: flex;
   gap: var(--unself-space-2);
   border-bottom: 1px solid var(--unself-color-border);
@@ -455,6 +403,8 @@ function close(): void {
   font-weight: 500;
 }
 .add-dialog-fields {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: var(--unself-space-3);
@@ -552,33 +502,24 @@ function close(): void {
   box-shadow: var(--unself-shadow-pop);
 }
 .add-dialog-alert {
+  position: relative;
+  z-index: 1;
   margin: 0;
   color: var(--unself-color-danger);
   font-size: var(--unself-font-size-sm);
 }
 .add-dialog-status {
+  position: relative;
+  z-index: 1;
   margin: 0;
   color: var(--unself-color-text-secondary);
   font-size: var(--unself-font-size-sm);
 }
-.add-dialog-actions {
+.add-actions-row {
+  position: relative;
+  z-index: 1;
   display: flex;
   justify-content: flex-end;
   gap: var(--unself-space-3);
-}
-
-/* 水舱装饰层 WaveFill 绝对铺满弹窗（inset:0）；内容块统一抬层压在水面上（设置弹窗同规）。 */
-.add-dialog-head,
-.add-dialog-tabs,
-.add-dialog-fields,
-.add-dialog-alert,
-.add-dialog-status,
-.add-dialog-actions {
-  position: relative;
-  z-index: 1;
-}
-/* 字段块压过下方校验行，说明气泡才能盖住那行字；气泡本身不抬高按钮。 */
-.add-dialog-fields {
-  z-index: 2;
 }
 </style>

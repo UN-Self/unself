@@ -853,7 +853,7 @@ describe('SettingsPage 弹窗重开（#100）', () => {
 
     expect(waterLevel(wrapper)).toBe('full')
     const box = dialogBox(wrapper, 'smtp')
-    expect(box.find('.settings-dialog-title').text()).toContain('通知发信')
+    expect(box.find('.aqua-dialog-title').text()).toContain('通知发信')
     expect(box.find('[data-test="settings-dialog-close"]').exists()).toBe(true)
   })
 
