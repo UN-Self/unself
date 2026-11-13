@@ -14,8 +14,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-/** 构造最小 Response mock（request() 会读 headers / status / json）。 */
-function jsonResponse(init: { ok: boolean; status: number; body: unknown }): () => Promise<Response> {
+/**
+ * 构造最小 Response mock（request() 会读 headers / status / json）。
+ * 形参按 fetch 的形状声明（URL + 可选 init）：`vi.fn` 才推断得出 calls 元组，
+ * 测试里可以直接读 `mock.calls[0]` 的 URL/method，不必再做 `as` 强转（#349 修红）。
+ */
+function jsonResponse(
+  init: { ok: boolean; status: number; body: unknown },
+): (url: string, init?: RequestInit) => Promise<Response> {
   return async () => ({
     ok: init.ok,
     status: init.status,
@@ -32,9 +38,9 @@ describe('removeModule（U10，#349）', () => {
     const result = await removeModule('hello')
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [url, init] = fetchMock.mock.calls[0]!
     expect(url).toBe('/api/admin/modules/hello')
-    expect(init.method).toBe('DELETE')
+    expect(init?.method).toBe('DELETE')
     expect(result).toEqual({ id: 'hello', removed: true })
   })
 
