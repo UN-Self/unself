@@ -45,7 +45,7 @@ export async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
 }
 
 /** 假 npm + CF 源；调用记录里 auth 只有 CF 上传那一跳有值。 */
-export function stubNpmFetch(pkgFiles: Record<string, string>) {
+export function stubNpmFetch(pkgFiles: Record<string, string>, opts?: { cfStatus?: number }) {
   const calls: Array<{ url: string; method: string; auth?: string }> = [];
   const impl = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const target = String(url);
@@ -61,7 +61,10 @@ export function stubNpmFetch(pkgFiles: Record<string, string>) {
       });
     }
     if (target.includes('api.cloudflare.com')) {
-      return Response.json({ success: true, result: {} });
+      const status = opts?.cfStatus ?? 200;
+      return Response.json(status === 200 ? { success: true, result: {} } : { success: false, errors: [{ message: 'auth denied' }] }, {
+        status,
+      });
     }
     return new Response('not found', { status: 404 });
   };

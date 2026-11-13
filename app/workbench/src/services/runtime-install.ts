@@ -18,7 +18,7 @@
  *   且与 #165 凭证纪律冲突：那些动作应留在部署期）。
  */
 
-import { ModuleManifestSchema, MODULE_PERMISSIONS, type ModuleManifest } from '@unself/contracts';
+import { ModuleManifestSchema, type ModuleManifest } from '@unself/contracts';
 
 import { fetchNpmPackage, readTextFile } from './npm-tarball';
 
@@ -83,13 +83,10 @@ export async function installNpmModule(
       .join('；');
     throw new RuntimeInstallError(`manifest 校验失败：${detail}`, 400);
   }
+  // 未知能力不再后置过滤：ModulePermissionSchema = z.enum(MODULE_PERMISSIONS) 在 schema 层
+  // 直接拒（词表单点 @unself/contracts/manifest.ts；上方 issues 映射已点名到 permissions.N），
+  // 走不到这里——保留本地过滤就是第二份词表规则（消融实验 B 删除）。
   const manifest = schema.data;
-  const unknown = (manifest.permissions ?? []).filter(
-    (p) => !(MODULE_PERMISSIONS as readonly string[]).includes(p),
-  );
-  if (unknown.length > 0) {
-    throw new RuntimeInstallError(`未知能力：${unknown.join('、')}（词表见契约）`, 400);
-  }
 
   const worker = readTextFile(pkg, 'package/worker.js');
   if (!worker) {

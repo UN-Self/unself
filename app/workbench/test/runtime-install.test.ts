@@ -1,51 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { gunzip, parseNpmSpec, pickTarball, untar } from '../src/services/npm-tarball';
 import { installNpmModule, RuntimeInstallError, wipeCredential } from '../src/services/runtime-install';
-
-/** 造一条 ustar 头（测试用最小实现：name ≤100、无 prefix、普通文件）。 */
-function tarHeader(name: string, size: number): Uint8Array {
-  const header = new Uint8Array(512);
-  const enc = new TextEncoder();
-  header.set(enc.encode(name).subarray(0, 100), 0);
-  header.set(enc.encode('0000644\0'), 100); // mode
-  header.set(enc.encode('0000000\0'), 108); // uid
-  header.set(enc.encode('0000000\0'), 116); // gid
-  header.set(enc.encode(size.toString(8).padStart(11, '0') + '\0'), 124);
-  header.set(enc.encode('00000000000\0'), 136); // mtime
-  header[156] = '0'.charCodeAt(0);
-  header.set(enc.encode('ustar\0'), 257);
-  header.set(enc.encode('00'), 263);
-  return header;
-}
-
-/** 打一个 tar（普通文件 + 结束块）。 */
-function buildTar(files: Record<string, string>): Uint8Array {
-  const enc = new TextEncoder();
-  const chunks: Uint8Array[] = [];
-  for (const [name, content] of Object.entries(files)) {
-    const bytes = enc.encode(content);
-    chunks.push(tarHeader(name, bytes.byteLength), bytes);
-    const pad = (512 - (bytes.byteLength % 512)) % 512;
-    if (pad > 0) chunks.push(new Uint8Array(pad));
-  }
-  chunks.push(new Uint8Array(1024));
-  const total = chunks.reduce((sum, c) => sum + c.byteLength, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
-}
-
-/** gzip 压缩（与运行时解压同一 Web API，双向对拍）。 */
-async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
+import { buildTar, gzip, stubNpmFetch } from './helpers/fake-npm-package';
 
 const MANIFEST = {
   id: 'hello',
@@ -56,35 +14,8 @@ const MANIFEST = {
   permissions: ['storage'],
 };
 
-/** 假 npm + CF：元数据 / tarball / 脚本上传三段；记录每次调用的 url 与 header。 */
 function fakeFetch(pkgFiles: Record<string, string>, opts?: { cfStatus?: number }) {
-  const calls: Array<{ url: string; method: string; auth?: string }> = [];
-  const impl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-    const target = String(url);
-    calls.push({
-      url: target,
-      method: init?.method ?? 'GET',
-      auth: new Headers(init?.headers as Record<string, string> | undefined).get('authorization') ?? undefined,
-    });
-    if (target.endsWith('.tgz')) {
-      return new Response(await gzip(buildTar(pkgFiles)));
-    }
-    if (target.includes('registry.npmjs.org')) {
-      return Response.json({
-        'dist-tags': { latest: '1.2.3' },
-        versions: { '1.2.3': { dist: { tarball: 'https://registry.npmjs.org/@unself/hello/-/hello-1.2.3.tgz' } } },
-      });
-    }
-    // CF 脚本上传
-    if (target.includes('api.cloudflare.com')) {
-      const status = opts?.cfStatus ?? 200;
-      return Response.json(status === 200 ? { success: true, result: {} } : { success: false, errors: [{ message: 'auth denied' }] }, {
-        status,
-      });
-    }
-    return new Response('not found', { status: 404 });
-  });
-  return { impl: impl as unknown as typeof fetch, calls };
+  return stubNpmFetch(pkgFiles, opts) as { impl: typeof fetch; calls: Array<{ url: string; method: string; auth?: string }> };
 }
 
 describe('npm 包读取（#349 模式一）', () => {
