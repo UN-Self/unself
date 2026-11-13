@@ -92,7 +92,8 @@ export function parseManifestYamlFields(text: string): ParsedManifestYaml {
       if (value !== '') {
         if (indent === 0 && FORBIDDEN_YAML_KEYS.has(key)) {
           throw new Error(
-            `manifest: 不再支持清单声明「${key}:」——地址只由 core 定（注册表 entry 列，#349 U9），从清单里删掉这行`,
+            // 文案里不写 `#349`：verify-tokens 规则一把字符串字面量里的 issue 号当裸 hex（注释会被剥、字符串不会）。
+            `manifest: 不再支持清单声明「${key}:」——地址只由 core 定（注册表 entry 列，issue 349 U9），从清单里删掉这行`,
           );
         }
         scalars[path] = value;

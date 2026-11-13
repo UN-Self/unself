@@ -225,15 +225,22 @@ describe('extractTarball（零脚本执行 + zip-slip 防护）', () => {
 });
 
 describe('npmResolve / githubResolve（子进程走真实 npm/gh 配置）', () => {
+  /**
+   * 这四个用例打真实 registry / gh（实现内部预算 15s，见 runCapture）。vitest 默认 5s
+   * 会在网络抖动时先超时——那是竞态伪红，不是行为断言：此处把预算对齐实现的 15s，
+   * 超出后仍由实现自己的人话超时路径报错（行为断言不变）。
+   */
+  const NETWORK_TIMEOUT_MS = 20_000;
+
   it('npmResolve：真实 registry 取 is-odd@3.0.1 元数据（需网络）', async () => {
     const meta = await npmResolve({ pkg: 'is-odd', version: '3.0.1', cwd: work });
     expect(meta.tarballUrl).toBe('https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz');
     expect(meta.integrity).toMatch(/^sha512-/);
     expect(meta.version).toBe('3.0.1');
-  });
+  }, NETWORK_TIMEOUT_MS);
   it('npmResolve：不存在的包 → 人话报错（不打 stack）', async () => {
     await expect(npmResolve({ pkg: 'unself-no-such-pkg-zzz', version: '1.0.0', cwd: work })).rejects.toThrow(/npm view/);
-  });
+  }, NETWORK_TIMEOUT_MS);
   it('githubResolve：无 gh 或私有仓库 → 人话报错（不炸栈）', async () => {
     const hasGh = spawnSync('gh', ['--version']).status === 0;
     if (!hasGh) {
@@ -241,7 +248,7 @@ describe('npmResolve / githubResolve（子进程走真实 npm/gh 配置）', () 
     } else {
       await expect(githubResolve({ repo: 'acme/no-such-repo-zzz-404', cwd: work })).rejects.toThrow(/gh release view/);
     }
-  });
+  }, NETWORK_TIMEOUT_MS);
   it('githubResolve：外部 gh 超时 → 有界失败，不拖住门禁', async () => {
     const hasGh = spawnSync('gh', ['--version']).status === 0;
     if (!hasGh) return;
@@ -250,7 +257,7 @@ describe('npmResolve / githubResolve（子进程走真实 npm/gh 配置）', () 
       /gh release view/,
     );
     expect(Date.now() - started).toBeLessThan(5_000);
-  });
+  }, NETWORK_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------------

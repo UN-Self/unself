@@ -60,7 +60,7 @@ function storeFor(c: Context<{ Bindings: Bindings; Variables: { claims: ModuleTo
   });
 }
 
-function storageReady(c: Context<{ Bindings: Bindings }>): boolean {
+function storageReady(c: Context<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }>): boolean {
   return Boolean(c.env.CORE_API) || coreUrlFromEnv() !== '';
 }
 
