@@ -16,7 +16,7 @@
  * 为什么不做「模式一先测试再保存」：运行时装配本身就是部署动作（拉包→校验→上传），
  * 没有「半成品可保存态」；失败即什么都没发生，重试即重跑（决策 #109 的语义）。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { CircleHelp, Eye, EyeOff } from 'lucide-vue-next'
 
 import { UButton, UMotionSelect, type SelectOption } from '@unself/ui'
@@ -30,6 +30,7 @@ import {
   installCloudflareModule,
   registerConnectModule,
 } from '../lib/modules-install-api'
+import { fetchAdminModules } from '../lib/admin-api'
 
 const props = defineProps<{
   modelValue: boolean
@@ -58,8 +59,16 @@ const connectId = ref('')
 /** 已生成的接入码（明文只在本次开窗内可见；关闭即清）。 */
 const connectKey = ref<string | null>(null)
 const connectStatus = ref<'idle' | 'testing' | 'online' | 'offline'>('idle')
+/**
+ * 上一次测试通过时的输入快照（id + 存储落点）。
+ * 绿只是「那一刻的 id 绿」：id/落点一变即失效，必须对当前输入重测才能保存（不能只看一个全局 online）。
+ */
+const testedSnapshot = ref<string | null>(null)
+const connectSnapshot = computed(() => JSON.stringify([connectId.value.trim(), connectStorage.value]))
 /** env 区默认打码；右侧内嵌眼睛是显式切换，明文只在此刻渲染进 DOM。 */
 const keyVisible = ref(false)
+/** 接入码展示框，降级复制时选中它，不靠全局 querySelector。 */
+const envEl = ref<HTMLElement | null>(null)
 /** 复制反馈：「已复制」约 2s；不透明 span 稳定占位，测试不查瞬时 DOM。 */
 const copied = ref(false)
 /** clipboard 不可用 / 被拒（纯 http 等）→ 降级：选中文本让用户手动 Ctrl+C。 */
@@ -92,7 +101,9 @@ const envLines = computed(() => [`UNSELF_MODULE_KEY=${keyVisible.value ? connect
 const envText = computed(() => envLines.value.join('\n'))
 
 const canTest = computed(() => Boolean(connectKey.value) && !busy.value)
-const canSave = computed(() => connectStatus.value === 'online' && !busy.value)
+const canSave = computed(
+  () => connectStatus.value === 'online' && testedSnapshot.value === connectSnapshot.value && !busy.value,
+)
 const canInstall = computed(() => Boolean(npmSpec.value.trim() && cfToken.value.trim() && accountId.value.trim()) && !busy.value)
 
 /** 水位派生（设置弹窗同款，#100）：反连 tab 才有水；testing→波动、在线→满灌、其余→静息。 */
@@ -100,6 +111,12 @@ const waveLevel = computed(() => {
   if (tab.value !== 'connect') return 'rest'
   if (connectStatus.value === 'testing') return 'testing'
   return connectStatus.value === 'online' ? 'full' : 'rest'
+})
+
+/** 输入一变，上一轮测试结果（含 testing 中的旧请求）立即作废，保存按钮随之禁用。 */
+watch(connectSnapshot, () => {
+  testedSnapshot.value = null
+  connectStatus.value = 'idle'
 })
 
 /** 换 tab / 关窗都清结果态（重开回到初始态，#100 同规）。 */
@@ -114,6 +131,7 @@ watch(
       connectKey.value = null
       cfToken.value = ''
       connectStatus.value = 'idle'
+      testedSnapshot.value = null
       keyVisible.value = false
       copied.value = false
       copyFallback.value = false
@@ -132,6 +150,12 @@ async function onGenerate(): Promise<void> {
   }
   busy.value = true
   try {
+    // id 不得与已有模块重名：先问管理端列表（拿不到就交给服务端 409 兜底）
+    const existing = (await fetchAdminModules().catch(() => [])) ?? []
+    if (existing.some((m) => m.id === moduleId)) {
+      errorText.value = moduleIdTakenMessage(moduleId)
+      return
+    }
     const { key, keyHash } = await generateConnectKey()
     await registerConnectModule({
       moduleId,
@@ -146,10 +170,19 @@ async function onGenerate(): Promise<void> {
     // 生成即复制（#349 验收定案）：明文 key 立刻进剪贴板，用户不必再找复制按钮
     await copyKey()
   } catch (err) {
-    errorText.value = (err as Error).message
+    errorText.value = isIdTaken(err) ? moduleIdTakenMessage(moduleId) : (err as Error).message
   } finally {
     busy.value = false
   }
+}
+
+/** 409 = 服务端说这个 id 已存在；给人话，不回显状态码。 */
+function isIdTaken(err: unknown): boolean {
+  return (err as { status?: number } | null)?.status === 409
+}
+
+function moduleIdTakenMessage(moduleId: string): string {
+  return `这个模块 id 已经有了（${moduleId}），换一个再生成`
 }
 
 /** 复制明文 key：成功→「已复制」约 2s；失败（纯 http / 权限被拒）→ 选中 env 文本提示手动 Ctrl+C。 */
@@ -164,15 +197,19 @@ async function copyKey(): Promise<void> {
       copied.value = false
     }, 2000)
   } catch {
-    // 纯 http / 权限被拒：降级为选中文本，提示手动 Ctrl+C（明文不落状态之外）
-    selectEnvText()
-    copied.value = false
+    // 纯 http / 权限被拒：先亮出明文再选中，否则 Ctrl+C 拿到的是打码圆点。
+    keyVisible.value = true
     copyFallback.value = true
+    copied.value = false
+    await nextTick()
+    selectEnvText()
   }
 }
 
 function selectEnvText(): void {
-  document.getSelection()?.selectAllChildren(document.querySelector('[data-test="connect-env"]') ?? document.body)
+  const node = envEl.value
+  if (!node) return
+  document.getSelection()?.selectAllChildren(node)
 }
 
 function onToggleKey(): void {
@@ -181,15 +218,22 @@ function onToggleKey(): void {
 
 async function onTest(): Promise<void> {
   errorText.value = null
+  const moduleId = connectId.value.trim()
+  const snapshot = connectSnapshot.value
   connectStatus.value = 'testing'
   try {
-    const status = await fetchConnectStatus(connectId.value.trim())
+    const status = await fetchConnectStatus(moduleId)
+    // 测试期间输入又变了：结果属于旧 id，丢弃（watch 已把状态打回 idle）
+    if (connectSnapshot.value !== snapshot) return
     connectStatus.value = status.online ? 'online' : 'offline'
+    testedSnapshot.value = status.online ? snapshot : null
     if (!status.online) {
       errorText.value = '模块还没连上来：确认模块已按 env 启动并保持运行'
     }
   } catch (err) {
+    if (connectSnapshot.value !== snapshot) return
     connectStatus.value = 'offline'
+    testedSnapshot.value = null
     errorText.value = (err as Error).message
   }
 }
@@ -304,6 +348,7 @@ function close(): void {
         <!-- 展示框本体=复制（生成已自动复制过一次，点框补手动）；右侧内嵌眼睛切打码/明文 -->
         <div class="add-env-box">
           <pre
+            ref="envEl"
             class="add-dialog-env"
             data-test="connect-env"
             role="button"
