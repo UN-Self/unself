@@ -37,7 +37,8 @@ export function registerModuleApiRoutes(app: Hono<{ Bindings: Bindings; Variable
   // --- config（#349 U8 ⑤）：模块读自己的配置声明与已存值（无需权限词） -------------
   // 注册序刻意在 requireModuleAuth 之前：本端点自核双轨——① Bearer 模块 token（复用
   // checkModuleGate 同一门禁）；② query keyHash（connect 模块无 token 时的同源凭证，
-  // lookupConnectModule 反查——与 WS 握手同口径）。两轨都不过 = 401/403/404 fail-closed。
+  // lookupConnectModule 反查——与 WS 握手同口径；disabled 在反查层即 403，
+  // 停用后模块不能再读配置）。两轨都不过 = 401/403/404 fail-closed。
   moduleApi.get('/config', async (c) => {
     const bearer = (c.req.header('authorization') ?? '').slice(7);
     let moduleId: string | null = null;

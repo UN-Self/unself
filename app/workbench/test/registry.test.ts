@@ -6,6 +6,7 @@ import { createApp } from '../src/index';
 const app = createApp();
 import { generateInstanceKeyPair } from '../src/keys';
 import { createCoreDb, type CoreTestDb } from './test-factory';
+import { lookupConnectModule, verifyConnectCredential } from '../src/services/connect-registry';
 
 const helloManifest = {
   id: 'hello',
@@ -83,21 +84,24 @@ describe('registry CRUD 与启停语义（#7）', () => {
       credential_hash: 'a'.repeat(64),
     });
     expect(first.status).toBe(201);
-    await expect(first.json()).resolves.toMatchObject({
+    const created = (await first.json()) as Record<string, unknown>;
+    expect(created).toMatchObject({
       mode: 'connect',
       entry: 'https://bridge.example.com/m/bridge/',
       storage_level: 'core',
-      credential_hash: 'a'.repeat(64),
     });
+    expect(created).not.toHaveProperty('credential_hash');
+    expect(JSON.stringify(created)).not.toContain('a'.repeat(64));
     // 重新注册（装配路径：只刷新快照，落点/凭证四列全未写）→ 旧值保留；响应是 RETURNING 真行，不回显请求值
     const second = await register(env, cookie, { id: 'hello', enabled: true, manifest: helloManifest });
     expect(second.status).toBe(201);
-    await expect(second.json()).resolves.toMatchObject({
+    const kept = (await second.json()) as Record<string, unknown>;
+    expect(kept).toMatchObject({
       mode: 'connect',
       entry: 'https://bridge.example.com/m/bridge/',
       storage_level: 'core',
-      credential_hash: 'a'.repeat(64),
     });
+    expect(kept).not.toHaveProperty('credential_hash');
     // mode 显式给出而 entry 缺失 → 400（不变式照旧）；mode 未写则不参与核对（列中旧值入库时已过 CHECK）
     const bad = await register(env, cookie, { id: 'other', enabled: true, manifest: helloManifest, mode: 'connect' });
     expect(bad.status).toBe(400);
@@ -156,7 +160,7 @@ describe('registry CRUD 与启停语义（#7）', () => {
       { method: 'PATCH', headers: { cookie, 'content-type': 'application/json' }, body: '{"enabled":true}' },
       env,
     );
-    expect(await on.json()).toEqual({ id: 'hello', enabled: true });
+    expect(await on.json()).toEqual({ id: 'hello', enabled: true, lifecycle: 'active' });
     const ghost = await app.request(
       `${REG_URL}/ghost/enabled`,
       { method: 'PATCH', headers: { cookie, 'content-type': 'application/json' }, body: '{"enabled":true}' },
@@ -284,6 +288,7 @@ describe('registry CRUD 与启停语义（#7）', () => {
       'mode',
       'credential_hash',
       'config_values',
+      'lifecycle',
     ]);
     await register(env, cookie, { id: 'hello', manifest: helloManifest });
 
@@ -296,10 +301,10 @@ describe('registry CRUD 与启停语义（#7）', () => {
     expect(list.status).toBe(200);
     const entries = (await list.json()) as Array<Record<string, unknown>>;
     expect(Object.keys(entries[0] ?? {}).sort()).toEqual([
-      'credential_hash',
       'enabled',
       'entry',
       'id',
+      'lifecycle',
       'manifest',
       'mode',
       'storage_level',
@@ -338,7 +343,7 @@ describe('registry CRUD 与启停语义（#7）', () => {
   });
 });
 
-describe('反连接入：POST /api/admin/modules/connect-register（#349，决策 #108 两段式）', () => {
+describe('反连接入：POST /api/admin/modules/connect-register（#349，决策 #109 两段式）', () => {
   const KEY_HASH = 'c'.repeat(64);
   const CONNECT_URL = 'https://t.example/api/admin/modules/connect-register';
 
@@ -362,15 +367,16 @@ describe('反连接入：POST /api/admin/modules/connect-register（#349，决�
     const { env, db, cookie } = await envFor('admin');
     const res = await connectRegister(env, cookie, { moduleId: 'hello', keyHash: KEY_HASH });
     expect(res.status).toBe(201);
-    expect(await res.json()).toMatchObject({ id: 'hello', mode: 'connect', enabled: false });
+    expect(await res.json()).toMatchObject({ id: 'hello', mode: 'connect', enabled: false, lifecycle: 'pending' });
 
     // 真库行：pending 态语义（保存前的记账态）；entry = core 隧道路由（请求 origin 推导）
     const row = db.first<Record<string, unknown>>(
-      'SELECT enabled, mode, credential_hash, entry, storage_level, manifest_json FROM module_registry WHERE id = ?',
+      'SELECT enabled, lifecycle, mode, credential_hash, entry, storage_level, manifest_json FROM module_registry WHERE id = ?',
       'hello',
     );
     expect(row).toMatchObject({
       enabled: 0,
+      lifecycle: 'pending',
       mode: 'connect',
       credential_hash: KEY_HASH,
       entry: 'https://t.example/m/hello/',
@@ -447,11 +453,12 @@ describe('反连接入：POST /api/admin/modules/connect-register（#349，决�
     });
     expect(saved.status).toBe(201);
     const row = db.first<Record<string, unknown>>(
-      'SELECT enabled, credential_hash, mode, entry FROM module_registry WHERE id = ?',
+      'SELECT enabled, lifecycle, credential_hash, mode, entry FROM module_registry WHERE id = ?',
       'hello',
     );
     expect(row).toEqual({
       enabled: 1,
+      lifecycle: 'active',
       credential_hash: KEY_HASH,
       mode: 'connect',
       entry: 'https://bridge.example.com/m/bridge/',
@@ -485,6 +492,154 @@ describe('反连接入：POST /api/admin/modules/connect-register（#349，决�
   });
 });
 
+describe('模块 lifecycle（#349：pending/active/disabled）', () => {
+  const CONNECT_URL = 'https://t.example/api/admin/modules/connect-register';
+
+  function connectRegister(
+    env: { JWT_PRIVATE_KEY: string; CORE_DB: D1Database },
+    cookie: string,
+    body: unknown,
+  ) {
+    return app.request(
+      CONNECT_URL,
+      { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify(body) },
+      env,
+    );
+  }
+
+  it('管理员 upsert/toggle 写 active/disabled：enabled 是 lifecycle 的正门', async () => {
+    const { env, db, cookie } = await envFor('admin');
+    const on = await register(env, cookie, { id: 'hello', enabled: true, manifest: helloManifest });
+    expect(await on.json()).toMatchObject({ enabled: true, lifecycle: 'active' });
+    expect(db.first<{ lifecycle: string }>("SELECT lifecycle FROM module_registry WHERE id = 'hello'")).toEqual({
+      lifecycle: 'active',
+    });
+
+    const off = await register(env, cookie, { id: 'hello', enabled: false, manifest: helloManifest });
+    expect(await off.json()).toMatchObject({ enabled: false, lifecycle: 'disabled' });
+    expect(db.first<{ lifecycle: string }>("SELECT lifecycle FROM module_registry WHERE id = 'hello'")).toEqual({
+      lifecycle: 'disabled',
+    });
+
+    const toggled = await app.request(
+      `${REG_URL}/hello/toggle`,
+      { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: '{"enabled":true}' },
+      env,
+    );
+    expect(await toggled.json()).toEqual({ id: 'hello', enabled: true, lifecycle: 'active' });
+  });
+
+  it('已 pending 重记账：只覆盖哈希（保留 manifest/version/enabled/storage），真清单不被清回占位', async () => {
+    const { env, db, cookie } = await envFor('admin');
+    expect(
+      (await connectRegister(env, cookie, { moduleId: 'hello', keyHash: 'a'.repeat(64), storageLevel: 'core' })).status,
+    ).toBe(201);
+    // 模块已自报真清单（模拟「测试连接」后 connect-manifest 已覆盖占位）
+    db.run(
+      'UPDATE module_registry SET manifest_json = ?, version = ? WHERE id = ?',
+      JSON.stringify({ ...helloManifest, version: '1.4.2', description: '真清单' }),
+      '1.4.2',
+      'hello',
+    );
+
+    const again = await connectRegister(env, cookie, { moduleId: 'hello', keyHash: 'b'.repeat(64) });
+    expect(again.status).toBe(201);
+    expect(await again.json()).toMatchObject({ enabled: false, lifecycle: 'pending' });
+
+    const row = db.first<Record<string, unknown>>(
+      'SELECT enabled, lifecycle, credential_hash, storage_level, version, manifest_json FROM module_registry WHERE id = ?',
+      'hello',
+    );
+    expect(row).toMatchObject({
+      enabled: 0,
+      lifecycle: 'pending',
+      credential_hash: 'b'.repeat(64),
+      storage_level: 'core',
+      version: '1.4.2',
+    });
+    const manifest = JSON.parse(row!.manifest_json as string) as Record<string, unknown>;
+    expect(manifest).toMatchObject({ version: '1.4.2', description: '真清单' });
+  });
+
+  it('已 active / disabled 重记账 → 409，整行不动（哈希/manifest/enabled/lifecycle 全保留）', async () => {
+    const { env, db, cookie } = await envFor('admin');
+    const hash = 'a'.repeat(64);
+    await register(env, cookie, {
+      id: 'hello',
+      enabled: true,
+      manifest: helloManifest,
+      mode: 'connect',
+      entry: 'https://bridge.example.com/m/hello/',
+      credential_hash: hash,
+    });
+
+    const active = await connectRegister(env, cookie, { moduleId: 'hello', keyHash: 'b'.repeat(64) });
+    expect(active.status).toBe(409);
+
+    await app.request(
+      `${REG_URL}/hello/toggle`,
+      { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: '{"enabled":false}' },
+      env,
+    );
+    const disabled = await connectRegister(env, cookie, { moduleId: 'hello', keyHash: 'b'.repeat(64) });
+    expect(disabled.status).toBe(409);
+
+    const row = db.first<Record<string, unknown>>(
+      'SELECT enabled, lifecycle, credential_hash, mode, entry, manifest_json FROM module_registry WHERE id = ?',
+      'hello',
+    );
+    expect(row).toMatchObject({
+      enabled: 0,
+      lifecycle: 'disabled',
+      credential_hash: hash,
+      mode: 'connect',
+      entry: 'https://bridge.example.com/m/hello/',
+    });
+    expect(JSON.parse(row!.manifest_json as string)).toMatchObject({ id: 'hello', version: '1.0.0' });
+    // 拒绝不伪造记账留痕
+    expect(db.query("SELECT action FROM audit_log WHERE action = 'module_connect_registered'")).toEqual([]);
+  });
+
+  it('connect 凭证门禁：pending/active 放行 lookup+verify，disabled 两层都 403', async () => {
+    const { env, cookie } = await envFor('admin');
+    const hash = 'a'.repeat(64);
+    await connectRegister(env, cookie, { moduleId: 'hello', keyHash: hash });
+
+    // pending：两段式第①段后仍可拨号做测试连接
+    await expect(lookupConnectModule(env.CORE_DB, hash)).resolves.toEqual({ ok: true, moduleId: 'hello' });
+    await expect(verifyConnectCredential(env.CORE_DB, 'hello', hash)).resolves.toEqual({
+      ok: true,
+      moduleId: 'hello',
+    });
+
+    // active：保存激活后照常
+    await register(env, cookie, {
+      id: 'hello',
+      enabled: true,
+      manifest: helloManifest,
+      mode: 'connect',
+      entry: 'https://bridge.example.com/m/hello/',
+    });
+    await expect(lookupConnectModule(env.CORE_DB, hash)).resolves.toEqual({ ok: true, moduleId: 'hello' });
+    await expect(verifyConnectCredential(env.CORE_DB, 'hello', hash)).resolves.toEqual({
+      ok: true,
+      moduleId: 'hello',
+    });
+
+    // disabled：停用即吊销连接面（key 仍对也 403）
+    await app.request(
+      `${REG_URL}/hello/toggle`,
+      { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: '{"enabled":false}' },
+      env,
+    );
+    await expect(lookupConnectModule(env.CORE_DB, hash)).resolves.toMatchObject({ ok: false, status: 403 });
+    await expect(verifyConnectCredential(env.CORE_DB, 'hello', hash)).resolves.toMatchObject({
+      ok: false,
+      status: 403,
+    });
+  });
+});
+
 describe('模块启停写端点 POST /toggle（#49）', () => {
   function toggle(
     env: { JWT_PRIVATE_KEY: string; CORE_DB: D1Database },
@@ -509,16 +664,18 @@ describe('模块启停写端点 POST /toggle（#49）', () => {
 
     const off = await toggle(env, cookie, 'hello', { enabled: false });
     expect(off.status).toBe(200);
-    expect(await off.json()).toEqual({ id: 'hello', enabled: false });
-    expect(db.first<{ enabled: number }>('SELECT enabled FROM module_registry WHERE id = ?', 'hello')).toEqual({
+    expect(await off.json()).toEqual({ id: 'hello', enabled: false, lifecycle: 'disabled' });
+    expect(db.first<{ enabled: number; lifecycle: string }>('SELECT enabled, lifecycle FROM module_registry WHERE id = ?', 'hello')).toEqual({
       enabled: 0,
+      lifecycle: 'disabled',
     });
 
     const on = await toggle(env, cookie, 'hello', { enabled: true });
     expect(on.status).toBe(200);
-    expect(await on.json()).toEqual({ id: 'hello', enabled: true });
-    expect(db.first<{ enabled: number }>('SELECT enabled FROM module_registry WHERE id = ?', 'hello')).toEqual({
+    expect(await on.json()).toEqual({ id: 'hello', enabled: true, lifecycle: 'active' });
+    expect(db.first<{ enabled: number; lifecycle: string }>('SELECT enabled, lifecycle FROM module_registry WHERE id = ?', 'hello')).toEqual({
       enabled: 1,
+      lifecycle: 'active',
     });
 
     expect(db.query('SELECT actor, action, target FROM audit_log ORDER BY id')).toEqual([

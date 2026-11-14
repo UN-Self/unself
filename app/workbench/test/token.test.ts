@@ -174,6 +174,7 @@ describe('POST /api/modules/:id/token（模块 token 签发）', () => {
       'mode',
       'credential_hash',
       'config_values',
+      'lifecycle',
     ]);
     seedHello(db);
 
