@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * connect 反连隧道 DO（issue #349，决策 #108）：
+ * connect 反连隧道 DO（issue #349，决策 #109）：
  * 模块 dial-home 反连后，core 到模块的反向代理出口住这里。
  *
- * 运行体定位（决策 #106/#108）：DO 是 CF 落点的**过渡事实**而非承诺——Node 运行体
+ * 运行体定位（决策 #106/#109）：DO 是 CF 落点的**过渡事实**而非承诺——Node 运行体
  * 纯 WS（无 DO）；本类只依赖 `state.acceptWebSocket`（hibernation API，省费的关键：
  * 模块长连不占 CPU 时间，只有帧到达才唤醒计费）与 websocket handlers，平台专属面
  * 收敛在这一层，平替时按同名内部路由重写本类即可。
@@ -21,7 +21,7 @@
  * 已建连按帧重验（每条响应帧回库重查**凭据是否被吊销**；哈希不重查——建连已核、换 key = 重连；
  * enabled 不参与隧道核验，见 connect-registry.ts：pending 模块必须能拨上来做「测试连接」）。
  *
- * 连接池语义（决策 #108：连接形式模块自选，core 备能力不强制）：一房多连 = 广播取
+ * 连接池语义（决策 #109：连接形式模块自选，core 备能力不强制）：一房多连 = 广播取
  * 最先响应者（connect 模块默认单实例部署，多连是重连竞态窗口的过渡形态）；
  * 负载均衡/粘滞归后续 issue。
  */
@@ -69,6 +69,42 @@ export const TUNNEL_PROTOCOL_VERSION = 1 as const;
 /** DO 内部路由 host（仅 stub.fetch 可达，外部请求打不进来）。 */
 export const TUNNEL_INTERNAL_ORIGIN = 'https://tunnel.internal';
 
+/**
+ * 同域隧道的请求头隔离（#349 定案）：壳与模块同域，用户浏览器带来的登录态绝不下发到
+ * 模块进程。入口（entry.prod）先剔一次，DO 转发前再剔一次（纵深：内部调用也不漏）。
+ *
+ * `authorization` 不在剔除名单（#349 真机取证修正）：壳的会话只认 Cookie
+ * （session.ts readSessionFromCookie），Authorization 不是壳的凭证；而模块页面带的
+ * `Bearer <模块 token>` 就是 core 签给它自己 aud 的 JWT，剔掉等于让模块永远拿不到凭证
+ * （模块侧 `missing bearer token` 401 即此因）。**不变量**：若壳将来引入 Bearer 会话，
+ * 必须改成由壳重签模块 token 再下发，不得把用户凭证透传给模块。
+ */
+export const TUNNEL_STRIPPED_REQUEST_HEADERS = new Set([
+  'cookie',
+  'cookie2',
+  'proxy-authorization',
+  'x-setup-token',
+]);
+
+/**
+ * 同域隧道的响应头隔离（#349 定案）：模块不能让壳域下 cookie、改 CORS、注入 CSP/XFO，
+ * 也不能声明 content-encoding（body 已被隧道解码/重编码）。保留 content-type、
+ * cache-control、etag、last-modified、location、content-disposition 等语义头。
+ */
+export const TUNNEL_STRIPPED_RESPONSE_HEADERS = new Set([
+  'set-cookie',
+  'set-cookie2',
+  'access-control-allow-origin',
+  'access-control-allow-credentials',
+  'access-control-allow-headers',
+  'access-control-allow-methods',
+  'content-encoding',
+  'content-security-policy',
+  'content-security-policy-report-only',
+  'x-frame-options',
+  'strict-transport-security',
+]);
+
 /** 每请求转发超时（毫秒）：模块侧无响应即 504（HTTP 轮询回答可能耗时，给足上限）。 */
 const FORWARD_TIMEOUT_MS = 15_000;
 /** 长轮询服务端等待上限（毫秒；模块 waitMs 再大也截断，防 DO 挂请求超平台上限）。 */
@@ -88,6 +124,8 @@ interface PendingEntry {
   timer: ReturnType<typeof setTimeout>;
   /** false = 还在等投递（WS/poll）；true = 已交到模块手里，只等 response/respond。 */
   delivered: boolean;
+  /** 这帧实际发出去的 socket。空集合 = 走 poll 队列，不归任何一条连接。 */
+  sockets: Set<WebSocket>;
 }
 
 export class TunnelRoom {
@@ -95,8 +133,10 @@ export class TunnelRoom {
   private env: TunnelEnv;
   /** 存活连接（hibernation 唤醒后由构造函数从 attachments 重建）。 */
   private connections: Map<WebSocket, TunnelAttachment>;
-  /** requestId → 挂起的转发（forward 进、response 帧/respond 出）。 */
+  /** requestId → 挂起的转发（forward 进、response 帧/respond 出）。一帧只一条，广播不覆盖。 */
   private pending: Map<string, PendingEntry>;
+  /** 已结束的 requestId（已回答/已超时/已拒）。同一帧的后到响应直接丢，不当伪造帧把连接关掉。 */
+  private settled: Set<string>;
   /** 长轮询等待者（有帧可摘时唤醒）。 */
   private pollWaiters: Array<{ resolve: () => void; timer: ReturnType<typeof setTimeout> }>;
 
@@ -105,6 +145,7 @@ export class TunnelRoom {
     this.env = env;
     this.connections = new Map();
     this.pending = new Map();
+    this.settled = new Set();
     this.pollWaiters = [];
 
     // hibernation 唤醒：accept 过的 socket 重新挂回内存表（attachment 是建连时的核验事实）。
@@ -167,7 +208,9 @@ export class TunnelRoom {
     const target = url.searchParams.get('target') ?? '';
     const targetUrl = new URL(target, TUNNEL_INTERNAL_ORIGIN);
 
-    const live = [...this.connections.entries()];
+    // 每次转发前重验已建连凭据（#349 定案）：吊销立刻生效，不等模块自己回 response。
+    // 失败连接先关 1008 并移出本次投递名单，用户请求（含任何剩余头）不发给它。
+    const live = await this.revalidatedConnections();
     // 离线即 503 人话（任务书定案「路由 503 人话」）：无 WS 连接且无 poll 等待者 = 模块
     // 必不在收帧（poll 兜底的模块在等待期内会挂着 waiter），队列投递无从谈起，不等超时。
     if (live.length === 0 && this.pollWaiters.length === 0) {
@@ -193,7 +236,9 @@ export class TunnelRoom {
     const headers: Record<string, string> = {};
     request.headers.forEach((value, key) => {
       // 壳内代理面逐跳头不透传（RFC 7230；host/content-length 由模块侧按帧重建）。
-      if (!HOP_BY_HOP.has(key.toLowerCase())) headers[key] = value;
+      const lower = key.toLowerCase();
+      if (HOP_BY_HOP.has(lower) || TUNNEL_STRIPPED_REQUEST_HEADERS.has(lower)) return;
+      headers[key] = value;
     });
 
     const frame: TunnelRequestFrame = {
@@ -217,6 +262,31 @@ export class TunnelRoom {
   }
 
   /**
+   * 转发前重验每条活连接的凭据（#51 按帧重验的入口侧版本）。同一 moduleId+keyHash 只查一次；
+   * 吊销的连接关 1008 并清其在途帧，返回本次可投递的连接。
+   */
+  private async revalidatedConnections(): Promise<Array<[WebSocket, TunnelAttachment]>> {
+    const live: Array<[WebSocket, TunnelAttachment]> = [];
+    const checked = new Map<string, boolean>();
+    for (const [socket, meta] of this.connections) {
+      const credentialKey = `${meta.moduleId}\u0000${meta.keyHash}`;
+      let ok = checked.get(credentialKey);
+      if (ok === undefined) {
+        const gate = await verifyConnectCredential(this.env.CORE_DB, meta.moduleId, meta.keyHash);
+        ok = gate.ok;
+        checked.set(credentialKey, ok);
+      }
+      if (!ok) {
+        this.rejectInFlight(socket, new Error('credential revoked'));
+        this.closeSocket(socket, 1008, 'credential revoked');
+        continue;
+      }
+      live.push([socket, meta]);
+    }
+    return live;
+  }
+
+  /**
    * 投递单帧并等回答：WS 连接广播取最先响应；无 WS 连接进 poll 队列等模块轮询+回答。
    * 超时 reject(null)。返回 resolve 的首条响应帧；全失败回 null。
    */
@@ -225,40 +295,42 @@ export class TunnelRoom {
     live: Array<[WebSocket, TunnelAttachment]>,
   ): Promise<TunnelResponseFrame | null> {
     const timeoutToken = Symbol('forward-timeout');
-    const attempts: Array<Promise<TunnelResponseFrame>> = [];
-    if (live.length > 0) {
-      for (const [socket, meta] of live) {
-        attempts.push(this.deliverOverSocket(socket, meta, frame, timeoutToken));
-      }
-    } else {
-      attempts.push(this.deliverOverQueue(frame, timeoutToken));
-    }
-    return Promise.any(attempts).catch(() => null);
+    const attempt =
+      live.length > 0
+        ? this.deliverToSockets(live, frame, timeoutToken)
+        : this.deliverOverQueue(frame, timeoutToken);
+    return attempt.catch(() => null);
   }
 
-  /** WS 投递：send 请求帧 + 挂 pending；socket 死亡/关闭即 reject（让 Promise.any 取别的）。 */
-  private deliverOverSocket(
-    socket: WebSocket,
-    meta: TunnelAttachment,
+  /**
+   * WS 广播：一帧只挂一条 pending，发给当前每条活连接。
+   * 先回答的生效；其余连接后到的同一帧响应丢弃，不关连接。
+   * 只有收到这帧的连接全断了，才判这一帧失败。
+   */
+  private deliverToSockets(
+    live: Array<[WebSocket, TunnelAttachment]>,
     frame: TunnelRequestFrame,
     timeoutToken: symbol,
   ): Promise<TunnelResponseFrame> {
     return new Promise<TunnelResponseFrame>((resolve, reject) => {
-      if (!this.connections.has(socket)) {
-        reject(new Error('socket not live'));
-        return;
-      }
+      const sockets = new Set<WebSocket>();
       const timer = setTimeout(() => {
-        this.pending.delete(frame.requestId);
+        this.clearPending(frame.requestId);
         reject(timeoutToken);
       }, FORWARD_TIMEOUT_MS);
-      this.pending.set(frame.requestId, { frame, resolve, reject, timer, delivered: true });
-      const outbound = { ...frame, moduleId: meta.moduleId };
-      try {
-        socket.send(JSON.stringify(outbound));
-      } catch (error) {
+      this.pending.set(frame.requestId, { frame, resolve, reject, timer, delivered: true, sockets });
+      for (const [socket, meta] of live) {
+        if (!this.connections.has(socket)) continue;
+        try {
+          socket.send(JSON.stringify({ ...frame, moduleId: meta.moduleId }));
+          sockets.add(socket);
+        } catch {
+          // 单条发不出去就跳过，还有别的连接可以答。
+        }
+      }
+      if (sockets.size === 0) {
         this.clearPending(frame.requestId);
-        reject(error instanceof Error ? error : new Error('send failed'));
+        reject(new Error('send failed'));
       }
     });
   }
@@ -271,7 +343,14 @@ export class TunnelRoom {
         reject(timeoutToken);
       }, FORWARD_TIMEOUT_MS);
       // delivered=false = 未投递（poll 可摘）；摘走才置 true。
-      this.pending.set(frame.requestId, { frame, resolve, reject, timer, delivered: false });
+      this.pending.set(frame.requestId, {
+        frame,
+        resolve,
+        reject,
+        timer,
+        delivered: false,
+        sockets: new Set(),
+      });
       this.wakePollWaiters();
     });
   }
@@ -395,7 +474,12 @@ export class TunnelRoom {
     }
 
     if (frame.type === 'ping') {
-      // 应用层 ping（auto-response 不可用的运行时兜底）；直接回 pong。
+      // 应用层 ping（auto-response 不可用的运行时兜底）：同样按帧重验，吊销即关 1008，不回 pong。
+      const gate = await verifyConnectCredential(this.env.CORE_DB, meta.moduleId, meta.keyHash);
+      if (!gate.ok) {
+        this.closeSocket(ws, 1008, 'credential revoked');
+        return;
+      }
       ws.send(JSON.stringify({ v: TUNNEL_PROTOCOL_VERSION, type: 'pong' }));
       return;
     }
@@ -412,9 +496,13 @@ export class TunnelRoom {
         this.closeSocket(ws, 1008, 'malformed response frame');
         return;
       }
+      if (this.settled.has(requestId)) {
+        // 同一帧已经有别的连接答过（或已超时）。后到的丢掉，不把还活着的连接关掉。
+        return;
+      }
       const entry = this.pending.get(requestId);
-      if (!entry) {
-        // 无人等这个 requestId（超时已 504 / 伪造帧）：按帧重验纪律丢弃并关（数据面不可信）。
+      if (!entry || !entry.sockets.has(ws)) {
+        // 无人等这个 requestId，或这条连接根本没收到过这帧：伪造帧，关。
         this.closeSocket(ws, 1008, 'unsolicited response');
         return;
       }
@@ -451,13 +539,13 @@ export class TunnelRoom {
    */
   webSocketClose(ws: WebSocket): void {
     this.connections.delete(ws);
-    this.rejectInFlight(new Error('tunnel socket closed'));
+    this.rejectInFlight(ws, new Error('tunnel socket closed'));
   }
 
   /** 平台异常断开（error handler 必须有，否则 DO 抛未捕获）；语义同 close。 */
   webSocketError(ws: WebSocket): void {
     this.connections.delete(ws);
-    this.rejectInFlight(new Error('tunnel socket error'));
+    this.rejectInFlight(ws, new Error('tunnel socket error'));
   }
 
   /** 在线表读数（测试连接消费；在线 = 存活 WS 会话 > 0）。 */
@@ -465,22 +553,34 @@ export class TunnelRoom {
     return this.connections.size;
   }
 
-  /** 断线时把「已投给这条 socket、还没回」的 pending 全部 reject（转发面兜底 504）。 */
-  private rejectInFlight(reason: unknown): void {
+  /**
+   * 断线时只拿掉「只发给这条连接」的在途帧。
+   * 还有别的连接握着同一帧时不拒，等那边回答。
+   */
+  private rejectInFlight(socket: WebSocket, reason: unknown): void {
     for (const [requestId, entry] of this.pending) {
-      if (!entry.delivered) continue;
-      clearTimeout(entry.timer);
-      this.pending.delete(requestId);
+      if (!entry.delivered || !entry.sockets.has(socket)) continue;
+      entry.sockets.delete(socket);
+      if (entry.sockets.size > 0) continue;
+      this.clearPending(requestId);
       entry.reject(reason);
     }
   }
 
   private clearPending(requestId: string): void {
     const entry = this.pending.get(requestId);
-    if (entry) {
-      clearTimeout(entry.timer);
-      this.pending.delete(requestId);
-    }
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    this.pending.delete(requestId);
+    this.rememberSettled(requestId);
+  }
+
+  /** 只留最近一批，防止长期运行把已结束的请求号堆满。 */
+  private rememberSettled(requestId: string): void {
+    this.settled.add(requestId);
+    if (this.settled.size <= MAX_PENDING * 2) return;
+    const oldest = this.settled.values().next().value;
+    if (oldest !== undefined) this.settled.delete(oldest);
   }
 
   /** 按策略违规关（1008 policy violation）：清内存表 + 关 socket（已死则忽略）。 */
@@ -497,7 +597,9 @@ export class TunnelRoom {
   private responseFromFrame(frame: TunnelResponseFrame): Response {
     const headers = new Headers();
     for (const [key, value] of Object.entries(frame.headers ?? {})) {
-      if (!HOP_BY_HOP.has(key.toLowerCase())) headers.set(key, value);
+      const lower = key.toLowerCase();
+      if (HOP_BY_HOP.has(lower) || TUNNEL_STRIPPED_RESPONSE_HEADERS.has(lower)) continue;
+      headers.set(key, value);
     }
     const body = frame.body ? base64ToArrayBuffer(frame.body) : null;
     return new Response(body, { status: frame.status, headers });

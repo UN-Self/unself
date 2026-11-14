@@ -25,7 +25,7 @@ import { createApp, type Bindings } from './index';
 import { normalizeAssetResponse } from './asset-response';
 import { registryFrameOrigins } from './registry';
 import { withHtmlSecurityHeaders } from './security-headers';
-import { TUNNEL_INTERNAL_ORIGIN } from './do/TunnelRoom';
+import { TUNNEL_INTERNAL_ORIGIN, TUNNEL_STRIPPED_REQUEST_HEADERS } from './do/TunnelRoom';
 
 /** DO 类必须由主模块导出（wrangler durable_objects 的 class_name 解析依赖它）；#349 隧道面。 */
 export { TunnelRoom } from './do/TunnelRoom';
@@ -33,7 +33,7 @@ export { TunnelRoom } from './do/TunnelRoom';
 /** 运行期绑定 = app 自身绑定 + 静态资产（装配期由引擎挂上 assets 目录）+ 隧道 DO（#349）。 */
 export interface ProdEnv extends Bindings {
   ASSETS: Fetcher;
-  /** connect 反连隧道 DO（#349 决策 #108）：未绑定 = /m/<id> 隧道路由按 503 人话兜底。 */
+  /** connect 反连隧道 DO（#349 决策 #109）：未绑定 = /m/<id> 隧道路由按 503 人话兜底。 */
   CONNECT_TUNNEL?: DurableObjectNamespace;
 }
 
@@ -72,10 +72,13 @@ export async function tryTunnelDataPlane(request: Request, env: ProdEnv): Promis
   const forwardUrl = new URL(
     `${TUNNEL_INTERNAL_ORIGIN}/forward?target=${encodeURIComponent(innerPath + url.search)}`,
   );
+  // 同域隔离（#349 定案）：登录态类头不进模块隧道（DO 转发前还有一次纵深剔除）。
+  const headers = new Headers(request.headers);
+  for (const name of TUNNEL_STRIPPED_REQUEST_HEADERS) headers.delete(name);
   return stub.fetch(
     new Request(forwardUrl, {
       method: request.method,
-      headers: request.headers,
+      headers,
       body:
         request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.arrayBuffer(),
     }),
