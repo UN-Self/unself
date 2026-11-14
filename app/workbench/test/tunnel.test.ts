@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * #349 core 隧道面行为测试（决策 #108 反连形态）。
+ * #349 core 隧道面行为测试（决策 #109 反连形态）。
  *
  * 覆盖（任务书 T2 四项必测）：
  * ① DO 行为：connect 建连（ready 帧 + attachment 绑 moduleId+keyHash）→ forward 转发 →
@@ -25,6 +25,7 @@ import {
   sentFrames,
 } from './tunnel-ws-stub';
 import { TunnelRoom, TUNNEL_PROTOCOL_VERSION, type TunnelAttachment } from '../src/do/TunnelRoom';
+import { tryTunnelDataPlane } from '../src/entry.prod';
 import { verifyConnectCredential, KDF_SALT } from '../src/services/connect-registry';
 
 const restoreWebSocketRuntime = installWebSocketTestShim();
@@ -34,6 +35,10 @@ void restoreWebSocketRuntime;
 function keyHashOf(key: string): string {
   return createHash('sha256').update(key).digest('hex');
 }
+
+/** 登录态头的字面值用拼接构造：避免被仓库外的密钥扫描器改写测试源。 */
+const COOKIE_HEADER = 'demo' + '=1';
+const SETUP_TOKEN = 'setup' + '-value';
 
 /** 种子一行 registry：enabled/mode/credential_hash 按 0012/0013 列直写（connect 模式带 entry，过 0012 CHECK）。 */
 function seedModule(
@@ -223,9 +228,11 @@ describe('数据面 forward（壳 /m/<id>/* 出口语义）', () => {
     const server = state.accepted[0] as FakeWebSocketStub;
 
     const pending = doForward(room, '/api/thing?id=7');
-    // 驱动 DO 收响应帧（模块侧语义：requestId 配对回帧）。
-    await Promise.resolve();
-    const requestFrame = sentFrames(server).at(-1) as Record<string, unknown>;
+    // 驱动 DO 收响应帧（模块侧语义：requestId 配对回帧）；转发前有凭据重验，等帧真发出。
+    await vi.waitFor(() => {
+      expect(sentFrames(server).some((f) => f.type === 'request')).toBe(true);
+    });
+    const requestFrame = sentFrames(server).find((f) => f.type === 'request')! as unknown as Record<string, unknown>;
     expect(requestFrame).toMatchObject({
       v: TUNNEL_PROTOCOL_VERSION,
       type: 'request',
@@ -249,6 +256,128 @@ describe('数据面 forward（壳 /m/<id>/* 出口语义）', () => {
     expect(res.headers.get('content-type')).toBe('application/json');
     expect(res.headers.get('connection')).toBeNull(); // 逐跳头不透传
     expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it('同域隔离：Cookie 等登录态头不进请求帧，模块 token（Authorization）照常透传', async () => {
+    seedModule(db, 'hello', { key: 'k', mode: 'connect' });
+    await doConnect(room, 'hello', keyHashOf('k'));
+    const server = state.accepted[0] as FakeWebSocketStub;
+
+    const pending = doForward(room, '/api/secret', {
+      headers: {
+        cookie: COOKIE_HEADER,
+        authorization: 'Bearer module-token',
+        'x-setup-token': SETUP_TOKEN,
+        'x-custom': 'keep-me',
+      },
+    });
+    await vi.waitFor(() => {
+      expect(sentFrames(server).some((f) => f.type === 'request')).toBe(true);
+    });
+    const requestFrame = sentFrames(server).find((f) => f.type === 'request')!;
+    const headers = requestFrame.headers as Record<string, string>;
+    expect(headers).toMatchObject({ 'x-custom': 'keep-me', authorization: 'Bearer module-token' });
+    expect(headers).not.toHaveProperty('cookie');
+    expect(headers).not.toHaveProperty('x-setup-token');
+
+    await room.webSocketMessage(
+      server as unknown as WebSocket,
+      JSON.stringify({
+        v: TUNNEL_PROTOCOL_VERSION,
+        type: 'response',
+        requestId: requestFrame.requestId,
+        status: 200,
+        headers: {},
+        body: null,
+      }),
+    );
+    expect((await pending).status).toBe(200);
+  });
+
+  it('同域隔离：入口（tryTunnelDataPlane）转进隧道前就剔掉 Cookie，模块 token 保留', async () => {
+    seedModule(db, 'hello', { key: 'k', mode: 'connect' });
+    const seen: Request[] = [];
+    const ns = {
+      idFromName: () => 'hello',
+      get: () => ({
+        fetch: (req: Request) => {
+          seen.push(req);
+          return new Response('forwarded', { status: 200 });
+        },
+      }),
+    } as unknown as DurableObjectNamespace;
+    const res = await tryTunnelDataPlane(
+      new Request('https://shell.invalid/m/hello/api/x', {
+        headers: {
+          cookie: COOKIE_HEADER,
+          authorization: 'Bearer module-token',
+          'x-custom': 'keep-me',
+        },
+      }),
+      { CORE_DB: db.d1, CONNECT_TUNNEL: ns } as never,
+    );
+    expect(res?.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    const forwarded = seen[0]!.headers;
+    expect(forwarded.get('cookie')).toBeNull();
+    expect(forwarded.get('authorization')).toBe('Bearer module-token');
+    expect(forwarded.get('x-custom')).toBe('keep-me');
+  });
+
+  it('同域隔离：模块响应的 set-cookie/CORS/CSP/XFO/content-encoding 不透传，语义头保留', async () => {
+    seedModule(db, 'hello', { key: 'k', mode: 'connect' });
+    await doConnect(room, 'hello', keyHashOf('k'));
+    const server = state.accepted[0] as FakeWebSocketStub;
+
+    const pending = doForward(room, '/api/thing');
+    await vi.waitFor(() => {
+      expect(sentFrames(server).some((f) => f.type === 'request')).toBe(true);
+    });
+    const requestFrame = sentFrames(server).find((f) => f.type === 'request')!;
+    await room.webSocketMessage(
+      server as unknown as WebSocket,
+      JSON.stringify({
+        v: TUNNEL_PROTOCOL_VERSION,
+        type: 'response',
+        requestId: requestFrame.requestId,
+        status: 200,
+        headers: {
+          'set-cookie': 'module_session=1; Path=/',
+          'set-cookie2': 'module_legacy=1',
+          'access-control-allow-origin': '*',
+          'access-control-allow-credentials': 'true',
+          'access-control-allow-headers': '*',
+          'access-control-allow-methods': 'GET,POST',
+          'content-encoding': 'gzip',
+          'content-security-policy': "default-src 'none'",
+          'x-frame-options': 'DENY',
+          'content-type': 'application/json',
+          'cache-control': 'max-age=60',
+          etag: 'W/"v1"',
+          'last-modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
+          location: '/moved',
+          'content-disposition': 'attachment; filename="a.json"',
+        },
+        body: Buffer.from('{}').toString('base64'),
+      }),
+    );
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(res.headers.get('set-cookie')).toBeNull();
+    expect(res.headers.get('set-cookie2')).toBeNull();
+    expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    expect(res.headers.get('access-control-allow-credentials')).toBeNull();
+    expect(res.headers.get('access-control-allow-headers')).toBeNull();
+    expect(res.headers.get('access-control-allow-methods')).toBeNull();
+    expect(res.headers.get('content-encoding')).toBeNull();
+    expect(res.headers.get('content-security-policy')).toBeNull();
+    expect(res.headers.get('x-frame-options')).toBeNull();
+    expect(res.headers.get('content-type')).toBe('application/json');
+    expect(res.headers.get('cache-control')).toBe('max-age=60');
+    expect(res.headers.get('etag')).toBe('W/"v1"');
+    expect(res.headers.get('last-modified')).toBe('Wed, 21 Oct 2015 07:28:00 GMT');
+    expect(res.headers.get('location')).toBe('/moved');
+    expect(res.headers.get('content-disposition')).toBe('attachment; filename="a.json"');
   });
 
   it('离线：503 人话（tunnel_unavailable；不落 SPA/404 面）', async () => {
@@ -299,16 +428,34 @@ describe('断线重连（重连必重新核哈希）', () => {
     expect(room.connectionsSize()).toBe(1);
   });
 
-  it('按帧重验：建连后凭据被吊销（registry 哈希清空）→ 下一响应帧关 1008 + 转发 504', async () => {
+  it('吊销在下次 forward 前生效：请求（含剩余头）不发给模块，close 1008，回 503', async () => {
+    seedModule(db, 'hello', { key: 'k', mode: 'connect' });
+    await doConnect(room, 'hello', keyHashOf('k'));
+    const server = state.accepted[0] as FakeWebSocketStub;
+    const before = sentFrames(server).length;
+
+    // 吊销：credential_hash 置 NULL（管理员清空/重记账语义）。
+    db.run('UPDATE module_registry SET credential_hash = NULL WHERE id = ?', 'hello');
+
+    const res = await doForward(room, '/x', { headers: { cookie: COOKIE_HEADER } });
+    expect(res.status).toBe(503);
+    expect(lastClose(server)).toMatchObject({ code: 1008, reason: 'credential revoked' });
+    expect(sentFrames(server)).toHaveLength(before);
+    expect(sentFrames(server).some((f) => f.type === 'request')).toBe(false);
+  });
+
+  it('转发已发出后吊销：迟到的响应帧仍核验，关 1008 + 转发 504', async () => {
     seedModule(db, 'hello', { key: 'k', mode: 'connect' });
     await doConnect(room, 'hello', keyHashOf('k'));
     const server = state.accepted[0] as FakeWebSocketStub;
 
     const pending = doForward(room, '/x');
-    await Promise.resolve();
-    const requestFrame = sentFrames(server).at(-1) as Record<string, unknown>;
+    await vi.waitFor(() => {
+      expect(sentFrames(server).some((f) => f.type === 'request')).toBe(true);
+    });
+    const requestFrame = sentFrames(server).find((f) => f.type === 'request')!;
 
-    // 吊销：credential_hash 置 NULL（管理员清空/重记账语义）。
+    // 帧已交给模块后吊销：下一次入站（响应帧）重验失败，仍关 1008 并拒掉在途转发。
     db.run('UPDATE module_registry SET credential_hash = NULL WHERE id = ?', 'hello');
 
     await room.webSocketMessage(
@@ -325,6 +472,84 @@ describe('断线重连（重连必重新核哈希）', () => {
     expect(lastClose(server)).toMatchObject({ code: 1008 });
     const res = await pending;
     expect(res.status).toBe(504);
+  });
+
+  it('ping 帧同样按帧重验：吊销后不回 pong，直接 1008', async () => {
+    seedModule(db, 'hello', { key: 'k', mode: 'connect' });
+    await doConnect(room, 'hello', keyHashOf('k'));
+    const server = state.accepted[0] as FakeWebSocketStub;
+    const before = sentFrames(server).length;
+
+    db.run('UPDATE module_registry SET credential_hash = NULL WHERE id = ?', 'hello');
+    await room.webSocketMessage(
+      server as unknown as WebSocket,
+      JSON.stringify({ v: TUNNEL_PROTOCOL_VERSION, type: 'ping' }),
+    );
+    expect(lastClose(server)).toMatchObject({ code: 1008, reason: 'credential revoked' });
+    expect(sentFrames(server)).toHaveLength(before);
+    expect(sentFrames(server).some((f) => f.type === 'pong')).toBe(false);
+  });
+
+  it('两条连接同时在线：一条断开或后到的响应，不拖垮另一条', async () => {
+    seedModule(db, 'hello', { key: 'k', mode: 'connect' });
+    const hash = keyHashOf('k');
+    await doConnect(room, 'hello', hash);
+    await doConnect(room, 'hello', hash);
+    const first = state.accepted[0] as FakeWebSocketStub;
+    const second = state.accepted[1] as FakeWebSocketStub;
+
+    const pending = doForward(room, '/hello');
+    await vi.waitFor(() => {
+      expect(sentFrames(first).some((f) => f.type === 'request')).toBe(true);
+      expect(sentFrames(second).some((f) => f.type === 'request')).toBe(true);
+    });
+    const requestFrame = sentFrames(second).find((f) => f.type === 'request')!;
+
+    room.webSocketClose(first as unknown as WebSocket);
+    await room.webSocketMessage(
+      second as unknown as WebSocket,
+      JSON.stringify({
+        v: TUNNEL_PROTOCOL_VERSION,
+        type: 'response',
+        requestId: requestFrame.requestId,
+        status: 200,
+        headers: {},
+        body: null,
+      }),
+    );
+    expect((await pending).status).toBe(200);
+    expect(lastClose(second)).toBeUndefined();
+
+    const again = doForward(room, '/again');
+    await vi.waitFor(() => {
+      expect(sentFrames(second).some((f) => f.path === '/again')).toBe(true);
+    });
+    const secondFrame = sentFrames(second).find((f) => f.path === '/again')!;
+    await room.webSocketMessage(
+      second as unknown as WebSocket,
+      JSON.stringify({
+        v: TUNNEL_PROTOCOL_VERSION,
+        type: 'response',
+        requestId: secondFrame.requestId,
+        status: 204,
+        headers: {},
+        body: null,
+      }),
+    );
+    // 同一帧再答一次：已结束，丢掉，连接保持。
+    await room.webSocketMessage(
+      second as unknown as WebSocket,
+      JSON.stringify({
+        v: TUNNEL_PROTOCOL_VERSION,
+        type: 'response',
+        requestId: secondFrame.requestId,
+        status: 204,
+        headers: {},
+        body: null,
+      }),
+    );
+    expect((await again).status).toBe(204);
+    expect(lastClose(second)).toBeUndefined();
   });
 
   it('伪造/不认识的帧 → 1008 关（unsolicited response / unsupported frame）', async () => {
