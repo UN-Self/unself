@@ -50,11 +50,18 @@ const errorTitle = computed(() =>
       />
     </div>
 
+    <!--
+      同域隔离（T5）：sandbox 不含 allow-same-origin → 模块文档为不透明源，
+      读不到父页面 cookie/localStorage，也无法以管理员会话 fetch /api/admin。
+      allow-scripts/allow-forms 保模块自身可用；不含 allow-top-navigation，模块不能劫持顶层导航。
+      postMessage 桥按 origin + contentWindow 校验，不依赖 sandbox 放行同源。
+    -->
     <iframe
       v-if="frameSrc"
       :ref="onFrameEl"
       :key="frameKey"
       :src="frameSrc"
+      sandbox="allow-scripts allow-forms"
       class="mh-frame"
       :title="`模块：${props.module?.id ?? ''}`"
       :class="{ 'mh-frame-hidden': frameState !== 'ready' }"

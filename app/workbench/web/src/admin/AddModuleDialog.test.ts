@@ -14,6 +14,7 @@ import {
   registerConnectModule,
 } from '../lib/modules-install-api'
 import { fetchAdminModules, toggleModule, type AdminModule } from '../lib/admin-api'
+import { makeApiError } from '../lib/api-client'
 
 /**
  * 「新增模块」双模式弹窗行为测试（#349 决策 #108/#109）。
@@ -65,6 +66,8 @@ describe('AddModuleDialog（#349 双模式）', () => {
     vi.mocked(fetchConnectStatus).mockResolvedValue({ moduleId: 'bridge', online: true })
     vi.mocked(activateConnectModule).mockResolvedValue(mod({ id: 'bridge', mode: 'connect', entry: 'https://t/m/bridge/' }))
     vi.mocked(installCloudflareModule).mockResolvedValue(mod())
+    // 重名预检的数据源：默认空列表（没有同名模块）
+    vi.mocked(fetchAdminModules).mockResolvedValue([])
   })
 
   function mountDialog() {
@@ -161,7 +164,7 @@ describe('AddModuleDialog（#349 双模式）', () => {
     }
   })
 
-  it('clipboard 失败（生成时与点框时）：降级为选中 env 文本并提示手动 Ctrl+C，明文不出 DOM', async () => {
+  it('clipboard 失败（生成时与点框时）：降级为亮出并选中明文，提示手动 Ctrl+C', async () => {
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: clipboardWriteText.mockRejectedValue(new Error('NotAllowedError')) },
       configurable: true,
@@ -177,7 +180,7 @@ describe('AddModuleDialog（#349 双模式）', () => {
       await flushPromises()
 
       expect(wrapper.find('[data-test="connect-copy-feedback"]').text()).toContain('Ctrl+C')
-      expect(wrapper.find('[data-test="connect-env"]').text()).not.toContain('plain-key-123')
+      expect(wrapper.find('[data-test="connect-env"]').text()).toContain('plain-key-123')
       expect(selectAllChildren).toHaveBeenCalled()
     } finally {
       selectAllChildren.mockRestore()
@@ -242,6 +245,71 @@ describe('AddModuleDialog（#349 双模式）', () => {
 
     expect(registerConnectModule).not.toHaveBeenCalled()
     expect(wrapper.find('[data-test="add-module-alert"]').text()).toContain('小写字母')
+  })
+
+  it('生成前查已有模块：id 重名就人话拦下，不生成也不注册', async () => {
+    vi.mocked(fetchAdminModules).mockResolvedValue([mod({ id: 'bridge' })])
+    const wrapper = mountDialog()
+    await wrapper.find('[data-test="connect-id"]').setValue('bridge')
+    await wrapper.find('[data-test="connect-generate"]').trigger('click')
+    await flushPromises()
+
+    expect(fetchAdminModules).toHaveBeenCalled()
+    expect(generateConnectKey).not.toHaveBeenCalled()
+    expect(registerConnectModule).not.toHaveBeenCalled()
+    const alert = wrapper.find('[data-test="add-module-alert"]').text()
+    expect(alert).toContain('已经有了')
+    expect(alert).toContain('bridge')
+  })
+
+  it('服务端回 409：界面说人话（这个 id 已经有了），不把状态码抛给用户', async () => {
+    vi.mocked(registerConnectModule).mockRejectedValue(makeApiError(409, '请求失败（409）'))
+    const wrapper = mountDialog()
+    await wrapper.find('[data-test="connect-id"]').setValue('bridge')
+    await wrapper.find('[data-test="connect-generate"]').trigger('click')
+    await flushPromises()
+
+    const alert = wrapper.find('[data-test="add-module-alert"]').text()
+    expect(alert).toContain('已经有了')
+    expect(alert).not.toContain('409')
+    expect(wrapper.find('[data-test="connect-env"]').exists()).toBe(false)
+  })
+
+  it('测试变绿后改模块 id：测试结果作废，保存重新禁用，须对新 id 重测', async () => {
+    const wrapper = mountDialog()
+    await generateKey(wrapper)
+    await wrapper.find('[data-test="connect-test"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="connect-save"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.find('[data-test="connect-id"]').setValue('bridge2')
+    await flushPromises()
+
+    // 回 idle：绿字消失、水位回落、保存不可用
+    expect(wrapper.find('[data-test="add-module-status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-level]').attributes('data-level')).toBe('rest')
+    expect(wrapper.find('[data-test="connect-save"]').attributes('disabled')).toBeDefined()
+
+    // 对当前 id 重测才恢复可保存
+    vi.mocked(fetchConnectStatus).mockResolvedValue({ moduleId: 'bridge2', online: true })
+    await wrapper.find('[data-test="connect-test"]').trigger('click')
+    await flushPromises()
+    expect(fetchConnectStatus).toHaveBeenLastCalledWith('bridge2')
+    expect(wrapper.find('[data-test="connect-save"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('测试变绿后改存储落点：同样作废测试结果，保存需重测', async () => {
+    const wrapper = mountDialog()
+    await generateKey(wrapper)
+    await wrapper.find('[data-test="connect-test"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="connect-save"]').attributes('disabled')).toBeUndefined()
+
+    wrapper.findAllComponents(UMotionSelect)[0]!.vm.$emit('update:modelValue', 'core')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="add-module-status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="connect-save"]').attributes('disabled')).toBeDefined()
   })
 
   it('测试连接绿之前保存按钮不可用；绿了才能保存并通知页面刷新', async () => {
