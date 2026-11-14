@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * connect 反连接口（issue #349，决策 #108 反连形态）：
+ * connect 反连接口（issue #349，决策 #109 反连形态）：
  *
  * - WS /api/modules/connect-ws?moduleId=&keyHash= —— dial-home 主形态（CF 落点挂
  *   TunnelRoom DO，hibernation 省费；决策 #106：DO 是过渡事实非承诺）；
@@ -9,7 +9,7 @@
  * - GET /api/modules/connect-status?moduleId= —— 「测试连接」查询在线状态（在线 ≠ enabled）。
  *
  * 验签纪律（决策 #51 照搬）：入站先验——upgrade/poll/respond 都过 lookupConnectModule
- * （keyHash 反查，#110）；DO 层逐帧重验用 verifyConnectCredential（TunnelRoom.ts）。
+ * （keyHash 反查，#110；disabled 在反查/核验两层都 403）；DO 层逐帧重验用 verifyConnectCredential（TunnelRoom.ts）。
  * （registry credential_hash 单点核对），核不过 404/403，不回明文原因给连接方（管理员排障
  * 走审计）。重连必重新核哈希：upgrade/poll/respond 路径均无会话缓存（测试锁定）。
  * 关闭码语义：1008 policy violation = 凭据不配/需重新配置；凭据被吊销（按帧重验败）也关 1008
@@ -54,7 +54,7 @@ export function registerConnectRoutes(app: Hono<{ Bindings: ConnectBindings }>):
   const connect = new Hono<{ Bindings: ConnectBindings }>();
 
   /**
-   * dial-home WS：upgrade 时按 keyHash 反查模块（#108 env 契约只有地址+key；模块不报 id）。
+   * dial-home WS：upgrade 时按 keyHash 反查模块（#109 env 契约只有地址+key；模块不报 id）。
    * （未知凭据 404 / 形状或不配 403，HTTP 状态码承载
    * 「未通过握手」；凭据吊销类断连由 DO 按帧重验后关 1008）。核过后 upgrade 请求原样
    * 转进 TunnelRoom（accept + serializeAttachment 绑 moduleId+keyHash，见 TunnelRoom.ts）。

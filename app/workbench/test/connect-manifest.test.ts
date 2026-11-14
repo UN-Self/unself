@@ -405,5 +405,32 @@ describe('GET /api/module-api/config（U8 ⑤模块读值）', () => {
     const none = await app.request('https://t.example/api/module-api/config', {}, env);
     expect(none.status).toBe(401);
   });
+
+  it('disabled lifecycle：keyHash 轨一律 403（停用后模块不能再读配置/自报清单）', async () => {
+    const { env, db } = await envFor();
+    const keyHash = 'e'.repeat(64);
+    await registerPending(db, 'bridge', keyHash);
+    db.run("UPDATE module_registry SET enabled = 0, lifecycle = 'disabled' WHERE id = 'bridge'");
+
+    const config = await app.request(
+      `https://t.example/api/module-api/config?keyHash=${keyHash}`,
+      {},
+      env,
+    );
+    expect(config.status).toBe(403);
+
+    const manifest = await app.request(
+      `https://t.example/api/modules/connect-manifest?keyHash=${keyHash}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(realManifest) },
+      env,
+    );
+    expect(manifest.status).toBe(403);
+    // 被拒请求不改行：停用态与占位清单仍在
+    const row = db.first<{ lifecycle: string; version: string }>(
+      'SELECT lifecycle, version FROM module_registry WHERE id = ?',
+      'bridge',
+    );
+    expect(row).toEqual({ lifecycle: 'disabled', version: '0.0.0' });
+  });
 });
 });

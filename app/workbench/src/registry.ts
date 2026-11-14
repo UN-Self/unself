@@ -84,7 +84,7 @@ export const ModuleRegistrationSchema = z
 export type ModuleRegistration = z.infer<typeof ModuleRegistrationSchema>;
 
 /**
- * 反连接入记账请求体（#349，决策 #108 两段式第①段）。
+ * 反连接入记账请求体（#349，决策 #109 两段式第①段）。
  * keyHash = 浏览器 hex(SHA-256(key))，形状单点在 control-plane CREDENTIAL_HASH_PATTERN；
  * storageLevel 可选两值（core|self；#349 U5。用户此时可能还没选存储，未写 = 保留列中旧值，合并语义同落点三列）。
  */
@@ -96,7 +96,7 @@ export const ConnectRegisterSchema = z.object({
 
 /**
  * connect 记账 pending 态的 manifest 占位快照（#349）：ModuleManifestSchema 的最小合法形状。
- * 决策 #108 两段式中本段不携带真清单（模块还没部署）；真快照由第②段「测试连接→保存」
+ * 决策 #109 两段式中本段不携带真清单（模块还没部署）；真快照由第②段「测试连接→保存」
  * 的 POST /api/admin/modules 写入并覆盖此占位。地址面只在 entry 列（U9：清单不承载地址），
  * credential_hash 列（非快照）才是凭证真值面。
  */
@@ -109,10 +109,16 @@ export function connectPendingManifest(moduleId: string): z.infer<typeof ModuleM
   });
 }
 
+/** 模块生命周期（0016）：pending=记账待激活（仍可拨号测试）、active=已启用、disabled=已停用。 */
+export const MODULE_LIFECYCLES = ['pending', 'active', 'disabled'] as const;
+export type ModuleLifecycle = (typeof MODULE_LIFECYCLES)[number];
+
 /** 注册表行（API 响应形状；enabled 以 boolean 暴露，映射 D1 INTEGER 0/1）。 */
 export interface RegistryEntry {
   id: string;
   enabled: boolean;
+  /** 生命周期事实（0016）：管理端可见，不是秘密；connect 记账段为 pending。 */
+  lifecycle: ModuleLifecycle;
   version: string | null;
   manifest: unknown;
   /** 落点形态（#348）；缺省 cloudflare。 */
@@ -121,14 +127,12 @@ export interface RegistryEntry {
   entry: string | null;
   /** 存储落点两值（core|self，#349 U5）；NULL = 未选。 */
   storage_level: StorageLevel | null;
-  /** 反连凭证哈希（#349，决策 #108）；mode=connect 且完成保存后必有值。 */
-  credential_hash: string | null;
 }
 
 /**
  * 成员侧模块条目（GET /api/modules，#348 遗留收窄，#349）：不回 mode/storage_level/credential_hash。
- * 排除面 = 0012 落点三列中的 mode/storage_level + 0013 credential_hash（凭证敏感面，
- * 管理员视角才有，GET /api/admin/modules）。**entry 例外面（#349 U9）**：清单不再承载地址后
+ * 排除面 = 0012 落点三列中的 mode/storage_level + 0013 credential_hash。哈希只留在库里供连接核对，
+ * 管理端响应也不再带回浏览器。**entry 例外面（#349 U9）**：清单不再承载地址后
  * 壳 iframe 装载（moduleFrameSrc）唯一地址源 = 本字段，回注册表 entry 列（core 隧道路由 /
  * 装配器写入的实例地址）。manifest 保留：nav 图标（manifest.icon）等消费它。
  * name = manifest.description ?? id（描述缺省时给可读名；描述进 manifest 由 contracts schema 掌握）。
@@ -142,10 +146,11 @@ export interface MemberModuleEntry {
   entry: string | null;
 }
 
-/** 启停响应。 */
+/** 启停响应（lifecycle 随 enabled 同步：on→active、off→disabled）。 */
 export interface ToggleResult {
   id: string;
   enabled: boolean;
+  lifecycle: ModuleLifecycle;
 }
 
 /** D1 行 → API 条目。 */
@@ -157,7 +162,7 @@ export function rowToEntry(row: {
   mode?: string | null;
   entry?: string | null;
   storage_level?: string | null;
-  credential_hash?: string | null;
+  lifecycle?: string | null;
 }): RegistryEntry {
   let manifest: unknown;
   try {
@@ -168,12 +173,12 @@ export function rowToEntry(row: {
   return {
     id: row.id,
     enabled: row.enabled === 1,
+    lifecycle: (row.lifecycle ?? 'pending') as ModuleLifecycle,
     version: row.version,
     manifest,
     mode: (row.mode ?? 'cloudflare') as DeployMode,
     entry: row.entry ?? null,
     storage_level: (row.storage_level ?? null) as StorageLevel | null,
-    credential_hash: row.credential_hash ?? null,
   };
 }
 
@@ -185,13 +190,16 @@ export function rowToEntry(row: {
  */
 export async function upsertModule(db: D1Database, reg: ModuleRegistration): Promise<RegistryEntry> {
   const manifestJson = JSON.stringify(reg.manifest);
+  // 管理员启停是 lifecycle 的唯一正门：enabled=true → active，false → disabled。
+  // connect 记账的 pending 不经本函数（走 registerPendingConnectModule），避免被保存段打回 pending。
+  const lifecycle: ModuleLifecycle = reg.enabled ? 'active' : 'disabled';
   const row = await db
     .prepare(
-      `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash) VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7, ?8)
-       ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, version = excluded.version, manifest_json = excluded.manifest_json,
+      `INSERT INTO module_registry (id, enabled, lifecycle, version, manifest_json, mode, entry, storage_level, credential_hash) VALUES (?1, ?2, ?9, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7, ?8)
+       ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, lifecycle = excluded.lifecycle, version = excluded.version, manifest_json = excluded.manifest_json,
        mode = coalesce(?5, mode), entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END), storage_level = coalesce(?7, storage_level),
        credential_hash = coalesce(?8, credential_hash)
-       RETURNING id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash`,
+       RETURNING id, enabled, lifecycle, version, manifest_json, mode, entry, storage_level, credential_hash`,
     )
     .bind(
       reg.id,
@@ -202,12 +210,67 @@ export async function upsertModule(db: D1Database, reg: ModuleRegistration): Pro
       reg.entry ?? null,
       reg.storage_level ?? null,
       reg.credential_hash ?? null,
+      lifecycle,
     )
-    .first<{ id: string; enabled: number; version: string | null; manifest_json: string; mode: string | null; entry: string | null; storage_level: string | null; credential_hash: string | null }>();
+    .first<{ id: string; enabled: number; lifecycle: string; version: string | null; manifest_json: string; mode: string | null; entry: string | null; storage_level: string | null; credential_hash: string | null }>();
   if (!row) {
     throw new Error(`upsertModule 未返回行（id=${reg.id}）`);
   }
   return rowToEntry(row);
+}
+
+/**
+ * connect 记账（决策 #109 两段式第①段）专用写面：新建行 = pending + enabled=0 +
+ * 占位 manifest + core 隧道路由；已有 pending 行只允许覆盖 credential_hash（以及本次给出
+ * 的 storageLevel），**不碰 manifest/version/enabled**——模块自报的真清单不能被重记账清回占位。
+ * 已有 active/disabled 行一律拒绝（返回 null，路由 409）：不能把已装好的模块打回 pending。
+ *
+ * 单条 SQL 用 ON CONFLICT ... WHERE lifecycle='pending' 承载「检查+写入」原子性，
+ * 避免「先查后写」竞态里管理员刚好激活却被并发记账覆盖。
+ */
+export interface ConnectRegistration {
+  moduleId: string;
+  keyHash: string;
+  entry: string;
+  storageLevel?: StorageLevel | null;
+}
+
+export async function registerPendingConnectModule(
+  db: D1Database,
+  input: ConnectRegistration,
+): Promise<RegistryEntry | null> {
+  const manifest = connectPendingManifest(input.moduleId);
+  const row = await db
+    .prepare(
+      `INSERT INTO module_registry (id, enabled, lifecycle, version, manifest_json, mode, entry, storage_level, credential_hash)
+       VALUES (?1, 0, 'pending', ?2, ?3, 'connect', ?4, ?5, ?6)
+       ON CONFLICT(id) DO UPDATE SET
+         mode = excluded.mode,
+         entry = excluded.entry,
+         storage_level = coalesce(excluded.storage_level, module_registry.storage_level),
+         credential_hash = excluded.credential_hash
+       WHERE module_registry.lifecycle = 'pending'
+       RETURNING id, enabled, lifecycle, version, manifest_json, mode, entry, storage_level`,
+    )
+    .bind(
+      input.moduleId,
+      manifest.version,
+      JSON.stringify(manifest),
+      input.entry,
+      input.storageLevel ?? null,
+      input.keyHash,
+    )
+    .first<{
+      id: string;
+      enabled: number;
+      lifecycle: string;
+      version: string | null;
+      manifest_json: string;
+      mode: string | null;
+      entry: string | null;
+      storage_level: string | null;
+    }>();
+  return row ? rowToEntry(row) : null;
 }
 
 // ---- 模块配置值（#349 U8 ④）：manifest.config 声明（快照内）与用户存值（0015 列）分存 ----
@@ -288,22 +351,23 @@ export async function updateModuleManifest(db: D1Database, moduleId: string, man
 
 /** 翻转启停（运行时秒级生效：边栏隐藏 + token 门禁拒发，§5.5）。 */
 export async function toggleModule(db: D1Database, id: string, enabled: boolean): Promise<ToggleResult | null> {
+  const lifecycle: ModuleLifecycle = enabled ? 'active' : 'disabled';
   const row = await db
-    .prepare('UPDATE module_registry SET enabled = ? WHERE id = ? RETURNING id, enabled')
-    .bind(enabled ? 1 : 0, id)
-    .first<{ id: string; enabled: number }>();
+    .prepare('UPDATE module_registry SET enabled = ?, lifecycle = ? WHERE id = ? RETURNING id, enabled, lifecycle')
+    .bind(enabled ? 1 : 0, lifecycle, id)
+    .first<{ id: string; enabled: number; lifecycle: string }>();
   if (!row) {
     return null;
   }
-  return { id: row.id, enabled: row.enabled === 1 };
+  return { id: row.id, enabled: row.enabled === 1, lifecycle: row.lifecycle as ModuleLifecycle };
 }
 
 /** 列出全部模块（管理端，含停用；成员侧由 GET /api/modules 收窄）。 */
 export async function listModules(db: D1Database): Promise<RegistryEntry[]> {
   // 列集合与迁移 0001 建表严格一致（历史幻影列教训：响应恒返空串——已删；真列 SELECT 可暴露查询列 ↔ 建表列错位）。
   const result = await db
-    .prepare('SELECT id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash FROM module_registry ORDER BY id')
-    .all<{ id: string; enabled: number; version: string | null; manifest_json: string; mode: string | null; entry: string | null; storage_level: string | null; credential_hash: string | null }>();
+    .prepare('SELECT id, enabled, lifecycle, version, manifest_json, mode, entry, storage_level FROM module_registry ORDER BY id')
+    .all<{ id: string; enabled: number; lifecycle: string; version: string | null; manifest_json: string; mode: string | null; entry: string | null; storage_level: string | null }>();
   return result.results.map(rowToEntry);
 }
 
