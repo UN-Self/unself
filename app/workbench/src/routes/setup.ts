@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { consumeSetupToken, isSetupTokenValid, releaseSetupToken } from '../setup';
 import { audit } from '../services/audit';
-import { isSetupDone, markSetupDone, persistOidcConfig } from '../services/instance-config';
+import { clearOidcConfig, isSetupDone, markSetupDone, persistOidcConfig } from '../services/instance-config';
 import { buildStoredCredential } from '../services/passwords';
 import type { Bindings } from '../index';
 
@@ -25,7 +25,7 @@ const BUILTIN_ADMIN_SCHEMA = z.object({
 
 /** 挂载 setup 域（/api/setup/*；#165 起不再有公开签发端点）。 */
 export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
-  /** setup 状态查询（#10 向导页用）：是否已激活 / token 是否仍可用。 */
+  /** setup 状态查询（#10 向导页用）：是否已完成初始化 / token 是否仍可用。 */
   app.get('/api/setup/status', async (c) => {
     const db = c.env.CORE_DB;
     const done = await isSetupDone(db);
@@ -47,7 +47,8 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
    * 向导 OIDC 字段落库（#332：可选支线，只保存配置）：
    * - 门禁：setup 未封箱 + token 有效（未消费）——只验不消费（可重复提交改填）；
    * - 动作：持久化向导 OIDC 字段；保留 loginUrl 响应，向导不据此跳转。
-   * 落库前置：不然「登录依赖配置、配置依赖激活后写入」鸡生蛋（登录器由表配置才可通）。
+   * - 撤销（#345）：body `{ clear: true }` 删除四个 oidc_* 键（向导里清空表单后离开配置面）。
+   * 落库前置：不然「登录依赖配置、配置依赖初始化后写入」鸡生蛋（登录器由表配置才可通）。
    */
   app.post('/api/setup/oidc-config', async (c) => {
     const db = c.env.CORE_DB;
@@ -61,7 +62,17 @@ export function registerSetupRoutes(app: Hono<{ Bindings: Bindings }>): void {
     if (!(await isSetupTokenValid(db, token))) {
       return c.json({ error: 'invalid or already-used setup token' }, 403);
     }
-    const body = OIDC_BODY_SCHEMA.safeParse(await c.req.json().catch(() => null));
+    const raw = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    // #345：向导里清空表单后离开配置面 = 撤销已保存的 OIDC 配置（需前端二次确认）。
+    // 与写入同一门禁：setup 未封箱 + token 有效且不消费。
+    if (raw?.clear === true) {
+      if ((await clearOidcConfig(db)) > 0) {
+        await audit(db, 'system', 'oidc_config_cleared');
+      }
+      const clearedLoginUrl = new URL('/api/auth/login', c.req.url);
+      return c.json({ ok: true, loginUrl: clearedLoginUrl.toString() });
+    }
+    const body = OIDC_BODY_SCHEMA.safeParse(raw);
     if (!body.success) {
       return c.json({ error: 'body must include issuer, clientId, clientSecret' }, 400);
     }

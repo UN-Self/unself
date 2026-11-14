@@ -131,7 +131,8 @@ describe('SetupView 初始化边界（#332）', () => {
     const [url, init] = requests(SAVE)[0]!
     expect(String(url)).toBe(`${SAVE}?token=tok-92`)
     expect(JSON.parse(init!.body as string)).toEqual({ issuer: ISSUER, clientId: 'client-1', clientSecret: 'secret-1' })
-    expect(wrapper.get('[role="status"]').text()).toContain('OIDC 配置已保存')
+    // 行为：保存后翻回账号页（OIDC 面不可交互），且不触发建号/登录
+    expect(wrapper.get('input[name="issuer"]').element.closest('[inert]')).not.toBeNull()
     expectNoCompletion()
   })
 
@@ -179,6 +180,9 @@ describe('SetupView 初始化边界（#332）', () => {
     await submit(wrapper, 'oidc')
     expect(requests(CREATE)).toHaveLength(1)
     expect(requests(SAVE)).toHaveLength(0)
+    // 锁定是可见状态，不只是「没发请求」：折角入口禁用，OIDC 面仍不可达
+    expect(wrapper.get('[data-testid="open-oidc"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('input[name="issuer"]').element.closest('[inert]')).not.toBeNull()
     finishCreate(json({ ok: true, user: { id: 'admin', name: 'boss', role: 'admin' } }, 201))
     await vi.waitFor(() => expect(routerReplace).toHaveBeenCalledWith('/'))
     expect(requests(LOGIN)).toHaveLength(1)
@@ -190,14 +194,21 @@ describe('SetupView 初始化边界（#332）', () => {
     const wrapper = mount(SetupView)
     await prepareOidc(wrapper)
     await submit(wrapper, 'oidc')
-    expect(wrapper.get('[role="alert"]').text()).toContain('服务尚未就绪')
+    // 保存失败必须让用户看得见（错误卡），文案内容由 setup-api 的人话映射负责
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    // 旧保存错误卡在字段一改动时就清除，不留到重测成功之后误导
+    await wrapper.get('input[name="issuer"]').setValue(ISSUER + '/')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    await wrapper.get('input[name="issuer"]').setValue(ISSUER)
     await submit(wrapper, 'oidc')
     expect(requests(SAVE)).toHaveLength(1)
     await testConnection(wrapper)
     await submit(wrapper, 'oidc')
     expect(requests(TEST)).toHaveLength(2)
     expect(requests(SAVE)).toHaveLength(2)
-    expect(wrapper.get('[role="status"]').text()).toContain('OIDC 配置已保存')
+    // 保存成功后翻回账号页（OIDC 面不再可交互），没有残留失败态
+    expect(wrapper.get('input[name="issuer"]').element.closest('[inert]')).not.toBeNull()
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
     expectNoCompletion()
   })
 
@@ -208,7 +219,7 @@ describe('SetupView 初始化边界（#332）', () => {
     await fillAdmin(wrapper)
     await prepareOidc(wrapper)
     await submit(wrapper, 'admin')
-    await vi.waitFor(() => expect(wrapper.get('[role="alert"]').text()).toContain('管理员账号已创建'))
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="admin-login-error"]').exists()).toBe(true))
     expect(routerReplace).not.toHaveBeenCalled()
     await submit(wrapper, 'admin')
     await submit(wrapper, 'oidc')
@@ -233,6 +244,25 @@ describe('SetupView 卡片翻页动线', () => {
     expect((wrapper.get('input[name="issuer"]').element as HTMLInputElement).value).toBe(ISSUER)
     expect((wrapper.get('input[name="client_secret"]').element as HTMLInputElement).value).toBe('secret-1')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('翻页在途时返回：迟到的聚焦不落回已隐藏页', async () => {
+    const wrapper = mount(SetupView, { attachTo: document.body })
+    try {
+      const issuer = wrapper.get('input[name="issuer"]').element
+      let issuerFocused = false
+      issuer.addEventListener('focus', () => { issuerFocused = true })
+      // 两次 flipTo 真正重叠：打开 OIDC 的 nextTick 尚未落地时就按 Escape 返回
+      const opening = wrapper.get('[data-testid="open-oidc"]').trigger('click')
+      await wrapper.get('.setup-shell').trigger('keydown', { key: 'Escape' })
+      await opening
+      await settle()
+      expect(issuerFocused).toBe(false)
+      expect(document.activeElement).toBe(wrapper.get('[data-testid="open-oidc"]').element)
+      expectNoCompletion()
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('打开时焦点进入 OIDC，Escape 返回折角入口；无效创建聚焦首个错误字段', async () => {
@@ -313,12 +343,152 @@ describe('SetupView OIDC 校验与测试失效', () => {
       ? Promise.resolve(json({ error: 'unreachable' }, 502)) : defaultResponse(path)
     const wrapper = mount(SetupView)
     await prepareOidc(wrapper)
-    expect(wrapper.get('[role="status"]').text()).toContain('无法访问该 Issuer')
+    // 失败结果必须公告出来，且不授权保存
+    expect(wrapper.find('[role="status"]').exists()).toBe(true)
     await submit(wrapper, 'oidc')
     expect(requests(SAVE)).toHaveLength(0)
     await testConnection(wrapper)
     await submit(wrapper, 'oidc')
     expect(requests(SAVE)).toHaveLength(1)
+  })
+
+  it('保存后带值返回不弹确认；清空后才需要撤销确认', async () => {
+    const wrapper = mount(SetupView)
+    await prepareOidc(wrapper)
+    await submit(wrapper, 'oidc')
+    // 保存态：字段仍是原值，返回就是普通翻页
+    await editBranch(wrapper, 'oidc')
+    await wrapper.get('[data-testid="return-admin"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-testid="confirm-clear"]').exists()).toBe(false)
+    expect(wrapper.get('input[name="issuer"]').element.closest('[inert]')).not.toBeNull()
+    // 清空后同一动作必须先确认，且此时不删库
+    await editBranch(wrapper, 'oidc')
+    for (const name of ['issuer', 'client_id', 'client_secret']) {
+      await wrapper.get(`input[name="${name}"]`).setValue('')
+    }
+    await wrapper.get('[data-testid="return-admin"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-testid="confirm-clear"]').exists()).toBe(true)
+    expect(requests(SAVE)).toHaveLength(1)
+  })
+
+  it('恢复已保存配置：字段回到保存值并离场，不删库', async () => {
+    const wrapper = mount(SetupView)
+    await prepareOidc(wrapper)
+    await submit(wrapper, 'oidc')
+    await editBranch(wrapper, 'oidc')
+    for (const name of ['issuer', 'client_id', 'client_secret']) {
+      await wrapper.get(`input[name="${name}"]`).setValue('')
+    }
+    await wrapper.get('[data-testid="return-admin"]').trigger('click')
+    await settle()
+    await wrapper.get('[data-testid="restore-saved"]').trigger('click')
+    await settle()
+    // 三个字段恢复成上次保存的内容，回到账号页
+    expect((wrapper.get('input[name="issuer"]').element as HTMLInputElement).value).toBe(ISSUER)
+    expect((wrapper.get('input[name="client_id"]').element as HTMLInputElement).value).toBe('client-1')
+    expect((wrapper.get('input[name="client_secret"]').element as HTMLInputElement).value).toBe('secret-1')
+    expect(wrapper.get('input[name="issuer"]').element.closest('[inert]')).not.toBeNull()
+    expect(wrapper.find('[data-testid="confirm-clear"]').exists()).toBe(false)
+    expect(requests(SAVE)).toHaveLength(1)
+  })
+
+  it('保存后清空三字段点返回：先确认，取消则留在本页且不删库', async () => {
+    const wrapper = mount(SetupView, { attachTo: document.body })
+    try {
+      await prepareOidc(wrapper)
+      await submit(wrapper, 'oidc')
+      await editBranch(wrapper, 'oidc')
+      for (const name of ['issuer', 'client_id', 'client_secret']) {
+        await wrapper.get(`input[name="${name}"]`).setValue('')
+      }
+      await wrapper.get('[data-testid="return-admin"]').trigger('click')
+      await settle()
+      expect(wrapper.find('[data-testid="confirm-clear"]').exists()).toBe(true)
+      // 确认期间编辑区让位：不可见、不可聚焦，面板顶替同一块区域
+      expect(wrapper.get('[data-testid="oidc-form"]').attributes('inert')).toBeDefined()
+      expect(wrapper.get('[data-testid="oidc-form"]').attributes('aria-hidden')).toBe('true')
+      // 破坏性确认默认焦点在「取消」，回车不会误删
+      expect(document.activeElement).toBe(wrapper.get('[data-testid="cancel-clear"]').element)
+      // 确认前绝不删库
+      expect(requests(SAVE)).toHaveLength(1)
+      await wrapper.get('[data-testid="cancel-clear"]').trigger('click')
+      await settle()
+      expect(wrapper.find('[data-testid="confirm-clear"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="oidc-form"]').attributes('inert')).toBeUndefined()
+      expect(wrapper.get('input[name="issuer"]').element.closest('[inert]')).toBeNull()
+      expect(requests(SAVE)).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('确认删除后向服务端发 clear，回到账号页', async () => {
+    const wrapper = mount(SetupView)
+    await prepareOidc(wrapper)
+    await submit(wrapper, 'oidc')
+    await editBranch(wrapper, 'oidc')
+    for (const name of ['issuer', 'client_id', 'client_secret']) {
+      await wrapper.get(`input[name="${name}"]`).setValue('')
+    }
+    await wrapper.get('[data-testid="return-admin"]').trigger('click')
+    await settle()
+    await wrapper.get('[data-testid="confirm-clear"]').trigger('click')
+    await settle()
+    const [url, init] = requests(SAVE)[1]!
+    expect(String(url)).toBe(`${SAVE}?token=tok-92`)
+    expect(JSON.parse(init!.body as string)).toEqual({ clear: true })
+    // 清空已生效：回到账号页、OIDC 面 inert
+    expect(wrapper.get('input[name="issuer"]').element.closest('[inert]')).not.toBeNull()
+    expect(wrapper.find('[data-testid="confirm-clear"]').exists()).toBe(false)
+    // 服务端已无配置：再次清空表单返回也不再弹确认、不再发请求
+    await editBranch(wrapper, 'oidc')
+    await wrapper.get('[data-testid="return-admin"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-testid="confirm-clear"]').exists()).toBe(false)
+    expect(wrapper.get('input[name="issuer"]').element.closest('[inert]')).not.toBeNull()
+    expect(requests(SAVE)).toHaveLength(2)
+    // 清空成功：三输入框同步置空（不只徽标，输入本身也回到初始态）
+    await editBranch(wrapper, 'oidc')
+    for (const name of ['issuer', 'client_id', 'client_secret']) {
+      expect((wrapper.get(`input[name="${name}"]`).element as HTMLInputElement).value).toBe('')
+    }
+    expectNoCompletion()
+  })
+
+  it('删除失败时留在本页并给出错误卡', async () => {
+    const wrapper = mount(SetupView)
+    respond = (path, init) =>
+      path === SAVE && JSON.parse(String(init?.body)).clear === true
+        ? Promise.resolve(json({ error: 'clear failed' }, 500))
+        : defaultResponse(path)
+    await prepareOidc(wrapper)
+    await submit(wrapper, 'oidc')
+    await editBranch(wrapper, 'oidc')
+    for (const name of ['issuer', 'client_id', 'client_secret']) {
+      await wrapper.get(`input[name="${name}"]`).setValue('')
+    }
+    await wrapper.get('[data-testid="return-admin"]').trigger('click')
+    await settle()
+    await wrapper.get('[data-testid="confirm-clear"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    // 仍停在 OIDC 面与确认面板上，未误翻页
+    expect(wrapper.find('[data-testid="confirm-clear"]').exists()).toBe(true)
+    expect(wrapper.get('.u-flip-book').classes()).toContain('u-flip-book-open')
+  })
+
+  it('从未保存过时清空表单点返回：直接翻页，不弹确认也不删库', async () => {
+    const wrapper = mount(SetupView)
+    await editBranch(wrapper, 'oidc')
+    await wrapper.get('input[name="issuer"]').setValue(ISSUER)
+    await wrapper.get('input[name="issuer"]').setValue('')
+    await wrapper.get('[data-testid="return-admin"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-testid="confirm-clear"]').exists()).toBe(false)
+    expect(wrapper.get('input[name="issuer"]').element.closest('[inert]')).not.toBeNull()
+    expect(requests(SAVE)).toHaveLength(0)
   })
 
   it.each(['issuer', 'client_id', 'client_secret'])('测试通过后修改 %s，旧结果不能用于保存', async (field) => {
@@ -356,7 +526,8 @@ describe('SetupView 本地管理员校验与失败恢复', () => {
     await fillAdmin(wrapper, 'different123')
     await submit(wrapper, 'admin')
     expectNoCompletion()
-    expect(wrapper.text()).toContain('两次输入的密码不一致')
+    // 字段级校验：错误挂在对应输入上（aria-invalid），不是只弹一句文案
+    expect(wrapper.get('input[name="password_confirm"]').attributes('aria-invalid')).toBe('true')
     await wrapper.get('input[name="password_confirm"]').setValue('password123')
     await submit(wrapper, 'admin')
     await vi.waitFor(() => expect(routerReplace).toHaveBeenCalledWith('/'))
@@ -368,7 +539,7 @@ describe('SetupView 本地管理员校验与失败恢复', () => {
     await wrapper.get('input[name="username"]').setValue('a')
     await submit(wrapper, 'admin')
     expectNoCompletion()
-    expect(wrapper.text()).toContain('用户名需为 3-32 位')
+    expect(wrapper.get('input[name="username"]').attributes('aria-invalid')).toBe('true')
     await wrapper.get('input[name="username"]').setValue('boss')
     await submit(wrapper, 'admin')
     await vi.waitFor(() => expect(routerReplace).toHaveBeenCalledWith('/'))
@@ -380,7 +551,7 @@ describe('SetupView 本地管理员校验与失败恢复', () => {
     const wrapper = mount(SetupView)
     await fillAdmin(wrapper)
     await submit(wrapper, 'admin')
-    await vi.waitFor(() => expect(wrapper.get('[role="alert"]').text()).toContain('该用户名已被占用'))
+    await vi.waitFor(() => expect(wrapper.find('[role="alert"]').exists()).toBe(true))
     expect(requests(LOGIN)).toHaveLength(0)
     expect(routerReplace).not.toHaveBeenCalled()
     await wrapper.get('input[name="username"]').setValue('boss2')

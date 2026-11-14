@@ -12,7 +12,7 @@
  * 传输/错误构造统一走 lib/api-client（#142）：本文件只留端点函数、人话映射与域类型。
  */
 
-import { request, type ApiError } from './api-client'
+import { request, isFallbackMessage, type ApiError } from './api-client'
 
 export type { ApiError }
 
@@ -32,12 +32,11 @@ export function getSetupStatus(token?: string): Promise<SetupStatus> {
   return request<SetupStatus>(`/api/setup/status${query}`, undefined, { messagePolicy: humanize })
 }
 
-/** 向导录入的 OIDC 连接配置（camelCase，与后端契约一致）；scope 缺省服务端回退。 */
+/** 向导录入的 OIDC 连接配置（camelCase，与后端契约一致）；契约只有三字段。 */
 export interface OidcSetup {
   issuer: string
   clientId: string
   clientSecret: string
-  scope?: string
 }
 
 /**
@@ -64,6 +63,22 @@ export function saveOidcConfig(
   )
 }
 
+/**
+ * 清空已保存的 OIDC 配置（#345）：向导里清空三字段后离开配置面时调用。
+ * 与写入同一端点、同一门禁（setup 未封箱 + token 有效，只验不消费）。
+ */
+export function clearOidcConfig(token: string): Promise<{ ok: boolean; loginUrl: string }> {
+  return request<{ ok: boolean; loginUrl: string }>(
+    `/api/setup/oidc-config?token=${encodeURIComponent(token)}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ clear: true }),
+    },
+    { messagePolicy: humanize },
+  )
+}
+
 /** 服务端错误 → 人话（§6.5：不暴露堆栈/内部错误码）。 */
 function humanize(status: number, serverMessage?: string): string {
   switch (status) {
@@ -75,8 +90,6 @@ function humanize(status: number, serverMessage?: string): string {
       return '初始化链接无效或已被使用，请向部署者要新的链接'
     case 409:
       return '实例已完成配置，setup 页面已关闭'
-    case 503:
-      return '服务尚未就绪，请稍后重试或联系部署者'
     default:
       return serverMessage ? `配置失败（${status}）` : `配置失败（${status}），请稍后重试`
   }
@@ -120,9 +133,9 @@ export async function testOidcConnection(
     if (apiErr.status === 0) {
       return { ok: false, reason: '连接测试失败：请确认服务端可访问该 Issuer' }
     }
-    // 非 2xx：message 已按默认策略收敛为 error 字段或 `请求失败（<status>）`，
-    // 后者等价于历史「拿不到 error」分支
-    const serverError = apiErr.message === `请求失败（${apiErr.status}）` ? undefined : apiErr.message
+    // 非 2xx：message 是后端 error 字段或客户端兜底文案；兜底（isFallbackMessage 单点判断）
+    // 说明服务端没给 error，交由按状态映射的人话兜底
+    const serverError = isFallbackMessage(apiErr) ? undefined : apiErr.message
     return { ok: false, reason: humanizeOidcTest(apiErr.status, serverError) }
   }
 }
