@@ -668,10 +668,9 @@ async function onLoginCreatedAdmin() {
   position: absolute;
   top: 0;
   right: 0;
-  /* 热区与可见折角同一几何：尺寸取折角令牌，形状取折角的三角裁切，不覆盖卡面内容 */
+  /* 热区=整块 128×128（可见折角缺口 + 纸背三角），clip 只装饰不可见热区纯属自残 */
   width: var(--unself-page-fold-size, calc(var(--unself-space-8) * 4));
   height: var(--unself-page-fold-size, calc(var(--unself-space-8) * 4));
-  clip-path: polygon(0 0, 100% 100%, 0 100%);
   padding: 0;
   border-radius: 0 var(--unself-radius-lg) 0 0;
   background: transparent;
