@@ -1,7 +1,7 @@
 # 产品设计文档（已拆分 → 索引页）
 
-> 本文档已按「一文件一职责」拆分（2026-09-15，#196）。本页只做索引：原章节 → 新去处，老链接不死。
-> 拆分原则：**零语义改写**，句子级内容原样搬运；只改标题层级与交叉引用指向。
+> 2026-09-15（#196）按「一文件一职责」拆开。这一页只当目录：旧章节去了哪，老链接还能用。
+> 拆的时候句子原样搬走，不改意思；只动了标题层级和交叉引用。
 
 ## 原 → 新
 
@@ -15,7 +15,7 @@
 | §5 可插拔架构图、§5.1-§5.8（模块契约/身份 token/路由/数据归属/部署编排/三原语/能力轴/改编纪律） | [docs/architecture.md](architecture.md) |
 | §6 代码组织 monorepo | [docs/architecture.md](architecture.md) |
 | §6.5 前端约定：主题系统 | [docs/architecture.md](architecture.md) |
-| §6.6 M1 产品化决策记录 | [docs/decisions.md](decisions.md)（#35-#40 等编号条目） |
+| §6.6 M1 产品化决策记录 | 已写进 [docs/product.md](product.md)、[docs/flows.md](flows.md)、[docs/architecture.md](architecture.md)。过程在对应 issue / PR |
 | §7 部署拓扑 | [docs/architecture.md](architecture.md)（部署拓扑节）；操作手册见 [docs/deploy.md](deploy.md) |
 | §8 里程碑 | [docs/roadmap.md](roadmap.md) |
 | §9 风险与决策点 | [docs/roadmap.md](roadmap.md) |
@@ -25,7 +25,7 @@
 
 ## 其他去向
 
-- 原 docs/requirements.md §6 已确认架构决策（#1-#34）+ §6.6/散落拍板 → [docs/decisions.md](decisions.md)（统一编号 #1-#93，含日期与来源）
+- 原 docs/requirements.md §6 已确认架构决策，以及后来的拍板，都写进对应契约文档的正文。过程留在 issue 和 PR，不再单开决策档案
 - 原 docs/requirements.md §0 现状与约束（参考部署资产）→ [docs/product.md](product.md)「现状与约束」
 - 原 docs/requirements.md §7 第一性原理技术评估 → [docs/architecture.md](architecture.md)
 - 原 docs/requirements.md §8 下一步 → [docs/roadmap.md](roadmap.md)「当前状态」

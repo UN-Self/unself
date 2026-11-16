@@ -18,7 +18,7 @@
        ├─────────────┼──────────────────────────────┐
        │             │                              │
 ┌──────▼──────┐ ┌────▼──────────┐ ┌────────────────▼─┐
-│ EdgeChat    │ │ Meeting       │ │ Calendar / Mail  │
+│ chat        │ │ Meeting       │ │ Calendar / Mail  │
 │ 可选 Worker │ │ Worker + DO   │ │ 外部适配器        │
 │ + DO        │ │ 只做信令       │ │ OIDC/SMTP/CalDAV  │
 └─────────────┘ └───────┬───────┘ └──────────────────┘
@@ -35,7 +35,7 @@
 
 ### 模块契约（已拍板，2026-09-06）
 
-模块是自包含的可部署单元。壳与模块之间只有三条通道，此外模块内部怎么实现，壳一概不知情：
+模块是自包含、可部署的单元。壳和模块之间只有三条通道，模块内部怎么实现，壳一概不管：
 
 ```text
 1. manifest   模块声明自己
@@ -48,14 +48,13 @@ manifest 只保留必要字段：
 ```yaml
 id: chat                   # 实例内名字；^[a-z][a-z0-9-]+$（决策 #59，不含点）
 route: /m/chat
-entry: https://team.example.com/m/chat/   # 完整 URL，第一方默认同域路径
-runtimes: [worker]         # worker | docker | external（数组，契约 v1）
+runtimes: [worker]         # worker | docker（
 permissions:               # 权限词表（storage/acl/notify/ai/realtime/mail）
   - storage
   - notify
-storage:                   # 数据落点声明（四级：core/shared/dedicated/external）
-  accepts: [dedicated]
-  preferred: dedicated
+storage:                   # core（核心代管）| self（模块自己的）。省略 = 只支持 self
+  accepts: [core]
+  preferred: core
 version: 1.0.0
 icon: inbox                # 可选，Lucide 图标名（[a-z0-9-]）；
                            # 缺省/未知时壳回退模块名首字
@@ -63,9 +62,9 @@ icon: inbox                # 可选，Lucide 图标名（[a-z0-9-]）；
 
 **icon 字段规则**（用户拍板：拒绝 emoji）：manifest 存图标名而非图标资产，由壳内置的 lucide-vue-next 统一渲染（白名单映射，按需打包）；模块不自带图标文件。未来模块需要品牌标时再议 `iconUrl` 可选字段，暂不设。
 
-**装载器**：默认 iframe，对所有模块无例外（自研模块也住 iframe，逼契约诚实）。契约措辞是“iframe 是默认装载器”，不是“模块必须是 iframe”；未来某模块需要原生体验时可单独提升进壳，契约不变。
+**装载器**：默认 iframe，所有模块一视同仁（自研模块也住 iframe，逼契约诚实）。契约的原话是“iframe 是默认装载器”，不是“模块必须是 iframe”；将来某个模块要原生体验，可以单独提进壳，契约不动。
 
-**不选微前端的理由**：模块代码进壳的构建系统会绑死技术栈、制造版本地狱，且 EdgeChat 衍生代码与核心代码可能进同一 bundle，破坏许可证边界。iframe 下模块独立构建、独立部署，第三方模块只要能起一个 HTTPS 站点即可接入。
+**不选微前端的理由**：模块代码一进壳的构建系统，技术栈就绑死了，版本地狱也跟着来；聊天模块是 GPL，不能和核心打进同一个 bundle。用 iframe，模块自己构建、自己部署。
 
 
 ### 模块身份与 token 交换（已拍板，2026-09-06）
@@ -103,7 +102,7 @@ icon: inbox                # 可选，Lucide 图标名（[a-z0-9-]）；
 ```text
 team.example.com
 ├─ /            → Shell + Core API
-├─ /m/chat/*    → 魔改 EdgeChat（独立 Worker，仅在启用时部署）
+├─ /m/chat/*    → 聊天模块（独立 Worker，没装就不出现）
 ├─ /m/meet/*    → 会议信令（独立 Worker + DO，仅在启用时部署）
 └─ /m/<其他>/*  → 其余第一方模块
 
@@ -111,7 +110,7 @@ Cloudflare：Workers Routes 按路径绑定
 Docker：openresty 按 location 分发，两者等价
 ```
 
-**安全模型**：不依赖浏览器 origin 隔离（同域下不存在），依赖 aud 锁定 + 10 分钟短时 token + 模块后端验签。同域共享 Cookie 无害：模块后端只认 Bearer，忽略 Cookie；第三方 Cookie 封杀问题随之消失。
+**安全模型**：不靠浏览器 origin 隔离（同域下也没有），靠 aud 锁定 + 10 分钟短时 token + 模块后端验签。同域共享 Cookie 不碍事：模块后端只认 Bearer，直接忽略 Cookie；第三方 Cookie 被封的问题也就不存在了。
 
 **卫生规则**（由 SDK 自动处理）：路径前缀 `/m/<模块id>/`；存储键前缀 `unself.<模块id>.*`；同源也禁止直接互摸 DOM/存储，一律走 postMessage 契约。
 
@@ -125,18 +124,17 @@ Docker：openresty 按 location 分发，两者等价
 ```text
 D1：core 库（用户、角色、模块注册表、会话、审计、setup token）
     modules 库（平台记账表 + `shared` 级模块自建表，表前缀 = 模块 id）
-    模块业务数据按四级落点（core / shared / dedicated / external，见下）
+    模块要用 core 的库，连上之后按 env 里的声明初始化
 
-R2/S3：统一存储适配层，对象按模块前缀隔离（chat/ docs/ meetings/），
-       模块只存对象引用，换桶不动模块
+S3：core 自己的桶。模块连上 core 之后，按 env 里的声明向 core 初始化，不另做存储适配层
 音频：原始录音永不入桶，只存成员本机；云端只有派生文字（转写/纪要）
 KV：共享命名空间，键前缀 unself.<模块id>.*
 DO：每模块独立 DO 类，存储天然隔离
 ```
 
-**为什么不分库**：分库买到的物理隔离已由 SDK 前缀收口 + 禁止跨模块外键覆盖；独立导出可用按表导出实现；写入争抢在 10 人规模不存在（D1 单写者，日写入千行级）。而分库要吃掉免费额度 7/10（上限 10 库/账户）并复杂化部署编排。边界执行者三件套：SDK 存储接口（模块拿不到裸连接）、禁止跨模块查询与外键（SDK 层拒绝）、按模块版本化的迁移。
+**为什么不分库**：分库才能换来的物理隔离，SDK 前缀收口 + 禁止跨模块外键已经兜住了；要单独导出，按表导出也能做；10 人规模谈不上写入争抢（D1 单写者，日写入千行级）。而分库要吃掉免费额度 7/10（上限 10 库/账户）并复杂化部署编排。边界执行者三件套：SDK 存储接口（模块拿不到裸连接）、禁止跨模块查询与外键（SDK 层拒绝）、按模块版本化的迁移。
 
-**core 为什么单独一库**：平台命脉（登录、权限、审计）值得唯一一道物理墙——modules 库里任何模块的 purge 事故或迁移失控都炸不到 core。代价 1/10 额度。
+**core 为什么单独一库**：登录、权限、审计是平台命脉，值得单独砌一道物理墙——modules 库里哪个模块 purge 出事或者迁移失控，都炸不到 core。代价 1/10 额度。
 
 **模块生命周期接口**（manifest 之外每模块必须实现）：
 
@@ -150,43 +148,18 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 **可逆性**：某模块数据量或写入暴涨时，可将其从 modules 库拆出独立库，SDK 配置切换，模块代码零改动。
 
 
-### 部署编排：装配器是产品的核心交互（2026-09-10 修订）
+### 部署
 
-装配与启停是两个操作：**装配在部署时做一次，启停在运行时随时做。**
+平台和模块分开。操作见 [docs/deploy.md](deploy.md)，资源初始化见 [docs/flows.md](flows.md)。
 
-```text
-装配（provision）  建 D1、跑迁移、传 Worker、绑路由 —— 只在部署时执行
-启停（toggle）     注册表开关 + token 门禁 —— 运行时秒级生效
-```
+安装器只把 core 和 workbench 部署到 Cloudflare，不装模块。不调用 wrangler，自建 Cloudflare REST 客户端。Docker 是另一条平台路径：写好 env，拉起 workbench。
 
-**装配器 = 产品核心交互**：「选模块 → 得到你的团队软件」就是 Unself 的商店结账页。交互稿六段流语义不变，**载体自 2026-09-17 起由「终端内 CLI」改为「本地 Web 向导」**（#53/#70；CLI 保留为逃生门与 CI，教程见 docs/deploy.md）：
+模块两条路，都在平台起来之后：
 
-```text
-① 认证：优先 OAuth（浏览器授权，零复制粘贴）；缺失时给预填权限的 CF 深链接 → token 填向导密码框（掩码/可校验/可重试）
-② 域名：列出账户内 zone 供选（免手输）；workers.dev 仍为显式第一选项
-③ 模块：从来源解析候选包，逐个展示版本/发布者/sha512/声明（permissions、storage、config）并确认
-④ 九步进度编号输出；每步失败给三要素：原因 / 归属（凭证·DNS·网络·代码）/ 修复
-⑤ 收尾「下一步」指引：setup 链接 → 首个管理员 → 邀请拉人 → 邮件轴（可选）
-⑥ 幂等重跑标语：任何时候重跑收敛同一终态
-```
+- workbench 里新建模块，填 CF token，部署成 Worker。token 只在这次操作的内存里，不进库、不进日志。
+- 自己用 Docker 起模块。env 自己填，core 不写这份 env。里面有接入码、workbench 地址，以及要用 core 的哪一类资源（Cloudflare 上的库和 S3，或 core 的其他库，变量名待定）。启动时先用 key 连上 core，再按声明调用 core 把资源初始化好。模块自己的库和桶也写在这份 env 里，core 不代管。
 
-非交互（CI/`-y`）：走配置与环境变量。**一键入口（Deploy to Cloudflare 按钮 + Workers Builds）在当前架构下不可行**（monorepo 多 Worker 不能一并部署、仓库必须 public、且与 #165 冲突）→ 需重定案（#68）；README 不写「一键」。
-
-**装配引擎 = 自建 Cloudflare REST 客户端**（#65；原「wrangler 幂等脚本」由 #69 取代——装配器不安装也不调用 wrangler），读唯一配置文件 `unself.config.jsonc`：
-
-```jsonc
-{
-  "domain": "team.example.com",
-  "modules": ["chat", { "id": "todo", "source": "npm:@acme/unself-todo@1.2.0", "mode": "docker" }],
-  "storage": { "provider": "r2" }
-}
-```
-
-脚本九步：① 确保 core/modules 两个 D1 存在；② 跑核心迁移与选中模块迁移（表前缀版本化）；③ 构建上传 Shell Worker；④ 每个选中模块构建、上传、绑 `/m/<id>/*` 路由与存储绑定；⑤ 注册表写入（选中 enabled，未选 not_deployed）；⑥ 建 R2 桶或接收外部 S3 参数；⑦ OIDC 不进配置文件——部署后在 setup 向导填写并存 core 库；⑧ 生成一次性 setup token 打印在部署输出末尾；⑨ 冒烟检查 `/api/health` 与各模块 health。
-
-**模块来源与包契约（#58/#59/#60/#76/#77）**：模块不再只能来自仓库 `modules/` 目录。来源协议四种：`npm:` / `github:` / `https:` / `file:`（`official:` 已在决策 #77 删除）——官方模块就是普通 npm 包，由安装器 `dependencies` 精确预装（决策 #76），与第三方共用同一个解析器；**远端一律要求已打包**——安装器直接从 registry 取 tarball 解包，不走 `npm install`，不执行任何第三方构建脚本；仅 `file:` 本地目录允许源码 + 本地构建。全局唯一身份是包名/来源，`manifest.id` 只是实例内名字（安装时可改）。worker 依赖全部 bundle 进 `worker.js`；docker 镜像是 npm 包的薄壳（#111：装包、跑同一 bin，官方镜像由包衍生构建；第三方自带镜像仍走 tag，`unself.lock` 钉 digest，哈希不匹配直接拒绝）。包格式与 `validate` 清单见 docs/modules.md。
-
-**模块数据四级（#55/#71）**：`core`（默认，经 Core API 代理，仅 get/put/delete/list）/ `shared`（共享 modules 库自建表，零隔离，需三护栏与知情同意）/ `dedicated`（装配器供给独立 D1/KV/R2）/ `external`（模块自备外部库）。模块声明 `storage.accepts` + `preferred`，**由用户在安装时选**；选了声明之外的模式即拒绝安装。
+**模块包**：官方模块和第三方都是普通 npm 包。worker 依赖打进 `worker.js`。字段表见 [docs/modules.md](modules.md)。清单里的 `storage` 只有 `core` 和 `self`，没有以前的四级。
 
 **部署目标与混杂部署（#54/#63）**：一个实例 = 一个逻辑 core；模块落点内部两轴 `provisioned`（cloudflare / docker）/ `connected`，对外只暴露 `mode: cloudflare / docker / connect`。三种部署形态（纯 CF / 纯 Docker / 混杂）= 同一模型的取值；混杂部署的动机是把只有 CF 能做的事（DO / AI）留在免费额度内，其余放自有机器。
 
@@ -198,19 +171,6 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 
 **运行时启停**：已部署模块由注册表开关控制——`enabled=false` 即边栏隐藏、core 停发对应 aud 的 token，存量 token 10 分钟内自然过期，数据原地保留。新增/移除模块 = 改 config → push → 自动重部署。
 
-**失败与回滚（#61/#62）**：脚本幂等，重跑收敛。迁移失败**停住并指出「模块 / 文件 / 语句」**，不自动重试、不自动回滚（D1 无事务）。升级前把旧 `unself.lock` 存一份到 `generated/history/`（兼审计），回滚 = 拷回快照重跑；降级允许但警告；fail-safe——新容器健康才切旧，CF 覆盖式部署。卸载走保留/导出删除/直接删除三选一。
-
-**Docker 等价**：同一份 `unself.config.jsonc`；`mode: docker` 的模块由安装器渲染 compose + 反代片段（Caddy/nginx）+ 初始化迁移容器，core 自身也可落在 Docker。DO 平替与真落地属下一阶段。
-
-**部署双路径与落点双形态（#101–#104，2026-10-18；展开见 issue #343）**：
-
-- **双路径并列，不分主备**：① 云路径 = installer 专用且持续扩展（向导新增：core 数据库连接串输入框——自托管落点问 PG，CF 默认 D1；模块屏落点选择 runtimes 驱动；存储四级内联选择；S3 统一桶或模块自备）；未来多云（Vercel/EdgeOne）= installer 新 target。② 自管路径 = docker/混搭全自管：compose/env/容器用户自管，installer 非必须，壳内填 URL 接入（#102：发现 → 认证 → registry upsert 即安装成功；壳永不经手模块密钥）。CF 凭证细化 #165：运行时进程不**持久持有**凭证；安装会话内用户提供 token → core 发 REST API → 用后即焚。
-- **core 存储三实现（#103）**：SqlExecutor 接口（ControlPlaneExecutor 形状）下 D1 / node:sqlite / PostgreSQL 三实现；迁移按方言分文件（`000N_*.pg.sql`），`?`→`$n` 在 driver 内改写，schema 用可移植子集；registry 增列 `mode` / `entry` / `storage_level`（用户实际选择，非 manifest 快照）。
-- **落点双形态（#104，修订 #13）**：同域路径制（单机默认）与子域名制（分布式推荐，同一根域名子域 + 一张泛域名证书）并存，同一 entry 契约的两种取值；跨域安全靠 #63/#73 既有设计（postMessage token / Bearer / frame-ancestors / 按 origin CORS），不靠同域——第一方同域是优化不是依赖。
-- **生命周期 v2 留位（#105）**：预留 `restore(bundle)`（搬落点需要 export 的逆操作），本期不改契约。
-- **一切模块可替代（#106）**：不存在终态的「CF 专属模块」；DO 依赖是当前实现的事实而非承诺，realtime 平替（自建 WebSocket hub + 模块自有库）立项；官方模块验收标准含「至少两种 runtimes 可跑」。
-- workerd 容器若作为 Docker 过渡形态，单独立项评估，不在默认路径。
-
 **已知缺口**：setup 向导录入的 OIDC client secret 存于 core D1（无字段级加密），审计记录读取行为；字段级加密为远期选项。
 
 
@@ -219,16 +179,15 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 模块作者**不部署，只发布**；部署永远是实例侧动作。
 
 ```text
-模块作者（独立仓库 / registry）      实例侧（安装器 · 九步）            运行时
+模块作者（独立仓库 / registry）      实例侧（工作台或自己的 Docker）   运行时
 ┌─────────────────────┐      ┌────────────────────────────┐      ┌─────────────┐
-│ 构建 + 打包          │      │ 读 config：modules:[{id,     │      │ 壳 + 模块页 │
-│ 产出「模块包」       │──发布─▶│  source, mode}]            │      │ 同实例共存   │
-│ (预构建产物)         │ npm/  │ 取包 → 校验 → 注册 → 绑路由 │      └─────────────┘
-└─────────────────────┘ git/  │ 注册表 upsert → 冒烟         │
-                        url   └────────────────────────────┘
+│ npm pack             │      │ 下载这个 npm 包              │      │ 壳 + 模块页 │
+│ 产出 npm 包          │─发布─▶│ CF：部署成 Worker            │      │ 同实例共存   │
+│                      │      │ Docker：跑同一个包           │      └─────────────┘
+└─────────────────────┘      └────────────────────────────┘
 ```
 
-**模块包内容**（由 `unself module pack` 产出；确切版本与哈希记在实例侧 `unself.lock`，不写在 config 里）：
+**模块包内容**（`npm pack` 的产物）：
 
 ```
 unself-todo-1.2.0.tgz
@@ -236,7 +195,7 @@ unself-todo-1.2.0.tgz
 ├─ worker.js         预构建、自包含（依赖已 bundle；模块不自带 SDK 浏览器侧资产）
 ├─ assets/           模块页静态文件（只含 var() 名字，不含值）
 ├─ migrations/       可选：表前缀命名的迁移（仅 shared/dedicated 模式需要）
-├─ config.schema     可选：配置页字段声明（schema 驱动，安装器渲染）
+├─ config.schema     可选：配置页字段声明
 ├─ theme.json        可选：模块自己皮肤（默认跟随实例主题）
 ├─ docker/           可选：镜像/端口/健康检查声明；#102 起降级为参考文档（用户自管
 │                    compose 的示例，供复制；壳不消费，机器契约见发现端点）
@@ -245,7 +204,7 @@ unself-todo-1.2.0.tgz
 
 **信任无分级（拍板）**：#42 不变——不区分官方/认证/任意，写部署脚本的人 = 信任决策者。但**「无分级」不等于「无信息」**：安装时展示版本、发布者、`sha512`、声明的 `permissions` 与 `storage`，由部署者知情确认。
 
-**信任边界（#58/#72）**：远端来源一律**要求已打包**；安装器直接从 registry 取 tarball 解包（不走 `npm install`，`postinstall` 无执行机会），**不执行任何第三方构建脚本**；只有 `file:` 本地目录允许源码 + 本地构建——作者的构建发生在**作者自己的 CI**。
+**模块来源只有 npm 包。** Cloudflare 和 Docker 都是在跑这个包。npm registry、GitHub、内网 tarball 只是部署时从哪下载。下载后不解源码、不执行包里的脚本。
 
 **主题与部署解耦**：模块产物里只有语义令牌名字（`var(--unself-*)`），没有值。部署时零令牌；值只在运行时由壳统一下发（见本文档「注入双通道」）。换主题不重部署模块。
 
@@ -265,7 +224,7 @@ unself-todo-1.2.0.tgz
 
 ### 身份与邮箱解耦：能力轴模型（2026-09-10 修订）
 
-身份与邮箱是两根独立的轴，「完整实例 / 弱化实例」二分废除；实例形态 = 各能力轴选择向量的组合：
+身份和邮箱是两根独立的轴，原来「完整实例 / 弱化实例」的二分作废；实例长什么样，就是各能力轴怎么选的组合：
 
 ```text
               邮件：无                邮件：Stalwart 全套
@@ -302,11 +261,7 @@ Stalwart ≥ 0.16.10（JMAP 全合规）为集成前提。
 
 ### 官方模块改编纪律（2026-09-10 拍板）
 
-**fork 动机**：节省开发时间——上游已是 CF 上的成熟实现（如 EdgeChat），满足极小团队的基础能力；不是追随上游路线图。
-
-**上游策略**：默认不跟。搬运后按契约做最小适配（上游把文件存储/数据库/KV cache 耦合在自研实现里，多不符合本 spec，适配是常态不是例外）；上游出现对产品有好处的能力时**看情况**选择性吸收；继承上游开源许可证（EdgeChat 衍生件 GPL-3.0，见决策 10）。
-
-（2026-09-15 修订：EdgeChat 改走「固定 commit 搬运 + 最小适配」路线，不做 GitHub fork，出处按件登记 third_party/components.yaml，见决策 #50）
+聊天模块已经在 `app/modules/chat`。它从 EdgeChat 搬进来，许可证仍是 GPL-3.0，出处登记在 `third_party/components.yaml`。不跟上游路线，也不把这份代码打进核心。
 
 **适配深度光谱 L0-L3**（官方与第三方同规适用）：
 
@@ -315,14 +270,14 @@ Stalwart ≥ 0.16.10（JMAP 全合规）为集成前提。
 | L0 包壳 | 不改上游代码，manifest 包装成模块 | 第三方快速接入、无改造意愿的服务 |
 | L1 前端适配 | 主题/导航/入口对齐契约，后端不动 | 现成 Web 应用门面化 |
 | L2 契约改造 | 认证与存储对齐（token 验签、SDK 存储、表前缀） | 需要数据隔离与统一身份的服务 |
-| L3 深度重写 | fork 后大刀阔斧：删耦合、改架构、自维护 | 需要彻底重构上游实现的场景；EdgeChat 不走此档（2026-09-15 起走搬运+适配，决策 #50） |
+| L3 深度重写 | fork 后大刀阔斧：删耦合、改架构、自维护 | 聊天模块不在这一档。它是搬进来之后按契约改过的模块 |
 
-**第三方 DX 是产品面**：`@unself/sdk` 文档与契约示例是产品交付物的一部分（决策 #82：不做脚手架/模板生成器）；「写一个模块放进去」的顺畅度决定平台成色。
+**第三方 DX 是产品面**：`@unself/sdk` 的文档和契约示例也算交付物的一部分（决策 #82：不做脚手架/模板生成器）；「写一个模块放进去」顺不顺，决定这个平台的成色。
 
 
 ## 代码组织：可插拔 monorepo（用户拍板，2026-09-06）
 
-monorepo 保留，目的是让核心协议、模块清单、适配器和部署配置可以在一个 PR 中协作。但第三方完整应用不通过 subtree 混入核心代码；它们保持独立构建边界，并以模块、服务或适配器接入。
+monorepo 保留，这样核心协议、模块清单、适配器和部署配置能在同一个 PR 里一起改。但第三方完整应用不走 subtree 混进核心代码；它们各自守住构建边界，以模块、服务或适配器接进来。
 
 两桶判据（决策 #83）：**`core/` = 开发用的代码依赖（库）；`app/` = 开发好的 app，可被装配**（全部发 npm）。
 未就位的模块（docs / board / calendar / git / meeting-p2p 等）按里程碑逐步进 `app/modules/`。
@@ -340,7 +295,7 @@ unself/
 │           └── stalwart/       # Stalwart 开户适配器（发 npm：@unself/stalwart-provisioner）
 ├── app/                        # 可装配的成品
 │   ├── workbench/              # 平台运行体（一个包两半边）：src＝core Worker、web＝工作台 SPA、migrations＝SQL
-│   ├── installer/              # 部署工具：Web 向导 + CLI + 九步装配引擎（src/engine）
+│   ├── installer/              # 部署工具：只把 core 和 workbench 部署到 Cloudflare
 │   └── modules/
 │       ├── hello/              # 参考模块（发 npm：@unself/hello）
 │       └── chat/               # 聊天模块（worker + frontend）
@@ -357,14 +312,14 @@ unself/
 1. 可复用库使用 package 依赖；
 2. 独立服务使用发布镜像、HTTP API 或模块 URL；
 3. 必须维护 fork 时，优先使用独立 fork 仓库或 submodule；
-4. 不使用 subtree 把 EdgeChat、MiroTalk 的完整历史和源码混入核心；
+4. 不使用 subtree 把聊天模块、MiroTalk 的完整历史和源码混入核心；
 5. `third_party/components.yaml` 固定版本、来源、构建方式和许可证。
 
 **许可证边界**（已拍板，2026-09-06）：
 
 1. **核心选 AGPL-3.0**：自托管产品防“拿代码开托管服务不回馈”的标准答案（Grafana/MinIO/Mastodon 同路）；威胁模型是云厂商白嫖，GPL 看不住托管路径，MIT/Apache 方向就不对。接受代价：AGPL 只强制开源、不阻止竞争性 fork；个别公司贡献政策会劝退贡献者，9 人社区可忽略。用户是唯一初始版权人，接受外部贡献前可随时改许可证或卖商业授权，这扇门目前开着。
 2. **边界标注**：根 `LICENSE` = AGPL-3.0 全文（核心/SDK/自研模块/文档）；`app/modules/chat/` 为 GPL-3.0-only（上游继承，manifest 声明 + 根 `NOTICE`/`third_party` 登记，注明含本仓库修改）；MiroTalk 相关件 AGPL-3.0；根 `NOTICE` 记录上游归属；`third_party/components.yaml` 登记每个外部件的版本/来源/SPDX/接入方式；新代码文件头 `// SPDX-License-Identifier: AGPL-3.0-only`（脚手架自动带上）。
-3. **合并判定铁律**：代码进同一构建产物才是“合并”；独立 Worker + HTTP 边界 + 标准协议 ≠ 合并；从 GPL 上游搬运进衍生件时必须固定 commit + 按件登记（third_party/components.yaml）+ 最小适配，不把上游代码复制进核心构建产物（2026-09-15 修订，决策 #50）；fork 过的件必须登记。魔改 EdgeChat 后端自用不分发二进制则无公开义务，但源码照常在仓库中。
+3. **合并判定**：代码进同一构建产物才是“合并”。聊天模块是独立 Worker，GPL 代码不进核心构建产物。出处登记在 `third_party/components.yaml`。源码在 `app/modules/chat`。
 
 
 ## 前端约定：主题系统（用户拍板，2026-09-09，替换 2026-09-07 版）
@@ -509,15 +464,15 @@ hello 页  身份行（token claims 姓名/邮箱）+ 计数按钮并排：
 
 ### 架构原则
 1. **一实例一团队**：每个团队部署并管理自己的实例；管理员只管理该实例对应的一个团队，不实现团队切换或 Unself 中央租户控制面。
-2. **Cloudflare first**：统一壳、模块注册、Webhook、EdgeChat 和 P2P 会议信令优先运行在 Pages/Workers/Durable Objects。
+2. **Cloudflare first**：统一壳、模块注册、Webhook、聊天模块和 P2P 会议信令优先运行在 Pages/Workers/Durable Objects。
 3. **模块优先于产品套装**：模块有 manifest、依赖、路由、权限和部署目标；未启用即不显示、不创建专属资源。
 4. **标准协议优先**：OIDC、SMTP、CalDAV/iCalendar、S3、Webhook 是外部服务边界；不把 Stalwart 写死为平台基础。
 5. **实时能力可运行在 CF**：WebSocket + Durable Objects 是聊天和会议小型信令室的默认实现；不把实时能力预设为 VPS 常驻进程。
 6. **P2P 媒体与信令分离**：Worker 承载会议鉴权、房间与信令，WebRTC 直接传媒体；TURN/SFU/录制按需放入 Docker 或外部基础设施。
 7. **许可证按代码和构建产物隔离**：不通过目录名称假设许可证隔离，必须保留独立依赖、构建和服务边界。
 8. **模块契约三通道**：壳与模块之间只有 manifest、`@unself/sdk`、Core API；模块默认 iframe 装载于 `/m/<模块id>/`，第一方同域同规，第三方可换独立域名 entry，契约不变；安全靠短时 token 验签，不靠 origin 隔离。
-9. **数据边界按四级声明**（#55）：core 库独立护住平台数据；模块业务数据按 `core`/`shared`/`dedicated`/`external` 四级由部署者选择，`shared` 靠表前缀隔离 + SDK 收口 + 三护栏；模块必须实现 export/purge 生命周期接口。
-10. **装配与启停分离**：装配只在部署时由自建 REST 客户端执行（#65），运行时进程不持有 Cloudflare 凭证；已部署模块的启停是注册表开关，秒级生效，免重部署。
+9. **资源**：模块 env 自己填。声明用 core 的 Cloudflare（库和 S3）还是 core 的其他库，变量名待定。启动后用 key 连上 core，再调用 core 初始化。模块自己的库和桶也在这份 env 里，core 不代管。
+10. **平台与模块分开部署**：安装器只部署 core 和 workbench。模块在平台起来之后再装。运行时进程不长期持有 Cloudflare 凭证。
 11. **跨模块协作走核心**：模块互通只经核心代调（act claim 双主体）；资源级权限记核心通用 ACL；AI、存储等基础设施能力由核心配置、SDK 供给。
 
 ### 技术选型与复用调研（v2：二次开发缝合路线）
@@ -528,7 +483,7 @@ hello 页  身份行（token claims 姓名/邮箱）+ 计数按钮并排：
 |---|---|---|---|
 | 统一壳 | Vue3/React 单页壳，CF Pages/Workers | Docker 静态/Node 部署 | OIDC 会话、动态导航、模块加载、通知中心 |
 | 身份 | 通用 OIDC | Stalwart、Keycloak、Authentik 等 | claim 映射、团队角色、模块权限 |
-| IM | EdgeChat，CF Workers + DO + D1 + KV + R2 | 后续聊天适配器 | OIDC、逐条已读、模块 manifest |
+| IM | 聊天模块 `@unself/chat`，已在 `app/modules/chat` | 其他聊天实现 | 模块 token、逐条已读 |
 | 日历 | CalDAV/iCalendar 适配器 | Stalwart、Nextcloud、其他 CalDAV | 响应式前端、会议/任务联动 |
 | 看板/任务 | 自研轻量模块 | 外部任务系统适配器 | 看板和日历联动 |
 | Markdown 文档 | 自研模块 + Milkdown/Tiptap | 外部文档系统适配器 | 内容、评论、权限 |
@@ -537,12 +492,12 @@ hello 页  身份行（token claims 姓名/邮箱）+ 计数按钮并排：
 | 邮件 | SMTP 适配器 | Stalwart、其他 SMTP | 通知、可选开户/停用适配器 |
 | Git 动态 | CF Webhook Worker | Gitea、GitHub、GitLab | 事件规范化和模块投递 |
 
-### EdgeChat 能力盘点（已读源码）
+### 聊天模块现状
 
 > 基准 commit 29978c2（2026-09-15，v2.7.0）；搬运路线见决策 #50。
-- ✅ 实时：Durable Objects WebSocket Hibernation，适合作为 Cloudflare 首选聊天模块。
+- ✅ 实时：Durable Objects WebSocket Hibernation，这就是现在的聊天模块。
 - ✅ 群聊/私聊/语音消息/文件/头像/历史分页/@提醒/封禁。
-- ✅ 文件存 R2，可通过存储适配层扩展到兼容对象存储。
+- ✅ 文件可以落在 core 的 S3。模块自己的桶写在模块 env 里。
 - ✅ 管理后台、邀请和用户管理能力。
 - ⚠️ 已读未读只有频道级游标，无逐条“已读 x/y”回执，需二次开发。
 - ⚠️ 原生认证是本地账号体系，需接入通用 OIDC。
@@ -552,7 +507,7 @@ hello 页  身份行（token claims 姓名/邮箱）+ 计数按钮并排：
 ```
 team.example.com（部署者自己的 Cloudflare 账户）
  ├─ /              → Shell + Core API / Module Registry（Workers）
- ├─ /m/chat/*      → 魔改 EdgeChat（可选：Workers + DO）
+ ├─ /m/chat/*      → 聊天模块（可选）
  ├─ /m/meet/*      → P2P 信令（可选：Worker + DO）
  ├─ /m/<其他>/*    → 其余第一方模块，按路径挂载，未启用不部署
  └─ 附件           → 可选 R2/S3/MinIO

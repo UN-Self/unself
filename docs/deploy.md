@@ -1,71 +1,57 @@
 # 部署指南
 
-## 直接跑（复制粘贴，从上到下）
+平台和模块是分开装的。平台（core 和 workbench）有两条路。模块也有两条路，而且不经过安装器。
+
+## 平台
+
+### 1. Cloudflare：安装器
+
+安装器只部署 core 和 workbench，不部署模块。
 
 ```sh
-# 前置：Node.js ≥ 22（`node -v` 自查；不需要 git、不需要 pnpm）
-
-# ① 启动本地 Web 向导（安装器的默认命令）
 npx @unself/installer@latest
-
-# ② 向导七屏：①凭证（wrangler OAuth 可直跳，API Token 折叠）→ ②域名（workers.dev 默认 / 自有域自动列账户 zone，只填子域前缀）→ ③模块 → ④模块配置（按模块 manifest 声明逐模块出页，无配置自动跳过）→ ⑤数据存放 → ⑥装配（九步折叠日志）→ ⑦完成页按钮打开激活入口
-# ③ 等九步跑完，在完成页点击一次性 setup 链接或复制按钮
-
-# ④ 浏览器打开 setup 链接 → 设管理员用户名密码 → 登录工作台
 ```
 
-> **仓库内运行（贡献者 / 装机前）：** `git clone https://github.com/UN-Self/unself.git && cd unself && pnpm install && pnpm -r build && node app/installer/dist/unself.mjs` —— 与 `npx` 是同一条装配路径（同一个引擎）。
+走 Cloudflare 自己的资源：账号、Worker、数据库都在你的 CF 账户里。向导跑完后，用它给出的一次性链接设管理员，然后登录工作台。
 
-**完成。** 拉人：管理台 → 邀请 → 生成链接发给新人 → 新人填表 → 你批准（秒回，开户+签激活令牌；发信后台尽力，失败不阻塞）→ 新人凭原邀请链接回邀请页自助激活（设邮箱密码）→ 登录。
-想要团队邮箱：管理台 → 设置 → 邮件服务（运行时配置，随时改即生效免重部署；填了之后批准邀请会后台尽力开邮箱并发信；发信为后台尽力增强、失败不阻塞，激活必经通道=邀请页三态自助。原「受 CF Workers 出站限制」的表述已 2026-10-13 复核修正，见决策 #96）。
 
-## 失败了怎么办
+### 2. Docker
 
-| 现象 | 修复 |
-|---|---|
-| `10405`（权限不足） | 凭证缺 zone 级权限：改用 CF 深链接建的 API Token（6 项勾全），再继续 |
-| 需要 Total TLS（多级子域证书） | OAuth 覆盖不到（2026-09-17 实测），改用 API Token |
-| DNS 报错 | 等 60 秒，重跑同一条命令 |
-| 配置、构建或接口失败 | 展开失败步骤，按原因/归属/修复处理；修正后重跑，不要把幂等当作自动修复 |
-
-看实时日志：`npx wrangler tail <实例名>-workbench`（0.1.x 时代叫 `<实例名>-core-api`，见下节）。
-仍卡住 → [开 issue](https://github.com/UN-Self/unself/issues)，附上终端里的三要素报错原文。
-
-## 升级已有实例
+不走 Cloudflare。写好环境变量，把 workbench 容器拉起来即可。
 
 ```sh
-npx @unself/installer@latest           # 用新版安装器重跑一次部署（幂等）
+docker compose -f docker/compose.yml up --build
 ```
 
-数据原地保留（迁移只增不改）。升级纪律：
+常用变量：
 
-- 更新安装器本身不会修改线上 Worker；在原实例目录重新完成部署，线上才使用新的平台和模块产物。0.3.0 安装器依赖 workbench/chat 0.1.1，包含本轮资产响应与聊天路径修复。
+| 变量 | 作用 |
+|---|---|
+| `UNSELF_PORT` | 监听端口，默认 `8787` |
+| `UNSELF_BASE_URL` | 反代或远程访问时，workbench 对外的地址。不设的话，别的机器上的模块可能连不进来 |
+| `JWT_PRIVATE_KEY` | 可空。空着的话，第一次启动会自己生成，并写进数据卷 |
 
-- **0.2.0 起 Worker 名变了**：`<实例名>-workbench`（旧名 `<实例名>-core-api`）。**D1 / R2 / KV 名与数据一律不动**（改名就会丢数据，所以我们不改名），只有 Worker 是删旧建新：重跑一次部署 → 确认新 Worker 正常 → 再手工删旧的：
-  ```sh
-  npx wrangler delete <实例名>-core-api
-  ```
-  顺序反了会出现打不开的窗口（路由已经指向新 Worker 而旧的还在、或反过来）。
+数据在卷 `unself-data` 里。容器起来之后，打开 workbench，设管理员。
 
-- **迁移只加新文件，不改旧文件**：已应用过的迁移不会重跑——`wrangler d1 migrations apply` 按**文件名**记账（`d1_migrations` 表）。要改 schema 就新增 `000N_*.sql`，原地改旧文件对已升级的库不生效（2026-09-15 本地实测：原地改 0001 后重跑报「No migrations to apply!」，旧库仍缺列缺表；补一个新文件即正常应用）。
-- **升级前先备份**：core 库 + modules 库（按表导出）+ R2 桶。
-- **历史例外（0.1.0 时期）**：`0001_init.sql` / `0002_setup_oidc.sql` 曾被原地修改（0001 补 `users.email/personal_email/status` 与 `invites`/`notification_types`/`notifications` 等表；0002 删 `oidc_flows`）。因此**那时建的旧库**升级到当前版本会缺表缺列：0001/0002 被跳过，只执行新增的 0004/0005，**在 0004 处中断**——`no such table: notification_types: SQLITE_ERROR`（0004 依赖被改的 0001 建的表），`d1_migrations` 停在 0003，库留半迁移态（实测 wrangler 4.129.1）。需重建 D1（或手工补 schema）后重跑装配器；0.1.0 之后建的库（迁移一次到位）不受影响。
+## 模块
 
-## 备份
+模块不由安装器部署。workbench 已经在跑之后，再选下面其中一种。
 
-core 库（用户/权限/审计）+ modules 库按表导出 + R2 桶整体；建议每周一次，放团队自己的存储。
+### 1. 在 workbench 里建成 Cloudflare Worker
 
-## 花多少钱
+打开已部署好的 workbench，到「新建模块」，填 Cloudflare API token。workbench 用这个 token 拉模块包，部署成一个 CF Worker。token 只在这次操作里用，不进库。
 
-Cloudflare 免费套餐足够 10 人左右的团队：Workers 10 万请求/天、D1 5GB、R2 10GB。邮件轴需要一台自己的邮件服务器（如 Stalwart，跑在任意 VPS 上）。
+这条路要求平台侧能代你调 Cloudflare。平台本身是 Docker 起的也可以，只要这次操作拿得到有权限的 token。
 
----
+### 2. 自己用 Docker 起模块，再连上 workbench
 
-## 附：每步在干什么（不用读，卡住了再看）
+模块容器你自己构建、自己启动。启动前写上：
 
-- **① 凭证**：优先 `wrangler login` 的 OAuth（浏览器授权，零复制粘贴）。**2026-09-17 用 wrangler 4.129.0 实测**（原始记录已迁入 [issue #241](https://github.com/UN-Self/unself/issues/241)；**2026-09-21 补测 DNS 记录与 Custom Domains，wrangler 4.129.1，#309**）：OAuth 覆盖 D1 建库/读写/迁移、R2 建桶/列举、KV 建命名空间、Workers 部署、secret 写入、zone 路由增/改/删；**覆盖不到的是 Total TLS（ACM）、DNS 记录读写（dns_records GET/POST 都 10000）、Workers Custom Domains 写（10405）**。自有域 + OAuth 时：装配器跳过 DNS 自建并给出人话指引（控制台手动加 A 记录 192.0.2.1 开代理，或改用 token 重跑自动创建）；只有多级子域（比 zone 深两级以上）才需要 Total TLS，失败也是人话跳过不阻断。需要这些能力、偏好 token、或跑 CI 时，用 CF 深链接建 API Token（权限已预填全部 **6** 项：Account 3 + Zone 3，含 dns:edit——token 路径自有域全自动），粘回终端即可。token 只在本次进程内存里用，不落盘。
-- **② 域名**：workers.dev 免费域名即刻可用；自有域名需 DNS 已托管在 Cloudflare，装配器会自动补代理记录和证书。
-- **③ 九步**：建两个数据库（core/modules）→ 跑迁移 → 搬壳产物与 core Worker bundle → 部署 core Worker → 部署各模块 → 写模块注册表 → 建 R2 桶 → 生成一次性 setup token → 冒烟检查。幂等：任何时候重跑，只补没完成的部分。**壳与 core Worker 的产物由 `@unself/workbench` 包提供**（安装器的依赖，预构建，干净机器不需要 pnpm/vite/esbuild）。
-- **④ setup 链接**：一次性，设的第一个账号即管理员。默认内置账号（用户名+密码）；团队有 SSO 可在向导里展开接 OIDC。
-- **模块启停**：已部署模块在管理台秒级开关，免重部署；新增/移除模块改 `unself.config.jsonc` 后重跑装配器。
-- **装配器源码**：[app/installer/src/engine/README.md](../app/installer/src/engine/README.md)（九步明细、换钥流程、Docker 注记）。
+| 变量 | 作用 |
+|---|---|
+| `UNSELF_CORE_URL` | workbench 的可访问地址。模块要能连到它，公网、局域网、Tailscale 都行 |
+| `UNSELF_MODULE_KEY` | workbench 里生成的接入码。workbench 只存哈希，明文留在模块这边 |
+
+模块起来后会自己去连 `UNSELF_CORE_URL`。workbench 里看到连接正常，再保存，模块才算装上。
+
+`.env` 文件不会被宿主自动读。Docker 要用 compose 的 `env_file`，或在启动命令里把变量传进去。
