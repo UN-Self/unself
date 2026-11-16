@@ -52,14 +52,10 @@ DCO 全文：<https://developercertificate.org/>
 pnpm install          # 依赖安装
 
 # 门禁（= CI 同一套，缺一不可）
-pnpm install --frozen-lockfile             # 锁文件必须一致
-node scripts/verify-workflows.mjs          # Actions YAML 解析护栏（解析失败是静默的）
-node scripts/verify-paths.mjs              # 结构闸门：tsconfig extends / workspace globs / 已删目录零引用
-pnpm -r build                              # 全量构建（必须在 typecheck/test 之前：@unself/sdk 是 dist 型包）
-pnpm -r typecheck                          # 类型检查
-pnpm -r test                               # 全量测试
-pnpm verify:tokens                         # 纪律 lint（样式只走 tokens）
-node scripts/check-migrations-upgrade.mjs  # 跨版本迁移闸门（老库 + 新迁移）
+pnpm install --frozen-lockfile
+pnpm -r build
+pnpm -r typecheck
+pnpm -r test
 ```
 
 本地不跑真云：`app/workbench` 测试用内存 D1 替身，适配器测试用契约假实现；

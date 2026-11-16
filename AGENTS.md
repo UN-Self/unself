@@ -39,5 +39,5 @@
 - D1 没有 `BEGIN`/`COMMIT`，迁移逐条执行。已经应用过的迁移文件不能改，按文件名记账。多个模块共用一个库时，各自用独立记账表，否则同名迁移会被跳过
 - `cloudflare:sockets` 的 `connect(address, options)`：`secureTransport` 在第二个参数里，默认 `off`。写进 address 会被丢掉
 - 安装器不调用 wrangler。OAuth scope 清单推不出真实权限，权限结论只能实测
-- CI 还在调用 `scripts/verify-workflows.mjs`、`scripts/verify-paths.mjs`、`scripts/check-migrations-upgrade.mjs`。这三支脚本当前不在仓库里。门禁以 [docs/testing.md](docs/testing.md) 为准
+- CI 门禁是 build、typecheck、test。清单见 [docs/testing.md](docs/testing.md)
 - PR 目标不是默认分支时，`closes #N` 不会自动关 issue，要手动 `gh issue close` 并写明合并点

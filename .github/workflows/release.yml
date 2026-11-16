@@ -1,7 +1,7 @@
 # 发布流水线（决策 #79；W5 预期行为清单 E1–E10）
 #
-# 只做四件事：检出 → 装依赖 → 构建（=「打包」）→ 推 npm。（五个包：#303 起含 @unself/workbench）
-# **不跑测试套件**：PR 阶段的八段门禁（.github/workflows/ci.yml，清单见 docs/testing.md「门禁」）已经跑过，发布不再重复。
+# 只做四件事：检出 → 装依赖 → 构建 → 推 npm。
+# **不跑测试套件**：PR 阶段的 CI（.github/workflows/ci.yml）已经跑过。
 #
 # 认证 = npm Trusted Publishing（GitHub Actions OIDC）：仓库里**不存任何 npm token/secret**。
 # 首次发布是人工的（维护者本机 `npm login` 后逐个包发一轮），之后在 npm 每个包的
@@ -12,7 +12,7 @@
 # 打 tag 前的三条前提：
 #   ① tag 必须在 main 上（本 workflow 会校验）
 #   ② 发版前有一次真机走查记录（docs/testing.md）
-#   ③ 模块包形态由 `unself module pack` 提供（#285）；SDK/安装器的可发布形态由 #283 提供
+#   ③ 模块和库都用 npm publish。模块不走单独的打包器。
 name: Release
 
 on:
@@ -55,42 +55,84 @@ jobs:
             exit 1
           fi
 
-      # E2/E3：tag → 待发布包 + 版本（不认识的前缀直接失败，绝不静默跳过）
       - name: 解析 tag
         id: rel
-        run: node scripts/release/tag-to-package.mjs "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+        run: |
+          node --input-type=module <<'JS' >> "$GITHUB_OUTPUT"
+          const tag = process.env.GITHUB_REF_NAME ?? '';
+          const targets = {
+            sdk: { package: '@unself/sdk', kind: 'workspace', dir: 'core/sdk' },
+            installer: { package: '@unself/installer', kind: 'workspace', dir: 'app/installer' },
+            workbench: { package: '@unself/workbench', kind: 'workspace', dir: 'app/workbench' },
+            hello: { package: '@unself/hello', kind: 'module', dir: 'app/modules/hello' },
+            chat: { package: '@unself/chat', kind: 'module', dir: 'app/modules/chat' },
+          };
+          const m = /^([a-z]+)-v(.+)$/.exec(tag.trim());
+          const semver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+          if (!m || !targets[m[1]] || !semver.test(m[2])) {
+            console.error(`tag 不认识或版本不合法：${tag}`);
+            process.exit(1);
+          }
+          const t = targets[m[1]];
+          process.stdout.write(`name=${m[1]}\npackage=${t.package}\nkind=${t.kind}\ndir=${t.dir}\nversion=${m[2]}\n`);
+          JS
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
 
-      # E3：版本以 tag 为准（workspace 包：直接写进 package.json）
-      - name: 注入版本（workspace 包）
-        if: steps.rel.outputs.kind == 'workspace'
+      - name: 注入版本
         run: npm pkg set version="${{ steps.rel.outputs.version }}"
         working-directory: ${{ steps.rel.outputs.dir }}
 
-      # npm publish **不改写** workspace: 协议（pnpm publish 才会），原样发布会让消费者装不上
-      # （Unsupported URL Type "workspace:"）→ 发布前先改写为真实版本号。
-      - name: "改写 workspace: 协议依赖"
-        if: steps.rel.outputs.kind == 'workspace'
-        run: node scripts/release/pin-workspace-deps.mjs "${{ steps.rel.outputs.dir }}"
-
-      # `--ignore-scripts`：pin 改写了 package.json → 本包的 prepack（`pnpm run build`）会因
-      # lockfile 与 package.json 不一致而失败；产物已在上面 `pnpm -r build` 步骤构建完毕。
-      - name: 发布（workspace 包）
-        if: steps.rel.outputs.kind == 'workspace'
-        run: npm publish --access public --ignore-scripts
+      # npm publish 不改写 workspace:。改写成仓库里对应包的 version，再发布。
+      # --ignore-scripts：上面已经 build；改过 package.json 后再跑 prepack 会和 lockfile 冲突。
+      - name: 改写 workspace 依赖并发布
         working-directory: ${{ steps.rel.outputs.dir }}
-
-      # E3：模块包——版本同时要进 packed 的 manifest.json，由打包器负责（#285）
-      - name: 打包（模块）
-        if: steps.rel.outputs.kind == 'module'
         run: |
-          node app/installer/dist/unself.mjs module pack "${{ steps.rel.outputs.dir }}" \
-            --out .release \
-            --version "${{ steps.rel.outputs.version }}" \
-            --name "${{ steps.rel.outputs.package }}"
-
-      - name: 发布（模块）
-        if: steps.rel.outputs.kind == 'module'
-        run: npm publish .release/*.tgz --access public
+          node --input-type=module <<'JS'
+          import { readFile, writeFile, readdir } from 'node:fs/promises';
+          import { existsSync } from 'node:fs';
+          import { join } from 'node:path';
+          const root = process.env.GITHUB_WORKSPACE;
+          const pkgDir = process.env.PKG_DIR;
+          const yaml = await readFile(join(root, 'pnpm-workspace.yaml'), 'utf8');
+          const patterns = yaml.split('\n').map((l) => /^\s*-\s*(.+?)\s*$/.exec(l)?.[1]).filter(Boolean);
+          const versions = new Map();
+          for (const pattern of patterns) {
+            const dirs = [];
+            if (pattern.includes('*')) {
+              const [head, ...rest] = pattern.split('/*');
+              const headDir = join(root, head);
+              if (!existsSync(headDir)) continue;
+              for (const d of await readdir(headDir, { withFileTypes: true })) {
+                if (d.isDirectory()) dirs.push(join(headDir, d.name, ...rest));
+              }
+            } else dirs.push(join(root, pattern));
+            for (const dir of dirs) {
+              const pj = join(dir, 'package.json');
+              if (!existsSync(pj)) continue;
+              const parsed = JSON.parse(await readFile(pj, 'utf8'));
+              if (parsed.name && parsed.version) versions.set(parsed.name, parsed.version);
+            }
+          }
+          const pjPath = join(pkgDir, 'package.json');
+          const pkg = JSON.parse(await readFile(pjPath, 'utf8'));
+          for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+            const deps = pkg[field];
+            if (!deps) continue;
+            for (const [name, spec] of Object.entries(deps)) {
+              const m = /^workspace:(.*)$/.exec(String(spec));
+              if (!m) continue;
+              const version = versions.get(name);
+              if (!version) throw new Error(`找不到 ${name} 的版本`);
+              const rest = m[1];
+              deps[name] = rest === '*' || rest === '' ? version : rest === '^' ? `^${version}` : rest === '~' ? `~${version}` : rest;
+            }
+          }
+          delete pkg.private;
+          await writeFile(pjPath, JSON.stringify(pkg, null, 2) + '\n');
+          JS
+          if [ -f dist/worker.js ]; then cp dist/worker.js worker.js; fi
+          npm publish --access public --ignore-scripts
+        env:
+          PKG_DIR: ${{ github.workspace }}/${{ steps.rel.outputs.dir }}

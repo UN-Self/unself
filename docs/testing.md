@@ -37,12 +37,9 @@ pnpm install --frozen-lockfile
 pnpm -r build
 pnpm -r typecheck
 pnpm -r test
-pnpm verify:tokens
 ```
 
 `@unself/sdk` 的入口指向 `dist/`。不先 build，干净树上 typecheck 和 test 会找不到这个包。本地留着旧 `dist/` 而变绿，不算过。
-
-CI 里还调用 `scripts/verify-workflows.mjs`、`scripts/verify-paths.mjs`、`scripts/check-migrations-upgrade.mjs`。这三支脚本当前不在仓库里，这三步会失败。要恢复门禁就先把脚本加回来，不要在文档里假装它们还在。
 
 发版由 tag 触发 `release.yml`，不在 PR 里重跑 CI。
 
