@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+id: calendar
+route: /m/calendar
+runtimes:
+  - worker
+version: 0.1.0
+description: 日程管理模块
+permissions:
+  - storage
+storage:
+  accepts:
+    - core
+  preferred: core

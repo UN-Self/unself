@@ -31,9 +31,17 @@ cat > "$CONFIG_DIR/wrangler.jsonc" <<EOF
     "not_found_handling": "single-page-application",
     "run_worker_first": true
   },
+  "durable_objects": {
+    "bindings": [
+      { "name": "CONNECT_TUNNEL", "class_name": "TunnelRoom" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["TunnelRoom"] }
+  ],
   "d1_databases": [
     { "binding": "CORE_DB", "database_name": "unself-core", "database_id": "docker-local", "migrations_dir": "migrations/core" },
-    { "binding": "MODULES_DB", "database_name": "unself-modules", "database_id": "docker-local" }
+    { "binding": "MODULES_DB", "database_name": "unself-modules", "database_id": "docker-local", "migrations_dir": "migrations/modules" }
   ]
 }
 EOF
@@ -67,7 +75,9 @@ PROBE_SELECT="SELECT (SELECT COUNT(*) FROM instance_config WHERE key = 'setup_do
 
 # ---------------------------------------------------------------- ① 迁移（幂等）
 echo "[entrypoint] ① 应用 core 迁移（幂等，按 d1_migrations 记账）…"
-"$WR" d1 migrations apply CORE_DB --local --persist-to "$PERSIST_DIR" >/dev/null
+"$WR" d1 migrations apply CORE_DB --local --persist-to "$PERSIST_DIR"
+echo "[entrypoint] ① 应用 modules 基建迁移（module_kv；幂等）…"
+"$WR" d1 migrations apply MODULES_DB --local --persist-to "$PERSIST_DIR" 
 
 # ---------------------------------------------------------------- ② JWT 私钥自举
 # TODO(#108)：R1 落地后密钥自举整块消失。优先用环境注入（用户自带密钥）；否则缺失即首启

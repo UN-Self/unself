@@ -1,0 +1,42 @@
+{
+  "id": "chat",
+  "version": "0.1.0",
+  "runtimes": [
+    "worker"
+  ],
+  "route": "/m/chat",
+  "permissions": [
+    "storage",
+    "notify"
+  ],
+  "storage": {
+    "accepts": [
+      "core"
+    ],
+    "preferred": "core"
+  },
+  "tables": [
+    "users",
+    "channels",
+    "channel_members",
+    "messages",
+    "user_blocks",
+    "channel_pins",
+    "message_reads",
+    "site_settings",
+    "registration_invites",
+    "registration_invite_uses",
+    "uploaded_files",
+    "device_sessions",
+    "realtime_tickets",
+    "message_events",
+    "message_event_compaction",
+    "pending_r2_delete",
+    "core_identities",
+    "read_receipts",
+    "message_deletion_audit",
+    "message_block_payloads",
+    "message_attachments"
+  ],
+  "description": "EdgeChat 频道聊天（fork 自 aozorae/Edgechat，GPL-3.0-only）"
+}

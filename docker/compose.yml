@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# R2 最简部署：单服务（核心 workbench）+ 数据卷（wrangler 持久层 = D1 sqlite 落盘处）。
+# R2 最简部署：核心 Workbench + 可选本地 Hello / Calendar 模块。
 # 用法：docker compose -f docker/compose.yml up --build
+# 本地模块：先在 Workbench 管理台生成接入 key，再写 docker/.env，然后
+#   docker compose -f docker/compose.yml --profile modules up --build
 #   -f 必带（compose 文件在 docker/ 下，build 上下文相对它解析）。
 # 可选 env（.env 或 shell 透传）：UNSELF_PORT（默认 8787）、UNSELF_BASE_URL（反代/远程访问时必设）。
 # TODO(#108): R1 落地后本目录整块删除。
@@ -12,6 +14,8 @@ services:
       additional_contexts:
         # 产物上下文 = app/workbench（dist/、migrations/、LICENSE、NOTICE）
         wb: ../app/workbench
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     image: unself-workbench:local
     restart: unless-stopped
     ports:
@@ -24,5 +28,50 @@ services:
     volumes:
       - unself-data:/app/data
 
+  hello:
+    profiles: ["modules"]
+    build:
+      context: ../app/modules/hello
+    image: unself-hello:local
+    restart: unless-stopped
+    depends_on:
+      - workbench
+    environment:
+      UNSELF_CORE_URL: http://workbench:${UNSELF_PORT:-8787}
+      UNSELF_MODULE_KEY: ${HELLO_MODULE_KEY:-}
+      UNSELF_MODULE_ADDR: 0.0.0.0:8790
+
+  calendar:
+    profiles: ["modules"]
+    build:
+      context: ../app/modules/calendar
+    image: unself-calendar:local
+    restart: unless-stopped
+    depends_on:
+      - workbench
+    environment:
+      UNSELF_CORE_URL: http://workbench:${UNSELF_PORT:-8787}
+      UNSELF_MODULE_KEY: ${CALENDAR_MODULE_KEY:-}
+      UNSELF_MODULE_ADDR: 0.0.0.0:8791
+
+  chat:
+    profiles: ["modules"]
+    build:
+      context: ../app/modules/chat
+      dockerfile: Dockerfile
+    image: unself-chat:local
+    restart: unless-stopped
+    depends_on:
+      - workbench
+    ports:
+      - "8792:8792"
+    environment:
+      UNSELF_CORE_URL: http://workbench:${UNSELF_PORT:-8787}
+      UNSELF_CHAT_PORT: 8792
+      UNSELF_DATA_DIR: /app/data
+    volumes:
+      - unself-chat-data:/app/data
+
 volumes:
   unself-data:
+  unself-chat-data:
