@@ -8,7 +8,18 @@
 
 日历是独立模块 Worker，有自己的 D1 库。
 
-> 这份文档是课程协作材料，放在 `docs/calendar-edit-plan.md`，单独一个提交。向上游开 PR 时把这个提交剔掉，PR 只保留代码。
+> 这份文档是课程协作材料，放在 `docs/calendar-edit-plan.md`，只留在开发分支，**不进 `main`**：fork 的 `main` 和上游 `main` 都不含它，上游 PR 里也不会出现。
+>
+> 合并到 `main` 时不要 merge 文档那个提交，而是从上游 `main` 重建，只 cherry-pick 代码提交：
+>
+> ```powershell
+> git fetch upstream
+> git checkout -B main upstream/main
+> git cherry-pick <文档提交>..feat/calendarEdit    # 从文档提交之后开始，文档那个提交本身排除
+> git push origin main
+> ```
+>
+> 这样各开发分支上仍有这份文档，`main` 的树和历史里都没有。
 
 ## 先看一条：仓库对日历的既有定位
 
@@ -205,6 +216,7 @@ pnpm -r test
 - 推 `origin`，不推 `upstream`
 - 合回 `feat/calendarEdit` 前先 `git rebase origin/feat/calendarEdit`
 - 按 CONTRIBUTING，开 PR 前先在上游开 issue 说明要做什么
+- 这份分工文档只存在于开发分支，合进 `main` 时剔除（命令见文档开头），`main` 和上游 PR 都不含它
 
 ## 表结构（A-1 要建的）
 
