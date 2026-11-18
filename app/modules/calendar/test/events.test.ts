@@ -319,6 +319,6 @@ describe('module-calendar events API', () => {
     const body = (await listed.json()) as { events: Array<{ title: string }> };
     expect(body.events.map((event) => event.title)).toEqual(['本地容器日程']);
     expect(calls).toContain('/.well-known/jwks.json');
-    expect(calls).toContain('/api/module-api/storage');
+    expect(calls).toContain('/api/module-api/storage/');
   });
 });
