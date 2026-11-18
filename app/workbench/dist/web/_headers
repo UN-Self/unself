@@ -1,0 +1,8 @@
+# 外壳静态资产安全响应头（决策 #47，M1 复核 S8）
+# 值必须与 app/workbench/src/security-headers.ts 的 HTML_CSP / HTML_FRAME_OPTIONS 逐字一致
+# （`/setup*` 走 Worker 由那份代码上头；这里管静态资产直出与 SPA 深链回退）。
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'
+  X-Frame-Options: SAMEORIGIN
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

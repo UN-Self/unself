@@ -1,0 +1,5 @@
+# Chat iframe is sandboxed to an opaque origin ("null"), so its module scripts
+# and stylesheets are cross-origin even when the HTTP URL is same-origin.
+/assets/*
+  Access-Control-Allow-Origin: *
+  Cross-Origin-Resource-Policy: cross-origin
