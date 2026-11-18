@@ -64,10 +64,21 @@ git fetch upstream
 git rebase upstream/main                # 合并前对齐上游
 ```
 
+## 开工顺序（第一天，别各干各的）
+
+B-1 的测试工厂要加载 `migrations/calendar/0001_events.sql` 才能跑起来，而这份 SQL 是 A-1 的活。所以第一天的顺序是固定的：
+
+1. **A 上午**：先把 A-1 里的两张建表 SQL 写出来交付（照本文档末尾的表结构写，半天的事）
+2. **B 下午**：拿到 SQL 做 B-1 测试工厂，当天交付
+3. **A 第二天起**：A-1 其余部分 → A-2 → A-3 → A-4 顺序推进
+4. **B 第二天起**：B-2 → B-3 → B-4 顺序推进；**B-4 不等 A-4**，先用 B-2 准备的 mock changes 把轮询和提醒逻辑做完（见 B-2），A-4 交付后切真接口
+
+不照这个顺序，第一天就是 B 等 SQL、A 不知道 B 在等。
+
 ## A 做的事（editServer）
 
 **A-1 模块骨架和契约**
-- `migrations/calendar/0001_events.sql`：两张表（见下），`CREATE TABLE/INDEX` 全部带 `IF NOT EXISTS`
+- `migrations/calendar/0001_events.sql`：两张表（见下），`CREATE TABLE/INDEX` 全部带 `IF NOT EXISTS`（**先做，B 的工厂等它**）
 - `src/types.ts`：字段映射、类型、错误体
 - `manifest.yaml`：字段必须按契约齐，缺一个装配就拒
 - `package.json`（包名 `@unself/calendar`）、`wrangler.jsonc`、`tsconfig.json`、`scripts/build.mjs`
@@ -82,6 +93,8 @@ runtimes:
   - worker
 version: 0.1.0
 description: 团队日历
+permissions:
+  - storage
 storage:
   accepts:
     - core
@@ -91,7 +104,7 @@ tables:
   - calendar_event_changes
 ```
 
-不要声明 `permissions`：我们直连专属 D1，不走 Core API 的 storage 代理，声明了反而没用。表名必须以模块 id 开头（`calendar_`），这是迁移契约的硬要求。
+`permissions` 照 chat 声明 `storage`：仓库里 hello 和 chat 两个现成模块都带这一行，chat 与我们同路线（专属 D1 + 关系表、不走 storage 键值代理）。permissions 是装配门禁字段，缺了有被拒装的风险，宁多勿少。表名必须以模块 id 开头（`calendar_`），这是迁移契约的硬要求。
 
 `/life/export` 和 `/life/purge` 是模块生命周期契约，必须实现，照 hello 的写法抄。这两个端点的鉴权方式跟业务接口一致。
 
@@ -106,6 +119,7 @@ tables:
 **A-3 编辑接口**
 - `src/routes/events.ts`：`PATCH /api/events/:id`
 - 流程：验 token（`aud` 必须是 calendar）→ 查记录 → 判组织者 → 校验 → 条件更新 → 返回
+- 顺手交付 `seed.sql`（往 `calendar_events` 手动 INSERT 一条测试日程）给联调用，别等增组
 
 交什么：路由级集成测试覆盖 200、400、401、403、404（已删除）、409，外加并发只成功一个。测试用 `app.fetch` 打真路由，不直接测内部函数。
 
@@ -120,12 +134,14 @@ tables:
 - `test/calendar-test-factory.ts`：**复用** `app/workbench/test/test-factory.ts` 的 D1 适配器（`node:sqlite`），只把迁移目录换成 `migrations/calendar/`
 - 不要从 chat 模块抄一份，也不要手搓假 D1：按 `docs/testing.md`，没有 schema 的假 D1 会让写错的 SQL 也变绿
 
-交什么：A 能拿它跑 A-2、A-3、A-4 的测试。这个要先给。
+交什么：A 能拿它跑 A-2、A-3、A-4 的测试。**前置：A 第一天上午交付的 0001 SQL。**
 
 **B-2 前端工程和接口调用**
 - `frontend/` 骨架，`vite.config.ts` 输出到 `../assets`
 - `frontend/src/lib/api.ts`：PATCH 和 changes 的客户端；409 抛出携带服务端当前值的错误；401 提示登录过期
 - `frontend/assets/mock/event.json`：查组交付前先用它
+- `frontend/assets/mock/changes.json`：**假变更流**。B-4 的轮询、游标推进、去重、提醒横幅先用它跑通，不等 A-4；A-4 交付后把请求地址从 mock 切到真接口即可
+- 照 chat 的 `frontend/public/dev-shim.html` 抄一个假壳页：页面在假壳里就能拿假 token、直接请求 8788 联调，**不需要等工作台**
 
 两层路径分清楚：浏览器侧 SDK 是**平台注入**的（装配器把 `assets/sdk/module-sdk.esm.js` 搬进部署目录），模块包里**不要**自带 SDK；页面里写 `import ... from './sdk/module-sdk.esm.js'` 即可。
 
@@ -137,7 +153,7 @@ tables:
 仓库 UI 约束：样式只用 `--unself-*` tokens 不自造颜色；图标用 Lucide；动效参数从 tokens 取并对 reduced-motion 降级；权限判断只信服务端，前端不下权限结论。
 
 **B-4 实时和页面装配**
-- `use-event-changes.ts`：每 3 秒拉 changes，游标推进，命中正在编辑的那条就提示
+- `use-event-changes.ts`：每 3 秒拉 changes，游标推进，命中正在编辑的那条就提示；先接 `mock/changes.json` 跑通全套逻辑（含后台暂停、切回补拉），A-4 好了切真接口
 - `App.vue`：SDK 握手、加载日程、挂编辑器和轮询
 - 页面切后台暂停，切回立刻补一次
 
@@ -147,11 +163,13 @@ tables:
 
 | 谁给谁 | 东西 | 时间点 |
 |---|---|---|
+| A → B | `0001_events.sql`（B-1 的前置） | **第一天上午** |
 | A → B | `src/types.ts` 字段名、错误码、changes 结构 | A-1 做完 |
 | B → A | 测试工厂 | A 开始 A-2 之前 |
 | A → B | 本地可跑的后端（8788） | A-3 做完 |
-| A → B | changes 接口可用 | A-4 做完，B 才能做 B-4 |
+| A → B | changes 接口可用 | A-4 做完（B-4 不等它，先跑 mock） |
 | B → A | 409 要展示哪些字段 | B-3 前 |
+| A → B | `seed.sql` 测试日程 | A-3 做完 |
 
 四条硬约定：
 
@@ -174,6 +192,7 @@ tables:
 - 时间存 UTC 毫秒 + IANA 时区名，不存本地时间字符串
 - 他们写的 RRULE 我们能原样回写，所以格式要能原样取回
 - 参会人表名要跟我们 `tables` 申报一致，且以 `calendar_` 开头
+- **我们联调不依赖他们的 POST**：测试日程用 A-3 的 `seed.sql` 自己造
 
 **删组**
 - 用 `deleted_at` 软删，非空我们一律 404
@@ -182,9 +201,11 @@ tables:
 
 ## 怎么联调
 
-1. A 起后端（8788），B 把前端请求地址指过去
-2. 两个浏览器登录同一团队，打开同一条日程
-3. 跑用例：
+1. **先打通页面（不用等工作台）**：B 用 dev-shim 假壳打开页面，请求指向 A 的 8788，先把接口和页面调通
+2. **再挂真壳**：把 calendar 注册进本地 workbench（8787），从侧栏图标进真 iframe，验证 SDK 握手和 token
+3. **测试日程自己造**：A 用 `seed.sql` 往 `calendar_events` 手动 INSERT 一条，别等增组
+4. 两个浏览器登录同一团队，打开同一条日程
+5. 跑用例：
 
 | 编号 | 做什么 | 预期 |
 |---|---|---|
@@ -205,6 +226,8 @@ pnpm -r test
 ```
 
 5. 页面要用浏览器真打开一次并截图，截图贴 PR；`/api/health` 返回 200 不算页面能用。
+
+> 上面的编号接续前一步的"5. 跑用例"，两段合起来读。
 
 ## 提交和合并
 
@@ -272,10 +295,20 @@ POST /life/purge → 清空数据
 | 分支用 `feat/xxx` | CONTRIBUTING | `calendarEdit` | 改 `feat/calendarEdit` |
 | 数据模型变更先改需求文档 | CONTRIBUTING | 未提 | 见下方"还有两件事没定" |
 
-## 还有两件事没定
+## 两件的定案（2026-11-18）
 
-1. **需求偏差要不要写进 docs**：只做课程交付可以不改上游文档，但 PR 说明里要写清"与 requirements 4.2 的 CalDAV 路线不同"。想让上游接受，按 CONTRIBUTING 必须先改 `docs/PRODUCT_SPEC.md` 和 `docs/requirements.md`，那是另一份工作量。
-2. **测试写多少**：AGENTS.md 有一条"用户没有主动要求设计测试，不要写测试"。这条约束的是 AI 协作，你们人写测试不受限；但之后让我写代码时，需要明确说"要写测试"，否则我按这条规则不写。
+1. **需求偏差**：按课程交付处理，**不改上游文档**。PR 说明里写清"与 requirements 4.2 的 CalDAV 路线不同，自建 D1 + 自研前端"。字段模型已按方案乙对齐 iCalendar 语义（UID / SEQUENCE），将来要补 CalDAV 适配层时数据模型不用重做——后路已留，不再额外投入。想让上游收编再议（按 CONTRIBUTING 得先改 `docs/PRODUCT_SPEC.md` 和 `docs/requirements.md`，那是另一份工作量）。
+2. **测试口径**：A-3 / A-4 清单里的集成测试是任务交付物，照写。之后让 AI 写代码时，想要测试必须明确说"要写测试"，否则 AI 按 AGENTS.md 的规则只交功能代码。
+
+## 本次修订对照（2026-11-18）
+
+| 问题 | 原来写的 | 现在改成 |
+|---|---|---|
+| 第一天开工顺序 | 只写"工厂 A-2 前要给" | 新增「开工顺序」节：A 第一天上午先交 SQL，B 下午做工厂 |
+| B-4 无保底 | mock 只备了 `event.json` | B-2 加 `changes.json` 假变更流，B-4 先跑 mock 不等 A-4 |
+| manifest 少 permissions | "不要声明，声明了反而没用" | 照 chat 声明 `permissions: [storage]`（两个现成模块都带，是门禁字段） |
+| 联调没有日程可改 | 未提 | A-3 交付 `seed.sql`，测试日程自己 INSERT，不等增组 |
+| 前端联调跑在哪 | 只说"A 起后端 B 指地址" | 两层：先 chat 式 dev-shim 假壳打通接口，再注册进 workbench 真壳 |
 
 ## 仓库权限和提交方式
 
