@@ -48,7 +48,7 @@ manifest 只保留必要字段：
 ```yaml
 id: chat                   # 实例内名字；^[a-z][a-z0-9-]+$（决策 #59，不含点）
 route: /m/chat
-runtimes: [worker]         # worker | docker | external；external = 自托管反连，不是运行体
+runtimes: [worker]         # worker | node
 permissions:               # 权限词表（storage/acl/notify/ai/realtime/mail）
   - storage
   - notify
@@ -161,7 +161,7 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 
 **模块包**：官方模块和第三方都是普通 npm 包。worker 依赖打进 `worker.js`。字段表见 [docs/modules.md](modules.md)。清单里的 `storage` 只有 `core` 和 `self`，没有以前的四级。
 
-**部署目标与混杂部署（#54/#63）**：一个实例 = 一个逻辑 core；模块落点内部两轴 `provisioned`（cloudflare / docker）/ `connected`，对外只暴露 `mode: cloudflare / docker / connect`。三种部署形态（纯 CF / 纯 Docker / 混杂）= 同一模型的取值；混杂部署的动机是把只有 CF 能做的事（DO / AI）留在免费额度内，其余放自有机器。这两根轴别混：`provisioned` 说的是包怎么到机器上，`connected` 说的是谁转发请求——同一个模块可以既跑在 docker 里、又反连接入。`mode` 把两根轴压成了一列，要不要收成「有地址 / 没地址」两态**待定**，见 [modules.md](modules.md) 4.1 与 #369。
+**部署目标与接入方式（#54/#63）**：一个实例 = 一个逻辑 core。部署只有 CF 这一种要特殊对待——能给它一条路由；其余的只要能连上 core，跑在哪我们不关心。接入只看有没有对外地址：有就直连，没有就反连由 core 转发，跟部署位置和运行体（`runtimes`：`worker` / `node`）都无关。核心留在 CF、模块放自有机器是常见组合，动机是把只有 CF 能做的事（DO / AI）留在免费额度内。接入两种的图见 [modules.md](modules.md) 4.1。
 
 **跨域与 hybrid 可达性（#63/#73）**：模块地址在安装时定——CF 装成 Worker 按 id 生成路由，自建反代或自有域名在表单里填；不进清单，也不进模块 env，强制 https（仅 localhost 豁免）。外壳 CSP 的 `frame-src` 按注册表动态生成，模块页必须带 `frame-ancestors`，Core API 按注册表 origin 开 CORS。**「模块恒挂根路径」是不变式**——前缀剥离归宿主（CF wrapper / 反代 / 独立域名各自负责）。四个可达方向：
 
@@ -174,7 +174,7 @@ flowchart LR
   B -->|"① 同源：session cookie"| C
   B -->|"② 仅直连：iframe → 模块地址<br/>需 frame-src 白名单 + frame-ancestors"| M
   M -->|"③ Core API：Bearer aud=模块id<br/>CORS 按 registry origin"| C
-  C -->|"④ 仅反连：/m/#lt;id#gt;/ 转发"| M
+  C -->|"④ 仅反连：/m/id/ 转发"| M
 ```
 
 **控制面与后端解耦（#64/#65）**：装配器写注册表与一次性 setup token 经 `ControlPlane` 接口（CF 直敲 D1 / Docker 走 `node:sqlite`），SQL 与校验收在 core 与装配器共用模块；迁移记账按模块独立（#55 三护栏之一）。
