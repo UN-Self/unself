@@ -6,22 +6,21 @@
 
 平台和模块分开装。安装器只装平台。操作步骤见 [docs/deploy.md](deploy.md)。
 
-```text
-平台（二选一）
-  A. Cloudflare：npx @unself/installer
-       只部署 core 和 workbench，不主动部署模块（用户可以一同部署在cf的模块）
-       → 一次性链接设管理员 → 进工作台
-  B. Docker：写好 env，docker compose 拉起 workbench
-       → 打开实例，设管理员 → 进工作台
+```mermaid
+flowchart TD
+  subgraph P[平台：安装器只装 core + workbench，不装模块]
+    A["npx @unself/installer 或 compose up workbench<br/>CF / Docker / 裸机 / k8s 都行"]
+  end
+  A --> S["一次性 setup 链接 → 设管理员"]
 
-模块（平台已经在跑之后，再二选一）
-  A. 工作台「新建模块」填 CF API token
-       → workbench 把模块部署成 CF Worker
-       token 只在这次操作里用，不进库
-  B. 自己用 Docker 起模块
-       env：UNSELF_CORE_URL = workbench 可访问地址
-            UNSELF_MODULE_KEY = 工作台给出的接入码（workbench 只存哈希）
-       → 模块主动连上 workbench → 工作台里确认连接 → 保存后侧栏出现
+  S --> M["模块：也是跑一个 npm 包，装在哪都行"]
+  M --> Q{模块有对外可访问地址吗}
+
+  Q -->|"有"| D["直连：浏览器 iframe 指向模块地址<br/>例：部署成 CF Worker，自带 URL"]
+  Q -->|"没有"| R["反连：模块主动 WS 拨号连 core<br/>例：NAT 后的 Docker，配 CORE_URL 和 MODULE_KEY"]
+
+  D -->|"保存 → 侧栏出现<br/>地址在安装时定：CF 按 id 生成路由，其它在表单填<br/>CF 这步现在没接通，见 #369"| G["侧栏出现"]
+  R -->|"测试连接 → 保存"| G
 ```
 
 没设管理员之前，谁拿到那条一次性链接，谁就能接管这个实例。
