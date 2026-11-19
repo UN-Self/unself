@@ -55,7 +55,7 @@ unself-todo-1.2.0.tgz
 |---|---|---|---|
 | `id` | string，`^[a-z][a-z0-9-]+$` | ✅ | 作者建议的实例内名字，可被部署者覆盖 |
 | `version` | semver `x.y.z` | ✅ | 版本 |
-| `runtimes` | `worker` / `docker` / `external` 的子集 | ✅ | 本模块支持跑在哪；决定可选的 `mode`（见第 4 节） |
+| `runtimes` | `worker` / `docker` / `external` 的子集 | ✅ | 本模块能跑在哪：`worker` = workerd，`docker` = 打进镜像跑 node 进程，`external` = 不随实例部署、由部署者自托管并反连 core。注意 `external` 说的是接入能力，不是运行体（见第 4 节） |
 | `route` | string，以 `/m/` 开头 | ✅ | 挂载路由建议值；同域路径制下由装配器生成 `/m/<id>/*` |
 | `permissions` | 能力词表子集（见下） | — | 向平台要的权限。没声明就调对应 Core API → 403 |
 | `storage` | `{ accepts, preferred?, declaration? }` | — | 只有 `core` 和 `self`。省略 = 只支持 `self` |
@@ -67,7 +67,7 @@ unself-todo-1.2.0.tgz
 | `coreOrigin` | string | — | 跨域时壳的 https origin。禁止 `*` |
 | `license` | SPDX 表达式 | — | 不写则按 AGPL-3.0-only |
 
-地址不写在清单里。写了 `entry` 会被丢掉。模块地址只在注册表的 `entry` 列：Cloudflare 由装配写入，反连由 core 写成 `/m/<id>/`。
+地址不写在清单里，也不写在模块的 env 里（env 只有 core 地址和接入码）。模块地址是**安装时的产物**：装成 CF Worker 就按 id 生成路由，地址自动得出；自建反代或自有域名在安装表单里填。壳从注册表读这个地址当 iframe src；反连则由 core 记成自己的 `/m/#lt;id#gt;/`。CF 装机这条路现在还没接通，见 #369。
 
 权威校验是 `core/contracts/src/manifest.ts` 里的 `ModuleManifestSchema`。
 
@@ -87,6 +87,36 @@ unself-todo-1.2.0.tgz
 | `connect` | `runtimes ∋ external` | 模块自己连上 workbench，地址由 core 写入注册表 |
 
 选了模块没声明支持的模式，就**直接拒绝安装**，不让它跑到一半再炸。所谓三种部署形态（纯 CF / 纯 Docker / 混杂），其实就是这些取值的组合。
+
+### 4.1 跑在哪，和「谁转发请求」不是一回事
+
+**一句人话**：部署方式随便挑，契约只认两件事——壳能不能把请求送到模块（接入方式），以及模块怎么证明自己是自己（认证，见第 9 节）。
+
+```mermaid
+flowchart LR
+  B["浏览器<br/>模块页"]
+  C["core / workbench<br/>验签 + /m/&lt;id&gt;/ 宿主"]
+  subgraph DEP["模块部署：npm 包跑在哪都行（CF / Docker / 裸机 / k8s）"]
+    D["模块 A<br/>有对外可访问地址"]
+    R["模块 B<br/>NAT 后，无直连地址"]
+  end
+  K[("core 代管的库<br/>module_kv")]
+  S[("模块自己的库 / 桶")]
+
+  B -->|"方式一：iframe 直连模块地址"| D
+  B -->|"方式二：经 core /m/&lt;id&gt;/ 访问"| C
+  C <-->|"WebSocket 拨号 + 隧道帧转发"| R
+
+  D -->|"Core API：Bearer aud=模块 id"| C
+  R -->|"Core API：Bearer aud=模块 id"| C
+  C -->|"storage=core：只有 get/put/delete/list"| K
+  D -.->|"storage=self"| S
+  R -.->|"storage=self"| S
+```
+
+两条路的模块认证完全一致，换接入方式不改模块代码；反连下 core 是所有模块流量的中转，流量大的模块更适合直连。
+
+`mode` 现在这三个取值混了两根轴：`cloudflare` / `docker` 说的是包怎么到机器上，`connect` 说的是谁转发。同一个模块可以既跑在 docker 里、又是反连接入（`app/modules/` 的本地模块就是）。这个枚举要不要收成「有地址 / 没地址」两态，**待定**，见 #369。
 
 **数据落点只有 `core` 和 `self`。**
 
@@ -157,6 +187,43 @@ npm publish
 
 ## 9. 运行时契约
 
+通道总览：
+
+```mermaid
+flowchart LR
+  B["浏览器<br/>模块页"]
+
+  subgraph CORE["core / workbench"]
+    direction TB
+    K["/.well-known/jwks.json<br/>core 签名公钥"]
+    A["/api/module-api/*<br/>验模块 token（aud=模块 id）<br/>按注册表 permissions 放行"]
+    T["隧道转发 /m/&lt;id&gt;/<br/>仅反连模式"]
+    L["/life/export · /life/purge<br/>卸载时 core 调模块<br/>两种模式都适用"]
+  end
+
+  subgraph MOD["模块（同一份 npm 包，两种部署形态）"]
+    direction TB
+    V["本地验签<br/>入站 token：core 签发，aud=模块 id<br/>用注入的 JWKS 验（零运行时联网）"]
+    H["业务 HTTP<br/>恒挂根路径<br/>出入两向共用同一枚模块 token"]
+  end
+
+  %% 主路径：上直连，下反连
+  B -->|"① 直连：iframe 指向模块地址<br/>跨域；CORS + frame-ancestors"| H
+  B -->|"② 反连：同源 /m/&lt;id&gt;/<br/>免 CORS"| T
+  T <-->|"模块主动 WS 拨号<br/>隧道帧转发"| H
+
+  %% 鉴权：左进右出
+  K -.->|"部署期注入 CORE_JWKS_JSON<br/>换钥 = 重新注入，旧 token 立即失效"| V
+  V -->|"验签通过才进业务<br/>两种模式共用"| H
+  H -->|"Bearer 模块身份 token<br/>storage / notify（501 预留）"| A
+
+  %% 生命周期：两种投递方式
+  L -.->|"直连：直接 HTTP 调模块"| H
+  L -.->|"反连：经 WS 隧道"| T
+```
+
+图里画不出的约束写在下面：
+
 - **身份**：模块只认 core 签发的短时 token（`aud` = 模块 id），本地验签，运行时不用联网取钥；公钥是装配器在部署期通过 `vars.CORE_JWKS_JSON` 注进去的。
 - **模块后端面（Core API 代理）**：模块带上 `Authorization: Bearer <模块 token>` 去调 `/api/module-api/*`；权限的真值取的是**服务端注册表快照**里的 `permissions` 声明（token 本身不带能力清单，决策 #56），**没声明就调用 → 403**。目前有的端点：
   - `GET` / `PUT` / `DELETE` `/api/module-api/storage/:key`、`GET /api/module-api/storage/`（列键）= `core` 落点的 get/put/delete/list 四个形状（**不承诺关系表**，决策 #55）
@@ -170,6 +237,7 @@ npm publish
 - **健康检查**：`GET /api/health`（冒烟和可达性体检用）。
 - **生命周期**：`GET /life/export`、`POST /life/purge`（卸载时「导出并删除」/「直接删除」用）。
 - **反连宿主**：`@unself/sdk/host`。进程环境变量 `UNSELF_CORE_URL`、`UNSELF_MODULE_KEY`，可选 `UNSELF_MODULE_ADDR`。不读 `.env` 文件，文件加载交给调用方。
+- **core → 模块的两条入站路径**：直连（按注册表里存的模块地址指过去）和反连（core 转发隧道帧）。模块只实现普通的 HTTP 处理，不知道请求走的是哪条——前缀 `/m/<id>/` 由宿主剥掉（见第 4.1 节）。
 
 ## 10. 兼容与升级
 
