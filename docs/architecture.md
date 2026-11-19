@@ -48,7 +48,7 @@ manifest 只保留必要字段：
 ```yaml
 id: chat                   # 实例内名字；^[a-z][a-z0-9-]+$（决策 #59，不含点）
 route: /m/chat
-runtimes: [worker]         # worker | docker（
+runtimes: [worker]         # worker | docker | external；external = 自托管反连，不是运行体
 permissions:               # 权限词表（storage/acl/notify/ai/realtime/mail）
   - storage
   - notify
@@ -163,7 +163,7 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 
 **部署目标与混杂部署（#54/#63）**：一个实例 = 一个逻辑 core；模块落点内部两轴 `provisioned`（cloudflare / docker）/ `connected`，对外只暴露 `mode: cloudflare / docker / connect`。三种部署形态（纯 CF / 纯 Docker / 混杂）= 同一模型的取值；混杂部署的动机是把只有 CF 能做的事（DO / AI）留在免费额度内，其余放自有机器。这两根轴别混：`provisioned` 说的是包怎么到机器上，`connected` 说的是谁转发请求——同一个模块可以既跑在 docker 里、又反连接入。`mode` 把两根轴压成了一列，要不要收成「有地址 / 没地址」两态**待定**，见 [modules.md](modules.md) 4.1 与 #369。
 
-**跨域与 hybrid 可达性（#63/#73）**：非 CF 模块由用户提供 `publicUrl`（强制 https）；外壳 CSP 的 `frame-src` 按注册表动态生成，模块页必须带 `frame-ancestors`，Core API 按注册表 origin 开 CORS。**「模块恒挂根路径」是不变式**——前缀剥离归宿主（CF wrapper / 反代 / 独立域名各自负责）。四个可达方向：
+**跨域与 hybrid 可达性（#63/#73）**：模块地址在安装时定——CF 装成 Worker 按 id 生成路由，自建反代或自有域名在表单里填；不进清单，也不进模块 env，强制 https（仅 localhost 豁免）。外壳 CSP 的 `frame-src` 按注册表动态生成，模块页必须带 `frame-ancestors`，Core API 按注册表 origin 开 CORS。**「模块恒挂根路径」是不变式**——前缀剥离归宿主（CF wrapper / 反代 / 独立域名各自负责）。四个可达方向：
 
 ```mermaid
 flowchart LR
