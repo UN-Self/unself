@@ -13,7 +13,7 @@
 
 ## 文档
 
-以当前正文为准：
+以当前正文为唯一真相源（除非明确要求更改契约）：
 
 - 产品 [docs/product.md](docs/product.md)
 - 需求 [docs/requirements.md](docs/requirements.md)
