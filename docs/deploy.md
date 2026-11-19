@@ -54,4 +54,6 @@ docker compose -f docker/compose.yml up --build
 
 模块起来后会自己去连 `UNSELF_CORE_URL`。workbench 里看到连接正常，再保存，模块才算装上。
 
+> 还有第三条：模块自己有对外地址（自建反代 / 自有域名）时不用反连，安装时把地址填进表单，壳直接拿它当 iframe src。这条路和上面「CF 装机自动填地址」都还没接通，见 #369。
+
 `.env` 文件不会被宿主自动读。Docker 要用 compose 的 `env_file`，或在启动命令里把变量传进去。

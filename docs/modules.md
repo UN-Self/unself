@@ -154,7 +154,7 @@ flowchart LR
 | `options` | `enum` 的候选 |
 | `test` | 可选的连接测试标识（如 `pg` / `s3` / `http`） |
 
-**配置写在模块自己的 env 里**，core 不代填。要用 core 的资源，在 env 里声明是 Cloudflare（库和 S3）还是 core 的其他库，变量名待定。模块启动后用 key 连上 core，再按声明初始化。
+**配置写在模块自己的 env 里**，core 不代填。用 core 的哪一类资源不写在 env 里——它在安装时选定（注册表 `storage_level`：`core` / `self`）。模块启动后用 key 连上 core，再按选定的落点初始化。
 
 ## 6. 迁移契约（硬）
 
@@ -253,3 +253,4 @@ flowchart LR
 | 发版约定细节 | 留档待定（决策 #57） |
 | DO / realtime 在 Docker 侧的平替原语 | 下一阶段 |
 | `oauth` 类型配置字段的交互细节 | 下一阶段 |
+| `mode` 三值要不要收成「有地址 / 没地址」两态 | #369 |
