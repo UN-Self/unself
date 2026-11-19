@@ -55,7 +55,7 @@ unself-todo-1.2.0.tgz
 |---|---|---|---|
 | `id` | string，`^[a-z][a-z0-9-]+$` | ✅ | 作者建议的实例内名字，可被部署者覆盖 |
 | `version` | semver `x.y.z` | ✅ | 版本 |
-| `runtimes` | `worker` / `docker` / `external` 的子集 | ✅ | 本模块能跑在哪：`worker` = workerd，`docker` = 打进镜像跑 node 进程，`external` = 不随实例部署、由部署者自托管并反连 core。注意 `external` 说的是接入能力，不是运行体（见第 4 节） |
+| `runtimes` | `worker` / `node` 的子集 | ✅ | 本模块能跑在哪：`worker` = workerd，`node` = node 进程。接入方式由地址决定，和运行体无关 |
 | `route` | string，以 `/m/` 开头 | ✅ | 挂载路由建议值；同域路径制下由装配器生成 `/m/<id>/*` |
 | `permissions` | 能力词表子集（见下） | — | 向平台要的权限。没声明就调对应 Core API → 403 |
 | `storage` | `{ accepts, preferred?, declaration? }` | — | 只有 `core` 和 `self`。省略 = 只支持 `self` |
@@ -78,15 +78,14 @@ unself-todo-1.2.0.tgz
 
 ## 4. 部署位置与数据落点
 
-**位置（`mode`）是部署者选的，模块只负责声明自己支持哪些**（决策 #54）：
+**部署位置是部署者选的，模块只声明自己能跑在哪**（决策 #54）。接入不由位置决定，只看模块有没有对外地址：
 
-| 部署者选 | 模块必须声明 | 含义 |
+| 接入 | 判据 | 谁转发 |
 |---|---|---|
-| `cloudflare` | `runtimes ∋ worker` | 部署到部署者的 CF 账户 |
-| `docker` | `runtimes ∋ docker` | 自己用 Docker 跑这个 npm 包 |
-| `connect` | `runtimes ∋ external` | 模块自己连上 workbench，地址由 core 写入注册表 |
+| 直连 | 安装时给了地址 | 不转发，壳把模块页当 iframe 指过去 |
+| 反连 | 没有地址 | core 转发（`/m/<id>/`） |
 
-选了模块没声明支持的模式，就**直接拒绝安装**，不让它跑到一半再炸。所谓三种部署形态（纯 CF / 纯 Docker / 混杂），其实就是这些取值的组合。
+模块没声明支持的运行体，就**直接拒绝安装**，不让它跑到一半再炸。
 
 ### 4.1 跑在哪，和「谁转发请求」不是一回事
 
@@ -95,7 +94,7 @@ unself-todo-1.2.0.tgz
 ```mermaid
 flowchart LR
   B["浏览器<br/>模块页"]
-  C["core / workbench<br/>验签 + /m/&lt;id&gt;/ 宿主"]
+  C["core / workbench<br/>验签 + /m/id/ 宿主"]
   subgraph DEP["模块部署：npm 包跑在哪都行（CF / Docker / 裸机 / k8s）"]
     D["模块 A<br/>有对外可访问地址"]
     R["模块 B<br/>NAT 后，无直连地址"]
@@ -115,8 +114,6 @@ flowchart LR
 ```
 
 两条路的模块认证完全一致，换接入方式不改模块代码；反连下 core 是所有模块流量的中转，流量大的模块更适合直连。
-
-`mode` 现在这三个取值混了两根轴：`cloudflare` / `docker` 说的是包怎么到机器上，`connect` 说的是谁转发。同一个模块可以既跑在 docker 里、又是反连接入（`app/modules/` 的本地模块就是）。这个枚举要不要收成「有地址 / 没地址」两态，**待定**，见 #369。
 
 **数据落点只有 `core` 和 `self`。**
 
@@ -197,7 +194,7 @@ flowchart LR
     direction TB
     K["/.well-known/jwks.json<br/>core 签名公钥"]
     A["/api/module-api/*<br/>验模块 token（aud=模块 id）<br/>按注册表 permissions 放行"]
-    T["隧道转发 /m/&lt;id&gt;/<br/>仅反连模式"]
+    T["隧道转发 /m/id/<br/>仅反连模式"]
     L["/life/export · /life/purge<br/>卸载时 core 调模块<br/>两种模式都适用"]
   end
 
@@ -253,4 +250,3 @@ flowchart LR
 | 发版约定细节 | 留档待定（决策 #57） |
 | DO / realtime 在 Docker 侧的平替原语 | 下一阶段 |
 | `oauth` 类型配置字段的交互细节 | 下一阶段 |
-| `mode` 三值要不要收成「有地址 / 没地址」两态 | #369 |
