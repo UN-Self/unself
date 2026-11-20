@@ -43,11 +43,11 @@ unself-todo-1.2.0.tgz
 └─ package.json      作者自己的 npm 元数据；`npm pack` / `npm publish` 用它
 ```
 
-`manifest.json` 才是**安装侧认的真相**；那份生成的 `package.json` 只是拿去发 npm 用的（决策 #78），两边的版本号必须对得上。
+`manifest.json` 才是**安装侧认的真相**；那份生成的 `package.json` 只是拿去发 npm 用的，两边的版本号必须对得上。
 
 **包里绝对不能放**：`node_modules/`、`.env` 或密钥、测试残留、源码。
 
-**`worker.js` 也有要求**：单文件、自包含——所有依赖都得 bundle 进产物（决策 #60）。部署的时候是零安装，运行时也没有任何动态装包的机制。
+**`worker.js` 也有要求**：单文件、自包含——所有依赖都得 bundle 进产物。部署的时候是零安装，运行时也没有任何动态装包的机制。
 
 ## 3. manifest.json 字段表（契约 v1）
 
@@ -69,16 +69,18 @@ unself-todo-1.2.0.tgz
 
 地址不写在清单里，也不写在模块的 env 里（env 只有 core 地址和接入码）。模块地址是**安装时的产物**：装成 CF Worker 就按 id 生成路由，地址自动得出；自建反代或自有域名在安装表单里填。壳从注册表读这个地址当 iframe src；反连则由 core 记成自己的 `/m/#lt;id#gt;/`。CF 装机这条路现在还没接通，见 #369。
 
+> **icon 字段规则**：manifest 存图标名而非图标资产，由壳内置的 lucide-vue-next 统一渲染（白名单映射，按需打包）；模块不自带图标文件。未来模块需要品牌标时再议 `iconUrl` 可选字段，暂不设。
+
 权威校验是 `core/contracts/src/manifest.ts` 里的 `ModuleManifestSchema`。
 
 **`permissions` 词表**（第一版，权威定义在 `@unself/contracts`）：`storage` / `acl` / `notify` / `ai` / `realtime` / `mail`。
 **碰上不认识的能力，安装时就直接拒掉**——要是悄悄忽略，模块跑起来会莫名其妙地 403，部署者压根查不出原因（这是沿用 #64 已经立下的原则）。
 
-**已经删掉的字段**（决策 #56）：`capabilities`（模块「提供什么功能」这件事不归 core 契约管，放错层了）和 `requires`（永远是恒定值，也没人消费）。等真需要表达「这个模块实现的是哪项产品能力」时再按增量补，现在别预留。
+**已经删掉的字段**：`capabilities`（模块「提供什么功能」这件事不归 core 契约管，放错层了）和 `requires`（永远是恒定值，也没人消费）。等真需要表达「这个模块实现的是哪项产品能力」时再按增量补，现在别预留。
 
 ## 4. 部署位置与数据落点
 
-**部署位置是部署者选的，模块只声明自己能跑在哪**（决策 #54）。接入不由位置决定，只看模块有没有对外地址：
+**部署位置是部署者选的，模块只声明自己能跑在哪**。接入不由位置决定，只看模块有没有对外地址：
 
 | 接入 | 判据 | 谁转发 |
 |---|---|---|
@@ -89,7 +91,7 @@ unself-todo-1.2.0.tgz
 
 ### 4.1 跑在哪，和「谁转发请求」不是一回事
 
-**一句人话**：部署方式随便挑，契约只认两件事——壳能不能把请求送到模块（接入方式），以及模块怎么证明自己是自己（认证，见第 9 节）。
+**一句人话**：部署方式随便挑，契约只认两件事——壳能不能把请求送到模块（接入方式），以及模块怎么证明自己是自己（认证，见第 8 节）。
 
 ```mermaid
 flowchart LR
@@ -182,7 +184,7 @@ npm publish
 
 装的是这个 npm 包的一个版本。升级要显式换版本，不会在重跑时偷偷换包。
 
-## 9. 运行时契约
+## 8. 运行时契约
 
 通道总览：
 
@@ -222,12 +224,35 @@ flowchart LR
 图里画不出的约束写在下面：
 
 - **身份**：模块只认 core 签发的短时 token（`aud` = 模块 id），本地验签，运行时不用联网取钥；公钥是装配器在部署期通过 `vars.CORE_JWKS_JSON` 注进去的。
-- **模块后端面（Core API 代理）**：模块带上 `Authorization: Bearer <模块 token>` 去调 `/api/module-api/*`；权限的真值取的是**服务端注册表快照**里的 `permissions` 声明（token 本身不带能力清单，决策 #56），**没声明就调用 → 403**。目前有的端点：
-  - `GET` / `PUT` / `DELETE` `/api/module-api/storage/:key`、`GET /api/module-api/storage/`（列键）= `core` 落点的 get/put/delete/list 四个形状（**不承诺关系表**，决策 #55）
+
+  规则只有一条：**全系统只有核心对接外部 OIDC，模块只认识核心。**
+
+  ```text
+  ① 成员在壳完成外部 OIDC 登录（PKCE），会话 Cookie 只在实例域名上
+  ② 壳装载模块 iframe，模块 SDK 向壳发 ready 消息
+  ③ 壳调核心 POST /api/modules/:id/token（核心校验模块启用与用户权限）
+  ④ 核心签发模块 token，壳经 postMessage 交给 iframe（targetOrigin 校验）
+  ⑤ 模块后端用核心 JWKS 验签、校验 aud，接受 Bearer 请求
+  ⑥ token 过期前 SDK 静默续期，成员无感
+  ```
+
+  | 参数 | 取值 | 理由 |
+  |---|---|---|
+  | 形态 | 核心签名的 JWT | 一个 JWKS 全平台通用，模块只需验签，不需懂 OIDC |
+  | aud | 模块 id | token 不能跨模块重放 |
+  | 有效期 | 10 分钟 + 静默续期 | 短时效是主要吊销手段 |
+  | sub | 核心内部稳定用户 id | `issuer + sub` 映射留在核心，换身份源不影响模块数据 |
+  | 交付 | postMessage 握手 | 不进 URL、不进 Cookie、不进日志 |
+
+  **踢人**：成员停用时核心停发模块 token 并广播停用事件（registry 停用；生命周期导出/清理走 `GET /life/export`、`POST /life/purge`）；10 分钟 token 过期作为兜底上限。
+
+  **登出**：壳清会话并广播登出消息，模块丢弃 token。外部身份源的 SLO 暂不做，标记为远期。
+- **模块后端面（Core API 代理）**：模块带上 `Authorization: Bearer <模块 token>` 去调 `/api/module-api/*`；权限的真值取的是**服务端注册表快照**里的 `permissions` 声明，**没声明就调用 → 403**。目前有的端点：
+  - `GET` / `PUT` / `DELETE` `/api/module-api/storage/:key`、`GET /api/module-api/storage/`（列键）= `core` 落点的 get/put/delete/list 四个形状
   - `POST /api/module-api/notify` = `notify` 那个词（站内通知，`module_notify` 类型；模块触发通知不直接发邮件）
   - `acl` / `ai` / `realtime` / `mail` 这四个词**门禁已经生效，但端点还没实现**（`501` 预留）
   - 落地与收敛：端点和 `module_notify` 由 #243 落地；`@unself/sdk` 客户端的收敛（把「SDK 直连 D1」和「Core API 代理」两条并存的路收成一条）归 **#248**。
-- **`coreOrigin` 必填**：跨域的模块必须显式配置，**不许回落到 `'*'`**（决策 #63）。
+- **`coreOrigin` 必填**：跨域的模块必须显式配置，**不许回落到 `'*'`**。
 - **模块永远挂在根路径**：模块代码就按「部署在根路径」来写；`/m/<id>/` 这个前缀由**宿主**剥掉（CF wrapper / 反代 / 独立域名本来就挂根）。模块自己不要实现前缀逻辑。
 - **CSP / CORS**：自托管的模块页必须带 `frame-ancestors <壳的 origin>`；Core API 按注册表的 origin 白名单放行。
 - **浏览器侧的 SDK 由平台注入**（`assets/sdk/module-sdk.esm.js`），模块**不要自带**——它实现的是壳和模块之间的 postMessage 协议，必须跟 core 同版本。worker 侧那个 `@unself/sdk` 则是普通依赖，跟着 bundle 走。
@@ -236,17 +261,17 @@ flowchart LR
 - **反连宿主**：`@unself/sdk/host`。进程环境变量 `UNSELF_CORE_URL`、`UNSELF_MODULE_KEY`，可选 `UNSELF_MODULE_ADDR`。不读 `.env` 文件，文件加载交给调用方。
 - **core → 模块的两条入站路径**：直连（按注册表里存的模块地址指过去）和反连（core 转发隧道帧）。模块只实现普通的 HTTP 处理，不知道请求走的是哪条——前缀 `/m/<id>/` 由宿主剥掉（见第 4.1 节）。
 
-## 10. 兼容与升级
+## 9. 兼容与升级
 
 - 契约版本（`CONTRACT_VERSION`，跟产品版本是两回事）**只在破坏性变更时才 bump**；增量变更不拦人（新字段有默认值、新能力进词表、新端点老模块不调用就行）。
 - `compat` 省略 = 接受任意版本。注册表里记着「安装时的契约版本」，core 升级时据此发现潜在的破坏 → 停用该模块并给出提示；`--allow-incompatible` 可以硬上。
 - **发版约定（破坏性变更怎么定义、弃用周期、谁来 bump、CI 卡点）待定。**
 
-## 11. 待定
+## 10. 待定
 
 | 项 | 归属 |
 |---|---|
-| `permissions` 词表的对外可见面（首版 6 项） | 由 `@unself/sdk` 具名导出（决策 #78②；issue #294，未落） |
-| 发版约定细节 | 留档待定（决策 #57） |
+| `permissions` 词表的对外可见面（首版 6 项） | 由 `@unself/sdk` 具名导出 |
+| 发版约定细节 | 留档待定 |
 | DO / realtime 在 Docker 侧的平替原语 | 下一阶段 |
 | `oauth` 类型配置字段的交互细节 | 下一阶段 |
