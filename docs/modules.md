@@ -255,7 +255,7 @@ flowchart LR
 - **`coreOrigin` 必填**：跨域的模块必须显式配置，**不许回落到 `'*'`**。
 - **模块永远挂在根路径**：模块代码就按「部署在根路径」来写；`/m/<id>/` 这个前缀由**宿主**剥掉（CF wrapper / 反代 / 独立域名本来就挂根）。模块自己不要实现前缀逻辑。
 - **CSP / CORS**：自托管的模块页必须带 `frame-ancestors <壳的 origin>`；Core API 按注册表的 origin 白名单放行。
-- **浏览器侧的 SDK 由平台注入**（`assets/sdk/module-sdk.esm.js`），模块**不要自带**——它实现的是壳和模块之间的 postMessage 协议，必须跟 core 同版本。worker 侧那个 `@unself/sdk` 则是普通依赖，跟着 bundle 走。
+- **SDK 只有一种用法**：`import { x } from '@unself/sdk'`——普通依赖，跟模块自己的构建和 `dependencies` 走。平台不注入、装配器不拷、模块不自带副本。
 - **健康检查**：`GET /api/health`（冒烟和可达性体检用）。
 - **生命周期**：`GET /life/export`、`POST /life/purge`（卸载时「导出并删除」/「直接删除」用）。
 - **反连宿主**：`@unself/sdk/host`。进程环境变量 `UNSELF_CORE_URL`、`UNSELF_MODULE_KEY`，可选 `UNSELF_MODULE_ADDR`。不读 `.env` 文件，文件加载交给调用方。
