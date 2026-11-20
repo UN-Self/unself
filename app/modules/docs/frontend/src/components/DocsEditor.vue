@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { markdown } from '@codemirror/lang-markdown'
-import { Compartment, EditorState as CmEditorState, Prec } from '@codemirror/state'
-import { EditorView, keymap, type ViewUpdate } from '@codemirror/view'
+import { Compartment, EditorState as CmEditorState, Prec, StateEffect, StateField } from '@codemirror/state'
+import { Decoration, EditorView, keymap, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { basicSetup } from 'codemirror'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
@@ -55,6 +55,18 @@ const statusTone = computed(() => {
 })
 
 const editableCompartment = new Compartment()
+
+/** 选区高亮（第二重保险）：用 Decoration 直接给选中区间刷色，不依赖编辑器是否持有焦点。 */
+const setSelectionHighlight = StateEffect.define<DecorationSet>()
+const selectionHighlightField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const effect of tr.effects) if (effect.is(setSelectionHighlight)) return effect.value
+    return tr.docChanged ? Decoration.none : value
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
+
 let view: EditorView | null = null
 
 /** 编辑区的表现层：只用语义令牌，禁裸色值（docs/modules.md 的前端硬规矩）。 */
@@ -66,8 +78,8 @@ const theme = EditorView.theme({
     fontSize: 'var(--unself-font-size-base)',
   },
   '&.cm-focused': { outline: 'none' },
-  // 自绘选区必须显式上色（CM6 不走浏览器原生 ::selection）；失焦后仍显示，方便选完去点「评论所选」
-  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
+  // 选区着色三通道：自绘背景（聚焦/失焦都要）+ 原生 ::selection 兜底；另加 Decoration 双保险
+  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, .cm-content ::selection': {
     backgroundColor: 'var(--unself-color-primary-soft)',
   },
   '.cm-cursor': { borderLeftColor: 'var(--unself-color-primary)' },
@@ -95,6 +107,7 @@ onMounted(() => {
         EditorView.lineWrapping,
         theme,
         editableCompartment.of(EditorView.editable.of(editable.value)),
+        selectionHighlightField,
         // Ctrl/Cmd+S 走同一条保存链路，不另开旁路
         Prec.highest(
           keymap.of([
@@ -110,7 +123,10 @@ onMounted(() => {
         ),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) editor.setContent(update.state.doc.toString())
-          if (update.selectionSet || update.docChanged) syncSelection(update)
+          if (update.selectionSet || update.docChanged) {
+            syncSelection(update)
+            highlightSelection(update)
+          }
         }),
       ],
     }),
@@ -155,6 +171,15 @@ function syncSelection(update: ViewUpdate): void {
   selectedText.value = update.state.sliceDoc(range.from, range.to)
 }
 
+/** 选中区间打标上色；空选区清掉。dispatch 引发的后续更新不含 selectionSet/docChanged，不会成环。 */
+function highlightSelection(update: ViewUpdate): void {
+  const range = update.state.selection.main
+  const decoration = range.empty
+    ? Decoration.none
+    : Decoration.set([Decoration.mark({ class: 'cm-sel-hl' }).range(range.from, range.to)])
+  update.view.dispatch({ effects: setSelectionHighlight.of(decoration) })
+}
+
 /** 把编辑器里选中的文字交给评论侧栏（D10 引用所选）。点击瞬间实时读选区，不依赖缓存值。 */
 function quoteSelection(): void {
   const range = view?.state.selection.main
@@ -186,13 +211,19 @@ function quoteSelection(): void {
         class="ghost"
         data-test="comment-selection"
         :disabled="selectedText.trim() === ''"
-        title="选中正文后可引用评论"
+        title="先在正文里选中一段文字，再点这里，右侧评论框会带上引用"
         @click="quoteSelection"
       >
         评论所选
       </button>
 
-      <button type="button" class="ghost" data-test="toggle-preview" @click="preview = !preview">
+      <button
+        type="button"
+        class="ghost"
+        data-test="toggle-preview"
+        :title="preview ? '回到 Markdown 编辑' : '渲染 Markdown 看排版效果'"
+        @click="preview = !preview"
+      >
         {{ preview ? '编辑' : '预览' }}
       </button>
 
@@ -201,6 +232,7 @@ function quoteSelection(): void {
         class="primary"
         data-test="save"
         :disabled="!saveable"
+        title="把当前修改存到服务端（快捷键 Cmd/Ctrl+S）"
         @click="editor.save()"
       >
         {{ saving ? '保存中…' : '保存' }}
@@ -357,6 +389,11 @@ button:focus-visible {
 
 .cm-host {
   height: 100%;
+}
+
+/* 选区双保险的界面侧：Decoration 打标的 span 直接刷主色软化令牌，与焦点态无关 */
+.cm-host :deep(.cm-sel-hl) {
+  background-color: var(--unself-color-primary-soft) !important;
 }
 
 .preview {
