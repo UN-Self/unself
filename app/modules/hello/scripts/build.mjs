@@ -12,9 +12,11 @@
  */
 import { build } from 'esbuild';
 import { writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const SPDX_BANNER = '// SPDX-License-Identifier: AGPL-3.0-only';
-const HERE = new URL('..', import.meta.url).pathname;
+// fileURLToPath：Windows 上 .pathname 是 "/D:/..."，esbuild 不认
+const HERE = fileURLToPath(new URL('..', import.meta.url));
 
 // ① node bin
 await build({
@@ -55,9 +57,11 @@ console.log('▣ hello 产物就绪：dist/main.js（bin）+ dist/worker.js（CF
 const { execFileSync } = await import('node:child_process');
 const { createRequire } = await import('node:module');
 const require2 = createRequire(import.meta.url);
+// Windows 上不能直接 spawn .mjs，须经 node 执行
 execFileSync(
-  require2.resolve('tsx/cli'),
+  process.execPath,
   [
+    require2.resolve('tsx/cli'),
     '--eval',
     [
       "import { readFileSync, writeFileSync } from 'node:fs';",
