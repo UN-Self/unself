@@ -38,7 +38,7 @@ unself-todo-1.2.0.tgz
 ├─ migrations/       可选：000N_*.sql，在 core 里自建表时用
 ├─ config.schema     可选：配置页字段声明（见第 5 节）
 ├─ theme.json        可选：模块自己的皮肤（默认跟随实例主题）
-├─ docker/           可选：runtimes 含 docker 时的镜像/端口/健康检查声明
+├─ docker/           可选：runtimes 含 docker 时的镜像/端口/健康检查声明；自 #102 起降级为参考文档，壳不消费，只供复制
 ├─ LICENSE / NOTICE  许可证随包走；GPL 类模块必须自带
 └─ package.json      作者自己的 npm 元数据；`npm pack` / `npm publish` 用它
 ```

@@ -139,20 +139,7 @@ flowchart LR
 └─────────────────────┘      └────────────────────────────┘
 ```
 
-**模块包内容**（`npm pack` 的产物）：
-
-```
-unself-todo-1.2.0.tgz
-├─ manifest.json     契约声明：id / version / runtimes / storage / config / tables / compat / permissions / icon
-├─ worker.js         预构建、自包含（依赖已 bundle；模块不自带 SDK 浏览器侧资产）
-├─ assets/           模块页静态文件（只含 var() 名字，不含值）
-├─ migrations/       可选：表前缀命名的迁移（仅 core 落点需要）
-├─ config.schema     可选：配置页字段声明
-├─ theme.json        可选：模块自己皮肤（默认跟随实例主题）
-├─ docker/           可选：镜像/端口/健康检查声明；#102 起降级为参考文档（用户自管
-│                    compose 的示例，供复制；壳不消费，机器契约见发现端点）
-└─ LICENSE / NOTICE  许可证随包走（GPL 类必须自带）
-```
+**模块包内容**：`npm pack` 的产物是什么、每项有什么要求，见 [docs/modules.md](modules.md) §2 包格式。
 
 **信任无分级**：#42 不变——不区分官方/认证/任意，写部署脚本的人 = 信任决策者。但**「无分级」不等于「无信息」**：安装时展示版本、发布者、`sha512`、声明的 `permissions` 与 `storage`，由部署者知情确认。
 
