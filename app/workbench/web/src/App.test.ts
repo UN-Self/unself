@@ -168,13 +168,10 @@ describe('App.vue 模块桥挂载时机（#71 根因 2）', () => {
     expect(iframeEl.exists()).toBe(true)
     // 落地规则：直访 / 落第一个启用模块 → hello 进入握手期（骨架可见）
     expect(iframeEl.attributes('src')).toBe('/m/hello/')
-    // 同域隔离（T5）：sandbox 使模块文档成为不透明源（不得放行同源），
-    // 也不得允许劫持顶层导航；脚本/表单保留，模块自身仍可运行。
-    const sandbox = (iframeEl.attributes('sandbox') ?? '').split(/\s+/).filter(Boolean)
-    expect(sandbox).toContain('allow-scripts')
-    expect(sandbox).toContain('allow-forms')
-    expect(sandbox).not.toContain('allow-same-origin')
-    expect(sandbox).not.toContain('allow-top-navigation')
+    // 同域装载（#349 回归修复）：iframe 不得带 sandbox——带 sandbox 而不放行同源时
+    // 模块文档是不透明源（origin 值为 "null"），SDK 的 ESM 脚本无 CORS 头即失败、
+    // 桥收到 ready 也过不了 origin 校验，实测表现为任何模块握手 15s 必超时。
+    expect(iframeEl.attributes('sandbox')).toBeUndefined()
     // 用户可见行为：握手期用户看到的是「正在连接模块…」加载骨架（aria-busy），
     // 这是用户可感知的「加载中」姿态——而非加不加 mh-frame-hidden 类（渲染细节，用户看不到）
     expect(wrapper.find('[aria-busy="true"]').exists()).toBe(true)
