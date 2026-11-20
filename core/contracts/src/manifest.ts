@@ -106,7 +106,7 @@ const TableNameSchema = z.string().regex(/^[a-z][a-z0-9_]*$/);
  */
 export const ModuleManifestSchema = z
   .object({
-    /** 模块 id：作者建议的实例内名字（决策 #59，全局身份=包名/来源），小写字母开头。 */
+    /** 模块 id：默认命名来源，不是实例身份（实例 id 由 core 定，见 docs/modules.md 第 8 节）；小写字母开头。 */
     id: z.string().regex(/^[a-z][a-z0-9-]+$/),
     /** semver 版本号（x.y.z）；实例侧确切版本另记在 unself.lock。 */
     version: z.string().regex(/^\d+\.\d+\.\d+$/),

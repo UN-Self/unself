@@ -20,7 +20,7 @@
 
 模块只有一种东西：npm 包。Cloudflare Worker 和 Docker 都是在跑这同一个包，不是两种来源。
 
-身份是包名，例如 `@acme/unself-todo`。`manifest.id` 只是实例里的名字。官方模块也是普通 npm 包（`@unself/hello`、`@unself/chat`），没有另一条来源。
+身份是包名，例如 `@acme/unself-todo`；`manifest.id` 只是默认命名来源，不是身份（见第 3、8 节）。官方模块也是普通 npm 包（`@unself/hello`、`@unself/chat`），没有另一条来源。
 
 npm registry、GitHub、内网 tarball 不是模块来源。那是部署时从哪把这个 npm 包拿下来。拿到的都是同一个包，然后要么部署成 Worker，要么放进 Docker 跑。
 
@@ -53,7 +53,7 @@ unself-todo-1.2.0.tgz
 
 | 字段 | 类型 | 必需 | 说明 |
 |---|---|---|---|
-| `id` | string，`^[a-z][a-z0-9-]+$` | ✅ | 作者建议的实例内名字，可被部署者覆盖 |
+| `id` | string，`^[a-z][a-z0-9-]+$` | ✅ | 默认命名来源（npm 包名缺省、tarball 名、Worker 脚本名）。**不是实例身份**——实例 id 由 core 定，见第 8 节 |
 | `version` | semver `x.y.z` | ✅ | 版本 |
 | `runtimes` | `worker` / `node` 的子集 | ✅ | 本模块能跑在哪：`worker` = workerd，`node` = node 进程。接入方式由地址决定，和运行体无关 |
 | `route` | string，以 `/m/` 开头 | ✅ | 挂载路由建议值；同域路径制下由装配器生成 `/m/<id>/*` |
@@ -239,7 +239,7 @@ flowchart LR
   | 参数 | 取值 | 理由 |
   |---|---|---|
   | 形态 | 核心签名的 JWT | 一个 JWKS 全平台通用，模块只需验签，不需懂 OIDC |
-  | aud | 模块 id | token 不能跨模块重放 |
+  | aud | 实例 id | token 不能跨模块重放（见第 8 节「实例 id」） |
   | 有效期 | 10 分钟 + 静默续期 | 短时效是主要吊销手段 |
   | sub | 核心内部稳定用户 id | `issuer + sub` 映射留在核心，换身份源不影响模块数据 |
   | 交付 | postMessage 握手 | 不进 URL、不进 Cookie、不进日志 |
@@ -259,6 +259,7 @@ flowchart LR
 - **健康检查**：`GET /api/health`（冒烟和可达性体检用）。
 - **生命周期**：`GET /life/export`、`POST /life/purge`（卸载时「导出并删除」/「直接删除」用）。
 - **反连宿主**：`@unself/sdk/host`。进程环境变量 `UNSELF_CORE_URL`、`UNSELF_MODULE_KEY`，可选 `UNSELF_MODULE_ADDR`。不读 `.env` 文件，文件加载交给调用方。
+- **实例 id**（下文与图示里的「模块 id」同义）：注册时定死，落注册表 `module_registry.id`（反连 = 管理台填的 id，CF = 装配器按表单/包名生成），`/m/<id>/`、隧道分片、`aud`、存储记账、审计全用它。`manifest.id` 只供默认命名，部署者可覆盖（见第 3 节）。**模块不得硬编码自己的 id**：反连模式下由握手响应 `POST /api/modules/connect-manifest` 的 `{ id }` 下发，`@unself/sdk/host` 负责交给模块；CF 部署态模块不需要知道外部 id。
 - **core → 模块的两条入站路径**：直连（按注册表里存的模块地址指过去）和反连（core 转发隧道帧）。模块只实现普通的 HTTP 处理，不知道请求走的是哪条——前缀 `/m/<id>/` 由宿主剥掉（见第 4.1 节）。
 
 ## 9. 兼容与升级
