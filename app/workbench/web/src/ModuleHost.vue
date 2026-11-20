@@ -51,17 +51,18 @@ const errorTitle = computed(() =>
     </div>
 
     <!--
-      同域隔离（T5）：sandbox 不含 allow-same-origin → 模块文档为不透明源，
-      读不到父页面 cookie/localStorage，也无法以管理员会话 fetch /api/admin。
-      allow-scripts/allow-forms 保模块自身可用；不含 allow-top-navigation，模块不能劫持顶层导航。
-      postMessage 桥按 origin + contentWindow 校验，不依赖 sandbox 放行同源。
+      不带 sandbox：同域路径制下模块是壳的第一方页面，sandbox 必须显式放行同源才可运行，
+      而「不带 allow-same-origin」的沙箱会让模块文档成为不透明源（origin 值为 "null"），
+      后果有三——加载 SDK 的 ESM 脚本无 CORS 头即失败、桥收不到 ready、origin 校验恒不相等
+      （#349 部署实测：任何模块握手 15s 必超时）。隔离边界由服务端承担：
+      CSP frame-ancestors 收窄嵌套面、会话 cookie HttpOnly + SameSite=Lax（模块 JS 读不到值）、
+      /api/admin/* 另需服务端防线（#349 后续项）。
     -->
     <iframe
       v-if="frameSrc"
       :ref="onFrameEl"
       :key="frameKey"
       :src="frameSrc"
-      sandbox="allow-scripts allow-forms"
       class="mh-frame"
       :title="`模块：${props.module?.id ?? ''}`"
       :class="{ 'mh-frame-hidden': frameState !== 'ready' }"
