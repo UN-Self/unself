@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 使用前：cp .env.example .env，填写 core 地址和模块 key，然后 pnpm pack。
+services:
+  calendar:
+    build: .
+    env_file: .env
+    ports:
+      - "8791:8791"
+    restart: unless-stopped
