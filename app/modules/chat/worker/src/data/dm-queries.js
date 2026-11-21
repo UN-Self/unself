@@ -3,8 +3,10 @@
 import { publicFileUrl } from "../utils.js";
 import { messagePreview } from './message-preview.js';
 import { userAvatarUrl } from "../profile-avatar.js";
+import { projectIdentity } from "./users.js";
 
 function mapUserDm(row) {
+	const otherUsername = row.other_username;
 	return {
 		id: Number(row.id),
 		kind: "dm",
@@ -14,9 +16,16 @@ function mapUserDm(row) {
 		mentionUnreadCount: Number(row.attention_unread_count || 0),
 		otherUser: {
 			id: Number(row.other_user_id),
-			username: row.other_username,
+			username: otherUsername,
 			displayName: row.other_display_name,
 			avatarUrl: userAvatarUrl(row.other_core_avatar_url, row.other_avatar_key),
+			// #透传：与群成员同一套投影规则（登录名/工作邮箱），私聊资料卡才有邮箱可显示。
+			...projectIdentity({
+				username: otherUsername,
+				core_login_name: row.other_core_login_name,
+				core_identity_source: row.other_core_identity_source,
+				core_email: row.other_core_email,
+			}),
 		},
 		isBlockedByMe: Boolean(row.blocked_by_me),
 	};
@@ -50,6 +59,9 @@ export async function listUserDms(db, userId, env) {
 			   other.display_name AS other_display_name,
 			   other.avatar_key AS other_avatar_key,
 			   other.core_avatar_url AS other_core_avatar_url,
+			   other.core_login_name AS other_core_login_name,
+			   other.core_identity_source AS other_core_identity_source,
+			   other.core_email AS other_core_email,
 			   EXISTS(SELECT 1 FROM user_blocks ub WHERE ub.blocker_id = ? AND ub.blocked_id = other.id) AS blocked_by_me,
 				   (SELECT COUNT(*) FROM messages m
 				    WHERE m.channel_id = c.id AND m.deleted_at IS NULL

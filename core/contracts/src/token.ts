@@ -28,6 +28,14 @@ export const ModuleTokenClaimsSchema = z.object({
   avatar_url: z.string().optional(),
   /** Core 资料的单调修订号；模块用它拒绝旧 token 回退展示资料。 */
   profile_revision: z.number().int().nonnegative().optional(),
+  /** 登录用户名（可选）：内置账号取 builtin_credentials.username；OIDC 用户无凭据行，缺省。
+   * 仅为展示句柄——模块内部身份锚（如 chat 的 core:<sub>）不外露，与此字段无关。 */
+  username: z.string().optional(),
+  /** 工作邮箱（可选）：核心 users.email（激活开户落库）；未开户/IdP 未签 email 时缺省。 */
+  email: z.string().optional(),
+  /** 身份来源（可选）：核心 users.issuer 落库值——'builtin'=内置账号，其余值一律签 'oidc'。
+   * 权威判断字段（模块侧不得用「username 有无」推断）；旧签发侧不带此字段 → 模块侧按「来源未知」处理。 */
+  identity_source: z.enum(['builtin', 'oidc']).optional(),
 });
 
 export type ModuleTokenClaims = z.infer<typeof ModuleTokenClaimsSchema>;

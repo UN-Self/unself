@@ -7,6 +7,7 @@ import { decryptMessageContent, encryptMessageContent } from "../encryption.js";
 import { pickAttachment, publicFileUrl } from "../utils.js";
 import { normalizeMentionUserIds } from "./mentions.js";
 import { fileBelongsToUser, isR2ObjectUnavailableError } from "./uploaded-files.js";
+import { projectLoginName } from "./users.js";
 
 function toNullableNumber(value) {
 	const number = Number(value);
@@ -84,6 +85,11 @@ export function mapMessage(row, content = row.content, replyTo = null) {
 				avatarUrl: isExternal
 					? row.external_sender_avatar_url || ""
 					: userAvatarUrl(row.sender_core_avatar_url, row.sender_avatar_key),
+				// #透传：真实登录名（`core:<sub>` 幂等锚点不外露）；external 与本地注册用户省略，
+				// 来源未知时也省略——只有明确 OIDC 才输出 null 让资料卡显示占位。
+				loginName: isExternal || !String(row.sender_username || '').startsWith("core:")
+					? undefined
+					: projectLoginName(row.sender_core_login_name, row.sender_core_identity_source),
 				source: isExternal ? row.source : "edgechat",
 			},
 			attachment: mapAttachment(row),
@@ -177,6 +183,8 @@ const MESSAGE_SELECT = `SELECT
 			  m.mention_user_ids, m.reply_to_message_id, m.reply_to_sender_id, m.created_at, m.deleted_at,
 		  u.id AS sender_id, u.username AS sender_username,
 		  u.display_name AS sender_display_name, u.avatar_key AS sender_avatar_key, u.core_avatar_url AS sender_core_avatar_url,
+		  u.core_login_name AS sender_core_login_name,
+		  u.core_identity_source AS sender_core_identity_source,
 		  reply.id AS reply_message_id, reply.content AS reply_content,
 		  reply.deleted_at AS reply_deleted_at,
 		  reply.attachment_key AS reply_attachment_key,

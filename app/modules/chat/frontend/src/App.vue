@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, provide, ref } from 'vue'
+import { computed, onBeforeUnmount, provide, ref, watch } from 'vue'
 
 import { attachmentLoaderKey, createAttachmentLoader } from './lib/attachment-resource'
 import { createDocumentSender, type ComposerDocument } from './lib/composer-document'
@@ -118,6 +118,58 @@ const groupDetailsError = ref('')
 const groupDetailsBusy = ref(false)
 const groupCreationError = ref('')
 
+/**
+ * 消息头像资料卡的群内身份：进频道时拉一次成员名单，建 senderId → ChannelMember 映射传给消息气泡；
+ * 拉取失败静默降级（卡片只显示昵称/句柄）。每次切频道重建，天然新鲜。
+ */
+const channelMemberMap = ref<Map<number, ChannelMember>>(new Map())
+/** 把一份频道成员名单应用到资料卡映射：只在还停留在该频道时生效（请求期间可能已切走）。 */
+function applyChannelMembers(roomId: number, members: ChannelMember[]): void {
+  const current = store.state.currentRoom
+  if (current && current.kind !== 'dm' && current.id === roomId) {
+    channelMemberMap.value = new Map(members.map((member) => [member.id, member]))
+  }
+}
+watch(
+  () => store.state.currentRoom,
+  (room) => {
+    if (!room) {
+      channelMemberMap.value = new Map()
+      return
+    }
+    if (room.kind === 'dm') return // DM 走 dmMemberMap（响应式，无需拉取）
+    void store.listChannelMembers(room.id).then((members) => {
+      applyChannelMembers(room.id, members)
+    }).catch(() => {
+      // 失败同样只降自己：无条件清空会抹掉切走后新频道已填好的映射
+      const current = store.state.currentRoom
+      if (current && current.kind !== 'dm' && current.id === room.id) {
+        channelMemberMap.value = new Map()
+      }
+    })
+  },
+  { immediate: true },
+)
+
+/**
+ * DM 资料卡映射（computed，非拉取）：对方来自会话 otherUser（openDm 先写 state.dms 再切房间），
+ * 自己来自 contacts（listContacts 不排除本人）——否则自己消息气泡的卡查不到 member，邮箱行凭空缺失。
+ * contacts 晚到也会自动补上（reactive 源）。
+ */
+const chatMemberMap = computed<Map<number, ChannelMember>>(() => {
+  const room = store.state.currentRoom
+  if (!room) return new Map()
+  if (room.kind === 'dm') {
+    const entries: ChannelMember[] = []
+    const other = store.state.dms.find((dm) => dm.id === room.id)?.otherUser
+    if (other) entries.push({ ...other, role: 'member' })
+    const me = store.state.contacts.find((user) => user.id === store.state.myUserId)
+    if (me) entries.push({ ...me, role: 'member' })
+    return new Map(entries.map((member) => [member.id, member]))
+  }
+  return channelMemberMap.value
+})
+
 function onSelect(room: { kind: RoomKind; id: number }): void {
   void store.openRoom(room, displayNameFor(room))
 }
@@ -148,6 +200,7 @@ async function onOpenGroupDetails(): Promise<void> {
   groupDetailsBusy.value = true
   try {
     groupMembers.value = await store.listChannelMembers(room.id)
+    applyChannelMembers(room.id, groupMembers.value) // 消息资料卡同步刷新（M1：打开面板即最新名单）
   } catch (error) {
     groupDetailsError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -162,6 +215,7 @@ async function onInviteMembers(userIds: number[]): Promise<void> {
   try {
     await store.inviteChannelMembers(room.id, userIds)
     groupMembers.value = await store.listChannelMembers(room.id)
+    applyChannelMembers(room.id, groupMembers.value) // 新邀成员立即可在消息资料卡上查到身份
   } catch (error) {
     groupDetailsError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -306,6 +360,7 @@ const contextKey = computed(() =>
       :read-receipts="store.state.readReceipts"
       :can-manage="activeRoom?.kind !== 'dm' && (store.state.channels.find((channel) => channel.id === activeRoom?.id)?.canManage ?? false)"
       :just-sent-ids="store.justSentIds.value"
+      :member-map="chatMemberMap"
       :load-error="roomsError"
       :group-error="groupCreationError"
       @select="onSelect"

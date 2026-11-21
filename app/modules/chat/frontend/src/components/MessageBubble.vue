@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
-import { computed, provide, ref } from 'vue'
+import { computed, provide, ref, useId } from 'vue'
 import { Check } from 'lucide-vue-next'
-import { UMessage, UMessageAvatar, UMessageBubble } from '@unself/ui'
+import { UHoverCard, UMessage, UMessageAvatar, UMessageBubble, UProfileCard } from '@unself/ui'
 
 import { attachmentResourceKey, useAttachmentResource } from '../lib/attachment-resource'
 import MessageContent from './MessageContent.vue'
 import MessageActions from './MessageActions.vue'
 import { deletionLabel } from '../lib/message-deletion'
-import type { Message, ReadReceiptsSummary } from '../lib/types'
+import type { ChannelMember, Message, ReadReceiptsSummary } from '../lib/types'
 
 /**
  * 单条消息气泡（#218 消息流）：头像/作者/时间/正文/附件。
@@ -38,6 +38,8 @@ export interface MessageBubbleProps {
   entering?: boolean
   /** #339②：他人新到达消息（左缘滑入一次性入场）；历史/本人消息不挂。 */
   receiving?: boolean
+  /** 发送者在当前会话的成员信息（群聊来自成员名单，私聊来自 otherUser；资料卡的 role/joinedAt/邮箱来源，缺失降级）。 */
+  member?: ChannelMember
 }
 
 const props = withDefaults(defineProps<MessageBubbleProps>(), {
@@ -50,9 +52,13 @@ const props = withDefaults(defineProps<MessageBubbleProps>(), {
   canDelete: false,
   entering: false,
   receiving: false,
+  member: undefined,
 })
 
 const HHMM_RE = /(\d{2}:\d{2})/
+
+/** 资料卡内容节点 id：触发器用 aria-describedby 指向它，键盘/读屏用户聚焦头像时能读到卡面。 */
+const cardId = useId()
 
 /** 气泡右上时间 HH:mm（日期语义由分隔条承担，气泡只留时刻）。 */
 const timeLabel = computed(() => {
@@ -115,7 +121,29 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
     :data-test="mine ? 'bubble-mine' : 'bubble-theirs'"
     @animationend="onBubbleAnimEnd"
   >
-    <UMessageAvatar :src="message.sender.avatarUrl" :name="message.sender.displayName" />
+    <!-- 头像悬停/tap 开资料卡：他人与本人一致（本人卡来自消息 sender，同 memberMap 查身份）。
+         触发器是真 button：头像本身是 img/aria-hidden span，不可聚焦，键盘与读屏用户走不到卡片 -->
+    <UHoverCard>
+      <template #trigger>
+        <button
+          type="button"
+          class="bubble-avatar-card"
+          :aria-label="`查看 ${message.sender.displayName} 的资料`"
+          :aria-describedby="cardId"
+        >
+          <UMessageAvatar :src="message.sender.avatarUrl" :name="message.sender.displayName" />
+        </button>
+      </template>
+      <UProfileCard
+        :id="cardId"
+        :display-name="message.sender.displayName"
+        :login-name="message.sender.loginName"
+        :avatar-url="message.sender.avatarUrl"
+        :email="member?.email"
+        :role="member?.role === 'owner' ? 'owner' : 'member'"
+        :joined-at="member?.joinedAt"
+      />
+    </UHoverCard>
 
     <div class="bubble-main">
       <div class="bubble-meta">
@@ -164,6 +192,9 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
 <style scoped>
 .message-system { margin: var(--unself-space-3) 0; padding: var(--unself-space-1) var(--unself-space-3); text-align: center; color: var(--unself-color-text-tertiary); font-size: var(--unself-font-size-xs); overflow-wrap: anywhere; }
 .bubble-row { max-width:100%; padding:var(--unself-space-1) 0; }
+/* 头像资料卡触发器：复位 button 外观（头像本身是 img），撑住 32px 不收缩 */
+.bubble-avatar-card { display:flex; flex:none; align-items:center; padding:0; border:0; border-radius:var(--unself-radius-full); background:transparent; cursor:pointer; }
+.bubble-avatar-card:focus-visible { outline:var(--unself-focus-ring); outline-offset:2px; }
 .bubble-row-highlight .bubble-main {
   outline: 1px solid var(--unself-color-primary-soft);
 }

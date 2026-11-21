@@ -45,6 +45,14 @@ export interface UserSummary {
   username: string
   displayName: string
   avatarUrl: string
+  /**
+   * 真实登录名三态（#透传）：string=内置账号登录名；null=明确的 OIDC 账号（无登录名，显示占位）；
+   * undefined=来源未知/非 core 身份/未升级 worker → 资料卡整行不渲染。
+   * 本接口的 `username` 是 JIT 幂等锚点（core:<sub>），不外露也不该展示。
+   */
+  loginName?: string | null
+  /** 工作邮箱；未开户/IdP 未签时省略（前端「无则隐藏」）。 */
+  email?: string
 }
 
 /** 私聊会话（GET /api/dm 出参项，上游 mapUserDm）。 */
@@ -97,6 +105,8 @@ export interface MessageSender {
   username: string
   displayName: string
   avatarUrl: string
+  /** 真实登录名三态（#透传），同 UserSummary.loginName。 */
+  loginName?: string | null
   source: string
 }
 

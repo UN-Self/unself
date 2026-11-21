@@ -39,6 +39,8 @@ export interface ChatLayoutProps {
   /** 会话列表加载失败人话（#221 走查补：错误态替代空态，不再静默吞错）。 */
   loadError?: string | null
   groupError?: string
+  /** 消息头像资料卡的群内身份（senderId → ChannelMember；拉取失败为空表，卡片降级）。 */
+  memberMap?: Map<number, import('../lib/types').ChannelMember>
 }
 
 const props = withDefaults(defineProps<ChatLayoutProps>(), {
@@ -48,6 +50,7 @@ const props = withDefaults(defineProps<ChatLayoutProps>(), {
   readReceipts: () => ({}),
   loadError: null,
   groupError: '',
+  memberMap: () => new Map(),
   canManage: false,
   contacts: () => [],
 })
@@ -229,6 +232,7 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
         :read-receipts="readReceipts"
         :can-manage="canManage"
         :just-sent-ids="justSentIds"
+        :member-map="memberMap"
         @load-earlier="emit('load-earlier')"
         @show-receipts="emit('show-receipts', $event)"
         @visible-read="emit('visible-read', $event)"

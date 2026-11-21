@@ -28,6 +28,12 @@ export interface IssuedModuleToken {
     name?: string;
     profile_revision?: number;
     avatar_url?: string;
+    /** 登录用户名（内置账号）；OIDC 用户省略。 */
+    username?: string;
+    /** 工作邮箱（users.email）；未开户时省略。 */
+    email?: string;
+    /** 身份来源；旧签发侧省略。 */
+    identity_source?: 'builtin' | 'oidc';
   };
 }
 
@@ -41,6 +47,12 @@ export interface TokenRequestContext {
   name?: string;
   profileRevision?: number;
   avatarUrl?: string;
+  /** 登录用户名（builtin_credentials.username；OIDC 用户省略）。 */
+  username?: string;
+  /** 工作邮箱（users.email；未开户省略）。 */
+  email?: string;
+  /** 身份来源（users.issuer 映射；缺省 = 旧调用方，签发侧省略该 claim）。 */
+  identitySource?: 'builtin' | 'oidc';
 }
 
 /**
@@ -73,6 +85,11 @@ export async function issueModuleToken(
     payload.profile_revision = ctx.profileRevision;
   }
   if (ctx.avatarUrl !== undefined) payload.avatar_url = ctx.avatarUrl;
+  // 身份透传（「有才带」）：内置账号带登录名；工作邮箱未开户/IdP 未签时省略，模块侧按缺省处理。
+  if (ctx.username !== undefined) payload.username = ctx.username;
+  if (ctx.email !== undefined) payload.email = ctx.email;
+  // 身份来源是权威判断字段（契约）：签发侧读 users.issuer 映射后签名，模块侧不得用 username 有无推断。
+  if (ctx.identitySource !== undefined) payload.identity_source = ctx.identitySource;
   const token = await new SignJWT(payload)
     .setProtectedHeader({ alg: 'ES256', kid: runtime.kid })
     .sign(runtime.signingKey);
