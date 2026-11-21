@@ -66,6 +66,8 @@ const emit = defineEmits<{
   /** #339② 入场动效播完 → 根层转 store.enterDone。 */
   'enter-done': [messageId: number]
   delete: [message: Message]
+  /** 右键菜单选「引用」→ 根层开 composer 回复条。 */
+  quote: [message: Message]
   'open-dm': [userId: number]
   'create-group': [input: { name: string; memberUserIds: number[] }]
   'open-group-details': []
@@ -238,6 +240,7 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
         @visible-read="emit('visible-read', $event)"
         @enter-done="emit('enter-done', $event)"
         @delete="emit('delete', $event)"
+        @quote="emit('quote', $event)"
       />
 
       <!-- composer 插槽：T4/T5 填充（发送/@/文件/语音入口） -->

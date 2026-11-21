@@ -65,7 +65,12 @@ function normalizeAttachment(pathname: string, attachment: Attachment | null): A
 
 function normalizeMessage(pathname: string, message: Message): Message {
   return { ...message, attachment: normalizeAttachment(pathname, message.attachment),
-    blocks: message.blocks?.map(block => block.type === 'attachment' ? { ...block, attachment: normalizeAttachment(pathname, block.attachment)! } : block) }
+    blocks: message.blocks?.map(block => block.type === 'attachment' ? { ...block, attachment: normalizeAttachment(pathname, block.attachment)! } : block),
+    // 引用块内嵌的附件同源 `/files/`，也要补模块前缀（当前只显示附件名，url 先改对）
+    replyTo: message.replyTo && !message.replyTo.deleted && 'attachment' in message.replyTo
+      ? { ...message.replyTo, attachment: normalizeAttachment(pathname, message.replyTo.attachment) }
+      : message.replyTo,
+  }
 }
 
 function normalizeSocketFrame(pathname: string, frame: Record<string, unknown>): Record<string, unknown> {
@@ -136,6 +141,8 @@ export interface ChatApi {
     attachment?: Attachment | null
     blocks?: Message['blocks']
     mentionUserIds?: number[]
+    /** 被引用消息（body 字段 replyMessageId，worker v1.js 实测 @29978c2 接收）。 */
+    replyTo?: { id: number } | null
   }): Promise<{ created: boolean; message: Message }>
   deleteMessage(kind: RoomKind, roomId: number, messageId: number): Promise<{ deletion?: MessageDeletionNotice } | void>
   uploadFile(file: File): Promise<{ file: Attachment }>
@@ -321,6 +328,7 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
           attachment: input.attachment ?? null,
           blocks: input.blocks,
           mentionUserIds: input.mentionUserIds ?? [],
+          replyMessageId: input.replyTo?.id ?? null,
         }),
       }).then((result) => ({ ...result, message: normalizeMessage(globalThis.location.pathname, result.message) })),
     deleteMessage: (kind, roomId, messageId) =>

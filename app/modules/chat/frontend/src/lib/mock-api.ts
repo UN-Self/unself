@@ -349,6 +349,14 @@ export function createMockChatApi(
       clientMessageId: input.clientMessageId,
       roomId: input.roomId,
     }
+    // 引用（与 worker 同语义）：同房间存在即挂，已删除回 deleted 占位（见 worker messages.js 读路径）；mock 直接回填整条原消息（含发言人/内容）
+    if (input.replyTo) {
+      const replyRow = rows.find((r) => r.id === input.replyTo?.id && r.roomId === input.roomId)
+      if (replyRow) {
+        created.replyToMessageId = replyRow.id
+        created.replyTo = replyRow.deleted ? { id: replyRow.id, deleted: true } : rowToMessage(replyRow)
+      }
+    }
     rows.unshift(created)
     return { created: true, message: rowToMessage(created) }
   }

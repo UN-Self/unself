@@ -273,28 +273,50 @@ const audienceSize = computed(() => {
 const replyTo = ref<Message | null>(null)
 const uploading = ref(false)
 
+// 切房清引用：replyTo 指向的是上一条消息，换房后原房间已变，留着会把旧 replyMessageId 发到新房
+watch(
+  () => store.state.currentRoom,
+  (room, previous) => {
+    if (previous && (!room || room.id !== previous.id || room.kind !== previous.kind)) {
+      replyTo.value = null
+    }
+  },
+)
+
 async function onSend(text: string, mentionUserIds: number[]): Promise<void> {
   try {
-    await store.sendMessage({ content: text, mentionUserIds })
+    await store.sendMessage({ content: text, mentionUserIds, replyTo: replyTo.value })
     replyTo.value = null
   } catch {
     // 发送失败：sendError 已由 store 置为人话提示（发送态复原，输入不丢可重试）
   }
 }
 
+// 文档发送同样消费引用：发送前快照并立即清条（避免上传期间回复条误导）；
+// 失败恢复引用条，重试时文档仍带引用（与文本 onSend「失败保留」同语义）；
+// 用户主动中止（signal.aborted）不算失败：不恢复，中止后随手发的文本不带旧引用
+let documentReplyTo: Message | null = null
 const sendDocument = createDocumentSender({
   getRoomKey: () => store.state.currentRoom ? roomKeyString(store.state.currentRoom) : null,
   upload: (file) => store.uploadFile(file),
-  send: (input) => store.sendMessage(input),
+  send: (input) => store.sendMessage({ ...input, replyTo: documentReplyTo }),
 })
 
 async function onSendDocument(document: ComposerDocument, mentionUserIds: number[], signal: AbortSignal): Promise<void> {
+  documentReplyTo = replyTo.value
+  const replyRoomKey = store.state.currentRoom ? roomKeyString(store.state.currentRoom) : null
+  replyTo.value = null
   uploading.value = true
   try {
     await sendDocument(document, mentionUserIds, signal)
-    replyTo.value = null
+  } catch {
+    // 中止是用户主动放弃，引用条保持清空；房间已切换也不恢复（documentReplyTo 指向旧房间，塞回新房间会发错 replyMessageId）
+    if (!signal.aborted && store.state.currentRoom && roomKeyString(store.state.currentRoom) === replyRoomKey) {
+      replyTo.value = documentReplyTo
+    }
   } finally {
     uploading.value = false
+    documentReplyTo = null
   }
 }
 
@@ -309,6 +331,7 @@ async function onSendVoice(recording: {
     if (!uploaded) return
     await store.sendMessage({
       content: '',
+      replyTo: replyTo.value,
       attachment: {
         ...uploaded,
         kind: 'voice',
@@ -316,6 +339,7 @@ async function onSendVoice(recording: {
         waveform: recording.waveform,
       },
     })
+    replyTo.value = null
   } finally {
     uploading.value = false
   }
@@ -371,6 +395,7 @@ const contextKey = computed(() =>
       @visible-read="onVisibleRead"
       @enter-done="store.enterDone"
       @delete="onDeleteMessage"
+      @quote="replyTo = $event"
       @create-group="onCreateGroup"
       @open-group-details="onOpenGroupDetails"
     >
