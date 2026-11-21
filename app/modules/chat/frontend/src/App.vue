@@ -399,6 +399,8 @@ const contextKey = computed(() =>
       :summary="receiptTarget ? store.state.readReceipts[receiptTarget.id] ?? null : null"
       :audience-size="audienceSize"
       :room-name="store.state.roomName"
+      :member-map="chatMemberMap"
+      :exclude-user-id="receiptTarget?.sender.id"
       @close="closeReceipts"
     />
 

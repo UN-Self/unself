@@ -23,7 +23,7 @@ const SPEC_COLORS = [
 ] as const;
 const SPEC_SPACES = ['1', '2', '3', '4', '5', '6', '8'] as const;
 const SPEC_RADII = ['sm', 'md', 'lg', 'full'] as const;
-const SPEC_FONT_SIZES = ['xs', 'sm', 'base', 'lg', 'xl', '2xl'] as const;
+const SPEC_FONT_SIZES = ['2xs', 'xs', 'sm', 'base', 'lg', 'xl', '2xl'] as const;
 const SPEC_SHADOWS = ['card', 'pop'] as const;
 const SPEC_OTHER = ['focus-ring'] as const;
 
