@@ -5,12 +5,19 @@
  * 保存经 300ms debounce（连续输入不刷存储），加载/清除即时。
  * localStorage 不可用（隐私模式/非浏览器）时静默降级到内存 Map——会话内仍在，
  * 跨刷新丢失可接受（草稿属易失 UI 状态）。
+ * #347 治本：草稿值从纯文本升级为结构化 part——mention chip（含 @all 标记）切房/刷新后
+ * 可完整重建；旧版纯文本草稿按单条 text part 兼容读回。附件 part 不入草稿（文件走提交链路）。
  */
+
+import type { RichInputPart } from '@unself/ui'
 
 /** 保存 debounce（ms）：任务书口径 300ms。 */
 export const DRAFT_SAVE_DELAY_MS = 300
 
 const DRAFT_PREFIX = 'unself.chat.draft.'
+
+/** 草稿里的合法 part：文本与提及 chip。附件只存过 id、恢复不了预览，不入草稿。 */
+export type DraftPart = Extract<RichInputPart, { type: 'text' | 'mention' }>
 
 /** 底层存储最小形状（localStorage 与内存兜底共用）。 */
 interface DraftStorage {
@@ -46,18 +53,35 @@ function draftKey(kind: string, roomId: number | string): string {
   return `${DRAFT_PREFIX}${kind}.${roomId}`
 }
 
-export function loadDraft(kind: string, roomId: number | string): string {
+/** 存储值 → part：JSON 数组按结构读，旧版纯文本按单条 text part 兼容，坏数据落空。 */
+function normalizeParts(raw: string | null): DraftPart[] {
+  if (!raw) return []
   try {
-    return resolveStorage().getItem(draftKey(kind, roomId)) ?? ''
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return raw ? [{ type: 'text', text: raw }] : []
+    return parsed.filter(
+      (part): part is DraftPart =>
+        part !== null && typeof part === 'object' &&
+        ((part as RichInputPart).type === 'text' || (part as RichInputPart).type === 'mention'),
+    )
   } catch {
-    return ''
+    // 旧版纯文本草稿（非 JSON）：按整段文本读回
+    return [{ type: 'text', text: raw }]
+  }
+}
+
+export function loadDraft(kind: string, roomId: number | string): DraftPart[] {
+  try {
+    return normalizeParts(resolveStorage().getItem(draftKey(kind, roomId)))
+  } catch {
+    return []
   }
 }
 
 const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 /** 输入侧保存入口：300ms debounce，同键连续输入只落最后一次。 */
-export function saveDraft(kind: string, roomId: number | string, text: string): void {
+export function saveDraft(kind: string, roomId: number | string, parts: DraftPart[]): void {
   const key = draftKey(kind, roomId)
   const existing = pendingTimers.get(key)
   if (existing) clearTimeout(existing)
@@ -66,8 +90,8 @@ export function saveDraft(kind: string, roomId: number | string, text: string): 
     setTimeout(() => {
       pendingTimers.delete(key)
       try {
-        if (text === '') resolveStorage().removeItem(key)
-        else resolveStorage().setItem(key, text)
+        if (parts.length === 0) resolveStorage().removeItem(key)
+        else resolveStorage().setItem(key, JSON.stringify(parts))
       } catch {
         // 配额满等写失败 → 静默：草稿丢失可接受
       }

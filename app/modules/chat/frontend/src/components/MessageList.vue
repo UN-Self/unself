@@ -63,6 +63,8 @@ const emit = defineEmits<{
   delete: [message: Message]
   /** 右键菜单选「引用」→ 父层开 composer 回复条。 */
   quote: [message: Message]
+  /** #347 右键头像选「@ 提及」→ 父层往 composer 插入 @username。 */
+  mention: [message: Message]
 }>()
 
 /** #339②：首渲染时已存在的消息是历史（不播入场）；其后新出现的他人消息才播（左缘滑入）。 */
@@ -272,6 +274,7 @@ onBeforeUnmount(() => { if (jumpFlashTimer) clearTimeout(jumpFlashTimer) })
               @show-receipts="onShowReceipts"
               @delete="emit('delete', $event)"
               @quote="emit('quote', $event)"
+              @mention="emit('mention', $event)"
             />
           </template>
         </template>

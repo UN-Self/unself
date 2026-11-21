@@ -49,17 +49,17 @@ function optionsOf(wrapper: Awaited<ReturnType<typeof mountComposer>>) {
 }
 
 describe('#230 core 身份下的 @ 提及', () => {
-  it('@core:2 与 @走查乙（展示名）两种输入都产出 mentionUserIds=[2]', async () => {
+  it('@core:2（手打 token）产出 mentionUserIds=[2]；@走查乙（手打展示名）不算提及（#347 定案）', async () => {
     const wrapper = await mountComposer()
     const input = inputOf(wrapper)
 
     await setValue(wrapper, '@core:2 回执请确认')
     await input.trigger('keydown', { key: 'Enter' })
-    expect(wrapper.emitted('send')?.[0]).toEqual(['@core:2 回执请确认', [2]])
+    expect(wrapper.emitted('send')?.[0]).toEqual(['@core:2 回执请确认', [2], false])
 
     await setValue(wrapper, '@走查乙 回执请确认')
     await input.trigger('keydown', { key: 'Enter' })
-    expect(wrapper.emitted('send')?.[1]).toEqual(['@走查乙 回执请确认', [2]])
+    expect(wrapper.emitted('send')?.[1]).toEqual(['@走查乙 回执请确认', [], false])
   })
 
   it('@走（非 ASCII）与 @core:2（含冒号）都保留候选浮层；username/displayName 双向匹配', async () => {
@@ -90,7 +90,7 @@ describe('#230 core 身份下的 @ 提及', () => {
     expect(wrapper.emitted('send')?.[1]?.[1]).toEqual([])
   })
 
-  it('@bobby 不误判为 @bob（词边界），@走查乙， 收尾标点仍算提及', async () => {
+  it('@bobby 不误判为 @bob（词边界），@core:2， 收尾标点仍算提及', async () => {
     const wrapper = await mountComposer({
       contacts: [...contacts, { id: 3, username: 'bob', displayName: 'Bob', avatarUrl: '' }],
     })
@@ -100,7 +100,7 @@ describe('#230 core 身份下的 @ 提及', () => {
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')?.[0]?.[1]).toEqual([])
 
-    await setValue(wrapper, '@走查乙，回执请确认')
+    await setValue(wrapper, '@core:2，回执请确认')
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')?.[1]?.[1]).toEqual([2])
   })
@@ -113,7 +113,8 @@ describe('#230 core 身份下的 @ 提及', () => {
     expect(optionsOf(wrapper)).toHaveLength(2)
 
     await optionsOf(wrapper)[1]!.trigger('mousedown')
-    expect(input.element.textContent).toBe('@core:2 ')
+    // chip 的 DOM 显示是 @displayName（token 与显示分离）；序列化/发送面才是 @core:2
+    expect(input.element.textContent).toBe('@走查乙 ')
 
     await setValue(wrapper, '@core:2 麻烦确认')
     await input.trigger('keydown', { key: 'Enter' })
@@ -122,7 +123,7 @@ describe('#230 core 身份下的 @ 提及', () => {
 })
 
 describe('#230 提及数据面：mock 链路的接收方 @未读投影', () => {
-  it('@走查乙 → mentionUserIds=[2] → mock 解析 mentions → room_message(mentionsMe) 使 mentionUnreadCount +1', async () => {
+  it('@core:2（手打 token）→ mentionUserIds=[2] → mock 解析 mentions → room_message(mentionsMe) 使 mentionUnreadCount +1', async () => {
     const api = createMockChatApi()
     // live core 身份：主角 = core:2（走查乙），联系人走 core:<sub> 命名空间
     api.world.me = { id: 2, username: 'core:2', displayName: '走查乙', avatarUrl: '' }
@@ -137,10 +138,10 @@ describe('#230 提及数据面：mock 链路的接收方 @未读投影', () => {
     await store.loadDms()
     await store.loadContacts()
 
-    // 发送侧：composer 对展示名输入产出 mentionUserIds
+    // 发送侧：composer 对 username token 输入产出 mentionUserIds（展示名手打不算）
     const wrapper = await mountComposer()
     const input = inputOf(wrapper)
-    await setValue(wrapper, '@走查乙 看一下')
+    await setValue(wrapper, '@core:2 看一下')
     await input.trigger('keydown', { key: 'Enter' })
     const [, mentionUserIds] = wrapper.emitted('send')![0]!
     expect(mentionUserIds).toEqual([2])
@@ -148,7 +149,7 @@ describe('#230 提及数据面：mock 链路的接收方 @未读投影', () => {
     // mock 面：发送后按 id 解析出 mentions（id 空间与接收方一致）
     await store.openRoom({ kind: 'public', id: 1 }, 'general')
     await store.sendMessage({
-      content: '@走查乙 看一下',
+      content: '@core:2 看一下',
       mentionUserIds: mentionUserIds as number[],
     })
     const sentId = store.state.messages.at(-1)!.id
@@ -168,7 +169,7 @@ describe('#230 提及数据面：mock 链路的接收方 @未读投影', () => {
       mentionUnreadCount: before + 1,
       mentionsMe: true,
       replyToMe: false,
-      contentPreview: '@走查乙 看一下',
+      contentPreview: '@core:2 看一下',
       sender: {
         kind: 'local',
         id: 1,

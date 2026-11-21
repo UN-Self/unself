@@ -32,6 +32,8 @@ export interface Channel {
   lastMessagePreview?: string | null
   unreadCount: number
   mentionUnreadCount: number
+  /** @all 独立红标计数（契约 4.1）：mention_all=1 的未读数；DM/旧 worker 缺省（视同 0）。 */
+  mentionAllUnreadCount?: number
 }
 
 export interface ChannelMember extends UserSummary {
@@ -131,6 +133,8 @@ export interface Message {
   id: number
   content: string
   mentionUserIds: number[]
+  /** @all（@所有人，仅群主可发；服务端复核 mention_all=1）。缺省/false = 普通消息。 */
+  mentionAll?: boolean
   mentions: Mention[]
   createdAt: string
   source: string
@@ -182,7 +186,11 @@ export interface WsRoomMessageNotice {
   createdAt: string
   unreadCount: number
   mentionUnreadCount?: number
+  /** @all 未读（契约 4.1）：[@全体成员] 红标独立计数；非 @all 消息缺省。 */
+  mentionAllUnreadCount?: number
   mentionsMe: boolean
+  /** @all 对所有非发送成员触发（不含在 mentionsMe 里，两类红标独立）。 */
+  mentionedByAll?: boolean
   replyToMe: boolean
   contentPreview: string
   sender: MessageSender

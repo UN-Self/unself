@@ -18,6 +18,11 @@ function render(over: Partial<Message> = {}, canDelete = true) {
 }
 async function settle() { await flushPromises(); await new Promise((resolve) => setTimeout(resolve, 30)); await flushPromises() }
 function item(label: string) { return [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) => el.textContent?.includes(label)) }
+/** #347 头像也挂了右键菜单（@ 提及）：动作菜单触发器 = 含气泡本体的那个 aria-haspopup 节点。 */
+function actionTrigger(wrapper: ReturnType<typeof render>) {
+  const body = wrapper.get('.bubble-body').element
+  return wrapper.findAll('[aria-haspopup="menu"]').find((w) => (w.element as Element).contains(body))!
+}
 afterEach(() => { wrappers.splice(0).forEach((w) => w.unmount()); vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.innerHTML = '' })
 
 describe('消息媒体与菜单交互', () => {
@@ -74,13 +79,13 @@ describe('消息媒体与菜单交互', () => {
     vi.stubGlobal('navigator', Object.assign(Object.create(navigator), { clipboard: { writeText } }))
     const wrapper = render()
     expect(document.querySelector('[role="menuitem"]')).toBeNull()
-    await wrapper.get('[aria-haspopup="menu"]').trigger('contextmenu', { clientX: 20, clientY: 20 }); await settle()
+    await actionTrigger(wrapper).trigger('contextmenu', { clientX: 20, clientY: 20 }); await settle()
     item('复制文本')!.click(); await settle()
     expect(writeText).toHaveBeenCalledWith('可复制的消息')
     expect(document.querySelector('[role="menu"]')).toBeNull()
     expect(wrapper.get('[role="status"]').text()).toBe('已复制')
     writeText.mockRejectedValueOnce(new Error('denied'))
-    await wrapper.get('[aria-haspopup="menu"]').trigger('contextmenu'); await settle()
+    await actionTrigger(wrapper).trigger('contextmenu'); await settle()
     item('复制文本')!.click(); await settle()
     expect(wrapper.get('[role="status"]').text()).toContain('复制失败')
     vi.unstubAllGlobals()
@@ -88,12 +93,12 @@ describe('消息媒体与菜单交互', () => {
   it('撤回只有在菜单中选择后触发；无权限不出现撤回项', async () => {
     const wrapper = render()
     expect(wrapper.find('[data-test="message-delete"]').exists()).toBe(false)
-    await wrapper.get('[aria-haspopup="menu"]').trigger('keydown', { key: 'F10', shiftKey: true }); await settle()
+    await actionTrigger(wrapper).trigger('keydown', { key: 'F10', shiftKey: true }); await settle()
     expect(wrapper.emitted('delete')).toBeUndefined()
     item('撤回')!.click(); await settle()
     expect(wrapper.emitted('delete')).toEqual([[message()]])
     await wrapper.setProps({ canDelete: false })
-    await wrapper.get('[aria-haspopup="menu"]').trigger('contextmenu'); await settle()
+    await actionTrigger(wrapper).trigger('contextmenu'); await settle()
     expect(item('撤回')).toBeUndefined()
     expect(item('复制文本')).toBeDefined()
     await wrapper.setProps({ message: message({ deleted: true }) }); await settle()
@@ -107,7 +112,7 @@ describe('消息媒体与菜单交互', () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { clicked.push(this.href) })
     const wrapper = mount(MessageBubble, { attachTo: document.body, props: { message: message({ attachment: file('application/pdf') }), mine: true }, global: { provide: { [attachmentLoaderKey as symbol]: loader } } })
     wrappers.push(wrapper)
-    const trigger = wrapper.get('[aria-haspopup="menu"]')
+    const trigger = actionTrigger(wrapper)
     trigger.element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch', clientX: 10, clientY: 10 }))
     await new Promise(resolve => setTimeout(resolve, 800)); await settle()
     item('下载附件')!.click(); await settle()
@@ -117,7 +122,7 @@ describe('消息媒体与菜单交互', () => {
   })
   it('菜单可以预览图片、下载附件，Esc 关闭后恢复焦点', async () => {
     const wrapper = render({ content: '', attachment: file() })
-    const trigger = wrapper.get('[aria-haspopup="menu"]')
+    const trigger = actionTrigger(wrapper)
     await trigger.trigger('contextmenu'); await settle()
     expect(item('复制文本')).toBeUndefined()
     expect(item('下载附件')).toBeDefined()

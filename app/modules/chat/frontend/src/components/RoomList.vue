@@ -76,7 +76,7 @@ function lastActivity(value: string | null): string {
                 <Lock v-if="channel.kind === 'private'" :size="17" />
                 <Hash v-else :size="17" />
               </span>
-              <span class="rooms-item-copy"><span class="rooms-item-name">{{ channel.name }}</span><small>{{ channel.lastMessagePreview || channel.description || `${channel.memberCount} 位成员` }}</small></span>
+              <span class="rooms-item-copy"><span class="rooms-item-name">{{ channel.name }}</span><small><span v-if="(channel.mentionAllUnreadCount ?? 0) > 0" class="rooms-mention-flag" data-test="mention-all-flag">[@全体成员] </span><span v-if="channel.mentionUnreadCount > 0" class="rooms-mention-flag" data-test="mention-flag">[有人@我] </span>{{ channel.lastMessagePreview || channel.description || `${channel.memberCount} 位成员` }}</small></span>
               <span v-if="channel.lastMessageAt" class="rooms-time">{{ lastActivity(channel.lastMessageAt) }}</span>
               <span v-if="channel.unreadCount > 0" class="rooms-badge" data-test="unread-badge">
                 {{ channel.unreadCount > 99 ? '99+' : channel.unreadCount }}
@@ -99,7 +99,7 @@ function lastActivity(value: string | null): string {
               @click="emit('select', { kind: 'dm', id: dm.id })"
             >
               <UMessageAvatar :src="dm.otherUser.avatarUrl" :name="dm.otherUser.displayName || dm.name" />
-              <span class="rooms-item-copy"><span class="rooms-item-name">{{ dm.otherUser.displayName || dm.name }}</span><small>{{ dm.lastMessagePreview || '暂无消息' }}</small></span>
+              <span class="rooms-item-copy"><span class="rooms-item-name">{{ dm.otherUser.displayName || dm.name }}</span><small><span v-if="dm.mentionUnreadCount > 0" class="rooms-mention-flag" data-test="mention-flag">[有人@我] </span>{{ dm.lastMessagePreview || '暂无消息' }}</small></span>
               <span v-if="dm.lastMessageAt" class="rooms-time">{{ lastActivity(dm.lastMessageAt) }}</span>
               <span v-if="dm.unreadCount > 0" class="rooms-badge" data-test="unread-badge">
                 {{ dm.unreadCount > 99 ? '99+' : dm.unreadCount }}
@@ -205,6 +205,8 @@ function lastActivity(value: string | null): string {
 }
 .rooms-item-copy { display:block; flex:1; min-width:0; }
 .rooms-item-copy small { display:block; margin-top:var(--unself-space-1); overflow:hidden; color:var(--unself-color-text-tertiary); font-size:var(--unself-font-size-xs); font-weight:400; text-overflow:ellipsis; white-space:nowrap; }
+/* #347 @ 提醒：预览灰字前的红色 [有人@我]，随 mentionUnreadCount 清零消失（静态文本，无动效） */
+.rooms-mention-flag { color: var(--unself-color-danger); font-weight: 600; }
 .rooms-time { align-self:flex-start; padding-top:var(--unself-space-2); color:var(--unself-color-text-tertiary); font-size:var(--unself-font-size-xs); font-variant-numeric:tabular-nums; }
 .rooms-badge {
   flex-shrink: 0;
