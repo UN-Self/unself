@@ -150,9 +150,11 @@ app.get('/', (c) => {
     const token = await sdk.waitForToken();
     window.__helloToken = token;
     // claims 展示（身份行：证明系统认识你，§6.5 hello 页动线）
+    // 邮箱来自核心 users.email，经模块 token 的 email claim 下发；未开户/IdP 未签时整行隐藏
     const claims = sdk.decodeContext(window.__helloToken);
     who.textContent = claims.name ?? claims.sub;
     email.textContent = claims.email ?? '';
+    email.hidden = !claims.email;
     await refresh();
 
     plus.addEventListener('click', async () => {

@@ -15,17 +15,26 @@ export function coreUsername(claims) {
  * - 首见 sub：INSERT OR IGNORE 建档（display_name 回填 claims.name）+ core_identities 映射行；
  *   general 频道入席由 schema 的 add_new_user_to_general 触发器兜底，此处不重复写。
  * - display_name 只在为空时回填 claims.name（不在每次请求 UPDATE，减少写放大）。
+ * - 登录名/邮箱/身份来源（#透传）同 display_name 口径：新建档写入，存量空值回填，不覆盖已有值。
  * - 停用复查：行被删/停用（is_disabled / disabled_until / deleted_at）→ 401（HTTP 停用语义）。
  */
 export async function jitEnsureUser(db, claims) {
   const username = coreUsername(claims);
   const displayName = typeof claims.name === 'string' && claims.name.trim() ? claims.name.trim() : null;
+  // #透传：登录名/工作邮箱/身份来源（有才带）。身份来源只信签发侧签名过的 claims.identity_source
+  // （核心 users.issuer 映射）——「claims.username 有无」不是证据：旧签发侧的内置账号 token 同样没有
+  // username，按它推断会把内置账号永久误标成 'oidc'。claim 缺省（旧签发侧）→ null = 来源未知。
+  const loginName = typeof claims.username === 'string' && claims.username ? claims.username : null;
+  const workEmail = typeof claims.email === 'string' && claims.email ? claims.email : null;
+  const identitySource = claims.identity_source === 'builtin' || claims.identity_source === 'oidc'
+    ? claims.identity_source
+    : null;
 
   await db.prepare(
-    `INSERT OR IGNORE INTO users (username, display_name, password_hash, password_salt)
-     VALUES (?, coalesce(?, 'member-' || ?), '', '')`
+    `INSERT OR IGNORE INTO users (username, display_name, password_hash, password_salt, core_login_name, core_email, core_identity_source)
+     VALUES (?, coalesce(?, 'member-' || ?), '', '', ?, ?, ?)`
   )
-    .bind(username, displayName, claims.sub)
+    .bind(username, displayName, claims.sub, loginName, workEmail, identitySource)
     .run();
 
   await db.prepare(
@@ -37,7 +46,7 @@ export async function jitEnsureUser(db, claims) {
 
   const found = await db
     .prepare(
-      `SELECT id, username, display_name, core_profile_revision, core_avatar_url, avatar_key, is_disabled, disabled_until, deleted_at
+      `SELECT id, username, display_name, core_profile_revision, core_avatar_url, avatar_key, is_disabled, disabled_until, deleted_at, core_login_name, core_email, core_identity_source
        FROM users
        WHERE username = ?
        LIMIT 1`
@@ -79,6 +88,25 @@ export async function jitEnsureUser(db, claims) {
         user.core_profile_revision = current.core_profile_revision;
       }
     }
+  }
+
+  // #透传：登录名/工作邮箱/身份来源只在新建档写入；存量行为空时按 claims 回填（有才带、空不覆盖，防写放大）。
+  // 身份来源必须回填——它是资料卡区分「OIDC 账号」与「来源未知」的唯一依据（见 0007 迁移）。
+  // 自愈：早期版本按「claims.username 有无」推断来源，会把内置账号误标成 'oidc'；
+  // 权威 claim 说 'builtin' 而库里的值是 'oidc' 时改写回来（反向不可能：同一 sub 的来源不会从 builtin 变 oidc）。
+  const needsIdentityHeal = identitySource === 'builtin' && user.core_identity_source === 'oidc';
+  // 来源未知（identitySource 为 null 且库值也是 NULL）时没有可写内容，必须跳过——
+  // 否则 UPDATE 对 NULL 是恒等操作却每次请求都执行（写放大 + updated_at 抖动），且永不收敛。
+  const needsIdentityBackfill = identitySource != null && user.core_identity_source == null;
+  if ((loginName && user.core_login_name == null) || (workEmail && user.core_email == null) || needsIdentityBackfill || needsIdentityHeal) {
+    await db.prepare(
+      `UPDATE users SET core_login_name = COALESCE(core_login_name, ?), core_email = COALESCE(core_email, ?),
+         core_identity_source = CASE WHEN ? = 'builtin' THEN 'builtin' ELSE COALESCE(core_identity_source, ?) END,
+         updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).bind(loginName, workEmail, identitySource, identitySource, user.id).run();
+    if (loginName) user.core_login_name = loginName;
+    if (workEmail) user.core_email = workEmail;
+    if (needsIdentityHeal || !user.core_identity_source) user.core_identity_source = identitySource;
   }
 
   return {

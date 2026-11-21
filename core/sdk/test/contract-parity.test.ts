@@ -29,9 +29,10 @@ describe('#283 公开结构类型与契约一致', () => {
     expectTypeOf<ContractThemeTokens>().toMatchTypeOf<ThemeTokens>();
   });
 
-  it('ModuleTokenClaims 双向可赋值', () => {
-    expectTypeOf<ModuleTokenClaims>().toMatchTypeOf<ContractModuleTokenClaims>();
-    expectTypeOf<ContractModuleTokenClaims>().toMatchTypeOf<ModuleTokenClaims>();
+  // 必须严格相等而非双向可赋值：可选字段只加在一侧时 toMatchTypeOf 依然通过，
+  // 镜像漏字段（如 #透传 的 username/email）会静默漂移。
+  it('ModuleTokenClaims 与契约严格相等', () => {
+    expectTypeOf<ModuleTokenClaims>().toEqualTypeOf<ContractModuleTokenClaims>();
   });
 });
 

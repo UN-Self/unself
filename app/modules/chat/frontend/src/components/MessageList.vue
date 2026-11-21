@@ -35,6 +35,8 @@ export interface MessageListProps {
   canManage?: boolean
   /** #339② 刚发送成功的消息 id 集：命中且 mine 的气泡播入场动效（吞入→残影→亮起），父层在 animationend 后移除。 */
   justSentIds?: number[]
+  /** 消息头像资料卡的群内身份（senderId → ChannelMember；拉取失败为空表，卡片降级）。 */
+  memberMap?: Map<number, import('../lib/types').ChannelMember>
 }
 
 const props = withDefaults(defineProps<MessageListProps>(), {
@@ -45,6 +47,7 @@ const props = withDefaults(defineProps<MessageListProps>(), {
   canManage: false,
   onVisible: undefined,
   justSentIds: () => [],
+  memberMap: () => new Map(),
 })
 
 const emit = defineEmits<{
@@ -221,6 +224,7 @@ function onShowReceipts(message: Message): void {
               :can-delete="message.sender.id === currentUserId || canManage"
               :entering="props.justSentIds.includes(message.id)"
               :receiving="isFreshArrival(message)"
+              :member="memberMap.get(message.sender.id)"
               @enter-done="emit('enter-done', message.id)"
               @show-receipts="onShowReceipts"
               @delete="emit('delete', $event)"

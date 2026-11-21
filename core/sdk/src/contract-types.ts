@@ -87,7 +87,8 @@ export type ThemeTokens = Record<string, string>;
 /**
  * 模块 token（JWT）claims 的公开形状，结构等价于契约包的
  * `ModuleTokenClaims`（`z.infer<typeof ModuleTokenClaimsSchema>`）。
- * 字段语义见该契约（iss/sub/aud/iat/exp + 可选 act/name）。
+ * 字段语义见该契约（iss/sub/aud/iat/exp + 可选 act/name/profile_revision/avatar_url/username/email/identity_source）。
+ * 新增字段必须同步这里——`test/contract-parity.test.ts` 用严格相等守卫，漂移即 typecheck 失败。
  */
 export interface ModuleTokenClaims {
   /** 签发方：Core 的 iss 标识。 */
@@ -107,4 +108,10 @@ export interface ModuleTokenClaims {
   /** Core 资料的单调修订号。 */
   profile_revision?: number;
   avatar_url?: string;
+  /** 登录用户名（内置账号）；OIDC 用户无凭据行，缺省。 */
+  username?: string;
+  /** 工作邮箱（核心 users.email）；未开户/IdP 未签时缺省。 */
+  email?: string;
+  /** 身份来源（核心 users.issuer 映射）；旧签发侧缺省。 */
+  identity_source?: 'builtin' | 'oidc';
 }

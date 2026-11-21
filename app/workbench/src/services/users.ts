@@ -58,10 +58,24 @@ export async function getDisplayName(db: D1Database, userId: string): Promise<st
   return (await getProfileIdentity(db, userId))?.name ?? null;
 }
 
-export async function getProfileIdentity(db: D1Database, userId: string): Promise<{ name: string; revision: number; avatarKey: string | null } | null> {
-  const row = await db.prepare('SELECT display_name, profile_revision, avatar_key FROM users WHERE id = ? AND status = ?')
-    .bind(userId, 'active').first<{ display_name: string | null; profile_revision: number; avatar_key: string | null }>();
-  return row ? { name: row.display_name ?? '', revision: row.profile_revision, avatarKey: row.avatar_key } : null;
+export async function getProfileIdentity(db: D1Database, userId: string): Promise<{ name: string; revision: number; avatarKey: string | null; username: string | null; email: string | null; identitySource: 'builtin' | 'oidc' | null } | null> {
+  // 登录用户名是凭据域字段（builtin_credentials），此处 LEFT JOIN 只读透传给模块 token claims
+  // （OIDC 用户无行 → null，签发侧省略该字段）；email 是激活开户落库的工作邮箱。
+  // identitySource 由权威字段 users.issuer 映射（内置建档固定 'builtin'，见 invites/setup/auth）；
+  // issuer 意外为 NULL 时返回 null（签发侧省略 claim，模块侧按「来源未知」处理），不猜。
+  const row = await db.prepare(
+    'SELECT u.display_name, u.profile_revision, u.avatar_key, u.email, u.issuer, bc.username AS builtin_username FROM users u LEFT JOIN builtin_credentials bc ON bc.user_id = u.id WHERE u.id = ? AND u.status = ?',
+  )
+    .bind(userId, 'active').first<{ display_name: string | null; profile_revision: number; avatar_key: string | null; email: string | null; issuer: string | null; builtin_username: string | null }>();
+  if (!row) return null;
+  return {
+    name: row.display_name ?? '',
+    revision: row.profile_revision,
+    avatarKey: row.avatar_key,
+    username: row.builtin_username,
+    email: row.email,
+    identitySource: row.issuer == null ? null : row.issuer === 'builtin' ? 'builtin' : 'oidc',
+  };
 }
 
 /** 当前用户修改自己的昵称。 */

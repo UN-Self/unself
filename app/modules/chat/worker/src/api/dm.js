@@ -3,6 +3,7 @@
 import { userAvatarUrl } from '../profile-avatar.js';
 import { ensureDmChannel } from '../data/dm-provisioning.js';
 import { listAdminDms, listUserDms } from '../data/dm-queries.js';
+import { projectIdentity } from '../data/users.js';
 import { getUserBlockStatus } from '../data/user-blocks.ts';
 import { errorResponse, parseJsonRequest } from '../utils.js';
 import { activeUserSql } from '../user-status.js';
@@ -24,7 +25,7 @@ export function registerDmRoutes(app) {
     }
 
     const targetUser = await c.env.DB.prepare(
-      `SELECT id, username, display_name, core_avatar_url, avatar_key
+      `SELECT id, username, display_name, core_avatar_url, avatar_key, core_login_name, core_identity_source, core_email
        FROM users
        WHERE id = ?
          AND ${activeUserSql()}
@@ -38,6 +39,7 @@ export function registerDmRoutes(app) {
       return errorResponse('目标用户不存在', 404);
     }
 
+    const target = targetUser.results[0];
     const [channel, blockStatus] = await Promise.all([
       ensureDmChannel(c.env.DB, session.userId, targetUserId),
       getUserBlockStatus(c.env.DB, session.userId, targetUserId)
@@ -48,10 +50,12 @@ export function registerDmRoutes(app) {
         kind: 'dm',
         name: channel.dm_key,
         otherUser: {
-          id: Number(targetUser.results[0].id),
-          username: targetUser.results[0].username,
-          displayName: targetUser.results[0].display_name,
-          avatarUrl: userAvatarUrl(targetUser.results[0].core_avatar_url, targetUser.results[0].avatar_key)
+          id: Number(target.id),
+          username: target.username,
+          displayName: target.display_name,
+          avatarUrl: userAvatarUrl(target.core_avatar_url, target.avatar_key),
+          // #透传：与 GET /api/dm 同一条投影规则，私聊资料卡才有邮箱可显示
+          ...projectIdentity(target)
         },
         isBlockedByMe: blockStatus.blockedByMe
       }
