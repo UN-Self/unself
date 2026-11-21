@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
 import { computed, provide, ref, useId } from 'vue'
-import { Check } from 'lucide-vue-next'
+import { Check, ArrowUp } from 'lucide-vue-next'
 import { UHoverCard, UMessage, UMessageAvatar, UMessageBubble, UProfileCard } from '@unself/ui'
 
 import { attachmentResourceKey, useAttachmentResource } from '../lib/attachment-resource'
@@ -23,8 +23,14 @@ export interface MessageBubbleProps {
   mine: boolean
   /** 被回复消息的摘要文本（已有 replyTo 时显示，deleted 时显示已撤回）。 */
   replyPreview?: string
+  /** 被回复消息的发言人名（引用块第一行灰字；replyDeleted 时不显示）。 */
+  replyAuthor?: string
   /** 回复原消息已删除。 */
   replyDeleted?: boolean
+  /** 被引用原文已加载在当前消息流里（true 时引用块显示「回到原文」按钮）。 */
+  replyJumpable?: boolean
+  /** 点击跳转后短暂高亮该气泡（flash 由父层定时清除）。 */
+  flash?: boolean
   /** 高亮（提及我/回复我）。 */
   highlighted?: boolean
   /** 私聊会话（#220）：DM 且已读 → 「已读」标签（aria=对方已读）。 */
@@ -44,7 +50,10 @@ export interface MessageBubbleProps {
 
 const props = withDefaults(defineProps<MessageBubbleProps>(), {
   replyPreview: undefined,
+  replyAuthor: undefined,
   replyDeleted: undefined,
+  replyJumpable: false,
+  flash: false,
   highlighted: undefined,
   isDm: false,
   audienceSize: undefined,
@@ -74,6 +83,10 @@ const emit = defineEmits<{ /** 点击回执标签：请求父层打开已读名�
   /** #339② 入场动效播完（bubble-arrive animationend），通知父层清 justSentIds。 */
   'enter-done': []
   delete: [message: Message]
+  /** 右键菜单选「引用」：上抛原消息，父层开 composer 回复条。 */
+  quote: [message: Message]
+  /** 点击引用块「回到原文」：上抛引用方消息（replyTo.id 是滚动目标），父层滚动定位。 */
+  'jump-to-reply': [message: Message]
 }>()
 
 /** #339② 入场动效结束（以落点亮起段为准）：只在 entering 期间监听，避免平时误报。 */
@@ -117,7 +130,7 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
     v-else
     :mine="mine"
     class="bubble-row"
-    :class="{ 'bubble-row-mine': mine, 'bubble-row-highlight': highlighted, 'bubble-entering': entering, 'bubble-row-theirs-enter': receiving && !mine }"
+    :class="{ 'bubble-row-mine': mine, 'bubble-row-highlight': highlighted, 'bubble-row-flash': flash, 'bubble-entering': entering, 'bubble-row-theirs-enter': receiving && !mine }"
     :data-test="mine ? 'bubble-mine' : 'bubble-theirs'"
     @animationend="onBubbleAnimEnd"
   >
@@ -152,13 +165,35 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
         <span v-else-if="fallbackTime" class="bubble-time">{{ fallbackTime }}</span>
       </div>
 
-      <!-- 引用块：被回复消息摘要 / 已删除提示 -->
-      <div v-if="!message.deleted && (replyPreview || replyDeleted)" class="bubble-reply">
-        <span class="bubble-reply-text">{{ replyDeleted ? '原消息已删除' : replyPreview }}</span>
-      </div>
+      <!-- 引用块在气泡体内（UMessageBubble 插槽第一段），见下方 MessageActions 处 -->
 
-      <MessageActions :message="message" :can-delete="canDelete" @delete="emit('delete', message)" @preview="attachmentView?.preview()">
+      <MessageActions :message="message" :can-delete="canDelete" @delete="emit('delete', message)" @quote="emit('quote', message)" @preview="attachmentView?.preview()">
         <UMessageBubble class="bubble-body" :variant="mine ? 'solid' : 'soft'">
+          <!-- 引用卡片：整个模块（竖线+底色+作者行+引文）可点回原文。可跳转时是 role=button（Enter/空格触发）；
+               右上角箭头是纯装饰（aria-hidden + pointer-events:none），键盘入口就是这张卡本身 -->
+          <div
+            v-if="!message.deleted && (replyPreview || replyDeleted)"
+            class="bubble-reply"
+            :class="{ 'bubble-reply-jumpable': replyJumpable && !replyDeleted, 'bubble-reply-mine': mine }"
+            data-test="bubble-reply"
+            :role="replyJumpable && !replyDeleted ? 'button' : undefined"
+            :tabindex="replyJumpable && !replyDeleted ? 0 : undefined"
+            @click.stop="replyJumpable && !replyDeleted && emit('jump-to-reply', message)"
+            @keydown.enter.prevent="replyJumpable && !replyDeleted && emit('jump-to-reply', message)"
+            @keydown.space.prevent="replyJumpable && !replyDeleted && emit('jump-to-reply', message)"
+          >
+            <span v-if="replyAuthor" class="bubble-reply-author">{{ replyAuthor }}</span>
+            <span class="bubble-reply-text">{{ replyDeleted ? '原消息已删除' : replyPreview }}</span>
+            <!-- 纯装饰图标：跳转交互在整块引用卡上（点它或 Enter/空格均可） -->
+            <span
+              v-if="replyJumpable && !replyDeleted"
+              class="bubble-reply-jump"
+              data-test="reply-jump"
+              aria-hidden="true"
+            >
+              <ArrowUp :size="14" />
+            </span>
+          </div>
           <MessageContent ref="attachmentView" :message="message" />
         </UMessageBubble>
       </MessageActions>
@@ -228,16 +263,58 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
+.bubble-reply-author {
+  display: block;
+  font-size: var(--unself-font-size-xs);
+  margin-bottom: 1px;
+}
+/* 引用卡片：气泡体内色块（作者行 + 引文全文），左竖线无底色，右上角留跳转按钮位；可点态 hover 才加深底色 */
 .bubble-reply {
-  border-left: 2px solid var(--unself-color-border);
-  padding: 2px var(--unself-space-2);
+  position: relative;
+  margin-bottom: var(--unself-space-1);
+  padding: var(--unself-space-1) calc(var(--unself-space-4) + 22px) var(--unself-space-1) var(--unself-space-2);
   font-size: var(--unself-font-size-sm);
-  color: var(--unself-color-text-tertiary);
-  background: var(--unself-color-surface);
+  color: var(--unself-color-text-secondary);
+  background: transparent;
+  border-left: 2px solid var(--unself-color-border);
   border-radius: 0 var(--unself-radius-sm) var(--unself-radius-sm) 0;
+}
+/* 引用卡片可点态：整个模块（含左竖线、底色、作者行、引文）点击回原文，悬浮高亮——对方灰、我方主题色，与气泡归属一致 */
+.bubble-reply-jumpable { cursor: pointer; transition: background-color var(--unself-duration-fast) var(--unself-ease-out); }
+.bubble-reply-jumpable:hover { background: color-mix(in srgb, var(--unself-color-text) 8%, transparent); }
+.bubble-reply-jumpable:focus-visible { outline: var(--unself-focus-ring); outline-offset: 2px; }
+.bubble-reply-mine { border-left-color: var(--unself-color-primary); }
+.bubble-reply-jumpable.bubble-reply-mine:hover { background: color-mix(in srgb, var(--unself-color-primary) 16%, transparent); }
+.bubble-reply-text {
+  /* 全文引用超长时截到 6 行，避免引用块撑爆气泡（line-clamp 与 pre-wrap 可共存） */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.bubble-reply-jump {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--unself-color-text-tertiary);
+  pointer-events: none;
+}
+/* 跳转定位后的短暂高亮（父层 1.2s 后清 flash）；reduced-motion 全局禁 animation，无动效即无闪烁 */
+.bubble-row-flash .bubble-main { animation: bubble-jump-flash 1.2s var(--unself-ease-out); }
+/* reduced-motion 下全局禁 animation，上面动画不播就没了任何反馈：静态 outline 兜底（1.2s 后父层清 flash 一并消失） */
+@media (prefers-reduced-motion: reduce) {
+  .bubble-row-flash .bubble-main { animation: none; outline: 2px solid var(--unself-color-primary); }
+}
+@keyframes bubble-jump-flash {
+  0%, 40% { outline: 2px solid var(--unself-color-primary); }
+  100% { outline: 2px solid transparent; }
 }
 .bubble-body {
   max-width:100%;

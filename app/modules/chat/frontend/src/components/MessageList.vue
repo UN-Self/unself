@@ -6,7 +6,8 @@ import MessageBubble from './MessageBubble.vue'
 import MessageRail from './MessageRail.vue'
 import { USkeleton } from '@unself/ui'
 import { formatDayLabel } from '../lib/message-time'
-import { nearTop } from '../lib/scroll'
+import { nearTop, scrollToPosition } from '../lib/scroll'
+import { replyAuthorOf, replyFullTextOf } from '../lib/reply-preview'
 import { useMessageScroll } from '../lib/use-message-scroll'
 import type { Message, ReadReceiptsSummary } from '../lib/types'
 
@@ -60,6 +61,8 @@ const emit = defineEmits<{
   /** #339② 入场动效播完 → 父层清除 justSentIds（避免重渲染重播）。 */
   'enter-done': [messageId: number]
   delete: [message: Message]
+  /** 右键菜单选「引用」→ 父层开 composer 回复条。 */
+  quote: [message: Message]
 }>()
 
 /** #339②：首渲染时已存在的消息是历史（不播入场）；其后新出现的他人消息才播（左缘滑入）。 */
@@ -186,6 +189,40 @@ onBeforeUnmount(() => {
 function onShowReceipts(message: Message): void {
   emit('show-receipts', message)
 }
+
+// ---------- 引用跳转：滚到原文 + 短暂高亮 ----------
+
+/** 已加载消息 id 集：原文在流内才显示「回到原文」按钮（不在则点了也没处滚）。 */
+const loadedIds = computed(() => new Set(props.messages.map((message) => message.id)))
+
+function canJumpTo(message: Message): boolean {
+  const reply = message.replyTo
+  return !!reply && !reply.deleted && loadedIds.value.has(reply.id)
+}
+
+const jumpFlashId = ref<number | null>(null)
+let jumpFlashTimer: ReturnType<typeof setTimeout> | null = null
+
+function jumpMotion(): ScrollBehavior {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+}
+
+/** 滚到原文（视口居中）并闪高亮 1.2s；原文未加载时按钮不显示，此处只做兜底。 */
+function onJumpToReply(message: Message): void {
+  const targetId = message.replyTo?.id
+  const view = scroller.value
+  if (targetId === undefined || view === null) return
+  const el = content.value?.querySelector<HTMLElement>(`[data-message-id="${targetId}"]`)
+  if (!el) return
+  const top = view.scrollTop + el.getBoundingClientRect().top - view.getBoundingClientRect().top
+    - Math.round(view.clientHeight / 2) + Math.round(el.clientHeight / 2)
+  scrollToPosition(view, Math.max(0, top), jumpMotion())
+  jumpFlashId.value = targetId
+  if (jumpFlashTimer) clearTimeout(jumpFlashTimer)
+  jumpFlashTimer = setTimeout(() => { jumpFlashId.value = null }, 1300)
+}
+
+onBeforeUnmount(() => { if (jumpFlashTimer) clearTimeout(jumpFlashTimer) })
 </script>
 
 <template>
@@ -225,9 +262,16 @@ function onShowReceipts(message: Message): void {
               :entering="props.justSentIds.includes(message.id)"
               :receiving="isFreshArrival(message)"
               :member="memberMap.get(message.sender.id)"
+              :reply-preview="replyFullTextOf(message.replyTo)"
+              :reply-author="replyAuthorOf(message.replyTo)"
+              :reply-deleted="message.replyTo?.deleted === true ? true : undefined"
+              :reply-jumpable="canJumpTo(message)"
+              :flash="jumpFlashId === message.id"
+              @jump-to-reply="onJumpToReply"
               @enter-done="emit('enter-done', message.id)"
               @show-receipts="onShowReceipts"
               @delete="emit('delete', $event)"
+              @quote="emit('quote', $event)"
             />
           </template>
         </template>

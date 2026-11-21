@@ -357,6 +357,33 @@ describe('Composer 回复条', () => {
     await wrapper.find('[data-test="cancel-reply"]').trigger('click')
     expect(wrapper.emitted('cancel-reply')).toHaveLength(1)
   })
+
+  // 文档发送也消费引用：Composer 层不清 replyTo（引用归父层 onSendDocument 快照消费），
+  // 因此发送后回复条仍在、不 emit cancel-reply。固化「Composer 不自作主张清引用」契约。
+  it('附件发送后回复条仍在（不 emit cancel-reply）', async () => {
+    const submitDocument = vi.fn().mockResolvedValue(undefined)
+    const wrapper = await mountComposer({
+      submitDocument,
+      replyTo: {
+        id: 99,
+        content: '被引用的原消息',
+        mentionUserIds: [],
+        mentions: [],
+        createdAt: '2026-09-16T00:00:00Z',
+        source: 'local',
+        sender: { kind: 'local', id: 1, username: 'u', displayName: '小明', avatarUrl: '', source: 'local' },
+        attachment: null,
+      },
+    })
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [new File(['x'], 'a.pdf', { type: 'application/pdf' })], configurable: true })
+    await input.trigger('change')
+    await wrapper.get('[data-test="send"]').trigger('click')
+    await flushPromises()
+    expect(submitDocument).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('cancel-reply')).toBeUndefined()
+    expect(wrapper.find('[data-test="reply-bar"]').exists()).toBe(true)
+  })
 })
 
 // ---------- 语音录制（外部能力 stub 为 fake） ----------

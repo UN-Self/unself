@@ -42,6 +42,8 @@ export interface SendMessageInput {
   attachment?: Message['attachment']
   blocks?: Message['blocks']
   mentionUserIds?: number[]
+  /** 被引用消息（右键「引用」）：只透传 id，同房间存在性由后端校验。 */
+  replyTo?: Message | null
 }
 
 export interface ChatStore {
@@ -530,6 +532,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
           attachment: input.attachment ?? null,
           blocks: input.blocks,
           mentionUserIds: input.mentionUserIds ?? [],
+          replyTo: input.replyTo ?? null,
         })
         // created=false = 服务端幂等回显（重试场景）：不重复插入
         if (result.created) {

@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Mic, Paperclip, SendHorizontal, Smile, Square, X } from 'lucide-vue-next'
 
 import { clearDraft, loadDraft, saveDraft } from '../lib/draft'
+import { replyAuthorOf, replyPreviewOf } from '../lib/reply-preview'
 import { UButton, UCard, URichInput, type RichInputPart } from '@unself/ui'
 import type { Message, UserSummary } from '../lib/types'
 import { createVoiceRecorder, isVoiceSupported } from '../lib/voice-recorder'
@@ -386,19 +387,18 @@ onBeforeUnmount(() => {
 
 // ---------- 回复条 ----------
 
-const replyPreview = computed(() => {
-  const reply = props.replyTo
-  if (!reply) return ''
-  const content = reply.content
-  return content.length > 60 ? `${content.slice(0, 60)}…` : content
-})
+/** 引文：取 content 第一行，超 60 字省略；纯附件消息回退附件名（与消息气泡引用块同源）。 */
+const replyPreview = computed(() => replyPreviewOf(props.replyTo) ?? '')
 </script>
 
 <template>
   <div class="composer" :class="{ 'composer-swallow': swallowing }" data-test="composer">
-    <!-- 回复条 -->
+    <!-- 回复条：发言人灰字一行 + 引文第一行 -->
     <div v-if="replyTo" class="composer-reply" data-test="reply-bar">
-      <span class="composer-reply-text" data-test="reply-preview">{{ replyPreview }}</span>
+      <span class="composer-reply-text">
+        <span class="composer-reply-author" data-test="reply-author">{{ replyAuthorOf(replyTo) }}</span>
+        <span class="composer-reply-quote" data-test="reply-preview">{{ replyPreview }}</span>
+      </span>
       <button
         type="button"
         class="composer-icon-btn"
@@ -631,17 +631,30 @@ const replyPreview = computed(() => {
   display: flex;
   align-items: center;
   gap: var(--unself-space-2);
+  margin-bottom: var(--unself-space-2);
   padding: var(--unself-space-2) var(--unself-space-3);
-  border-bottom: 1px solid var(--unself-color-border);
+  border: 1px solid var(--unself-color-border);
+  border-radius: var(--unself-radius-sm);
   background: var(--unself-color-surface);
 }
 .composer-reply-text {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.composer-reply-author {
+  display: block;
+  font-size: var(--unself-font-size-xs);
+  color: var(--unself-color-text-tertiary);
+  margin-bottom: 1px;
+}
+.composer-reply-quote {
+  display: block;
   font-size: var(--unself-font-size-sm);
   color: var(--unself-color-text-secondary);
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  overflow: hidden;
 }
 .composer-mentions {
   position: absolute;

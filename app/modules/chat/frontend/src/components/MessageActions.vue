@@ -1,18 +1,20 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
-import { Copy, Image, Undo2, Download } from 'lucide-vue-next'
+import { Copy, Image, Undo2, Download, MessageSquareQuote } from 'lucide-vue-next'
 import { UContextMenu, type MenuAction } from '@unself/ui'
 import { attachmentResourceKey } from '../lib/attachment-resource'
 import type { Message } from '../lib/types'
 const props = defineProps<{ message: Message; canDelete: boolean }>()
-const emit = defineEmits<{ delete: []; preview: [] }>()
+const emit = defineEmits<{ delete: []; preview: []; quote: [] }>()
 const resource = inject(attachmentResourceKey, null)
 const status = ref('')
 watch(() => [props.message.id, props.message.deleted], () => { status.value = '' })
 const items = computed<MenuAction[]>(() => {
   if (props.message.deleted) return []
   const actions: MenuAction[] = []
+  // 引用：所有未删除消息都可引用（纯附件消息引用块回退到附件名，见 reply-preview.ts）
+  actions.push({ id: 'quote', label: '引用', icon: MessageSquareQuote })
   if (props.message.content) actions.push({ id: 'copy', label: '复制文本', icon: Copy })
   const attachment = props.message.attachment
   if (attachment) {
@@ -26,6 +28,7 @@ async function select(id: string) {
   if (props.message.deleted) return
   status.value = ''
   if (id === 'delete' && props.canDelete) { emit('delete'); return }
+  if (id === 'quote') { emit('quote'); return }
   if (id === 'preview') { emit('preview'); return }
   if (id === 'download' && props.message.attachment) {
     await resource?.download()
@@ -44,6 +47,7 @@ async function select(id: string) {
 </script>
 <template>
   <UContextMenu :items="items" :disabled="message.deleted" @select="select"><slot /></UContextMenu>
+
   <span v-if="status" role="status" class="action-status">{{ status }}</span>
 </template>
 <style scoped>
