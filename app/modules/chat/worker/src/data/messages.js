@@ -74,6 +74,8 @@ export function mapMessage(row, content = row.content, replyTo = null) {
 		id: Number(row.id),
 		content,
 		mentionUserIds: normalizeMentionUserIds(JSON.parse(row.mention_user_ids || "[]")),
+		// @all：仅群主提交且服务端复核通过才置 1（message-submission.resolveMessageMentionAll）。
+		mentionAll: Number(row.mention_all) === 1,
 		mentions,
 		createdAt: row.created_at,
 		source: row.source || "edgechat",
@@ -180,7 +182,7 @@ const MESSAGE_SELECT = `SELECT
 		  m.sender_kind, m.external_sender_id, m.external_sender_name,
 		  m.external_sender_avatar_url, m.source, m.source_message_id,
 		  m.source_attachment_id, m.source_attachment_unique_id, m.client_message_id,
-			  m.mention_user_ids, m.reply_to_message_id, m.reply_to_sender_id, m.created_at, m.deleted_at,
+				  m.mention_user_ids, m.mention_all, m.reply_to_message_id, m.reply_to_sender_id, m.created_at, m.deleted_at,
 		  u.id AS sender_id, u.username AS sender_username,
 		  u.display_name AS sender_display_name, u.avatar_key AS sender_avatar_key, u.core_avatar_url AS sender_core_avatar_url,
 		  u.core_login_name AS sender_core_login_name,
@@ -413,6 +415,7 @@ async function persistMessage(env, {
 	sourceAttachmentUniqueId = null,
 	clientMessageId = null,
 	mentionUserIds = [],
+	mentionAll = 0,
 	replyToMessageId = null,
 	replyToSenderId = null,
 }) {
@@ -464,6 +467,7 @@ async function persistMessage(env, {
 	const storedMentionUserIds = JSON.stringify(
 		isExternal ? [] : normalizeMentionUserIds(mentionUserIds),
 	);
+	const storedMentionAll = isExternal ? 0 : Number(mentionAll) === 1 ? 1 : 0;
 	const normalizedReplyToMessageId = replyToMessageId ? Number(replyToMessageId) : null;
 	const normalizedReplyToSenderId = replyToSenderId ? Number(replyToSenderId) : null;
 	try {
@@ -475,9 +479,9 @@ async function persistMessage(env, {
 					   attachment_waveform, sender_kind, external_sender_id,
 						   external_sender_name, external_sender_avatar_url, source, source_message_id,
 						   source_attachment_id, source_attachment_unique_id, client_message_id,
-							   mention_user_ids, reply_to_message_id, reply_to_sender_id
-							 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				)
+							   mention_user_ids, mention_all, reply_to_message_id, reply_to_sender_id
+							 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					)
 			.bind(
 				Number(channelId),
 				normalizedSenderId,
@@ -503,6 +507,7 @@ async function persistMessage(env, {
 						sourceAttachmentUniqueId ? String(sourceAttachmentUniqueId) : null,
 							normalizedClientMessageId,
 							storedMentionUserIds,
+							storedMentionAll,
 							normalizedReplyToMessageId,
 							normalizedReplyToSenderId,
 
@@ -556,6 +561,7 @@ export async function insertMessage(env, {
 	blocks = null,
 	clientMessageId = null,
 	mentionUserIds = [],
+	mentionAll = 0,
 	replyToMessageId = null,
 	replyToSenderId = null,
 }) {
@@ -567,6 +573,7 @@ export async function insertMessage(env, {
 		blocks,
 		clientMessageId,
 		mentionUserIds,
+		mentionAll,
 		replyToMessageId,
 		replyToSenderId,
 	});

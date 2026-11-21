@@ -272,6 +272,14 @@ const audienceSize = computed(() => {
 
 const replyTo = ref<Message | null>(null)
 const uploading = ref(false)
+/** #347 右键头像 @：Composer 实例句柄（insertMention 外部插入入口）。 */
+const composerView = ref<InstanceType<typeof Composer> | null>(null)
+
+/** 右键消息头像 @ 提及：往输入框插入 mention chip（显示 @displayName，序列化 @username）。 */
+function onMention(message: Message): void {
+  const { id, username, displayName } = message.sender
+  composerView.value?.insertMention({ id, username, displayName })
+}
 
 // 切房清引用：replyTo 指向的是上一条消息，换房后原房间已变，留着会把旧 replyMessageId 发到新房
 watch(
@@ -283,9 +291,9 @@ watch(
   },
 )
 
-async function onSend(text: string, mentionUserIds: number[]): Promise<void> {
+async function onSend(text: string, mentionUserIds: number[], mentionAll = false): Promise<void> {
   try {
-    await store.sendMessage({ content: text, mentionUserIds, replyTo: replyTo.value })
+    await store.sendMessage({ content: text, mentionUserIds, mentionAll, replyTo: replyTo.value })
     replyTo.value = null
   } catch {
     // 发送失败：sendError 已由 store 置为人话提示（发送态复原，输入不丢可重试）
@@ -302,13 +310,13 @@ const sendDocument = createDocumentSender({
   send: (input) => store.sendMessage({ ...input, replyTo: documentReplyTo }),
 })
 
-async function onSendDocument(document: ComposerDocument, mentionUserIds: number[], signal: AbortSignal): Promise<void> {
+async function onSendDocument(document: ComposerDocument, mentionUserIds: number[], mentionAll: boolean, signal: AbortSignal): Promise<void> {
   documentReplyTo = replyTo.value
   const replyRoomKey = store.state.currentRoom ? roomKeyString(store.state.currentRoom) : null
   replyTo.value = null
   uploading.value = true
   try {
-    await sendDocument(document, mentionUserIds, signal)
+    await sendDocument(document, mentionUserIds, mentionAll, signal)
   } catch {
     // 中止是用户主动放弃，引用条保持清空；房间已切换也不恢复（documentReplyTo 指向旧房间，塞回新房间会发错 replyMessageId）
     if (!signal.aborted && store.state.currentRoom && roomKeyString(store.state.currentRoom) === replyRoomKey) {
@@ -396,12 +404,14 @@ const contextKey = computed(() =>
       @enter-done="store.enterDone"
       @delete="onDeleteMessage"
       @quote="replyTo = $event"
+      @mention="onMention"
       @create-group="onCreateGroup"
       @open-group-details="onOpenGroupDetails"
     >
       <template #composer>
         <Composer
           v-if="store.state.currentRoom"
+          ref="composerView"
           :key="contextKey"
           :context-key="contextKey"
           :disabled="store.state.realtimeStatus === 'error'"
@@ -409,6 +419,7 @@ const contextKey = computed(() =>
           :uploading="uploading"
           :reply-to="replyTo"
           :contacts="contacts"
+          :can-mention-all="activeRoom?.kind !== 'dm' && (store.state.channels.find((channel) => channel.id === activeRoom?.id)?.myRole === 'owner')"
           @send="onSend"
           :submit-document="onSendDocument"
           @send-voice="onSendVoice"

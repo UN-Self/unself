@@ -139,6 +139,24 @@ export async function countUnreadAttention(db, { channelId, userId }) {
 // 协议沿用 mentionUnreadCount 兼容旧客户端，但计数语义与外部桥接一致：同时覆盖提及和回复。
 export const countUnreadMentions = countUnreadAttention;
 
+/**
+ * @all 未读（契约 docs/requirements.md 4.1）：只数 mention_all=1 的未读非本人消息。
+ * 独立于 countUnreadAttention——@all 只点亮 [@全体成员]，不并入 [有人@我]。
+ */
+export async function countUnreadMentionAll(db, { channelId, userId }) {
+	const { results } = await db
+		.prepare(
+				`SELECT COUNT(*) AS unread_count FROM messages m
+				 WHERE m.channel_id = ? AND m.deleted_at IS NULL AND m.mention_all = 1
+				   AND (m.sender_id IS NULL OR m.sender_id != ?)
+				   AND m.id > COALESCE((SELECT mr.last_read_message_id FROM message_reads mr
+				                            WHERE mr.channel_id = ? AND mr.user_id = ?), 0)`,
+		)
+		.bind(Number(channelId), Number(userId), Number(channelId), Number(userId))
+		.all();
+	return Number(results[0]?.unread_count || 0);
+}
+
 export async function listRoomMemberIds(db, channelId) {
 	const { results } = await db
 		.prepare(

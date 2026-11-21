@@ -63,7 +63,9 @@
 ### 4.1 聊天（可选）
 - [x] 聊天模块就是 `app/modules/chat`（包名 `@unself/chat`）。代码源自 EdgeChat，现在是本仓库里的一个模块，不是还要再接的外部产品。（2026-09-23 对齐：`@unself/chat` 0.1.1 已发 npm）
 - [x] 频道消息、附件、消息持久化已经在这个模块里（表：`channels`、`messages`、`message_attachments`、`uploaded_files`）。
-- [ ] @ 提醒和历史检索还没单独立项验收。
+- [x] @ 提醒已验收：发送透传 `mentionUserIds`、服务端复核（mentions.js）、气泡高亮、右键头像 @、列表 `[有人@我]` 前缀。（2026-11-21 实测：mock 全链路真机走查；live 待部署后复验）
+- [x] @ 全体成员（@all）：仅频道/群聊的群主（`channel_members.role = 'owner'`）可用，DM 无此功能；服务端按 owner 角色 + 客户端 `mentionAll` chip 标记（手打 `@所有人` 文本不算，只有选中 @ 候选插入的 @all chip 才置位）+ content 含边界包裹的 `@所有人` 三重复核，任一不满足即降级为普通消息；`@all` 只点亮列表 `[@全体成员]` 前缀（独立计数 `mentionAllUnread`），单独特定我才点亮 `[有人@我]`（沿用 `mentionUnreadCount`），两者可并存、`[@全体成员]` 在前。（2026-11-21 契约定案：仅群主口径，管理(admin)角色另立）
+- [ ] 历史检索还没单独立项验收。
 - [x] 逐条已读回执在聊天模块里（`read_receipts`）。（2026-09-23 对齐：#220 落地，#239 终验）
 - [x] 通过核心签发的模块 token 接入（模块碰不到外部 OIDC），不依赖原来那套本地账号体系。（2026-09-23 修正表述：#217）
 

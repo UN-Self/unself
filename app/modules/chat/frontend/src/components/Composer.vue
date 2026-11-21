@@ -3,8 +3,9 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Mic, Paperclip, SendHorizontal, Smile, Square, X } from 'lucide-vue-next'
 
-import { clearDraft, loadDraft, saveDraft } from '../lib/draft'
+import { clearDraft, loadDraft, saveDraft, type DraftPart } from '../lib/draft'
 import { replyAuthorOf, replyPreviewOf } from '../lib/reply-preview'
+import { textMentionsName } from '../lib/mention-text'
 import { UButton, UCard, URichInput, type RichInputPart } from '@unself/ui'
 import type { Message, UserSummary } from '../lib/types'
 import { createVoiceRecorder, isVoiceSupported } from '../lib/voice-recorder'
@@ -31,10 +32,12 @@ export interface ComposerProps {
   placeholder?: string
   /** @候选联系人（父级传房间成员/联系人）。 */
   contacts?: UserSummary[]
+  /** @all（@所有人）可用（契约 4.1）：仅频道/群聊群主（myRole === 'owner'，canManage 含 admin 口径更宽，不用它）。 */
+  canMentionAll?: boolean
   /** 草稿与录制复位键（`kind:id`），切换房间时换草稿、停录制。 */
   contextKey: string
   /** 点击发送后执行；失败须 reject，以保留附件与说明文字。 */
-  submitDocument?: (document: ComposerDocument, mentionUserIds: number[], signal: AbortSignal) => Promise<void>
+  submitDocument?: (document: ComposerDocument, mentionUserIds: number[], mentionAll: boolean, signal: AbortSignal) => Promise<void>
 }
 
 const props = withDefaults(defineProps<ComposerProps>(), {
@@ -44,11 +47,12 @@ const props = withDefaults(defineProps<ComposerProps>(), {
   replyTo: null,
   placeholder: '输入消息…',
   contacts: () => [],
+  canMentionAll: false,
 })
 
 const emit = defineEmits<{
-  /** 文本发送：内容 + 本次文本中被 @ 的联系人 id（去重、随文本增删）。 */
-  send: [text: string, mentionUserIds: number[]]
+  /** 文本发送：内容 + 本次文本中被 @ 的联系人 id（去重、随文本增删）+ @all chip 标记（手打不算）。 */
+  send: [text: string, mentionUserIds: number[], mentionAll: boolean]
   /** 语音发送：录制产物（file/durationMs/waveform）。 */
   'send-voice': [recording: VoiceRecording]
   /** 回复条取消。 */
@@ -73,42 +77,26 @@ const emojiOpen = ref(false)
 
 /** 提及状态：随文本编辑同步增删（本次文本中真实被 @ 的联系人集合）。 */
 const mentionUserIds = ref<number[]>([])
+/** #347 @all：只认 chip（选中候选插入），手打 `@所有人` 文本不算。 */
+const mentionAllRequested = ref(false)
+const MENTION_ALL_NAME = '所有人'
 
 /**
- * #230 提及词边界：行首/行尾算边界，正文中 `@` 前与提及名后需落在空白或标点。
- * 口径对齐 worker/src/data/mentions.js 的 isMentionBoundary（服务端按 content 含
- * username 复核提及），避免 `@core` 粘连 `@core:2`、`@bob` 粘连 `@bobby`。
+ * #230 提及词边界口径已抽到 lib/mention-text.ts（与 MessageContent 气泡高亮、
+ * worker mentions.js 三处同源）。本组件只负责「文本里出现哪些提及」的回填。
  */
-const MENTION_BOUNDARY = /[\s，。！？、：；,.!?()[\]{}<>"'“”‘’《》〈〉「」【】…—～`|/\\*+=&%$#^]/
-
-function isMentionBoundary(char: string | undefined): boolean {
-  return char === undefined || MENTION_BOUNDARY.test(char)
-}
-
-/** value 中是否出现被边界包裹的 `@name`（逐位置比较，天然支持冒号与中文）。 */
-function textMentionsName(value: string, name: string): boolean {
-  const target = name.toLowerCase()
-  if (!target) return false
-  for (let start = value.indexOf('@'); start !== -1; start = value.indexOf('@', start + 1)) {
-    if (start > 0 && !isMentionBoundary(value[start - 1])) continue
-    const end = start + 1 + target.length
-    if (end > value.length) continue
-    if (value.slice(start + 1, end).toLowerCase() !== target) continue
-    if (isMentionBoundary(value[end])) return true
-  }
-  return false
-}
 
 /**
- * #230 回填：core JIT 身份下 username=`core:<sub>`（含冒号），展示名为中文。
- * 旧的 `/@([a-zA-Z0-9_-]+)/` 只吃到 `core`，与 username 不等 → mentionUserIds 恒空。
- * 现按联系人的 username / displayName 直接匹配文本（#230 验收：两种输入都产出 id）。
+ * #230 回填：core JIT 身份下 username=`core:<sub>`（含冒号）。口径（#347 定案）：手打不算
+ * 提及，选中候选插入 chip 才算——chip 的 id 直接采信；文本匹配只兜底手打完整 username token
+ * 与草稿恢复（token 序列化后与 chip 文本不可区分，且服务端 username 复核本来也认它）。
+ * displayName 手打不产出 id（服务端也不认，前端不再乐观计入）。
  */
-function syncMentionsFromText(value: string): void {
-  const valid = new Set<number>()
+function syncMentionsFromText(value: string, tokenIds: number[] = []): void {
+  // id<=0 是 @all chip 的占位（无真实用户），不进 mentionUserIds（避免发给服务端一条注定为空的成员复核）。
+  const valid = new Set<number>(tokenIds.filter((id) => id > 0))
   for (const contact of props.contacts) {
-    const names = [contact.username, contact.displayName]
-    if (names.some((name) => textMentionsName(value, name))) valid.add(contact.id)
+    if (textMentionsName(value, contact.username)) valid.add(contact.id)
   }
   mentionUserIds.value = [...valid]
 }
@@ -122,8 +110,12 @@ const sendable = computed(() => !props.disabled && !busy.value && (text.value.tr
 function onDocumentChange(parts: RichInputPart[], value: string, caret: number): void {
   documentParts.value = parts
   text.value = value
-  syncMentionsFromText(value.replaceAll('\uFFFC', '\n'))
-  if (contextRoom.value) saveDraft(contextRoom.value.kind, contextRoom.value.id, value.replaceAll('\uFFFC', ''))
+  // chip 的 id 直接采信（点选产出的 token），文本匹配兜底手打 @username / 草稿恢复的场景。
+  const tokenIds = parts.filter((part): part is Extract<RichInputPart, { type: 'mention' }> => part.type === 'mention').map((part) => part.id)
+  syncMentionsFromText(value.replaceAll('\uFFFC', '\n'), tokenIds)
+  mentionAllRequested.value = parts.some(part => part.type === 'mention' && part.username === MENTION_ALL_NAME)
+  // 草稿存结构化 part（#347 治本）：chip/@all 标记随房往返；附件不入草稿（saveDraft 内也会滤）。
+  if (contextRoom.value) saveDraft(contextRoom.value.kind, contextRoom.value.id, documentParts.value.filter((part): part is DraftPart => part.type !== 'attachment'))
   maybeOpenMentionMenu(value, caret)
 }
 
@@ -151,6 +143,33 @@ const mentionCandidates = computed(() => {
   })
 })
 
+/**
+ * @all（@所有人）候选（契约 4.1）：仅群主（canMentionAll）可见，置顶在候选首位；
+ * query 为空或命中「所有人/all」前缀时出现。服务端仍会按 owner 角色 + 文本边界复核。
+ */
+const mentionHasAll = computed(() => {
+  if (!props.canMentionAll) return false
+  const query = mentionQuery.value.toLowerCase()
+  return query === '' || MENTION_ALL_NAME.startsWith(query) || 'all'.startsWith(query)
+})
+/** 浮层条目总数：@所有人 置顶 + 联系人候选。键盘 ↑↓/Enter 按这个总数导航。 */
+const mentionItemCount = computed(() => (mentionHasAll.value ? 1 : 0) + mentionCandidates.value.length)
+
+/**
+ * @all 也走 chip（#347 定案：手打不算，选中候选才算）：插入 username=所有人 的 chip，
+ * mentionAllRequested 由 onDocumentChange 从 parts 回填；服务端仍复核 owner 角色 + 文本边界。
+ */
+function applyMentionAll(): void {
+  const caret = editor.value?.selection() ?? text.value.length
+  editor.value?.insertMention(
+    { id: 0, username: MENTION_ALL_NAME, displayName: MENTION_ALL_NAME },
+    mentionTriggerPos.value >= 0 ? mentionTriggerPos.value : caret,
+    caret,
+  )
+  mentionMenuOpen.value = false
+  mentionQuery.value = ''
+}
+
 function maybeOpenMentionMenu(value: string, caret: number): void {
   const before = value.slice(0, caret)
   // #230：query 取 `@` 之后任意非空白片段（放行冒号与非 ASCII；旧 ASCII 白名单会让 `@走` 关浮层）。
@@ -167,12 +186,29 @@ function maybeOpenMentionMenu(value: string, caret: number): void {
   }
 }
 
+/** #347 插入提及改 chip（token 与显示分离）：编辑器里显示 @displayName，序列化输出 @username。 */
 function applyMention(contact: UserSummary): void {
   const caret = editor.value?.selection() ?? text.value.length
-  editor.value?.insertText(`@${contact.username} `, mentionTriggerPos.value >= 0 ? mentionTriggerPos.value : caret, caret)
+  editor.value?.insertMention(
+    { id: contact.id, username: contact.username, displayName: contact.displayName },
+    mentionTriggerPos.value >= 0 ? mentionTriggerPos.value : caret,
+    caret,
+  )
   mentionMenuOpen.value = false
   mentionQuery.value = ''
 
+}
+
+/**
+ * #347 外部插入提及（右键头像 @）：插入 mention chip（显示 @displayName，序列化为
+ * @username），mentions 由 onDocumentChange 从 parts 自动回填。前文非边界时补一个
+ * 空格，否则序列化出的 `@username` 粘连前文会被前后端边界口径同时判否（提及失效）。
+ */
+function insertMention(mention: { id: number; username: string; displayName: string }): void {
+  if (!mention.username) return
+  const prefix = text.value.length > 0 && !/\s$/.test(text.value) ? ' ' : ''
+  if (prefix) editor.value?.insertText(prefix)
+  editor.value?.insertMention(mention)
 }
 
 /**
@@ -180,17 +216,21 @@ function applyMention(contact: UserSummary): void {
  * Shift+Enter 换行；composition 期间一律不发送。
  */
 function onKeydown(event: KeyboardEvent): void {
-  if (mentionMenuOpen.value && mentionCandidates.value.length > 0) {
+  if (mentionMenuOpen.value && mentionItemCount.value > 0) {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      mentionActiveIndex.value = (mentionActiveIndex.value + 1) % mentionCandidates.value.length
+      mentionActiveIndex.value = (mentionActiveIndex.value + 1) % mentionItemCount.value
     } else if (event.key === 'ArrowUp') {
       event.preventDefault()
       mentionActiveIndex.value =
-        (mentionActiveIndex.value - 1 + mentionCandidates.value.length) % mentionCandidates.value.length
+        (mentionActiveIndex.value - 1 + mentionItemCount.value) % mentionItemCount.value
     } else if (event.key === 'Enter') {
       event.preventDefault()
-      const contact = mentionCandidates.value[mentionActiveIndex.value]
+      if (mentionHasAll.value && mentionActiveIndex.value === 0) {
+        applyMentionAll()
+        return
+      }
+      const contact = mentionCandidates.value[mentionActiveIndex.value - (mentionHasAll.value ? 1 : 0)]
       if (contact) applyMention(contact)
     } else if (event.key === 'Escape') {
       event.preventDefault()
@@ -208,7 +248,7 @@ function onKeydown(event: KeyboardEvent): void {
 
 async function sendText(): Promise<void> {
   if (!sendable.value || composing.value) return
-  if (mentionMenuOpen.value && mentionCandidates.value.length > 0) return
+  if (mentionMenuOpen.value && mentionItemCount.value > 0) return
   const trimmed = text.value.trim()
   if (hasAttachments.value) {
     const document: ComposerDocument = { parts: documentParts.value.map(part => ({ ...part })), files: new Map(draftFiles) }
@@ -218,7 +258,7 @@ async function sendText(): Promise<void> {
     fileError.value = ''
     try {
       if (!props.submitDocument) throw new Error('附件发送暂不可用')
-      await props.submitDocument(document, [...mentionUserIds.value], fileSubmission.signal)
+      await props.submitDocument(document, [...mentionUserIds.value], mentionAllRequested.value, fileSubmission.signal)
       if (props.contextKey !== context) return
       clearSentText()
       return
@@ -230,7 +270,7 @@ async function sendText(): Promise<void> {
       fileSubmission = null
     }
   } else {
-    emit('send', trimmed, [...mentionUserIds.value])
+    emit('send', trimmed, [...mentionUserIds.value], mentionAllRequested.value)
   }
   clearSentText()
 }
@@ -240,6 +280,7 @@ function clearSentText(): void {
   editor.value?.setText('')
   releaseFiles()
   mentionUserIds.value = []
+  mentionAllRequested.value = false
   if (contextRoom.value) clearDraft(contextRoom.value.kind, contextRoom.value.id)
   // #339①：发送期间输入区 disabled（busy）会按 HTML 规范强制失焦——busy 解除后把焦点还给输入区，
   // 连续聊天零点击。TipTap focus() 自带光标归位（末尾）。
@@ -358,6 +399,8 @@ watch(busy, (now, was) => {
 })
 onBeforeUnmount(() => { if (swallowTimer) clearTimeout(swallowTimer) })
 
+defineExpose({ /** #347 右键头像 @ 的外部插入入口（父层 App.vue 调用）。 */ insertMention })
+
 watch(
   contextRoom,
   (room, previous) => {
@@ -368,13 +411,20 @@ watch(
   fileError.value = ''
   emojiOpen.value = false
   if (room) {
-    text.value = loadDraft(room.kind, room.id)
-    syncMentionsFromText(text.value)
-  } else {
-    text.value = ''
-    mentionUserIds.value = []
+    // #347 治本：草稿按结构化 part 恢复——mention chip 与 @all 标记可完整往返。
+    const parts = loadDraft(room.kind, room.id)
+    documentParts.value = parts
+    text.value = parts.map((part) => (part.type === 'text' ? part.text : part.type === 'mention' ? `@${part.username}` : '\uFFFC')).join('')
+    syncMentionsFromText(text.value, parts.filter(part => part.type === 'mention').map(part => part.id))
+    mentionAllRequested.value = parts.some(part => part.type === 'mention' && part.username === MENTION_ALL_NAME)
+    editor.value?.setParts(parts)
+    return
   }
-  editor.value?.setText(text.value)
+  text.value = ''
+  documentParts.value = []
+  mentionUserIds.value = []
+  mentionAllRequested.value = false
+  editor.value?.setText('')
   },
   { immediate: true },
 )
@@ -412,19 +462,33 @@ const replyPreview = computed(() => replyPreviewOf(props.replyTo) ?? '')
 
     <p v-if="fileError" role="alert" class="composer-error">{{ fileError }}</p>
 
-    <!-- @选择浮层 -->
-    <div v-if="mentionMenuOpen && mentionCandidates.length > 0" class="composer-mentions" data-test="mention-menu" role="listbox" aria-label="提及候选人">
+    <!-- @选择浮层：@所有人 置顶（仅群主可见），其后是联系人候选 -->
+    <div v-if="mentionMenuOpen && mentionItemCount > 0" class="composer-mentions" data-test="mention-menu" role="listbox" aria-label="提及候选人">
+      <button
+        v-if="mentionHasAll"
+        type="button"
+        class="composer-mention-item"
+        :class="{ 'composer-mention-item-active': mentionActiveIndex === 0 }"
+        role="option"
+        :aria-selected="mentionActiveIndex === 0"
+        data-test="mention-option-all"
+        @mousedown.prevent="applyMentionAll"
+        @mousemove="mentionActiveIndex = 0"
+      >
+        <span class="composer-mention-name">@所有人</span>
+        <span class="composer-mention-username">全体成员</span>
+      </button>
       <button
         v-for="(contact, index) in mentionCandidates"
         :key="contact.id"
         type="button"
         class="composer-mention-item"
-        :class="{ 'composer-mention-item-active': index === mentionActiveIndex }"
+        :class="{ 'composer-mention-item-active': index + (mentionHasAll ? 1 : 0) === mentionActiveIndex }"
         role="option"
-        :aria-selected="index === mentionActiveIndex"
+        :aria-selected="index + (mentionHasAll ? 1 : 0) === mentionActiveIndex"
         :data-test="`mention-option-${contact.username}`"
         @mousedown.prevent="applyMention(contact)"
-        @mousemove="mentionActiveIndex = index"
+        @mousemove="mentionActiveIndex = index + (mentionHasAll ? 1 : 0)"
       >
         <span class="composer-mention-name">{{ contact.displayName }}</span>
         <span class="composer-mention-username">@{{ contact.username }}</span>
@@ -484,6 +548,7 @@ const replyPreview = computed(() => replyPreviewOf(props.replyTo) ?? '')
       <URichInput
         ref="editor"
         :initial-text="text"
+        :initial-parts="documentParts"
         :placeholder="placeholder"
         :disabled="disabled || busy"
         @change="onDocumentChange"
@@ -524,6 +589,9 @@ const replyPreview = computed(() => replyPreviewOf(props.replyTo) ?? '')
 
 <style scoped>
 .composer {
+  /* @选择浮层的定位锚（Composer.vue 模板里浮层与 .composer-row 同级）：
+     没有 relative 时 absolute 一路找到初始包含块，bottom:100% 把浮层推出视口顶（真机不可见，jsdom 测不出）。 */
+  position: relative;
   border-top: 1px solid var(--unself-color-border);
   padding: var(--unself-space-2) var(--unself-space-3) var(--unself-space-3);
   background: var(--unself-color-bg);
@@ -661,6 +729,8 @@ const replyPreview = computed(() => replyPreviewOf(props.replyTo) ?? '')
   bottom: 100%;
   left: var(--unself-space-3);
   right: var(--unself-space-3);
+  /* 盖过消息流（气泡自带层叠上下文）；对齐 emoji 弹层的写法 */
+  z-index: 2;
   max-height: 240px;
   overflow-y: auto;
   border: 1px solid var(--unself-color-border);

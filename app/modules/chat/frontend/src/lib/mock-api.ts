@@ -16,6 +16,7 @@ import type {
   UserSummary,
 } from './types'
 import type { ChatApi } from './api'
+import { textMentionsName } from './mention-text'
 
 /** mock 消息内存行（内部形态，出参转 Message 契约）。 */
 interface MockMessageRow extends Message {
@@ -52,6 +53,7 @@ export function buildMockWorld(): MockWorld {
       lastMessageAt: '2026-09-15 09:30:00',
       unreadCount: 0,
       mentionUnreadCount: 0,
+      mentionAllUnreadCount: 0,
     },
     {
       id: 2,
@@ -67,6 +69,8 @@ export function buildMockWorld(): MockWorld {
       lastMessageAt: '2026-09-15 10:00:00',
       unreadCount: 2,
       mentionUnreadCount: 1,
+      // 现成 @all 红标样例：首屏即可走查 [@全体成员]（与 [有人@我] 并存）
+      mentionAllUnreadCount: 1,
     },
     {
       id: 3,
@@ -82,6 +86,7 @@ export function buildMockWorld(): MockWorld {
       lastMessageAt: null,
       unreadCount: 0,
       mentionUnreadCount: 0,
+      mentionAllUnreadCount: 0,
     },
   ]
 
@@ -346,6 +351,13 @@ export function createMockChatApi(
       },
       attachment: input.attachment ?? null,
       blocks: input.blocks,
+      // @all（契约 4.1）：频道/群聊 + 群主（myRole=owner 口径，对齐 worker）+ 客户端 chip 标记
+      // + 文本含边界包裹的 @所有人 才置位；手打不算（#347 定案）
+      mentionAll:
+        input.kind !== 'dm' &&
+        input.mentionAll === true &&
+        world.channels.find((c) => c.id === input.roomId)?.myRole === 'owner' &&
+        textMentionsName(input.content, '所有人'),
       clientMessageId: input.clientMessageId,
       roomId: input.roomId,
     }

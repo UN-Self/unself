@@ -139,6 +139,8 @@ export function registerV1Routes(app) {
         blocks: payload.blocks,
 				attachment: payload.attachment || null,
 				mentionUserIds: payload.mentionUserIds || [],
+				// @all 只认客户端 chip 标记（手打 @所有人 文本不算）；服务端仍复核 owner + 文本边界。
+				mentionAll: payload.mentionAll === true,
 				replyMessageId: payload.replyMessageId ?? null
 			  }
     });

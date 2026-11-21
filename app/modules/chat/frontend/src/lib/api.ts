@@ -141,6 +141,8 @@ export interface ChatApi {
     attachment?: Attachment | null
     blocks?: Message['blocks']
     mentionUserIds?: number[]
+    /** @all 请求标记（仅 @all chip 置位，手打不算）；服务端仍复核 owner + 文本边界。 */
+    mentionAll?: boolean
     /** 被引用消息（body 字段 replyMessageId，worker v1.js 实测 @29978c2 接收）。 */
     replyTo?: { id: number } | null
   }): Promise<{ created: boolean; message: Message }>
@@ -328,6 +330,7 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
           attachment: input.attachment ?? null,
           blocks: input.blocks,
           mentionUserIds: input.mentionUserIds ?? [],
+          mentionAll: input.mentionAll === true,
           replyMessageId: input.replyTo?.id ?? null,
         }),
       }).then((result) => ({ ...result, message: normalizeMessage(globalThis.location.pathname, result.message) })),

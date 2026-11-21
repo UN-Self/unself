@@ -68,6 +68,8 @@ const emit = defineEmits<{
   delete: [message: Message]
   /** 右键菜单选「引用」→ 根层开 composer 回复条。 */
   quote: [message: Message]
+  /** #347 右键头像选「@ 提及」→ 根层往 composer 插入 @username。 */
+  mention: [message: Message]
   'open-dm': [userId: number]
   'create-group': [input: { name: string; memberUserIds: number[] }]
   'open-group-details': []
@@ -241,6 +243,7 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
         @enter-done="emit('enter-done', $event)"
         @delete="emit('delete', $event)"
         @quote="emit('quote', $event)"
+        @mention="emit('mention', $event)"
       />
 
       <!-- composer 插槽：T4/T5 填充（发送/@/文件/语音入口） -->

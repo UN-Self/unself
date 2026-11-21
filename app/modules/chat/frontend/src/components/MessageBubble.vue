@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 <script setup lang="ts">
 import { computed, provide, ref, useId } from 'vue'
-import { Check, ArrowUp } from 'lucide-vue-next'
-import { UHoverCard, UMessage, UMessageAvatar, UMessageBubble, UProfileCard } from '@unself/ui'
+import { Check, ArrowUp, AtSign } from 'lucide-vue-next'
+import { UContextMenu, UHoverCard, UMessage, UMessageAvatar, UMessageBubble, UProfileCard, type MenuAction } from '@unself/ui'
 
 import { attachmentResourceKey, useAttachmentResource } from '../lib/attachment-resource'
 import MessageContent from './MessageContent.vue'
@@ -85,6 +85,8 @@ const emit = defineEmits<{ /** 点击回执标签：请求父层打开已读名�
   delete: [message: Message]
   /** 右键菜单选「引用」：上抛原消息，父层开 composer 回复条。 */
   quote: [message: Message]
+  /** #347 右键头像选「@ 提及」：上抛被 @ 者的消息，父层往 composer 插入 @username。 */
+  mention: [message: Message]
   /** 点击引用块「回到原文」：上抛引用方消息（replyTo.id 是滚动目标），父层滚动定位。 */
   'jump-to-reply': [message: Message]
 }>()
@@ -96,6 +98,12 @@ function onBubbleAnimEnd(event: AnimationEvent): void {
 
 /** 回执面是否显示：仅 mine 气泡 + 有回执数据（旧格式/缺省不显示）。 */
 const showReceiptTag = computed(() => !props.message.deleted && props.mine && props.readSummary !== null && props.readSummary !== undefined)
+
+/** #347 头像右键菜单：@ 提及（DM 服务端丢弃提及，不出该项；撤回消息不弹）。 */
+const avatarMenuItems = computed<MenuAction[]>(() => {
+  if (props.message.deleted || props.isDm) return []
+  return [{ id: 'mention', label: '@ 提及', icon: AtSign }]
+})
 
 /** DM：读1人即全读 → 单勾「已读」（#339③，TG 口径双勾另有语义）；未读 → 「未读」（无发送中态）。 */
 const dmRead = computed(() => (props.readSummary?.count ?? 0) > 0)
@@ -136,27 +144,35 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
   >
     <!-- 头像悬停/tap 开资料卡：他人与本人一致（本人卡来自消息 sender，同 memberMap 查身份）。
          触发器是真 button：头像本身是 img/aria-hidden span，不可聚焦，键盘与读屏用户走不到卡片 -->
-    <UHoverCard>
-      <template #trigger>
-        <button
-          type="button"
-          class="bubble-avatar-card"
-          :aria-label="`查看 ${message.sender.displayName} 的资料`"
-          :aria-describedby="cardId"
-        >
-          <UMessageAvatar :src="message.sender.avatarUrl" :name="message.sender.displayName" />
-        </button>
-      </template>
-      <UProfileCard
-        :id="cardId"
-        :display-name="message.sender.displayName"
-        :login-name="message.sender.loginName"
-        :avatar-url="message.sender.avatarUrl"
-        :email="member?.email"
-        :role="member?.role === 'owner' ? 'owner' : 'member'"
-        :joined-at="member?.joinedAt"
-      />
-    </UHoverCard>
+    <!-- #347 头像右键 @ 提及：UContextMenu 包住触发按钮；DM 无菜单项（items 为空 + disabled 双保险）。
+         壳 span 是必须的：UContextMenu 模板根是片段（Root+Portal，无单一 DOM 根），把 UHoverCard
+         直接塞进 HoverCardTrigger(as-child) 的 slot 会让 Vue 丢弃属性透传——悬浮/点击/聚焦开卡
+         全部失效。两个基元都需要真实元素当直接触发子节点，用壳隔开：右键挂壳、悬停/点击仍挂按钮。 -->
+    <UContextMenu :items="avatarMenuItems" :disabled="avatarMenuItems.length === 0" @select="emit('mention', message)">
+          <span class="bubble-avatar-shell">
+            <UHoverCard>
+              <template #trigger>
+                <button
+                  type="button"
+                  class="bubble-avatar-card"
+                  :aria-label="`查看 ${message.sender.displayName} 的资料`"
+                  :aria-describedby="cardId"
+                >
+                  <UMessageAvatar :src="message.sender.avatarUrl" :name="message.sender.displayName" />
+                </button>
+              </template>
+              <UProfileCard
+                :id="cardId"
+                :display-name="message.sender.displayName"
+                :login-name="message.sender.loginName"
+                :avatar-url="message.sender.avatarUrl"
+                :email="member?.email"
+                :role="member?.role === 'owner' ? 'owner' : 'member'"
+                :joined-at="member?.joinedAt"
+              />
+            </UHoverCard>
+          </span>
+        </UContextMenu>
 
     <div class="bubble-main">
       <div class="bubble-meta">
@@ -228,6 +244,8 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
 .message-system { margin: var(--unself-space-3) 0; padding: var(--unself-space-1) var(--unself-space-3); text-align: center; color: var(--unself-color-text-tertiary); font-size: var(--unself-font-size-xs); overflow-wrap: anywhere; }
 .bubble-row { max-width:100%; padding:var(--unself-space-1) 0; }
 /* 头像资料卡触发器：复位 button 外观（头像本身是 img），撑住 32px 不收缩 */
+/* #347 右键菜单触发壳（真实 DOM，UContextMenu 的处理器落在这里）；不参与布局语义，内联排布即可 */
+.bubble-avatar-shell { display:inline-flex; flex:none; }
 .bubble-avatar-card { display:flex; flex:none; align-items:center; padding:0; border:0; border-radius:var(--unself-radius-full); background:transparent; cursor:pointer; }
 .bubble-avatar-card:focus-visible { outline:var(--unself-focus-ring); outline-offset:2px; }
 .bubble-row-highlight .bubble-main {

@@ -13,10 +13,10 @@ describe('附件提交编排', () => {
     const send = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(undefined)
     const submit = createDocumentSender({ getRoomKey: () => 'dm.1', upload, send })
     const file = new File(['x'], 'a.png')
-    await expect(submit(doc(file, '说明'), [2], signal)).rejects.toThrow('offline')
-    await submit(doc(file, '新说明'), [3], signal)
+    await expect(submit(doc(file, '说明'), [2], false, signal)).rejects.toThrow('offline')
+    await submit(doc(file, '新说明'), [3], false, signal)
     expect(upload).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenLastCalledWith({ content: '新说明', attachment, mentionUserIds: [3], blocks: [{ type: 'text', text: '新说明' }, { type: 'attachment', attachment }] })
+    expect(send).toHaveBeenLastCalledWith({ content: '新说明', attachment, mentionUserIds: [3], mentionAll: false, blocks: [{ type: 'text', text: '新说明' }, { type: 'attachment', attachment }] })
   })
 
   it('上传失败可重试，上传期间切换会话不会误发至新会话', async () => {
@@ -27,8 +27,8 @@ describe('附件提交编排', () => {
     const send = vi.fn()
     const submit = createDocumentSender({ getRoomKey: () => room, upload, send })
     const file = new File(['x'], 'a.png')
-    await expect(submit(doc(file), [], signal)).rejects.toThrow('upload offline')
-    const pending = submit(doc(file), [], signal)
+    await expect(submit(doc(file), [], false, signal)).rejects.toThrow('upload offline')
+    const pending = submit(doc(file), [], false, signal)
     room = 'dm.2'
     finish(attachment)
     await expect(pending).rejects.toThrow('会话已切换')
@@ -40,7 +40,7 @@ describe('附件提交编排', () => {
     const upload = vi.fn(async () => { controller.abort(); return attachment })
     const send = vi.fn()
     const submit = createDocumentSender({ getRoomKey: () => 'dm.1', upload, send })
-    await expect(submit(doc(new File(['x'], 'a.png')), [], controller.signal)).rejects.toThrow('会话已切换')
+    await expect(submit(doc(new File(['x'], 'a.png')), [], false, controller.signal)).rejects.toThrow('会话已切换')
     expect(send).not.toHaveBeenCalled()
   })
 })

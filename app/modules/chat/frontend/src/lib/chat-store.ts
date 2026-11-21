@@ -12,6 +12,7 @@
  */
 import { reactive, shallowRef } from 'vue'
 import { reconcileDeletedMessage } from './message-deletion'
+import { replaceMentionNames } from './mention-text'
 import type {
   Channel,
   Dm,
@@ -42,6 +43,8 @@ export interface SendMessageInput {
   attachment?: Message['attachment']
   blocks?: Message['blocks']
   mentionUserIds?: number[]
+  /** @all 请求标记（仅 @all chip 置位，手打不算）。 */
+  mentionAll?: boolean
   /** 被引用消息（右键「引用」）：只透传 id，同房间存在性由后端校验。 */
   replyTo?: Message | null
 }
@@ -329,6 +332,8 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     if (entry) {
       entry.unreadCount = 0
       entry.mentionUnreadCount = 0
+      // @all 红标与提及红标同批清零（进房即读，契约 4.1）；只频道有此字段，DM 按 kind 判定
+      if (room.kind !== 'dm') (entry as Channel).mentionAllUnreadCount = 0
     }
   }
 
@@ -345,7 +350,15 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
       const entry = findRoomList(room)
       if (entry) {
         entry.lastMessageAt = message.createdAt
-        entry.lastMessagePreview = message.deleted ? '消息已撤回' : message.content.trim() || (message.attachment?.kind === 'voice' ? '[语音]' : message.attachment ? `[附件] ${message.attachment.name}` : '')
+        // 预览里的 @username token 换成 @displayName（与 worker 预览同口径）；先换后判空，附件兜底不变。
+        // 撤回分支先短路：deletion 帧先到、发送回显后到的竞态下，回显带 deleted=true，
+        // 若走 preview||兜底 会被空串覆盖掉 deletion 帧（:587）刚写的「消息已撤回」。
+        if (message.deleted) {
+          entry.lastMessagePreview = '消息已撤回'
+        } else {
+          const preview = replaceMentionNames(message.content.trim(), message.mentions ?? [])
+          entry.lastMessagePreview = preview || (message.attachment?.kind === 'voice' ? '[语音]' : message.attachment ? `[附件] ${message.attachment.name}` : '')
+        }
       }
     }
     oldestMessageId = Math.min(oldestMessageId, message.id)
@@ -392,7 +405,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
 
     createChannel: async (input) => {
       const result = await api.createChannel(input)
-      const existing = state.channels.findIndex((channel) => channel.id === result.channel.id)
+      const existing = state.channels.findIndex((item) => item.id === result.channel.id)
       if (existing >= 0) state.channels.splice(existing, 1, result.channel)
       else state.channels.unshift(result.channel)
       await store.openRoom({ kind: result.channel.kind, id: result.channel.id }, result.channel.name)
@@ -532,6 +545,7 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
           attachment: input.attachment ?? null,
           blocks: input.blocks,
           mentionUserIds: input.mentionUserIds ?? [],
+          mentionAll: input.mentionAll === true,
           replyTo: input.replyTo ?? null,
         })
         // created=false = 服务端幂等回显（重试场景）：不重复插入
@@ -624,6 +638,14 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
         frame.mentionUnreadCount ?? 0,
         entry.mentionUnreadCount + (frame.mentionsMe ? 1 : 0),
       )
+      // @all 独立红标（契约 4.1）：只频道有此字段（按 kind 判定），不并入 mentionUnreadCount，只亮 [@全体成员]
+      if (room.kind !== 'dm') {
+        const channel = entry as Channel
+        channel.mentionAllUnreadCount = Math.max(
+          frame.mentionAllUnreadCount ?? 0,
+          (channel.mentionAllUnreadCount ?? 0) + (frame.mentionedByAll ? 1 : 0),
+        )
+      }
       entry.lastMessageAt = frame.createdAt
       entry.lastMessagePreview = frame.contentPreview || (frame.sender.displayName ? `${frame.sender.displayName} 发来一条消息` : '新消息')
     },
