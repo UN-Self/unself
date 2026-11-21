@@ -111,9 +111,12 @@ describe('气泡回执标签（#220）', () => {
 })
 
 describe('已读名单浮层（#220）', () => {
-  it('open 时渲染名单：已读行（姓名+时间）与未读占位；关闭钮 close', async () => {
+  it('open 时渲染名单：已读头像格（昵称）与未读头像格（发件人剔除）；关闭钮 close', async () => {
+    const memberMap = new Map(
+      [2, 3, 4, 5].map((id) => [id, { kind: 'local', id, username: `u${id}`, displayName: `用户${id}`, avatarUrl: '', source: 'local', role: 'member' }]),
+    )
     const wrapper = mount(ReadReceipts, {
-      props: { summary: summary(2, [2, 3]), audienceSize: 4, open: true, roomName: 'general' },
+      props: { summary: summary(2, [2, 3]), audienceSize: 4, open: true, roomName: 'general', memberMap, excludeUserId: 1 },
       attachTo: document.body,
     })
     await flushPromises()
@@ -123,13 +126,27 @@ describe('已读名单浮层（#220）', () => {
     expect(document.querySelector('[data-test="receipt-title"]')?.textContent).toContain('general')
     expect(document.querySelectorAll('[data-test="receipt-row-read"]')).toHaveLength(2)
     expect(document.body.textContent).toContain('用户2')
-    expect(document.body.textContent).toContain('10:00')
-    expect(document.querySelector('[data-test="receipt-row-unread"]')?.textContent).toContain('未读 2 人')
+    // 已读时间小字：formatMessageTime 口径（夹具时钟钉同日 → HH:mm）
+    expect(document.querySelector('[data-test="receipt-row-read"] time')?.textContent).toBe('10:00')
+    // 未读网格：成员 4/5（已读 2/3 剔除、发件人 1 剔除）
+    expect(document.querySelectorAll('[data-test="receipt-row-unread"] .member-cell')).toHaveLength(2)
+    expect(document.body.textContent).toContain('用户5')
 
     // Teleport 内容在 body 下（wrapper 树外）：直接 DOM 事件面触发点击
     document.querySelector<HTMLButtonElement>('[data-test="receipt-close"]')?.click()
     await flushPromises()
     expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('成员名单不可用（memberMap 空）时未读退回「未读 n 人」文字占位', async () => {
+    const wrapper = mount(ReadReceipts, {
+      props: { summary: summary(2, [2, 3]), audienceSize: 4, open: true, roomName: 'general' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    expect(document.querySelectorAll('[data-test="receipt-row-read"]')).toHaveLength(2)
+    expect(document.querySelector('[data-test="receipt-row-unread"]')?.textContent).toContain('未读 2 人')
     wrapper.unmount()
   })
 
