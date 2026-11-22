@@ -121,16 +121,21 @@ export function createLiveTransport(): Transport {
   }
 }
 
-/** 统一错误解析：优先服务端 error 人话（上游信封即字符串），解析失败用状态码兜底。 */
+/** 统一错误解析：优先服务端 error 人话（字符串信封或 {code,message} 对象信封），解析失败用状态码兜底。 */
 export async function toChatApiError(response: Response): Promise<ChatApiError> {
   let message = `请求失败（${response.status}）`
   try {
     const payload: unknown = await response.json()
-    const serverMessage = (
-      payload as { error?: unknown } | null
-    )?.error
-    if (typeof serverMessage === 'string' && serverMessage.trim()) {
-      message = serverMessage
+    const serverError = (payload as { error?: unknown } | null)?.error
+    // worker v1 返回对象信封 {error:{code,message}}；上游兼容字符串信封（error 即人话）
+    if (typeof serverError === 'string' && serverError.trim()) {
+      message = serverError
+    } else if (
+      serverError !== null && typeof serverError === 'object'
+      && typeof (serverError as { message?: unknown }).message === 'string'
+      && (serverError as { message: string }).message.trim()
+    ) {
+      message = (serverError as { message: string }).message
     }
   } catch {
     // body 非 JSON：保留状态码兜底文案
