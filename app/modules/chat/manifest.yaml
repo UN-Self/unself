@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # 模块契约 v1（docs/modules.md §3 字段冻结；决策 #56/#57）
-# 地址不在此声明（#349 U9）：壳装载与白名单只读注册表 entry 列
-# storage（#349 U5 两值收敛：core=核心代管（分表隔离，专属 D1/KV/DO）| self=自托管）：
+# 地址不在此声明（#347 U9）：壳装载与白名单只读注册表 entry 列
+# storage（#347 U5 两值收敛：core=核心代管（分表隔离，专属 D1/KV/DO）| self=自托管）：
 #   - core（preferred/默认）：专属 D1/KV/DO，表名不带前缀（分表隔离，存量实例零迁移）；
 #   - self：自备外部库自托管，连接串走配置页，装配器不接线。
 id: chat

@@ -77,6 +77,26 @@ flowchart TD
 
 上报走 HTTP：`POST /api/messages/read`，一批最多 200 条，`INSERT OR IGNORE`，没进这个房间的人 403。不走 WebSocket 上行。有新行才广播一帧 `read_receipts`（带 `messageIds[]`），重复上报不产生事件。拉历史时，分页结果里每条消息带 `readReceipts{count, readBy[], total}`。已经连上的 socket 要换 token，走控制帧 `{type:'token_refresh', token}`，验过再换绑；新 token 无效就关连接。过程在 issue #217、#220。
 
+## 链路 2b：一条消息的转发
+
+```
+① 右键消息「转发」（单条）或「多选」勾选多条 → 底部操作条选「逐条转发 / 合并转发」（勾 1 条也可选）
+② 弹窗选目标：已加入的群组 + 联系人（联系人经 openDm 解析出私聊房间），可多选目标
+③ 客户端只传 forward{mode, messageIds} → POST /api/v1/rooms/:kind/:id/messages
+④ 服务端读取源消息并校验：存在、未删除、所在房间当前用户可读（逐房间 authorizeRoom）
+⑤ 逐条：每条源消息复制为一条普通消息（附件沿用原 R2 key，归属校验对象为原发件人）；
+   合并：全部源消息序列化为 forward_bundle blocks 存 message_block_payloads.content_blocks
+⑥ 落地消息经 DO 广播帧下发；转发消息不做来源标注，外观与普通消息一致
+```
+
+转发走 HTTP 逐目标提交（每次一个目标房间，幂等键 `clientMessageId` 派生——必须透传到 DO，缺了会退化为固定派生键、第二次往同房间转发命中幂等回显而「转发不成功」）。合并消息气泡渲染 `[聊天记录] N 条消息` 摘要卡，点开浮层逐条查看；浮层条目带引用快照（作者行 + 截断原文，原文已删显示占位），与正常聊天引用块同款但不可点（原文不在浮层上下文）。源消息被撤回后转发会报 `forward_source_unavailable`。
+
+副本不带 mentions（不点亮 @ 高亮、不触发未读红标）：复制时服务端把正文里的 `@username`（core:<sub> 稳定 token）重写为 `@displayName`（按源消息 mentions 映射），否则对端看到裸 `@core:xxx`。
+
+副本行写 `source = 'forward'`（外观不标注，仅 DB/审计用）：0009 起附件触发器的「owner = sender」「不在 pending_r2_delete」两条兜底只对 `source = 'forward'` 的行豁免（转发附件属原作者、被引用 key 由 GC 引用检查兜底），普通发送仍全量强制。
+
+附件真删时机（0010）：撤回/硬删入待删清单前，排除仍被其他存活消息引用的 key（口径同 GC 引用检查）——源消息撤回不影响转发副本的附件可用性，最后一个引用消失才真正进入删除流程。
+
 ## 链路 3：创建会议（日历 → 邀请 → P2P 视频 → 会议记录）
 
 ```

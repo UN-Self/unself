@@ -5,6 +5,7 @@ import {
   submitRoomMessage,
   submitRoomMessageIdempotent
 } from '../message-submission.js';
+import { ForwardSubmissionError, submitForwardMessage } from '../forward-submission.js';
 import { deleteRoomMessage, MessageDeletionError } from '../message-deletion.js';
 import {
   MessagePinningError,
@@ -249,6 +250,23 @@ export class ChannelRoom {
     const meta = { principal, room: access.room };
     try {
       if (action?.type === 'send') {
+        // #347 转发：forward 面存在时走转发提交（服务端复制源消息，逐条/合并），不走普通发送
+        if (action.forward && Array.isArray(action.forward.messageIds) && action.forward.messageIds.length > 0) {
+          // clientMessageId 必须透传（#347 反馈①）：submitForwardMessage 缺它会直接拒绝（400），
+          // 而不是让逐条转发的派生幂等键退化成固定 '-1' 后静默命中回显
+          const result = await submitForwardMessage(this.env, meta, { ...action.forward, clientMessageId: action.clientMessageId });
+          for (const packet of result.packets) {
+            await this.broadcast(packet);
+          }
+          // 未读投影整批只跑最后一帧：投影是按 DB 现势全量重算（未读数/预览），逐条跑纯冗余；
+          // 且每条投影 ≥3 个 subrequest（成员查询 + 未读计数 + inbox DO fetch，waitUntil 同计配额），
+          // 逐条跑会撞 Workers 单 invocation 上限（免费版 50）——线上「转发消息过多 500」的根因
+          const lastCreated = result.messages[result.messages.length - 1];
+          if (lastCreated) {
+            this.runMessageProjections(access.room, lastCreated);
+          }
+          return Response.json({ created: result.created, message: result.message });
+        }
         const result = await submitRoomMessageIdempotent(this.env, meta, action);
         if (result.created) {
           await this.broadcast(result.packet);
@@ -302,7 +320,8 @@ export class ChannelRoom {
       if (
         error instanceof MessageSubmissionError ||
         error instanceof MessageDeletionError ||
-        error instanceof MessagePinningError
+        error instanceof MessagePinningError ||
+        error instanceof ForwardSubmissionError
       ) {
         return Response.json(
           { error: { code: error.code || 'invalid_request', message: error.message } },

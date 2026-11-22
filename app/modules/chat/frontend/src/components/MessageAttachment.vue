@@ -57,7 +57,7 @@ defineExpose({ preview })
     <span v-if="loading" role="status">正在加载附件…</span>
     <button v-if="requestFailed" class="attachment-load" type="button" @click="resource.load()">加载失败，点击重试</button>
     <p v-if="failed" role="status" class="attachment-error">无法预览，可下载后查看</p>
-    <a v-if="failed || requestFailed || !mediaType.startsWith('image/')" class="bubble-file" data-test="bubble-file" :href="source || attachment.url" @click.prevent="resource.download()" :download="attachment.name" target="_blank" rel="noopener">
+    <a v-if="failed || requestFailed || !mediaType.startsWith('image/')" class="bubble-file" data-test="bubble-file" :href="source || undefined" @click.prevent="resource.download()" :download="attachment.name" target="_blank" rel="noopener">
       <Paperclip :size="14" aria-hidden="true" />
       <span class="attachment-name">{{ attachment.name }}</span>
       <span class="attachment-size">{{ Math.max(1, Math.round((attachment.size || 0) / 1024)) }} KB</span>

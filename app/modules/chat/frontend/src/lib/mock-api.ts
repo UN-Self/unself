@@ -9,6 +9,7 @@ import type {
   Attachment,
   Channel,
   Dm,
+  ForwardBundleEntry,
   Message,
   ReadReceiptBy,
   ReadReceiptsSummary,
@@ -16,7 +17,7 @@ import type {
   UserSummary,
 } from './types'
 import type { ChatApi } from './api'
-import { textMentionsName } from './mention-text'
+import { replaceMentionNames, textMentionsName } from './mention-text'
 
 /** mock 消息内存行（内部形态，出参转 Message 契约）。 */
 interface MockMessageRow extends Message {
@@ -254,6 +255,107 @@ export function createMockChatApi(
   api.listContacts = async () => ({ users: world.contacts })
   api.listDms = async () => ({ dms: world.dms })
 
+  /** 全库按 id 找源消息（转发源可以是任何当前用户可见的房间；mock 不做房间授权细分）。 */
+  const findMessageAnywhere = (messageId: number): MockMessageRow | null => {
+    for (const rows of world.messagesByRoom.values()) {
+      const row = rows.find((item) => item.id === messageId)
+      if (row) return row
+    }
+    return null
+  }
+
+  /** 落地一条消息到目标房间（转发副本：本人发送、不带提及；外观与普通消息一致）。 */
+  const insertForwardCopy = (input: Parameters<ChatApi['sendMessage']>[0], over: Partial<MockMessageRow>): MockMessageRow => ({
+    id: ++nextMessageId,
+    content: '',
+    mentionUserIds: [],
+    mentions: [],
+    createdAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
+    // 与 worker 同口径：转发副本 source='forward'（触发器豁免标记 + 审计可辨识；外观不标注）
+    source: 'forward',
+    sender: {
+      kind: 'local',
+      id: world.me.id,
+      username: world.me.username,
+      displayName: world.me.displayName,
+      avatarUrl: world.me.avatarUrl,
+      source: 'edgechat',
+    },
+    attachment: null,
+    roomId: input.roomId,
+    ...over,
+  })
+
+  /** 目标房间正是当前连着的房间时按 WS 语义补推帧（对齐真实 DO 全量广播）。 */
+  const pushIfCurrentRoom = (kind: RoomKind, roomId: number, messages: Message[]): void => {
+    const socket = api.lastSocket
+    if (!socket || socket.closed) return
+    if (socket.handlers.kind !== kind || socket.handlers.roomId !== roomId) return
+    for (const message of messages) {
+      socket.serverPush({ protocolVersion: 1, type: 'message', message })
+    }
+  }
+
+  /** @token 重写（#347 反馈②）：副本不带 mentions，正文 `@username` 重写为 `@displayName`（mention-text 共享口径）。 */
+  const displayContentOf = (row: MockMessageRow): string => replaceMentionNames(row.content, row.mentions)
+  const displayBlocksOf = (row: MockMessageRow): Message['blocks'] | null =>
+    row.blocks
+      ? row.blocks.map((block) => (block.type === 'text' ? { type: 'text', text: replaceMentionNames(block.text, row.mentions) } : block))
+      : null
+  /** 引用快照（#347 反馈③，与 worker replySnapshotOf 同语义）。 */
+  const replySnapshotOf = (row: MockMessageRow): ForwardBundleEntry['reply'] => {
+    const reply = row.replyTo
+    if (!reply) return null
+    if (reply.deleted || !('content' in reply)) return { deleted: true, authorName: '', text: '' }
+    return { deleted: false, authorName: reply.sender?.displayName ?? '', text: reply.content || reply.attachment?.name || '' }
+  }
+
+  // mock 只撑 UI 演示：不做房间授权/DM 拉黑细分，不复刻 worker 的幂等回显与并发兜底
+  const mockForward = (input: Parameters<ChatApi['sendMessage']>[0]): { created: boolean; message: Message } => {
+    const targetRows = listRoom(input.kind, input.roomId)
+    const sources = input.forward!.messageIds.map(findMessageAnywhere)
+    if (sources.some((row) => row === null || row.deleted)) {
+      throw Object.assign(new Error('转发的消息不存在或已被删除'), { status: 400 })
+    }
+    // 按源消息 id 升序（旧→新）落地与展示，与 worker 同口径
+    const sourceRows = (sources as MockMessageRow[]).sort((left, right) => left.id - right.id)
+    if (input.forward!.mode === 'merged') {
+      const bundle: MockMessageRow = insertForwardCopy(input, {
+        content: `[聊天记录] ${sourceRows.length} 条消息`,
+        blocks: [{
+          type: 'forward_bundle',
+          count: sourceRows.length,
+          messages: sourceRows.map((row) => ({
+            content: displayContentOf(row),
+            blocks: displayBlocksOf(row) ?? null,
+            attachment: row.attachment ?? null,
+            senderName: row.sender.displayName,
+            createdAt: row.createdAt,
+            reply: replySnapshotOf(row),
+          })),
+        }],
+        clientMessageId: input.clientMessageId,
+      })
+      targetRows.unshift(bundle)
+      const created = rowToMessage(bundle)
+      pushIfCurrentRoom(input.kind, input.roomId, [created])
+      return { created: true, message: created }
+    }
+    // 逐条：每条源消息复制为一条普通消息（幂等键按序派生；@token 重写为显示名）
+    const createdMessages = sourceRows.map((row, index) => {
+      const createdRow = insertForwardCopy(input, {
+        content: displayContentOf(row),
+        blocks: displayBlocksOf(row) ?? undefined,
+        attachment: row.attachment ?? null,
+        clientMessageId: `${input.clientMessageId}-${index + 1}`,
+      })
+      targetRows.unshift(createdRow)
+      return rowToMessage(createdRow)
+    })
+    pushIfCurrentRoom(input.kind, input.roomId, createdMessages)
+    return { created: true, message: createdMessages.at(-1)! }
+  }
+
   api.openDm = async (userId) => {
     const existing = world.dms.find((d) => d.otherUser.id === userId)
     if (existing) return { dm: existing }
@@ -327,6 +429,10 @@ export function createMockChatApi(
 
   api.sendMessage = async (input) => {
     const rows = listRoom(input.kind, input.roomId)
+    // #347 转发：客户端只传源消息 id，服务端（mock 同语义）读取复制——逐条/合并
+    if (input.forward && input.forward.messageIds.length > 0) {
+      return mockForward(input)
+    }
     // 幂等：同 clientMessageId 直接回显已存在消息（上游 idempotent 语义）
     const existing = rows.find((r) => r.clientMessageId === input.clientMessageId)
     if (existing) return { created: false, message: rowToMessage(existing) }

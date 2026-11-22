@@ -40,7 +40,7 @@ function segmentText(segment: { text: string; matchedName?: string }): string {
     <template v-else-if="message.blocks?.length">
       <template v-for="(block, index) in message.blocks" :key="index">
         <span v-if="block.type === 'text'"><template v-for="(seg, segIndex) in segmentsOf(block.text)" :key="segIndex"><span v-if="seg.mention" class="message-mention" :data-mention="seg.text">{{ segmentText(seg) }}</span><template v-else>{{ seg.text }}</template></template></span>
-        <MessageAttachment v-else :ref="(view) => { if (block.attachment.key === props.message.attachment?.key) firstAttachment = view as InstanceType<typeof MessageAttachment> }" :attachment="block.attachment" :isolated="block.attachment.key !== message.attachment?.key" class="message-inline-media" />
+        <MessageAttachment v-else-if="block.type === 'attachment'" :ref="(view) => { if (block.attachment.key === props.message.attachment?.key) firstAttachment = view as InstanceType<typeof MessageAttachment> }" :attachment="block.attachment" :isolated="block.attachment.key !== message.attachment?.key" class="message-inline-media" />
       </template>
     </template>
     <template v-else>

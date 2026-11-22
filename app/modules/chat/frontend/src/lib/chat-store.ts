@@ -97,6 +97,14 @@ export interface ChatStore {
   loadOlderMessages(): Promise<void>
   /** 幂等发送：REST 提交（clientMessageId），失败置 sendError 并上抛。 */
   sendMessage(input: SendMessageInput): Promise<void>
+  /** 转发（#347）：源消息 id 交服务端复制到目标房间（群组/个人）；多目标逐个提交，任一失败汇总报错。
+   * clientMessageId 由调用方持有并跨重试复用（H1）——键不变，服务端幂等回显挡住已成功目标的重复落地。 */
+  forwardMessages(input: {
+    mode: 'single' | 'merged'
+    messageIds: number[]
+    clientMessageId: string
+    targets: Array<{ kind: 'channel' | 'user'; id: number }>
+  }): Promise<void>
   /** #339②：入场动效播完，清除对应 justSentId（重渲染不重播）。 */
   enterDone(messageId: number): void
   deleteMessage(messageId: number): Promise<void>
@@ -566,6 +574,65 @@ export function createChatStore(options: CreateChatStoreOptions): ChatStore {
     /** #339②：入场动效播完（bubble-arrive animationend）后由 MessageList 链上抛，父层转发到 store。 */
     enterDone: (messageId: number) => {
       justSentIds.value = justSentIds.value.filter((id) => id !== messageId)
+    },
+
+    forwardMessages: async (input) => {
+      // 会话列表预览同步刷新（#347 反馈）：转发不走 handleMessage（目标房间多半非当前），
+      // 预览由源消息本地推导——合并=摘要文案，逐条=最后一条源消息（与 handleMessage 同口径）
+      const sourceMessages = input.messageIds
+        .map((id) => state.messages.find((message) => message.id === id))
+        .filter((message): message is Message => Boolean(message))
+        // M3：与 worker 同口径按 id 升序取「最后一条」——内存列表未含全部勾选项或顺序不保证时，预览才不会取错条目
+        .sort((left, right) => left.id - right.id)
+      const last = sourceMessages.at(-1)
+      const lastText = last ? replaceMentionNames(last.content.trim(), last.mentions ?? []) : ''
+      const preview = input.mode === 'merged'
+        ? `[聊天记录] ${input.messageIds.length} 条消息`
+        : lastText || (last?.attachment?.kind === 'voice' ? '[语音]' : last?.attachment ? `[附件] ${last.attachment.name}` : '')
+      const errors: string[] = []
+      for (const target of input.targets) {
+        try {
+          let kind: RoomKind
+          let roomId: number
+          if (target.kind === 'user') {
+            // 个人目标：openDm 解析出 dm 房间 id（已开通则幂等返回），顺带同步会话列表
+            const result = await api.openDm(target.id)
+            const existing = state.dms.findIndex((dm) => dm.id === result.dm.id)
+            if (existing >= 0) state.dms.splice(existing, 1, result.dm)
+            else state.dms.unshift(result.dm)
+            kind = 'dm'
+            roomId = result.dm.id
+          } else {
+            const channel = state.channels.find((item) => item.id === target.id)
+            if (!channel) throw new Error('目标群组不存在')
+            kind = channel.kind
+            roomId = channel.id
+          }
+          await api.sendMessage({
+            kind,
+            roomId,
+            content: '',
+            // H1：键由 App 层生成并跨重试复用；逐条的服务端子键按 cmid-N 派生，基键稳定即整批幂等
+            clientMessageId: input.clientMessageId,
+            forward: { mode: input.mode, messageIds: input.messageIds },
+          })
+          // 目标房间预览刷新（RoomList 直接读 entry；lastMessageAt 用本地时钟近似，
+          // 与 worker createdAt 粒度一致即可，仅影响列表时间小字）
+          const entry = findRoomList({ kind, id: roomId })
+          if (entry && preview) {
+            entry.lastMessageAt = new Date().toISOString().slice(0, 19).replace('T', ' ')
+            entry.lastMessagePreview = preview
+          }
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : String(error))
+        }
+      }
+      if (errors.length > 0) {
+        // 错误只上抛（ForwardDialog 的 error 位展示），不写 state.sendError——
+        // 那是当前房间 composer 的发送错误位，转发失败语义错位且会双份展示
+        const first = errors[0] ?? '转发失败'
+        throw new Error(errors.length === input.targets.length ? first : `部分目标转发失败：${errors.join('；')}`)
+      }
     },
 
     deleteMessage: async (messageId) => {

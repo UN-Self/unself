@@ -9,9 +9,11 @@ import ChatLayout from './components/ChatLayout.vue'
 import Composer from './components/Composer.vue'
 import ReadReceipts from './components/ReadReceipts.vue'
 import GroupDetails from './components/GroupDetails.vue'
+import ForwardDialog, { type ForwardTarget } from './components/ForwardDialog.vue'
 import { createChatApi, type ChatApi } from './lib/api'
 import { attachInboxSocket, createChatStore, roomKeyString } from './lib/chat-store'
 import { createMockChatApi } from './lib/mock-api'
+import { forwardSuccessTickKey } from './lib/forward-events'
 import { createChatSession } from './lib/session'
 import { createChatStorage } from './lib/storage'
 import type { ChannelMember, Message, RoomKind, UserSummary } from './lib/types'
@@ -271,6 +273,63 @@ const audienceSize = computed(() => {
 // ---------- composer 编排 ----------
 
 const replyTo = ref<Message | null>(null)
+
+// ---------- #347 转发：目标弹窗（状态由根层持有） ----------
+
+// 基幂等键随本次转发一次性生成、重试复用（H1）：失败重试时目标房间不变、键不变，
+// 服务端幂等回显挡掉已成功目标的重复落地；逐条模式的 -n 子键由服务端按序派生
+function newForwardClientMessageId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `cm-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+const forwardState = ref<{ mode: 'single' | 'merged'; messageIds: number[]; clientMessageId: string } | null>(null)
+/** 弹窗开关与状态分离：失败后关弹窗不清 forwardState（键保留），重选同一批消息复用旧键走幂等回显。
+ * 全清只发生在成功或切房——否则同批消息隔久的「有意重发」也会被旧键回显吞掉，表现为转不出去。 */
+const forwardOpen = ref(false)
+const forwardBusy = ref(false)
+const forwardError = ref('')
+// 转发整体成功计数（MessageList 清空多选勾选；provide/inject 直达，失败不增，勾选保留可换目标重试）
+const forwardSuccessTick = ref(0)
+provide(forwardSuccessTickKey, forwardSuccessTick)
+
+/** 同一批（mode + 消息 id 集一致，id 序已由服务端归一，这里按集合比较）。 */
+function sameForwardSelection(left: { mode: 'single' | 'merged'; messageIds: number[] }, right: { mode: 'single' | 'merged'; messageIds: number[] }): boolean {
+  return left.mode === right.mode
+    && left.messageIds.length === right.messageIds.length
+    && left.messageIds.every((id) => right.messageIds.includes(id))
+}
+
+function onForward(payload: { mode: 'single' | 'merged'; messageIds: number[] }): void {
+  // 失败重试（上次提交失败且勾选同批）：复用旧幂等键，已成功目标命中服务端回显不再重复落地；
+  // 其余情况一律新键——包括成功后的有意重发，避免被旧回显吞掉。先判定再清 error，否则恒判非失败
+  const retryable = forwardError.value !== '' && forwardState.value !== null && sameForwardSelection(forwardState.value, payload)
+  const clientMessageId = retryable ? forwardState.value!.clientMessageId : newForwardClientMessageId()
+  forwardError.value = ''
+  forwardState.value = { ...payload, clientMessageId }
+  forwardOpen.value = true
+}
+
+async function onForwardConfirm(targets: ForwardTarget[]): Promise<void> {
+  if (!forwardState.value) return
+  forwardBusy.value = true
+  forwardError.value = ''
+  try {
+    await store.forwardMessages({ ...forwardState.value, targets })
+    forwardSuccessTick.value += 1
+    forwardState.value = null
+    forwardOpen.value = false
+  } catch (error) {
+    // 失败保留 forwardState（forwardOpen 由关闭路径控制），重开同批消息时复用键
+    forwardError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    forwardBusy.value = false
+  }
+}
+
+function onForwardClose(): void {
+  forwardOpen.value = false
+  // 无失败的正常取消：状态即刻清掉；有失败则保留键供重试复用（见 forwardOpen 注释）
+  if (forwardError.value === '') forwardState.value = null
+}
 const uploading = ref(false)
 /** #347 右键头像 @：Composer 实例句柄（insertMention 外部插入入口）。 */
 const composerView = ref<InstanceType<typeof Composer> | null>(null)
@@ -281,12 +340,16 @@ function onMention(message: Message): void {
   composerView.value?.insertMention({ id, username, displayName })
 }
 
-// 切房清引用：replyTo 指向的是上一条消息，换房后原房间已变，留着会把旧 replyMessageId 发到新房
+// 切房清引用：replyTo 指向的是上一条消息，换房后原房间已变，留着会把旧 replyMessageId 发到新房。
+// 转发失败保留的幂等键同样只属于当前消息流，切房即弃（防隔久误复用）
 watch(
   () => store.state.currentRoom,
   (room, previous) => {
     if (previous && (!room || room.id !== previous.id || room.kind !== previous.kind)) {
       replyTo.value = null
+      forwardState.value = null
+      forwardOpen.value = false
+      forwardError.value = ''
     }
   },
 )
@@ -405,6 +468,7 @@ const contextKey = computed(() =>
       @delete="onDeleteMessage"
       @quote="replyTo = $event"
       @mention="onMention"
+      @forward="onForward"
       @create-group="onCreateGroup"
       @open-group-details="onOpenGroupDetails"
     >
@@ -450,6 +514,19 @@ const contextKey = computed(() =>
       :error="groupDetailsError"
       @close="groupDetailsOpen = false"
       @invite="onInviteMembers"
+    />
+
+    <!-- #347 转发目标弹窗：群组（已加入频道）+ 联系人（确认时 openDm 解析 dm 房间） -->
+    <ForwardDialog
+      :open="forwardOpen"
+      :mode="forwardState?.mode ?? 'single'"
+      :count="forwardState?.messageIds.length ?? 0"
+      :channels="store.state.channels"
+      :contacts="contacts.filter((contact) => contact.id !== store.state.myUserId)"
+      :busy="forwardBusy"
+      :error="forwardError"
+      @close="onForwardClose"
+      @confirm="onForwardConfirm"
     />
 
     <div v-if="!handshakeError && !handshakeReady" class="chat-root-boot" data-test="handshaking" aria-busy="true">
