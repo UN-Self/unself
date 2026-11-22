@@ -78,7 +78,7 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
     expect(fake.state.kv.has(chatKvName())).toBe(true);
     expect(fake.state.buckets.has(chatR2Name())).toBe(true);
     // ② #248 存储面去豁免（#349 U5 归 core）：chat 与任何 core 自建表模块同一条链——独立记账表 unself_migrations_chat
-    //    + 迁移链（migrations/chat/0001..0005）按文件 import，记账名即模块 id。
+    //    + 迁移链（migrations/chat/0001..0010）按文件 import，记账名即模块 id。
     expect(fake.state.ledgerTables.has('unself_migrations_chat')).toBe(true);
     // 同一张账表：SQL 文件 + DO 迁移 tag（#255 归一）
     expect([...(fake.state.ledgerRows.get('unself_migrations_chat') ?? [])].sort()).toEqual([
@@ -87,6 +87,11 @@ describe('#219 chat 全链路（干净装配「仅启用 chat」）', () => {
       '0003_core_avatar.sql',
       '0004_message_deletion_audit.sql',
       '0005_message_blocks.sql',
+      '0006_core_identity_fields.sql',
+      '0007_core_identity_source.sql',
+      '0008_mention_all.sql',
+      '0009_forward_attachment_owner.sql',
+      '0010_attachment_reference_guard.sql',
       'do-migration:v1',
     ]);
     expect(fake.state.importEtags.size).toBeGreaterThanOrEqual(1);
