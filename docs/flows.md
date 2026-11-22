@@ -84,7 +84,7 @@ flowchart TD
 ② 弹窗选目标：已加入的群组 + 联系人（联系人经 openDm 解析出私聊房间），可多选目标
 ③ 客户端只传 forward{mode, messageIds} → POST /api/v1/rooms/:kind/:id/messages
 ④ 服务端读取源消息并校验：存在、未删除、所在房间当前用户可读（逐房间 authorizeRoom）
-⑤ 逐条：每条源消息复制为一条普通消息（附件沿用原 R2 key，归属校验对象为原发件人）；
+⑤ 逐条：每条源消息复制为一条普通消息（附件沿用原 R2 key，归属按 uploaded_files 真实 owner 校验——副本不记原发件人，转发多少手都不断链；可读性由源房间授权保证）；
    合并：全部源消息序列化为 forward_bundle blocks 存 message_block_payloads.content_blocks
 ⑥ 落地消息经 DO 广播帧下发；转发消息不做来源标注，外观与普通消息一致
 ```

@@ -249,6 +249,7 @@ function flashSelectLimitHint(): void {
 }
 
 function enterSelecting(first: Message): void {
+  if (first.deleted) return
   selecting.value = true
   selectedIds.value = new Set([first.id])
 }
@@ -259,6 +260,8 @@ function exitSelecting(): void {
   if (selectLimitTimer) clearTimeout(selectLimitTimer)
 }
 function toggleSelected(message: Message): void {
+  // 已撤回消息不可选（守卫兜底：模板已隐藏勾选框，气泡点击路径仍会进到这里）
+  if (message.deleted) return
   const next = new Set(selectedIds.value)
   if (next.has(message.id)) {
     next.delete(message.id)
@@ -290,6 +293,17 @@ watch(forwardSuccessTick, () => {
 })
 // 切房退出多选：勾选集属于上一条消息流，留着会把旧房间消息 id 发到新房
 watch(() => props.roomKey, () => exitSelecting())
+// 勾选后消息被撤回（WS 帧原地置 deleted）：从勾选集清洗掉，否则提交整批被服务端拒绝，
+// 且该行高亮还在、勾选框已消失，视觉不一致。全空时顺势退出多选态
+watch(() => props.messages.map((message) => (message.deleted ? message.id : 0)), () => {
+  if (!selecting.value) return
+  // 勾选数有上限（几十条），先建 Map 再查，避免列表更新时 O(勾选数 × 消息数) 的 find 扫描
+  const byId = new Map(props.messages.map((message) => [message.id, message]))
+  const next = new Set([...selectedIds.value].filter((id) => byId.get(id)?.deleted === false))
+  if (next.size === selectedIds.value.size) return
+  selectedIds.value = next
+  if (next.size === 0) exitSelecting()
+})
 /** #347 多选（M2）：点气泡内部的可交互元素（按钮/引用卡/附件预览）只执行原功能，不切换勾选。 */
 function onStreamItemClick(event: MouseEvent, message: Message): void {
   if (!selecting.value) return
@@ -331,7 +345,7 @@ function onStreamItemClick(event: MouseEvent, message: Message): void {
             >
               <!-- #347 多选态勾选框：真实 button（Enter/空格可切换），点击不进气泡交互 -->
               <button
-                v-if="selecting"
+                v-if="selecting && !message.deleted"
                 type="button"
                 class="stream-select-box"
                 data-test="select-box"

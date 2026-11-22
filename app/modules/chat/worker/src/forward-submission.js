@@ -2,8 +2,8 @@
 
 /**
  * 消息转发（#347）：客户端只传 forwardFromMessageIds，服务端读取源消息并复制落地——
- * 不接受客户端自带内容（防伪造），附件沿用原 R2 key（归属校验对象换成原发件人，
- * 转发方对源消息的可读性在此统一校验）。两种模式：
+ * 不接受客户端自带内容（防伪造），附件沿用原 R2 key（归属按 uploaded_files 真实 owner 校验——
+ * 副本不记原发件人，转发方对源消息的可读性在此统一校验）。两种模式：
  * - single 逐条：每条源消息复制为一条普通消息（不标注来源，外观与普通消息一致）；
  * - merged 合并：全部源消息序列化为 forward_bundle blocks（存 message_block_payloads
  *   content_blocks，0005 已有的加密 JSON 扩展点，不动 messages 表结构），正文存摘要文案。
@@ -83,38 +83,45 @@ async function resolveForwardSources(env, principal, messageIds) {
 }
 
 /**
- * 附件归属批量校验（subrequest 收敛）：一次 IN 查询取全部 key 的 owner，逐对核对
- * 「附件属原作者」。通过后落地走 trustAttachmentOwnership，跳过逐条 fileBelongsToUser
- * （N 条带附件的转发 = N 个 subrequest，免费版 50 上限会在十几条就爆成 500）。
+ * 附件批量校验 + 真实 owner 回读（subrequest 收敛）：一次 IN 查询取全部附件 key 的
+ * uploaded_files 登记与 owner。不与「消息 sender」比对——副本消息不记原发件人，二转时
+ * 必然断链（线上 400「转发的消息包含不可用附件」即此）；访问控制由「源房间可读」保证
+ * （resolveForwardSources）。返回 Map<key, 真实 owner_id>，落地项用它做 attachmentOwner：
+ * keyBelongsToOwner 的 key 前缀检查、normalizeMessageBlocks 的 getOwnedUploadedFileMetadata
+ * 都按真实 owner 通过，转发多少手都不断链。同时跳过逐条 fileBelongsToUser（N 条带附件的
+ * 转发 = N 个 subrequest，免费版 50 上限会在十几条就爆成 500）。
  */
-async function verifyAttachmentOwnership(env, sources) {
-	const pairs = [];
+async function resolveAttachmentOwners(env, sources) {
+	const keys = new Set();
 	for (const message of sources) {
-		const ownerId = Number(message.sender?.id);
-		if (message.attachment?.key) {
-			pairs.push({ key: String(message.attachment.key), ownerId });
-		}
-		// blocks 内嵌附件（图文混排，无顶层 attachment）一并核对：落地时 normalizeMessageBlocks
-		// 会按原作者身份再验一次，但这里不收的话逐条转发 N 条图文就是 N 次隐藏 DB 查询，两处口径不一致
+		if (message.attachment?.key) keys.add(String(message.attachment.key));
+		// blocks 内嵌附件（图文混排，无顶层 attachment）一并确认，与落地口径一致
 		for (const block of Array.isArray(message.blocks) ? message.blocks : []) {
-			if (block?.type === "attachment" && block.attachment?.key) {
-				pairs.push({ key: String(block.attachment.key), ownerId });
-			}
+			if (block?.type === "attachment" && block.attachment?.key) keys.add(String(block.attachment.key));
 		}
 	}
-	if (!pairs.length) return;
-	const keys = [...new Set(pairs.map((pair) => pair.key))];
-	const placeholders = keys.map(() => "?").join(", ");
+	const owners = new Map();
+	if (!keys.size) return owners;
+	const unique = [...keys];
+	const placeholders = unique.map(() => "?").join(", ");
 	const { results } = await env.DB
 		.prepare(`SELECT object_key, owner_user_id FROM uploaded_files WHERE object_key IN (${placeholders})`)
-		.bind(...keys)
+		.bind(...unique)
 		.all();
-	const ownerByKey = new Map(results.map((row) => [String(row.object_key), Number(row.owner_user_id)]));
-	for (const pair of pairs) {
-		if (ownerByKey.get(pair.key) !== pair.ownerId) {
+	for (const row of results) owners.set(String(row.object_key), Number(row.owner_user_id));
+	for (const key of unique) {
+		if (!owners.has(key)) {
 			throw new ForwardSubmissionError("转发的消息包含不可用附件", "invalid_request");
 		}
 	}
+	return owners;
+}
+
+/** 单条消息的真实附件 owner（同一条消息的附件都是同一上传者，取首个 key 的 owner）。 */
+function attachmentOwnerOf(message, owners) {
+	const key = message.attachment?.key
+		?? (Array.isArray(message.blocks) ? message.blocks.find((block) => block?.type === "attachment")?.attachment?.key : undefined);
+	return key ? owners.get(String(key)) ?? null : null;
 }
 
 /** 落地前的 DM 目标拦截：被对方拉黑/已拉黑对方时逐条与合并都不发送（与普通发送同语义）。 */
@@ -199,6 +206,20 @@ function collectAttachmentKeys(blocks) {
 }
 
 /**
+ * 嵌套 bundle 条目（forward_bundle 的 messages[].attachment / blocks）的附件 key 不在
+ * resolveAttachmentOwners 的顶层收集范围内：缺失 uploaded_files 登记时消息会照常落地，
+ * 接收人点开摘要卡访问附件才失败。合并落地 / bundle 套娃落地前按 owners Map 提前拦截，
+ * 统一给人话 400。
+ */
+function assertBundleAttachmentsRegistered(blocks, owners) {
+	for (const key of collectAttachmentKeys(blocks)) {
+		if (!owners.has(String(key))) {
+			throw new ForwardSubmissionError("转发的消息包含不可用附件", "invalid_request");
+		}
+	}
+}
+
+/**
  * 提交转发：meta = { principal, room }（目标房间），forward = { mode, messageIds }。
  * 返回最后一条落地消息（HTTP 回包用；全部消息经广播帧下发）。
  */
@@ -217,9 +238,8 @@ export async function submitForwardMessage(env, meta, { mode, messageIds, client
 	}
 	const sources = await resolveForwardSources(env, meta.principal, messageIds);
 	await requireDmSendable(env, meta.room, meta.principal.userId);
-	// 附件归属一次批量校验（subrequest 收敛）：落地时跳过逐条 fileBelongsToUser——
-	// N 条带附件的逐条转发就是 N 个 subrequest，免费版 50 上限必爆（线上「过多 500」成因之一）
-	await verifyAttachmentOwnership(env, sources);
+	// 附件真实 owner 批量回读（subrequest 收敛）：落地项用它做 attachmentOwner，转发多少手都不断链
+	const attachmentOwners = await resolveAttachmentOwners(env, sources);
 
 	const forwarderId = Number(meta.principal.userId);
 	if (mode === "merged") {
@@ -234,6 +254,8 @@ export async function submitForwardMessage(env, meta, { mode, messageIds, client
 				400,
 			);
 		}
+		// 落地前拦截嵌套 bundle 条目的附件缺登记（见 assertBundleAttachmentsRegistered 注释）
+		assertBundleAttachmentsRegistered([forwardBlock], attachmentOwners);
 		const { messages, createdFlags } = await insertForwardMessagesAtomic(env, [{
 			channelId: meta.room.id,
 			senderId: forwarderId,
@@ -266,11 +288,13 @@ export async function submitForwardMessage(env, meta, { mode, messageIds, client
 			channelId: meta.room.id,
 			senderId: forwarderId,
 			source: "forward",
-			// 归属已在 verifyAttachmentOwnership 一次校验过，落地跳过逐条查询
+			// 归属已在 resolveAttachmentOwners 一次校验过，落地跳过逐条查询
 			trustAttachmentOwnership: true,
 			clientMessageId: `${normalizedClientMessageId}-${index + 1}`,
 		};
 		if (isBundleMessage(source)) {
+			// 套娃落地前拦截嵌套附件缺登记（见 assertBundleAttachmentsRegistered 注释）
+			assertBundleAttachmentsRegistered(source.blocks, attachmentOwners);
 			return {
 				...base,
 				content: String(source.content ?? ""),
@@ -283,8 +307,9 @@ export async function submitForwardMessage(env, meta, { mode, messageIds, client
 			content: displayContentOf(source),
 			blocks: displayBlocksOf(source),
 			attachment: source.attachment ?? null,
-			// 附件仍属原作者：归属校验对象换成原发件人（可读性已在 resolveForwardSources 校验）
-			attachmentOwnerUserId: source.sender?.id ?? null,
+			// 用 uploaded_files 的真实 owner（而非源消息 sender——二转时两者不同）：
+			// key 前缀检查与 normalizeMessageBlocks 的 owner 查询都按真实 owner 通过
+			attachmentOwnerUserId: attachmentOwnerOf(source, attachmentOwners),
 		};
 	});
 	const { messages, createdFlags } = await insertForwardMessagesAtomic(env, items);
