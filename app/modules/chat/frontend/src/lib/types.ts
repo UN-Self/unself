@@ -91,7 +91,22 @@ export interface Attachment {
 
 export interface MessageDeletionNotice { actorId: number; actorName: string; action: 'recalled' | 'removed' }
 
-export type MessageBlock = { type: 'text'; text: string } | { type: 'attachment'; attachment: Attachment }
+/** 合并转发条目（#347）：bundle 内嵌的轻量消息副本（浮层展示用，不带 id/回执）。 */
+export interface ForwardBundleEntry {
+  content: string
+  blocks: MessageBlock[] | null
+  attachment: Attachment | null
+  senderName: string
+  createdAt: string
+  /** 引用快照（#347 反馈③）：浮层内与正常聊天一致渲染引用卡；无引用/原文已删为占位。 */
+  reply?: { authorName?: string; text: string; deleted?: boolean } | null
+}
+
+export type MessageBlock =
+  | { type: 'text'; text: string }
+  | { type: 'attachment'; attachment: Attachment }
+  /** 合并转发（#347）：服务端内部载荷，气泡渲染摘要卡，点开浮层看 messages。 */
+  | { type: 'forward_bundle'; count: number; messages: ForwardBundleEntry[] }
 
 /** 提及片段（渲染 @ 高亮用；上游 mapMessage.mentions）。 */
 export interface Mention {

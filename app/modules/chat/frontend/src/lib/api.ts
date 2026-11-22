@@ -63,9 +63,26 @@ function normalizeAttachment(pathname: string, attachment: Attachment | null): A
   return { ...attachment, url: moduleFileUrl(pathname, attachment.url) }
 }
 
+/** 附件 url 同源 `/files/`，补模块前缀；forward_bundle 递归（套娃）内嵌条目也补。 */
+function normalizeBlocks(pathname: string, blocks: Message['blocks']): Message['blocks'] {
+  return blocks?.map(block => {
+    if (block.type === 'attachment') {
+      return { ...block, attachment: normalizeAttachment(pathname, block.attachment)! }
+    }
+    if (block.type === 'forward_bundle') {
+      return { ...block, messages: block.messages.map((entry) => ({
+        ...entry,
+        attachment: normalizeAttachment(pathname, entry.attachment),
+        blocks: normalizeBlocks(pathname, entry.blocks ?? undefined) ?? null,
+      })) }
+    }
+    return block
+  })
+}
+
 function normalizeMessage(pathname: string, message: Message): Message {
   return { ...message, attachment: normalizeAttachment(pathname, message.attachment),
-    blocks: message.blocks?.map(block => block.type === 'attachment' ? { ...block, attachment: normalizeAttachment(pathname, block.attachment)! } : block),
+    blocks: normalizeBlocks(pathname, message.blocks),
     // 引用块内嵌的附件同源 `/files/`，也要补模块前缀（当前只显示附件名，url 先改对）
     replyTo: message.replyTo && !message.replyTo.deleted && 'attachment' in message.replyTo
       ? { ...message.replyTo, attachment: normalizeAttachment(pathname, message.replyTo.attachment) }
@@ -145,6 +162,8 @@ export interface ChatApi {
     mentionAll?: boolean
     /** 被引用消息（body 字段 replyMessageId，worker v1.js 实测 @29978c2 接收）。 */
     replyTo?: { id: number } | null
+    /** 转发（#347）：只传源消息 id，服务端读取复制（逐条/合并）；目标即本次请求的房间。 */
+    forward?: { mode: 'single' | 'merged'; messageIds: number[] } | null
   }): Promise<{ created: boolean; message: Message }>
   deleteMessage(kind: RoomKind, roomId: number, messageId: number): Promise<{ deletion?: MessageDeletionNotice } | void>
   uploadFile(file: File): Promise<{ file: Attachment }>
@@ -332,6 +351,7 @@ export function createChatApi(options: CreateChatApiOptions): ChatApi {
           mentionUserIds: input.mentionUserIds ?? [],
           mentionAll: input.mentionAll === true,
           replyMessageId: input.replyTo?.id ?? null,
+          forward: input.forward ?? null,
         }),
       }).then((result) => ({ ...result, message: normalizeMessage(globalThis.location.pathname, result.message) })),
     deleteMessage: (kind, roomId, messageId) =>

@@ -70,6 +70,8 @@ const emit = defineEmits<{
   quote: [message: Message]
   /** #347 右键头像选「@ 提及」→ 根层往 composer 插入 @username。 */
   mention: [message: Message]
+  /** #347 转发确认 → 根层开转发目标弹窗（多选操作条 / 右键单条）。 */
+  forward: [payload: { mode: 'single' | 'merged'; messageIds: number[] }]
   'open-dm': [userId: number]
   'create-group': [input: { name: string; memberUserIds: number[] }]
   'open-group-details': []
@@ -244,6 +246,7 @@ const activeChannel = computed(() => props.activeRoom?.kind === 'dm'
         @delete="emit('delete', $event)"
         @quote="emit('quote', $event)"
         @mention="emit('mention', $event)"
+        @forward="emit('forward', $event)"
       />
 
       <!-- composer 插槽：T4/T5 填充（发送/@/文件/语音入口） -->

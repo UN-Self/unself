@@ -62,4 +62,5 @@ export function useAttachmentResource(attachment: () => Attachment | null) {
   return { source, failed, loading, load, download }
 }
 export type AttachmentResource = ReturnType<typeof useAttachmentResource>
-export const attachmentResourceKey: InjectionKey<AttachmentResource> = Symbol('attachment-resource')
+// 值可为 null：消费方（ForwardBundleList）显式 provide null 以断开外层气泡的共享 resource 继承
+export const attachmentResourceKey: InjectionKey<AttachmentResource | null> = Symbol('attachment-resource')

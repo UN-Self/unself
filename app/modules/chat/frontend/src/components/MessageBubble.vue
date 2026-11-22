@@ -7,6 +7,7 @@ import { UContextMenu, UHoverCard, UMessage, UMessageAvatar, UMessageBubble, UPr
 import { attachmentResourceKey, useAttachmentResource } from '../lib/attachment-resource'
 import MessageContent from './MessageContent.vue'
 import MessageActions from './MessageActions.vue'
+import ForwardBundleView from './ForwardBundleView.vue'
 import { deletionLabel } from '../lib/message-deletion'
 import type { ChannelMember, Message, ReadReceiptsSummary } from '../lib/types'
 
@@ -87,6 +88,10 @@ const emit = defineEmits<{ /** 点击回执标签：请求父层打开已读名�
   quote: [message: Message]
   /** #347 右键头像选「@ 提及」：上抛被 @ 者的消息，父层往 composer 插入 @username。 */
   mention: [message: Message]
+  /** #347 右键菜单选「转发」：上抛原消息，父层开转发目标弹窗（单条逐条）。 */
+  forward: [message: Message]
+  /** #347 右键菜单选「多选」：上抛原消息，父层（MessageList）进入多选模式。 */
+  'multi-select': [message: Message]
   /** 点击引用块「回到原文」：上抛引用方消息（replyTo.id 是滚动目标），父层滚动定位。 */
   'jump-to-reply': [message: Message]
 }>()
@@ -130,6 +135,15 @@ const fallbackTime = computed(() => {
 
 provide(attachmentResourceKey, useAttachmentResource(() => props.message.deleted ? null : props.message.attachment))
 const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
+
+// ---------- #347 合并转发：摘要卡 + 内容浮层 ----------
+
+/** forward_bundle 载荷（服务端内部 block；存在即渲染摘要卡替代正文）。 */
+const bundle = computed(() => {
+  const found = props.message.blocks?.find((block) => block.type === 'forward_bundle')
+  return found && found.type === 'forward_bundle' ? found : null
+})
+const bundleOpen = ref(false)
 </script>
 
 <template>
@@ -183,7 +197,7 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
 
       <!-- 引用块在气泡体内（UMessageBubble 插槽第一段），见下方 MessageActions 处 -->
 
-      <MessageActions :message="message" :can-delete="canDelete" @delete="emit('delete', message)" @quote="emit('quote', message)" @preview="attachmentView?.preview()">
+      <MessageActions :message="message" :can-delete="canDelete" @delete="emit('delete', message)" @quote="emit('quote', message)" @preview="attachmentView?.preview()" @forward="emit('forward', message)" @multi-select="emit('multi-select', message)">
         <UMessageBubble class="bubble-body" :variant="mine ? 'solid' : 'soft'">
           <!-- 引用卡片：整个模块（竖线+底色+作者行+引文）可点回原文。可跳转时是 role=button（Enter/空格触发）；
                右上角箭头是纯装饰（aria-hidden + pointer-events:none），键盘入口就是这张卡本身 -->
@@ -210,9 +224,22 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
               <ArrowUp :size="14" />
             </span>
           </div>
-          <MessageContent ref="attachmentView" :message="message" />
+          <!-- #347 合并转发摘要卡：点击开浮层看完整列表（样式与引用卡同族：左竖条 + tinted 底） -->
+          <button
+            v-if="bundle"
+            type="button"
+            class="bubble-forward-card"
+            data-test="forward-bundle-card"
+            @click.stop="bundleOpen = true"
+          >
+            <span class="bubble-forward-text">[聊天记录] {{ bundle.count }} 条消息</span>
+          </button>
+          <MessageContent v-else ref="attachmentView" :message="message" />
         </UMessageBubble>
       </MessageActions>
+
+      <!-- #347 合并转发内容浮层（本组件局部开关；Teleport 到 body） -->
+      <ForwardBundleView :open="bundleOpen" :messages="bundle?.messages ?? []" @close="bundleOpen = false" />
 
       <!-- #220/#339③ 已读回执标签（mine 尾部；DM=已读单勾（TG 口径：双勾另有所指），群聊=已读 n/m）；点击开名单浮层（父层渲染） -->
       <button
@@ -382,6 +409,26 @@ const attachmentView = ref<InstanceType<typeof MessageContent> | null>(null)
   flex-shrink: 0;
 }
 .bubble-body:focus-visible { outline:var(--unself-focus-ring); outline-offset:2px; }
+
+/* #347 合并转发摘要卡：与引用卡同族（左竖条 + tinted 底），整卡可点开浮层 */
+.bubble-forward-card {
+  display: block;
+  width: 100%;
+  margin-bottom: var(--unself-space-1);
+  padding: var(--unself-space-1) var(--unself-space-2);
+  border: 0;
+  border-left: 2px solid var(--unself-color-primary);
+  border-radius: 0 var(--unself-radius-sm) var(--unself-radius-sm) 0;
+  background: transparent;
+  color: var(--unself-color-text-secondary);
+  font: inherit;
+  font-size: var(--unself-font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.bubble-forward-card:hover { background: color-mix(in srgb, var(--unself-color-text) 8%, transparent); }
+.bubble-forward-card:focus-visible { outline: var(--unself-focus-ring); outline-offset: 2px; }
+.bubble-forward-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* #339② 入场动效（发送）：气泡本体微缩淡入→归位（吞入+亮起两段，backwards 消首帧闪）。
    原第三段紫色残影（bubble-ghost 伪元素）已按部署者要求整体移除。

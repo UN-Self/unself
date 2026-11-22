@@ -147,7 +147,7 @@ export const SCHEMA_BASELINE_PATH = fileURLToPath(
 /**
  * 建一个加载真实 schema-baseline.sql 的内存库。
  * 每个用例各自建库，互不共享状态（并发/顺序都不串味）。
- * schemaPath 缺省 = 逻辑表名基线（core 专属库形态；#349 U5 后无 shared 前缀集）。
+ * schemaPath 缺省 = 逻辑表名基线（core 专属库形态；#347 U5 后无 shared 前缀集）。
  */
 export function createChatDb(opts: { schemaPath?: string } = {}): ChatTestDb {
   const sqlite = new DatabaseSync(':memory:');
