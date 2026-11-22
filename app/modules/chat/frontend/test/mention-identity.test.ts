@@ -3,6 +3,7 @@ import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import Composer from '../src/components/Composer.vue'
+import MessageContent from '../src/components/MessageContent.vue'
 import { createChatStore } from '../src/lib/chat-store'
 import { createMockChatApi } from '../src/lib/mock-api'
 import { createChatStorage } from '../src/lib/storage'
@@ -119,6 +120,26 @@ describe('#230 core 身份下的 @ 提及', () => {
     await setValue(wrapper, '@core:2 麻烦确认')
     await input.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('send')?.[0]?.[1]).toEqual([2])
+  })
+})
+
+describe('#347 气泡提及高亮：相邻 token 不串名', () => {
+  // 回归：匹配失败后向后扫后续 `@`，把后面位置的命中错标到当前片段——
+  // `@甲 @乙 @甲 @乙` 渲染成 `@甲 @甲 @甲 @乙`（最后一条后面没有 @ 所以幸免）。
+  it('交替提及两名成员，每个 token 显示自己的 displayName', () => {
+    const wrapper = mount(MessageContent, {
+      props: {
+        message: {
+          id: 1,
+          content: '@core:1 @core:2 @core:1 @core:2',
+          mentions: [
+            { userId: 1, username: 'core:1', displayName: '走查甲' },
+            { userId: 2, username: 'core:2', displayName: '走查乙' },
+          ],
+        } as never,
+      },
+    })
+    expect(wrapper.text()).toBe('@走查甲 @走查乙 @走查甲 @走查乙')
   })
 })
 

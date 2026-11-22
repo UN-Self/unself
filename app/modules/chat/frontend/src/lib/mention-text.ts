@@ -14,24 +14,26 @@ export function isMentionBoundary(char: string | undefined): boolean {
 
 /** value 中是否出现被边界包裹的 `@name`（逐位置比较，天然支持冒号与中文）。 */
 export function textMentionsName(value: string, name: string): boolean {
-  return mentionMatchLengthAt(value, name) >= 0
+  for (let at = value.indexOf('@'); at !== -1; at = value.indexOf('@', at + 1)) {
+    if (mentionLengthAt(value, name, at) >= 0) return true
+  }
+  return false
 }
 
 /**
- * value[start] 为 `@` 时，若其后紧跟被边界包裹的 name 则返回 `@name` 长度，否则 -1。
- * 多个名字共享同一 `@` 前缀时（如 `bob`/`bobby`），调用方先试更长的名字。
+ * value[at] 为 `@` 时，若其后紧跟被边界包裹的 name 则返回 `@name` 长度，否则 -1。
+ * 只在给定位置精确比对，不后扫后续 `@`——调用方（splitMentionSegments）按位置
+ * 消费返回长度，命中位置漂移会把别人的显示名错标到当前片段（实测踩坑：相邻两条
+ * token 第二条显示第一条的名字）。
  */
-function mentionMatchLengthAt(value: string, name: string, start = -1): number {
+function mentionLengthAt(value: string, name: string, at: number): number {
   const target = name.toLowerCase()
-  if (!target) return -1
-  for (let at = value.indexOf('@', start + 1); at !== -1; at = value.indexOf('@', at + 1)) {
-    if (at > 0 && !isMentionBoundary(value[at - 1])) continue
-    const end = at + 1 + target.length
-    if (end > value.length) continue
-    if (value.slice(at + 1, end).toLowerCase() !== target) continue
-    if (isMentionBoundary(value[end])) return target.length + 1
-  }
-  return -1
+  if (!target || value[at] !== '@') return -1
+  const end = at + 1 + target.length
+  if (end > value.length) return -1
+  if (value.slice(at + 1, end).toLowerCase() !== target) return -1
+  if (!isMentionBoundary(value[at - 1]) || !isMentionBoundary(value[end])) return -1
+  return target.length + 1
 }
 
 export interface MentionSegment {
@@ -61,7 +63,7 @@ export function splitMentionSegments(value: string, names: string[]): MentionSeg
     let matched = -1
     let matchedName: string | undefined
     for (const name of sorted) {
-      const length = mentionMatchLengthAt(value, name, index - 1)
+      const length = mentionLengthAt(value, name, index)
       if (length > 0 && (matched < 0 || length > matched)) {
         matched = length
         matchedName = name
