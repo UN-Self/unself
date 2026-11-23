@@ -538,15 +538,34 @@ export function renderCalendarPage(): string {
     state.selected = dateKey(new Date());
     renderCalendar();
 
-    sdk.ready();
-    token = await sdk.waitForToken();
-    var claims = sdk.decodeContext(token);
-    $('who').textContent = (claims.name ?? claims.sub) + (claims.email ? ' · ' + claims.email : '');
-    await loadEvents();
-    renderCalendar();
+    // 握手超时兜底：壳异常不回 token 时给人话，不永久停在「加载中」
+    function tokenWithTimeout(ms) {
+      return Promise.race([
+        sdk.waitForToken(),
+        new Promise(function (resolve, reject) {
+          setTimeout(function () { reject(new Error('token timeout')); }, ms);
+        }),
+      ]);
+    }
 
-    // 静默续期：token 更新后跟随刷新本地副本
-    sdk.startTokenLoop(token, function (next) { token = next; });
+    sdk.ready();
+    try {
+      token = await tokenWithTimeout(15000);
+    } catch (e) {
+      token = '';
+      fail('登录初始化超时，请刷新页面重试');
+    }
+
+    if (token) {
+      var claims = sdk.decodeContext(token);
+      // claims 无 email 字段（ModuleTokenClaimsSchema）：身份行只展示 name/sub
+      $('who').textContent = claims.name ?? claims.sub;
+      await loadEvents();
+      renderCalendar();
+
+      // 静默续期：token 更新后跟随刷新本地副本
+      sdk.startTokenLoop(token, function (next) { token = next; });
+    }
   </script>
 </body>
 </html>`;

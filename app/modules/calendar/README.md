@@ -12,7 +12,7 @@ cp .env.example .env
 pnpm --filter @unself/calendar dev
 ```
 
-默认监听 `127.0.0.1:8791`，同时主动连接 Workbench。连接成功后即可在模块列表打开 Calendar。
+宿主默认监听 `127.0.0.1:8790`（Docker 部署在 `compose.yml` 里显式设 `0.0.0.0:8791` 以打通端口映射），同时主动连接 Workbench。连接成功后即可在模块列表打开 Calendar。
 
 ## Docker
 
@@ -31,3 +31,5 @@ pnpm --filter @unself/calendar build
 ```
 
 日程数据使用 Core 的 `module-api/storage` 接口，因此不依赖 Cloudflare R2。
+
+> AI生成

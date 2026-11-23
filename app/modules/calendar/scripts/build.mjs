@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-/** Calendar 发布产物：Node 宿主入口、Worker 入口和 manifest 快照。 */
+/** Calendar 发布产物：Node 宿主入口、Worker 入口和 manifest 快照。
+ * SDK 浏览器资产不拷进包（契约 §8「SDK 只有一种用法」）：node 宿主态由 @unself/sdk/host
+ * 自供（serveSdkAssetsFrom 定位包内产物），CF 部署态由装配资产拦截——模块不自带副本。 */
 import { execFileSync } from 'node:child_process';
-import { cp, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
@@ -38,11 +38,6 @@ await build({
 });
 
 const require = createRequire(import.meta.url);
-const sdkDist = join(dirname(require.resolve('@unself/sdk/package.json')), 'dist');
-await mkdir(join(HERE, 'dist', 'sdk'), { recursive: true });
-await cp(join(sdkDist, 'module-sdk.esm.js'), join(HERE, 'dist', 'sdk', 'module-sdk.esm.js'));
-await cp(join(sdkDist, 'module-sdk.js'), join(HERE, 'dist', 'sdk', 'module-sdk.js'));
-
 execFileSync(
   process.execPath,
   [

@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
+# 交付形态含 Dockerfile / compose / 反连入口（main.ts）；
+# Docker 是分发形式不是运行体（容器里跑的仍是 node），故声明 node。
+# 未声明的运行体按契约在安装时直接拒绝（docs/modules.md §3/§4）。
 id: calendar
 route: /m/calendar
 runtimes:
   - worker
+  - node
 version: 0.1.0
 description: 日程管理模块
 permissions:

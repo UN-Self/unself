@@ -14,7 +14,9 @@ export interface Bindings {
   CORE_ISSUER?: string;
 }
 
-/** 模块 id：aud 锁定 + SDK 存储子域 + 表前缀三处一致。 */
+/** 模块 id（manifest.id 默认命名）：aud 锁定 + SDK 存储子域一致。实例 id 由 core 定、部署者
+ *  可覆盖（docs/modules.md §8），其下发机制（反连握手响应 { id } 交模块）待 @unself/sdk/host
+ *  落地——落地前沿用默认命名（hello/chat 同构）。 */
 const MODULE_ID = 'calendar';
 
 /** Service Binding 调用用的占位 origin（host 不参与路由；core-api 按路径匹配，决策 #63）。 */
@@ -57,7 +59,8 @@ function bearerFor(c: Context<{ Bindings: Bindings; Variables: { claims: ModuleT
   return (c.req.header('authorization') ?? '').slice(7);
 }
 
-async function listStorageKeys(
+/** 事件键列举（业务面只取 event_ 前缀；生命周期面 /life/* 用全量 list，见各路由）。 */
+async function listEventKeys(
   c: Context<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }>,
 ): Promise<string[]> {
   return storeFor(c).list(EVENT_PREFIX);
@@ -91,7 +94,7 @@ async function getEvents(
   c: Context<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaims } }>,
   store: ModuleStorage,
 ): Promise<CalendarEvent[]> {
-  const keys = (await listStorageKeys(c)).filter((key) => key.startsWith(EVENT_PREFIX));
+  const keys = (await listEventKeys(c)).filter((key) => key.startsWith(EVENT_PREFIX));
   const events: CalendarEvent[] = [];
 
   for (const key of keys) {
@@ -110,8 +113,13 @@ const app = new Hono<{ Bindings: Bindings; Variables: { claims: ModuleTokenClaim
 
 /** 模块页：月历 + 新增日程（本模块前端，见 src/page.ts）。
  *  页面 fetch/import 全用相对路径（不带前导 /）：同一路径制下模块同时挂载在
- *  /m/<id>/（部署）与开发期根路径，根相对路径只在后者成立——相对路径两处皆可（#14）。 */
+ *  /m/<id>/（部署）与开发期根路径，根相对路径只在后者成立——相对路径两处皆可（#14）。
+ *  CSP（docs/modules.md §8「自托管的模块页必须带 frame-ancestors」）：反连态页面经 core
+ *  /m/<id>/ 同源装载，'self' 即壳；直连跨域时壳 origin = core 地址（UNSELF_CORE_URL）。 */
 app.get('/', (c) => {
+  const coreUrl = coreUrlFromEnv();
+  const ancestors = coreUrl ? `'self' ${coreUrl}` : "'self'";
+  c.header('Content-Security-Policy', `frame-ancestors ${ancestors}`);
   return c.html(renderCalendarPage());
 });
 
@@ -186,81 +194,9 @@ app.get('/api/events', async (c) => {
   }
 });
 
-// SDK 静态文件（页面 import /sdk/module-sdk.js）：开发期直映 node_modules 源；
-// 部署期由 wrangler 构建打包（#14 装配脚本职责）。
-
-/** 更新指定日历事件 */
-app.put('/api/events/:id', async (c) => {
-  if (!storageReady(c)) {
-    return c.json({ error: 'storage binding missing' }, 503);
-  }
-
-  const authError = await requireAuth(c);
-  if (authError) return authError;
-
-  try {
-    const id = c.req.param('id');
-
-    if (!id || !/^[0-9a-f-]{36}$/i.test(id)) {
-      return c.json({ error: 'invalid event id' }, 400);
-    }
-
-    const store = storeFor(c);
-    const key = `${EVENT_PREFIX}${id}`;
-    const raw = await store.get(key);
-
-    if (!raw) {
-      return c.json({ error: 'event not found' }, 404);
-    }
-
-    const existing = JSON.parse(raw) as CalendarEvent;
-    const body = await c.req.json();
-
-    const { title, description, location, start_time, end_time } = body;
-
-    if (
-      typeof title !== 'string' || !title.trim() ||
-      typeof start_time !== 'string' ||
-      typeof end_time !== 'string'
-    ) {
-      return c.json({ error: 'invalid event data' }, 400);
-    }
-
-    if (
-      !Number.isFinite(Date.parse(start_time)) ||
-      !Number.isFinite(Date.parse(end_time)) ||
-      Date.parse(start_time) >= Date.parse(end_time)
-    ) {
-      return c.json({ error: 'invalid event time' }, 400);
-    }
-
-    if (
-      (description !== undefined && typeof description !== 'string') ||
-      (location !== undefined && typeof location !== 'string')
-    ) {
-      return c.json({ error: 'invalid event data' }, 400);
-    }
-
-    const updatedEvent: CalendarEvent = {
-      ...existing,
-      title: title.trim(),
-      description: description === undefined ? existing.description : description,
-      location: location === undefined ? existing.location : location,
-      start_time: new Date(start_time).toISOString(),
-      end_time: new Date(end_time).toISOString(),
-    };
-
-    await saveEvent(store, updatedEvent);
-
-    return c.json({ event: updatedEvent });
-  } catch (error) {
-    console.error(
-      'Calendar update event failed:',
-      error instanceof Error ? error.message : String(error),
-    );
-    return c.json({ error: 'failed to update event' }, 500);
-  }
-});
+// SDK 静态文件（页面 import ./sdk/module-sdk.esm.js）：不在业务里兜底——node 宿主态由
+// @unself/sdk/host 自供（serveSdkAssetsFrom，先于业务），CF 部署态由装配资产拦截；
+// 资产缺失时宿主不认领、业务侧自然 404，不把「SDK 没打进产物」伪装成「平台没实现」。
 
 /** 删除指定日历事件 */
 app.delete('/api/events/:id', async (c) => {
@@ -297,7 +233,6 @@ app.delete('/api/events/:id', async (c) => {
     return c.json({ error: 'failed to delete event' }, 500);
   }
 });
-app.get('/sdk/*', (c) => c.json({ error: 'sdk asset served by deploy bundler (M0 dev: vite alias)' }, 501));
 
 /** 用请求内 Bearer 做一次性验签（全模块认证唯一收口：本地 JWKS，零运行时网络）。 */
 async function requireAuth(
@@ -341,7 +276,7 @@ async function fetchCoreJwks(): Promise<string> {
 }
 
 /** 生命周期骨架（§5.4 契约；M0 返回契约形状，全量实现随 M1 卸载剧本）。
- * 认证与 /api/count 同规（#45 遗留项②）：storage 缺绑定 503，验签不过 401。 */
+ * 认证与 /api/events 同规（#45 遗留项②）：storage 缺绑定 503，验签不过 401。 */
 app.get('/life/export', async (c) => {
   if (!storageReady(c)) {
     return c.json({ error: 'storage binding missing' }, 503);
@@ -350,9 +285,10 @@ app.get('/life/export', async (c) => {
   if (authError) return authError;
   // core 级落点（#248）：模块没有自己的表，导出 = 本模块在 Core API 代理侧的键值行
   // （表名 module_kv 是平台基建表，行已由 core-api 按 aud 收口到本模块子域）。
+  // 全量键（不止 event_ 前缀）：将来新增的业务键同样导出（评审：只列前缀会漏键）。
   const store = storeFor(c);
   const rows: Array<{ key: string; value: string }> = [];
-  for (const key of await listStorageKeys(c)) {
+  for (const key of await store.list()) {
     rows.push({ key, value: (await store.get(key)) ?? '' });
   }
   return c.json({
@@ -373,7 +309,8 @@ app.post('/life/purge', async (c) => {
   const authError = await requireAuth(c);
   if (authError) return authError;
   const store = storeFor(c);
-  for (const key of await listStorageKeys(c)) {
+  // 全量键（不止 event_ 前缀）：清除须覆盖模块全部数据（评审：只列前缀会留残留键）。
+  for (const key of await store.list()) {
     await store.delete(key);
   }
   return c.json({ ok: true });
