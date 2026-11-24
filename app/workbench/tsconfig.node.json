@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Node 入口只认 Node + 运行面结构类型（D1Database 等仍来自 workers types 的全局声明，
+    // 与 Worker 入口共享同一套结构形状；Node 进程不会加载 cloudflare:sockets 等运行时模块）。
+    "types": ["node", "@cloudflare/workers-types"],
+    "lib": ["ES2022"],
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "src/entry.node.ts",
+    "src/node/**/*",
+    "src/adapters/local-avatar-store.ts",
+    "src/adapters/s3-avatar-store.ts",
+    "../../core/adapters/mail-smtp/src/sockets.d.ts"
+  ]
+}

@@ -26,5 +26,6 @@ declare module 'node:fs' {
 }
 
 declare module 'node:url' {
-  export function fileURLToPath(url: string | URL): string;
+  // 与 @types/node 的 node:url 合并时，用结构形状兼容 Workers 的全局 URL（无 [Symbol.dispose]）。
+  export function fileURLToPath(url: string | { readonly href: string }): string;
 }
