@@ -168,6 +168,9 @@ describe('生产组合根（@unself/workbench 的 src/entry.prod.ts）', () => {
   // 注入是装配决策（注入丢了 = 生产开户走内存假实现），且这件事静态可判——所以用源码断言，
   // 不假装成行为断言。真正的运行期行为由 workbench 包内 test/entry-prod.test.ts 覆盖。
   const entrySource = (): string => readFileSync(join(REPO_ROOT, 'app/workbench/src/entry.prod.ts'), 'utf8');
+  /** 与入口同层、被入口引用的运行时组合文件（#360 从 entry.prod.ts 抽出的共用 handler）。 */
+  const prodHandlerSource = (): string =>
+    readFileSync(join(REPO_ROOT, 'app/workbench/src/prod-handler.ts'), 'utf8');
 
   it('入口注入真 Stalwart 适配器（经配置校验收口），不落无参 createApp', () => {
     const src = entrySource();
@@ -178,14 +181,24 @@ describe('生产组合根（@unself/workbench 的 src/entry.prod.ts）', () => {
     expect(src).not.toMatch(/createApp\(\s*\)/);
   });
 
-  it('入口自足：只 import 包内相对路径 + 裸包名（不再有「相对路径到仓库根」那一套）', () => {
+  it('入口自足：入口与它抽出的共用 handler 只 import 包内相对路径 + 裸包名（#303）', () => {
+    // #303：不许回到「相对路径到仓库根」那一套（那正是「打包方在 app 外面」的产物）。
+    // 护栏同时盖 entry.prod.ts 与它抽出的 prod-handler.ts：组合根拆分后若只检查入口，
+    // 违规挪到 handler 里就能绕过——逐文件检查。
+    for (const [name, src] of [
+      ['entry.prod.ts', entrySource()],
+      ['prod-handler.ts', prodHandlerSource()],
+    ] as const) {
+      // 两种 import 形式都要查：`from 'x'` 与 side-effect 的 `import 'x'`。
+      // 只查 from 会漏掉 `import '../../leak'`（原护栏的洞）。
+      expect(src, `${name} 不得回仓库根`).not.toMatch(/(?:from|import)\s+'\.\.\//);
+      expect(src, `${name} 不得用绝对路径`).not.toMatch(/(?:from|import)\s+'\//);
+    }
+    // 入口仍自己组合（不是把所有东西都推给 handler）
     const src = entrySource();
     expect(src).toContain("from './index'");
-    expect(src).toContain("from './registry'");
-    expect(src).toContain("from './security-headers'");
+    expect(src).toContain("from './prod-handler'");
     expect(src).toContain("from '@unself/stalwart-provisioner'");
-    // #303：不再有 ../.. 之类仓库根相对路径（那正是「打包方在 app 外面」的产物）
-    expect(src).not.toMatch(/from '\.\.\//);
   });
 });
 
