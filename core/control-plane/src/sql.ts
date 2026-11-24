@@ -22,8 +22,13 @@ import { migrationsTableFor, type ModuleRegistration } from './types';
  * installer 同源副本（app/installer/src/engine/registry.ts）随本语句同步 8 参；installer
  * 本身不传凭证（缺省 NULL 保留旧值），反连凭证只经 connect-register / 保存流程写入。
  * enabled/version/manifest_json 仍随注册刷新。
+ *
+ * 两份常量、一条语句：写语句本体只有 REGISTRY_UPSERT_WRITE_SQL 这一份；四个控制面实现
+ * （D1 / node:sqlite / REST / PG）用的 REGISTRY_UPSERT_SQL 是它 + RETURNING（要回显合并后的
+ * 真行）；installer 的装配路径只写不读结果集，直接用写语句本体。以前 installer 自带一份
+ * 「逐字同构」的副本、靠注释提醒同步——现在结构上不可能漂移（#369 收口）。
  */
-export const REGISTRY_UPSERT_SQL = `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash)
+export const REGISTRY_UPSERT_WRITE_SQL = `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash)
 VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'direct'), ?6, ?7, ?8)
 ON CONFLICT(id) DO UPDATE SET
   enabled = excluded.enabled,
@@ -32,7 +37,9 @@ ON CONFLICT(id) DO UPDATE SET
   mode = coalesce(?5, mode),
   entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END),
   storage_level = coalesce(?7, storage_level),
-  credential_hash = coalesce(?8, credential_hash)
+  credential_hash = coalesce(?8, credential_hash)`;
+
+export const REGISTRY_UPSERT_SQL = `${REGISTRY_UPSERT_WRITE_SQL}
 RETURNING id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash`;
 
 export const REGISTRY_TOGGLE_SQL =
