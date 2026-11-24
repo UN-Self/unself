@@ -35,7 +35,40 @@ describe('toPgPlaceholders（?N → $N）', () => {
     );
   });
 
-  it('? 后面不是数字时原样保留（jsonb 的 ? 操作符不被误改）', () => {
-    expect(toPgPlaceholders("SELECT data ? 'k' FROM t WHERE a = ?1")).toBe("SELECT data ? 'k' FROM t WHERE a = $1");
+  it('匿名 ? 按出现顺序编号（workbench 路由层内联 SQL 的写法，#360 用户定案走 adapter）', () => {
+    expect(toPgPlaceholders('SELECT mode FROM module_registry WHERE id = ?')).toBe(
+      'SELECT mode FROM module_registry WHERE id = $1',
+    );
+    expect(toPgPlaceholders('UPDATE t SET a = ?, b = ? WHERE id = ?')).toBe('UPDATE t SET a = $1, b = $2 WHERE id = $3');
+  });
+
+  it('匿名 ? 与 ?N 混用：匿名从本句已有最大编号之后接起（SQLite 语义：匿名 ? = 此前最大编号 + 1）', () => {
+    // `WHERE a = ? AND b = ?2` 在 SQLite 里 a 绑的是第 3 个参数；改写成 $3 才不与 $2 撞车
+    expect(toPgPlaceholders('WHERE a = ? AND b = ?2')).toBe('WHERE a = $3 AND b = $2');
+    expect(toPgPlaceholders('SELECT ?1, ?5, ?5, ?')).toBe('SELECT $1, $5, $5, $6');
+  });
+
+  it('字符串 / 标识符 / 注释里的 ? 不是占位符：匿名编号不受它们干扰', () => {
+    expect(toPgPlaceholders("UPDATE x SET s = 'a?b' WHERE id = ? -- c?d\nAND y = ?")).toBe(
+      "UPDATE x SET s = 'a?b' WHERE id = $1 -- c?d\nAND y = $2",
+    );
+    expect(toPgPlaceholders('SELECT "weird?col" FROM t WHERE id = ?')).toBe('SELECT "weird?col" FROM t WHERE id = $1');
+    expect(toPgPlaceholders('SELECT 1 /* a ? b /* c ? */ d ? */ WHERE id = ?')).toBe(
+      'SELECT 1 /* a ? b /* c ? */ d ? */ WHERE id = $1',
+    );
+  });
+
+  it('? 后紧跟非空白（jsonb 的 ?| / ?& 操作符）不是占位符，原样保留', () => {
+    expect(toPgPlaceholders("SELECT data ?| array['a'] FROM t WHERE id = ?")).toBe(
+      "SELECT data ?| array['a'] FROM t WHERE id = $1",
+    );
+  });
+
+  it('契约边界：裸 `? 值`（jsonb 存在操作符 `data ? \'k\'`）不识别，视为占位符——core 列全是 TEXT，不用 jsonb 操作符', () => {
+    // 文本层面「匿名占位符」与「jsonb 二元 ?」无法可靠区分；按本仓实际用法取占位符语义，
+    // 并在此把这条边界写成明文而不是让 adapter 去猜。（本句已有 ?1，匿名从 2 接起。）
+    expect(toPgPlaceholders("SELECT data ? 'k' FROM t WHERE a = ?1")).toBe(
+      "SELECT data $2 'k' FROM t WHERE a = $1",
+    );
   });
 });
