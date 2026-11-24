@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 行尾归一：Windows clone 会把 shell 脚本变成 CRLF，容器里 /bin/sh 直接崩。
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf
+pnpm-lock.yaml text eol=lf
+*.tgz binary
+*.png binary

@@ -129,7 +129,10 @@ export function readNodeConfig(env: NodeJS.ProcessEnv, packageRoot: string): Nod
     host: addr.host,
     port: addr.port,
     dataDir,
-    baseUrl: env.UNSELF_BASE_URL ?? null,
+    // 空串与纯空白都归一为「未设」：compose 里 `${UNSELF_BASE_URL:-}` 默认传的是空串，
+    // 用 ?? 兜不住它（?? 只描 null/undefined），会拼出 `/setup?token=…` 这种相对路径——
+    // 用户从终端复制到浏览器直接打不开。归一后走下方 localhost 兑底。
+    baseUrl: env.UNSELF_BASE_URL?.trim() || null,
     assetsDir: env.UNSELF_WEB_DIR ? resolve(env.UNSELF_WEB_DIR) : join(packageRoot, 'dist', 'web'),
     migrationsDir: join(packageRoot, 'migrations'),
   };

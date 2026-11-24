@@ -1,28 +1,68 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# R2 最简部署：单服务（核心 workbench）+ 数据卷（wrangler 持久层 = D1 sqlite 落盘处）。
-# 用法：docker compose -f docker/compose.yml up --build
-#   -f 必带（compose 文件在 docker/ 下，build 上下文相对它解析）。
-# 可选 env（.env 或 shell 透传）：UNSELF_PORT（默认 8787）、UNSELF_BASE_URL（反代/远程访问时必设）。
-# TODO(#108): R1 落地后本目录整块删除。
+# Unself 自托管编排（#360 轨道 A）：一个 workbench 容器 + 一个数据卷；PG 可选（profile）。
+#
+# 用法（-f 必带，compose 文件在 docker/ 下；build 上下文相对它解析 → 仓库根）：
+#   cp docker/.env.example docker/.env
+#   docker compose -f docker/compose.yml up --build -d
+#   docker compose -f docker/compose.yml logs -f workbench   # 首启在这里拿一次性 setup 链接
+# 也可以 cd docker 后省略 -f（默认找 compose.yml）：
+#   cd docker && docker compose up --build -d
+#
+# 两种方言（同一 compose 文件）：
+#   默认（sqlite）：只起 workbench，数据落 unself-data 卷的 /app/data/core.db。
+#   PostgreSQL：docker/.env 里把 UNSELF_DB 改成 postgres://unself:<密码>@postgres:5432/unself，
+#     然后 `docker compose -f docker/compose.yml --profile pg up --build -d`。
+#   postgres 服务挂在 profile=pg 下，默认 up 不会起它、也不会等它。compose 的 depends_on 无法
+#   按 profile 条件挂载，所以 workbench 不声明 depends_on：PG 未就绪时 Node 入口连库失败退出，
+#   `restart: unless-stopped` 会持续重试直到 postgres 健康。
+#
+# 数据卷：unself-data → /app/data（sqlite 库、实例签名私钥、可选的 local 头像目录）；
+#         pg-data → postgres 数据目录。宿主 bind mount 时目录须归 uid 1000（见 README）。
+# 项目名固定为 unself：卷实际名为 unself_unself-data / unself_pg-data，不随调用目录变化。
+name: unself
+
 services:
   workbench:
     build:
-      context: .
-      dockerfile: Dockerfile
-      additional_contexts:
-        # 产物上下文 = app/workbench（dist/、migrations/、LICENSE、NOTICE）
-        wb: ../app/workbench
+      # 仓库根为上下文：pnpm install 需要根锁文件与 workspace 清单（理由见 Dockerfile 头注释）。
+      context: ..
+      dockerfile: docker/Dockerfile
     image: unself-workbench:local
     restart: unless-stopped
     ports:
-      - "${UNSELF_PORT:-8787}:${UNSELF_PORT:-8787}"
+      # 宿主端口可调，容器内固定 8787（与 UNSELF_ADDR 一致）。
+      - "${UNSELF_PORT:-8787}:8787"
     environment:
-      UNSELF_PORT: ${UNSELF_PORT:-8787}
+      # 缺省 sqlite；切 PG 时在 .env 里改成 postgres://… 并加 --profile pg。
+      UNSELF_DB: ${UNSELF_DB:-sqlite:///app/data/core.db}
+      # 留空 = 头像能力关闭；`local:/app/data/avatars` 或 `s3://…`（见 .env.example）。
+      UNSELF_FILES: ${UNSELF_FILES:-}
+      UNSELF_ADDR: 0.0.0.0:8787
+      UNSELF_DATA_DIR: /app/data
+      # 反代/远程访问必设，否则首启深链接指向 localhost。
       UNSELF_BASE_URL: ${UNSELF_BASE_URL:-}
-      # 现阶段允许自带私钥（留空则 entrypoint 首启自举生成，落数据卷）——TODO(#108)
+      # 留空 = 首启自动生成并落数据卷；注入则用环境里的 PEM。
       JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
     volumes:
       - unself-data:/app/data
 
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["pg"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-unself}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-unself}
+      POSTGRES_DB: ${POSTGRES_DB:-unself}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-unself} -d ${POSTGRES_DB:-unself}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # 默认不对外暴露：只在 compose 网络内供 workbench 访问。需要外部连接时自行加 ports。
+
 volumes:
   unself-data:
+  pg-data:
