@@ -686,3 +686,33 @@ describe('0016 lifecycle 列（老库 0001-0015 已应用 + 0016，#349）', () 
     expect(stmts(pg)).toEqual(stmts(core));
   });
 });
+
+/**
+ * #369 0017 mode 两值收敛：SQLite 只能重建表、PG 有 ALTER TABLE ... DROP/ADD CONSTRAINT
+ * ——**方言政策（#103①）的第一次真分歧**。语句列表不再一一对应，同构断言改为
+ * 「两方言逻辑等价的可验证部分」：同一映射、同一值域、同一构成定义。
+ */
+describe('0017 mode 两值收敛（#369）', () => {
+  const read = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('--'))
+      .join('\n')
+      .replace(/\s+/g, ' ');
+
+  it('PG 变体与 SQLite 逻辑等价（首次真分歧：重建表 vs 原地改约束）', () => {
+    const core = read('../migrations/core/0017_registry_mode_two_values.sql');
+    const pg = read('../migrations/pg/0017_registry_mode_two_values.pg.sql');
+    for (const text of [core, pg]) {
+      // 同一映射：connect 不动，cloudflare / docker 归 direct
+      expect(text).toContain("CASE mode WHEN 'connect' THEN 'connect' ELSE 'direct' END");
+      // 同一值域：direct / connect 两值
+      expect(text).toContain("mode IN ('direct', 'connect')");
+      // 同一构成定义：connect 必须有 entry（0012 的 CHECK 语义不放松）
+      expect(text).toContain("mode != 'connect' OR entry IS NOT NULL");
+    }
+    // 分歧点各自成立：SQLite 重建表换 CHECK；PG 按 pg_constraint 查旧匿名 CHECK 后原地换约束
+    expect(core).toContain('CREATE TABLE module_registry_new');
+    expect(pg).toContain('ADD CONSTRAINT module_registry_mode_two_values');
+  });
+});
