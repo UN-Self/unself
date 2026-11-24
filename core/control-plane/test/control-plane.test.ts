@@ -26,11 +26,11 @@ describe('SqliteControlPlane（真 sqlite）', () => {
     await expect(cp.readRegistry()).resolves.toHaveLength(1);
   });
 
-  it('落点三列合并语义（#348 review）：未写保留旧值，显式传值覆盖；首次插入 mode 缺省 cloudflare', async () => {
+  it('落点三列合并语义（#348 review）：未写保留旧值，显式传值覆盖；首次插入 mode 缺省 direct（#369）', async () => {
     const cp = SqliteControlPlane.open(':memory:');
-    // 首次插入：三列全未写 → mode 由 SQL 内 coalesce 落 'cloudflare'（列 DEFAULT 不救显式 NULL）
+    // 首次插入：三列全未写 → mode 由 SQL 内 coalesce 落 'direct'（列 DEFAULT 不救显式 NULL）
     const first = await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST });
-    expect(first).toMatchObject({ mode: 'cloudflare', entry: null, storage_level: null });
+    expect(first).toMatchObject({ mode: 'direct', entry: null, storage_level: null });
     // 管理接口路径写入用户选择
     await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, storage_level: 'core', mode: 'connect', entry: 'https://bridge.example.com/m/bridge/' });
     // 模块升级（重新装配）三列全未写 → 旧值保留，快照刷新
@@ -43,9 +43,9 @@ describe('SqliteControlPlane（真 sqlite）', () => {
       entry: 'https://bridge.example.com/m/bridge/',
       storage_level: 'core',
     });
-    // 显式传值仍可覆盖（下次装配路径变化时）
-    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, mode: 'cloudflare', storage_level: 'self' });
-    expect((await cp.readRegistry())[0]).toMatchObject({ mode: 'cloudflare', entry: null, storage_level: 'self' });
+    // 显式传值仍可覆盖（下次装配路径变化时）：connect → direct 时 entry 清空（不再是 core 隧道路由）
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, mode: 'direct', storage_level: 'self' });
+    expect((await cp.readRegistry())[0]).toMatchObject({ mode: 'direct', entry: null, storage_level: 'self' });
   });
 
   it('credential_hash（#349）：合并语义同落点三列——未写保留旧值、显式传值覆盖、首插直写', async () => {
@@ -71,8 +71,8 @@ describe('SqliteControlPlane（真 sqlite）', () => {
     await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, credential_hash: 'b'.repeat(64) });
     expect((await cp.readRegistry())[0]).toMatchObject({ credential_hash: 'b'.repeat(64) });
     // 装配路径（installer 同构：provisioningBinds 恒 NULL）不冲掉已有哈希
-    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, mode: 'cloudflare', entry: null, storage_level: 'core' });
-    expect((await cp.readRegistry())[0]).toMatchObject({ mode: 'cloudflare', entry: null, storage_level: 'core', credential_hash: 'b'.repeat(64) });
+    await cp.upsertModule({ id: 'hello', enabled: true, manifest: MANIFEST, mode: 'direct', entry: null, storage_level: 'core' });
+    expect((await cp.readRegistry())[0]).toMatchObject({ mode: 'direct', entry: null, storage_level: 'core', credential_hash: 'b'.repeat(64) });
   });
 
   it('upsert 收敛：同 id 重复注册刷新快照不重复建行；toggle 不存在的 id 回 null', async () => {

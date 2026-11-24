@@ -33,8 +33,13 @@ export type ModulePermission = (typeof MODULE_PERMISSIONS)[number];
 /** 词表 schema：词表外的值直接 parse 失败（未知能力拒绝）。 */
 export const ModulePermissionSchema = z.enum(MODULE_PERMISSIONS);
 
-/** 运行时类型：worker（workerd）、docker 容器、external（自托管外部服务）。 */
-export const ModuleRuntimeSchema = z.enum(['worker', 'docker', 'external']);
+/**
+ * 运行体（#369）：模块能跑在哪个进程上——`worker` = workerd，`node` = Node 进程。
+ * 只回答「跑在哪」，不回答「怎么接入」：接入由有没有对外地址决定（直连 / 反连），
+ * 两种运行体都能走任一接入。原 `docker` 是分发形式不是运行体（docker 里跑的也是 node），
+ * 原 `external` 是入站能力不是运行时，两者都不是这根轴上的值，已删。
+ */
+export const ModuleRuntimeSchema = z.enum(['worker', 'node']);
 
 const STORAGE_LEVEL_VALUES = ['core', 'self'] as const;
 

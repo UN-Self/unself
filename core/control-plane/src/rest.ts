@@ -168,7 +168,7 @@ function toEntry(row: RawRow): RegistryEntry {
     enabled: Number(row.enabled) === 1,
     version: row.version == null ? null : String(row.version),
     manifest,
-    mode: (row.mode == null ? 'cloudflare' : String(row.mode)) as RegistryEntry['mode'],
+    mode: (row.mode == null ? 'direct' : String(row.mode)) as RegistryEntry['mode'],
     entry: row.entry == null ? null : String(row.entry),
     storage_level: (row.storage_level == null ? null : String(row.storage_level)) as RegistryEntry['storage_level'],
     credential_hash: row.credential_hash == null ? null : String(row.credential_hash),

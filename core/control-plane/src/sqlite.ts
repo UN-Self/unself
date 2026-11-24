@@ -91,9 +91,11 @@ export function openCoreDb(path: string): { db: DatabaseSync; ensureSchema(): vo
           manifest_json TEXT NOT NULL,
           entry TEXT,
           storage_level TEXT,
-          mode TEXT NOT NULL DEFAULT 'cloudflare'
-            CHECK (mode IN ('cloudflare', 'docker', 'connect') AND (mode != 'connect' OR entry IS NOT NULL)),
-          credential_hash TEXT
+          mode TEXT NOT NULL DEFAULT 'direct'
+            CHECK (mode IN ('direct', 'connect') AND (mode != 'connect' OR entry IS NOT NULL)),
+          credential_hash TEXT,
+          config_values TEXT,
+          lifecycle TEXT NOT NULL DEFAULT 'pending'
         );
         CREATE INDEX IF NOT EXISTS idx_module_registry_enabled ON module_registry (enabled, id);
       `);
@@ -114,7 +116,7 @@ export function rowToEntry(row: Record<string, unknown>): RegistryEntry {
     enabled: Number(row.enabled) === 1,
     version: row.version == null ? null : String(row.version),
     manifest,
-    mode: (row.mode == null ? 'cloudflare' : String(row.mode)) as RegistryEntry['mode'],
+    mode: (row.mode == null ? 'direct' : String(row.mode)) as RegistryEntry['mode'],
     entry: row.entry == null ? null : String(row.entry),
     storage_level: (row.storage_level == null ? null : String(row.storage_level)) as RegistryEntry['storage_level'],
     credential_hash: row.credential_hash == null ? null : String(row.credential_hash),

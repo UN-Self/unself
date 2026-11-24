@@ -13,7 +13,7 @@ import { migrationsTableFor, type ModuleRegistration } from './types';
 /**
  * upsert 冲突分支合并语义（#348 review 定案，#103②「用户实际选择」的构成定义）：
  * 落点三列与 credential_hash（#349）要活过模块升级——本次未写（绑定值为 NULL）保留列中旧值，
- * 清空必须走显式写值（管理接口/管理动作），装配器不承担清空职责。首次插入的缺省值（mode='cloudflare'）由
+ * 清空必须走显式写值（管理接口/管理动作），装配器不承担清空职责。首次插入的缺省值（mode='direct'）由
  * VALUES 里的 coalesce 承载（列 DEFAULT 不救显式 NULL）；冲突分支引用原始绑定值与目标行
  * 现值合并，不复用被 coerce 过的 excluded.*（否则会把「未写」变成「写默认值」）。同一 ?N
  * 可多处引用，bind 数仍是 8（D1 与 node:sqlite 同语义，三实现共用）。
@@ -24,7 +24,7 @@ import { migrationsTableFor, type ModuleRegistration } from './types';
  * enabled/version/manifest_json 仍随注册刷新。
  */
 export const REGISTRY_UPSERT_SQL = `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash)
-VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7, ?8)
+VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'direct'), ?6, ?7, ?8)
 ON CONFLICT(id) DO UPDATE SET
   enabled = excluded.enabled,
   version = excluded.version,
