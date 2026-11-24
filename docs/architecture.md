@@ -27,7 +27,7 @@
                         │
                 可选外部 STUN / TURN / SFU
 
-   文件：可选 S3 / R2 / MinIO
+   文件：可选 R2（CF）/ S3 兼容（自备桶 / MinIO）/ 本地目录（单机默认）
    部署双路径（#101，2026-10-18）：云路径 = installer 专用且扩展；自管路径 =
    Docker/混搭全自管，壳内 URL 接入（#102），installer 非必须
 ```

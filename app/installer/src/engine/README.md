@@ -81,10 +81,13 @@ use:'sig', alg:'ES256' } ] }`（与 core `GET /.well-known/jwks.json` 响应体�
 
 ## Docker 等价注记
 
-`docker/` 目录尚未建立（M3 交付），当前只在 CF 装配器（`deploy/cloudflare`）落地。
-容器化部署的等价做法：同一环境变量 `CORE_JWKS_JSON` 写入 compose 的模块服务
+workbench 自身的容器已落地（`docker/`，Node 运行体，见 [deploy.md](../../../docs/deploy.md)）。
+**模块容器**尚未由安装器接管——模块的容器跑法参考 `app/modules/hello/compose.yml`
+（同一个 npm 包，入口可以是包的 `bin`，也可以是 `@unself/sdk/host` 反连宿主）。
+
+容器化模块的 JWKS 注入等价做法：同一环境变量 `CORE_JWKS_JSON` 写入 compose 的模块服务
 environment（值由生成脚本在启动时从 core 侧导出），模块行为与 CF 一致——本地验签、
-零运行时网络取钥。待 docker/ 落地时按此注记实现。
+零运行时网络取钥。
 
 ## 产物
 
