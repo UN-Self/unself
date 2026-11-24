@@ -38,7 +38,7 @@ unself-todo-1.2.0.tgz
 ├─ migrations/       可选：000N_*.sql，在 core 里自建表时用
 ├─ config.schema     可选：配置页字段声明（见第 5 节）
 ├─ theme.json        可选：模块自己的皮肤（默认跟随实例主题）
-├─ docker/           可选：runtimes 含 docker 时的镜像/端口/健康检查声明；自 #102 起降级为参考文档，壳不消费，只供复制
+├─ docker/           可选：模块以 Node 运行体跑在容器里时的镜像/端口/健康检查参考；壳不消费，只供复制
 ├─ LICENSE / NOTICE  许可证随包走；GPL 类模块必须自带
 └─ package.json      作者自己的 npm 元数据；`npm pack` / `npm publish` 用它
 ```
@@ -67,7 +67,7 @@ unself-todo-1.2.0.tgz
 | `coreOrigin` | string | — | 跨域时壳的 https origin。禁止 `*` |
 | `license` | SPDX 表达式 | — | 不写则按 AGPL-3.0-only |
 
-地址不写在清单里，也不写在模块的 env 里（env 只有 core 地址和接入码）。模块地址是**安装时的产物**：装成 CF Worker 就按 id 生成路由，地址自动得出；自建反代或自有域名在安装表单里填。壳从注册表读这个地址当 iframe src；反连则由 core 记成自己的 `/m/#lt;id#gt;/`。CF 装机这条路现在还没接通，见 #369。
+地址不写在清单里，也不写在模块的 env 里（env 只有 core 地址和接入码）。模块地址是**安装时的产物**，三种来法都是「直连」（#369）：装成 CF Worker 时选挂到账号下已有域名（core 建 zone 路由，地址 = `https://<domain>/m/<id>/`）或 workers.dev 子域（core 开脚本子域，地址 = `https://<script>.<account>.workers.dev/`），地址由 core 算出写进注册表，管理员不填；模块已经自己部署好、有可达地址的，在同一个 Cloudflare 部署 tab 里选「我已有地址」，只填模块 id + 地址登记（清单落占位，当前没有自报清单的通道，列表里看不到版本/图标）。壳从注册表读这个地址当 iframe src；反连则由 core 记成自己的 `/m/<id>/`。
 
 > **icon 字段规则**：manifest 存图标名而非图标资产，由壳内置的 lucide-vue-next 统一渲染（白名单映射，按需打包）；模块不自带图标文件。未来模块需要品牌标时再议 `iconUrl` 可选字段，暂不设。
 
@@ -274,5 +274,5 @@ flowchart LR
 |---|---|
 | `permissions` 词表的对外可见面（首版 6 项） | 由 `@unself/sdk` 具名导出 |
 | 发版约定细节 | 留档待定 |
-| DO / realtime 在 Docker 侧的平替原语 | 下一阶段 |
+| chat / meeting 模块对 DO 的依赖在 Node 运行体上的平替（core 自己的反连隧道已平替：Node 运行体里同一份 `TunnelRoom` 经薄适配层跑；模块侧的 `ChannelRoom` / `Scheduler` / `UserInbox` 是 SQLite-backed DO，要平替得先给模块一套本地存储与消息广播，不是换个 WebSocket hub 的事） | 下一阶段，落地前这两个模块 manifest 如实只写 `worker` |
 | `oauth` 类型配置字段的交互细节 | 下一阶段 |

@@ -103,7 +103,7 @@ purge():  Promise<void>           // 彻底清除本模块全部表与对象前�
 
 **部署目标与接入方式（#54/#63）**：一个实例 = 一个逻辑 core。部署只有 CF 这一种要特殊对待——能给它一条路由；其余的只要能连上 core，跑在哪我们不关心。接入只看有没有对外地址：有就直连，没有就反连由 core 转发，跟部署位置和运行体（`runtimes`：`worker` / `node`）都无关。核心留在 CF、模块放自有机器是常见组合，动机是把只有 CF 能做的事（DO / AI）留在免费额度内。接入两种的图见 [modules.md](modules.md) 4.1。
 
-**跨域与 hybrid 可达性（#63/#73）**：模块地址在安装时定——CF 装成 Worker 按 id 生成路由，自建反代或自有域名在表单里填；不进清单，也不进模块 env，强制 https（仅 localhost 豁免）。外壳 CSP 的 `frame-src` 按注册表动态生成，模块页必须带 `frame-ancestors`，Core API 按注册表 origin 开 CORS。**「模块恒挂根路径」是不变式**——前缀剥离归宿主（CF wrapper / 反代 / 独立域名各自负责）。四个可达方向：
+**跨域与 hybrid 可达性（#63/#73）**：模块地址在安装时定——CF 部署时选挂到账号域名（core 建 zone 路由）或 workers.dev 子域（core 开子域），地址由 core 算出；已自己部署好的模块在同一个 tab 里填 id + 地址登记。地址不进清单，也不进模块 env，强制 https（仅 localhost 豁免）。外壳 CSP 的 `frame-src` 按注册表动态生成，模块页必须带 `frame-ancestors`，Core API 按注册表 origin 开 CORS。**「模块恒挂根路径」是不变式**——前缀剥离归宿主（CF wrapper / 反代 / 独立域名各自负责）。四个可达方向：
 
 ```mermaid
 flowchart LR

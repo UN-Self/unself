@@ -19,7 +19,7 @@ flowchart TD
   Q -->|"有"| D["直连：浏览器 iframe 指向模块地址<br/>例：部署成 CF Worker，自带 URL"]
   Q -->|"没有"| R["反连：模块主动 WS 拨号连 core<br/>例：NAT 后的 Docker，配 CORE_URL 和 MODULE_KEY"]
 
-  D -->|"保存 → 侧栏出现<br/>地址在安装时定：CF 按 id 生成路由，其它在表单填<br/>CF 这步现在没接通，见 #369"| G["侧栏出现"]
+  D -->|"保存 → 侧栏出现<br/>地址在安装时定：CF 部署选挂到哪（域名 / workers.dev），core 算出地址；已有地址的只登记"| G["侧栏出现"]
   R -->|"测试连接 → 保存"| G
 ```
 
