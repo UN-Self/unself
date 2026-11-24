@@ -600,12 +600,12 @@ describe('storage.declaration（#55 增量字段：安装时用户选定）', ()
 });
 
 describe('manifest.config YAML 轨（#349 U8 模块可配置选项）', () => {
-  /** 带 config 块的最小 yaml。 */
+  /** 带 config 块的最小 yaml（runtimes 用 node：非 worker 形态，#369 两值词表）。 */
   const configYaml = [
     'id: demo',
     'version: 1.0.0',
     'runtimes:',
-    '  - external',
+    '  - node',
     'route: /m/demo',
     'config:',
     '  - key: greeting',
