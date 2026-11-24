@@ -5,15 +5,22 @@
  * 注册表 API（#7）持有管理员会话，装配期无会话 → 直写 module_registry（与 API 同构 upsert 语义）。
  */
 import { ModuleManifestSchema, manifestFromYamlText, type ModuleManifest } from '@unself/contracts';
+import type { DeployMode } from '@unself/control-plane/types';
 import type { UnselfConfig, ModuleRef } from './config';
 
-/** 注册表 upsert SQL（与 core-api/control-plane REGISTRY_UPSERT_SQL 同源；0012 起带落点三列，
- * 0013 起带 credential_hash（#349，8 参形态）；合并语义同源——未写保留旧值，#348 review 定案。
+/** 注册表 upsert SQL（与 core/control-plane REGISTRY_UPSERT_SQL 同源同构；0012 起带落点三列，
+ * 0013 起带 credential_hash（#349，8 参形态）；0017 起 mode 首插缺省 'direct'（#369 两态）。
+ * 合并语义同源——未写保留旧值，#348 review 定案。
  * installer 不传凭证（binds 恒 NULL = 首插落 NULL / 冲突保留旧值）：反连凭证只经
- * workbench connect-register / 保存流程写入，装配合不冲掉哈希。） */
+ * workbench connect-register / 保存流程写入，装配合不冲掉哈希。）
+ *
+ * 为何不直接 import core 那份：core 的常量带 8 列 `RETURNING` 收尾（core-api 要回显合并后的真行，
+ * 见 types.ts RegistryEntry），而装配器这条是纯写语句、不消费结果集——照搬会往写路径塞一个
+ * 无人读的结果集。本文件与 core 的唯一差异就是这条 RETURNING 尾巴；VALUES/ON CONFLICT 段必须逐字
+ * 同构，改 core 的 sql.ts 时同步这里（0001–0017 迁移列清单也要一起对）。 */
 export function registryUpsertSql(): string {
   return `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash)
-VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7, ?8)
+VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'direct'), ?6, ?7, ?8)
 ON CONFLICT(id) DO UPDATE SET
   enabled = excluded.enabled,
   version = excluded.version,
@@ -64,7 +71,8 @@ export function sqlString(value: string): string {
  * credential_hash 恒 NULL（#349：installer 不经手凭证；首插落 NULL，冲突分支保留已有哈希）。 */
 export function registryUpsertCommand(input: {
   manifest: ModuleManifest;
-  mode?: 'cloudflare' | 'docker' | 'connect' | null;
+  /** 接入方式（#369 两态 direct/connect）；缺省 NULL = 保留旧值，首插由 SQL 的 coalesce 落 'direct'。 */
+  mode?: DeployMode | null;
   entry?: string | null;
   storage_level?: string | null;
 }): { sql: string; binds: [string, number, string, string, string | null, string | null, string | null, string | null] } {

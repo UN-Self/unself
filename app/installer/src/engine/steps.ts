@@ -1004,18 +1004,19 @@ async function runNineStepsInner(input: RunNineStepsOptions): Promise<Summary> {
     const snapshot = declaration
       ? { ...manifest, storage: storageWithDeclaration(manifest.storage, declaration as StorageLevel) }
       : manifest;
-    // 落点三列（#348/#103②/#349 U9）：mode=cloudflare（CF 装配路径），entry=模块**真实**可达 URL
+    // 落点三列（#348/#103②/#349 U9）：mode=direct（CF 装配路径；#369 两态——direct = 壳 iframe
+    // 直指模块真实地址，不回答模块跑在哪），entry=模块**真实**可达 URL
     // （#273 形态决策：domain → zone 路径 /m/<id>/；workers.dev → 模块自有子域——moduleEntryUrl
     // 是注册表 entry / 冒烟 / 主题体检共用的唯一真值源），storage_level=用户两值选择（同一
     // declaration，列是用户选择 + 地址真值面，快照不再承载任何地址）。
     // 合并语义（#348 review 定案）：declaration 未选时不写该键——「未写 = 保留旧值」，
     // 装配器不把用户此前通过管理接口选的落点冲成 NULL。entry 列每次显式写（U9：装配器是
-    // CF 形态地址的写入者），mode='cloudflare' 是本次装配的事实（worker 确实重新部署在 CF）。
+    // CF 形态地址的写入者），mode='direct' 是本次装配的事实（worker 部署在 CF，壳直连其地址）。
     await coreCp.upsertModule({
       id: mod.id,
       enabled: true,
       manifest: snapshot,
-      mode: 'cloudflare',
+      mode: 'direct',
       entry: moduleEntryUrl({
         domain: config.domain ?? '',
         workersDevSubdomain: workersDevAccountSubdomain,

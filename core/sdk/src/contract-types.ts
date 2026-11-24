@@ -31,7 +31,7 @@ export interface ModuleManifest {
   id: string;
   /** semver 版本号（x.y.z）。 */
   version: string;
-  /** 支持的运行时（至少一项）：worker / docker / external。 */
+  /** 支持的运行体（至少一项）：worker（workerd）/ node（Node 进程）。只回答「跑在哪」，不回答怎么接入。 */
   runtimes: ('worker' | 'node')[];
   /** 挂载路由建议值，以 `/m/` 开头。 */
   route: string;

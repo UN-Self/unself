@@ -217,10 +217,11 @@ describe('runNineSteps（九步编排 · 幂等收敛 · REST）', () => {
     // registry 终态：#284 未选模块只来自 lock（config 只有 hello、lock 为空 → 没有可 disable 的）
     const toggles = calls.filter(sqlStartsWith('UPDATE module_registry'));
     expect(toggles).toHaveLength(0);
-    // 落点写入（#348）：config 里的用户四级选择必须随 upsert 落进 storage_level 列（绑参第 7 位，非 null）
+    // 落点写入（#348/#369）：用户选择必须随 upsert 落进 storage_level 列（绑参第 7 位，非 null）；
+    // mode 第 5 位 = 本次 CF 装配的接入事实（direct；#369 两态）
     const upsertParams = (calls[registryUpsert]?.body as { params?: unknown[] } | undefined)?.params ?? [];
     expect(upsertParams[0]).toBe('hello');
-    expect(upsertParams[4]).toBe('cloudflare');
+    expect(upsertParams[4]).toBe('direct');
     expect(upsertParams[6]).toBe('core');
   });
 
