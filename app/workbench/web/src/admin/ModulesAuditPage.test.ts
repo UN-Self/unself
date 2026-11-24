@@ -40,7 +40,7 @@ const mod = (over: Partial<AdminModule> = {}): AdminModule => ({
   id: 'hello',
   enabled: true,
   version: '0.1.0',
-  mode: 'cloudflare',
+  mode: 'direct',
   entry: null,
   storage_level: null,
   ...over,
@@ -88,7 +88,7 @@ describe('ModulesPage（#208）', () => {
 
   it('落点三列可见（#348/#107 消费面）：mode+存储，connect 模式带接入 URL', async () => {
     vi.mocked(fetchAdminModules).mockResolvedValue([
-      mod({ id: 'a', mode: 'cloudflare', storage_level: 'core' }),
+      mod({ id: 'a', mode: 'direct', storage_level: 'core' }),
       mod({ id: 'b', mode: 'connect', entry: 'https://team.example.com/m/b/', storage_level: null }),
     ])
     const wrapper = mount(ModulesPage)
@@ -97,8 +97,8 @@ describe('ModulesPage（#208）', () => {
     const rows = wrapper.findAll('[data-test="module-provisioning"]')
     expect(rows).toHaveLength(2)
     // U7 存储文案收敛：旧值 dedicated→Core、null→自托管
-    expect(rows[0]!.text()).toBe('落点 cloudflare · 存储 Core')
-    expect(rows[1]!.text()).toBe('落点 connect · 存储 自托管 · 接入 https://team.example.com/m/b/')
+    expect(rows[0]!.text()).toBe('落点 直连 · 存储 Core')
+    expect(rows[1]!.text()).toBe('落点 反连 · 存储 自托管 · 接入 https://team.example.com/m/b/')
     wrapper.unmount()
   })
 
@@ -164,13 +164,13 @@ describe('ModulesPage（#208）', () => {
 
   /** 存储值含旧契约值（self/shared/dedicated/''），构造时不走严格字面量类型。 */
   const modRaw = (id: string, storage_level: unknown): AdminModule =>
-    ({ id, enabled: true, version: '0.1.0', mode: 'cloudflare', entry: null, storage_level }) as AdminModule
+    ({ id, enabled: true, version: '0.1.0', mode: 'direct', entry: null, storage_level }) as AdminModule
 
-  it('U7：反连行有「测试」按钮；CF/docker 行没有按钮，只显示 —；挂载即不自动测', async () => {
+  it('U7：反连行有「测试」按钮；直连行没有按钮，只显示 —；挂载即不自动测', async () => {
     vi.mocked(fetchAdminModules).mockResolvedValue([
-      mod({ id: 'cf-mod', mode: 'cloudflare' }),
+      mod({ id: 'cf-mod', mode: 'direct' }),
       mod({ id: 'bridge', mode: 'connect', entry: 'https://team.example.com/m/bridge/' }),
-      mod({ id: 'docker-mod', mode: 'docker' }),
+      mod({ id: 'docker-mod', mode: 'direct' }),
     ])
     const wrapper = mount(ModulesPage)
     await flushPromises()
@@ -270,13 +270,13 @@ describe('ModulesPage（#208）', () => {
 
     const rows = wrapper.findAll('[data-test="module-provisioning"]')
     expect(rows).toHaveLength(7)
-    expect(rows[0]!.text()).toBe('落点 cloudflare · 存储 Core')
-    expect(rows[1]!.text()).toBe('落点 cloudflare · 存储 自托管')
-    expect(rows[2]!.text()).toBe('落点 cloudflare · 存储 Core')
-    expect(rows[3]!.text()).toBe('落点 cloudflare · 存储 Core')
-    expect(rows[4]!.text()).toBe('落点 cloudflare · 存储 自托管')
-    expect(rows[5]!.text()).toBe('落点 cloudflare · 存储 自托管')
-    expect(rows[6]!.text()).toBe('落点 cloudflare · 存储 自托管')
+    expect(rows[0]!.text()).toBe('落点 直连 · 存储 Core')
+    expect(rows[1]!.text()).toBe('落点 直连 · 存储 自托管')
+    expect(rows[2]!.text()).toBe('落点 直连 · 存储 Core')
+    expect(rows[3]!.text()).toBe('落点 直连 · 存储 Core')
+    expect(rows[4]!.text()).toBe('落点 直连 · 存储 自托管')
+    expect(rows[5]!.text()).toBe('落点 直连 · 存储 自托管')
+    expect(rows[6]!.text()).toBe('落点 直连 · 存储 自托管')
     wrapper.unmount()
   })
 })

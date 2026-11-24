@@ -30,7 +30,7 @@ const CROSS_MODULE: RegistryModule = {
   manifest: {
     id: 'todo',
     route: '/m/todo/',
-    runtimes: ['external'],
+    runtimes: ['node'],
     version: '0.1.0',
   },
 }

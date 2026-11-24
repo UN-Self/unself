@@ -2,6 +2,7 @@
 import { z } from 'zod';
 
 export * from './manifest';
+export * from './cf-routing';
 export * from './build-info';
 export * from './spdx';
 export * from './token';

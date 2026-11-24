@@ -11,7 +11,8 @@
  * - 反连（connect）：生成接入码（问号收进按钮，UNSELF_CORE_URL 说明走其 hover/focus tooltip）→ 生成即复制
  *   （明文立刻进剪贴板）→ env 展示框**默认打码**（点框=复制明文；右侧内嵌眼睛切打码/明文）→ 测试连接（查隧道在线）
  *   → 保存（激活记账行）。壳从不持有明文 key 的常驻视图：打码是默认，明文只活在剪贴板与显式的显示态（#349 验收定案）。
- * - CF 部署：npm 规格 + CF token + 账号 → 一次请求完成部署与注册（token 用后即焚，#165）。
+ * - CF 部署：npm 规格 + 挂到哪 + CF token + 账号 → 一次请求完成部署/登记（token 用后即焚，#165）。
+ *   挂到三种（#369）：账号下已有域名（上传 + zone 路由）/ workers.dev 子域（上传 + 开子域）/ 我已有地址（只登记）。
  *
  * 为什么不做「模式一先测试再保存」：运行时装配本身就是部署动作（拉包→校验→上传），
  * 没有「半成品可保存态」；失败即什么都没发生，重试即重跑（决策 #109 的语义）。
@@ -25,10 +26,12 @@ import AquaDialog from '../components/aqua-dialog.vue'
 
 import {
   activateConnectModule,
+  fetchAccountZones,
   fetchConnectStatus,
   generateConnectKey,
   installCloudflareModule,
   registerConnectModule,
+  type ModuleMount,
 } from '../lib/modules-install-api'
 import { fetchAdminModules } from '../lib/admin-api'
 
@@ -82,6 +85,22 @@ const npmSpec = ref('')
 const cfToken = ref('')
 const accountId = ref('')
 
+/** 挂到哪（#369）：三种都是直连接入，区别只在 entry 怎么来。 */
+type MountKind = 'zone' | 'workers-dev' | 'existing'
+const cfMount = ref<MountKind>('workers-dev')
+const cfMountOptions: SelectOption[] = [
+  { value: 'zone', label: '账号下已有域名' },
+  { value: 'workers-dev', label: 'workers.dev 子域' },
+  { value: 'existing', label: '我已有地址' },
+]
+/** 账号域名下拉（「读取账号域名」按当前账号 + token 拉一次）。 */
+const cfDomain = ref('')
+const cfDomainOptions = ref<SelectOption[]>([])
+/** 「我已有地址」形态：管理员自己给的模块地址。 */
+const cfEntry = ref('')
+/** Token 权限说明 tooltip（同 coreUrlTip 的 hover/focus 承载方式）。 */
+const cfTokenTip = ref(false)
+
 // 存储落点收敛为两档：core（经核心代理）/ self（自托管，默认）。undefined 即 self（#349 验收定案）；
 // AdminModule['storage_level'] 契约尚未并入 'self'（另一 worker 负责契约层 enum('core','self')），先用本地类型
 const storageOptions: SelectOption[] = [
@@ -104,7 +123,16 @@ const canTest = computed(() => Boolean(connectKey.value) && !busy.value)
 const canSave = computed(
   () => connectStatus.value === 'online' && testedSnapshot.value === connectSnapshot.value && !busy.value,
 )
-const canInstall = computed(() => Boolean(npmSpec.value.trim() && cfToken.value.trim() && accountId.value.trim()) && !busy.value)
+const canInstall = computed(() => {
+  if (!npmSpec.value.trim() || busy.value) return false
+  if (cfMount.value === 'existing') return Boolean(cfEntry.value.trim())
+  if (!cfToken.value.trim() || !accountId.value.trim()) return false
+  return cfMount.value === 'zone' ? Boolean(cfDomain.value) : true
+})
+/** 已有地址只登记清单与地址（不上传），按钮文案换成「注册」。 */
+const installLabel = computed(() => (cfMount.value === 'existing' ? '注册' : '部署并注册'))
+/** 上传/建路由形态才需要 CF 凭证；已有地址形态不碰 CF。 */
+const needsCfCredentials = computed(() => cfMount.value !== 'existing')
 
 /** 水位派生（设置弹窗同款，#100）：反连 tab 才有水；testing→波动、在线→满灌、其余→静息。 */
 const waveLevel = computed(() => {
@@ -136,6 +164,7 @@ watch(
       copied.value = false
       copyFallback.value = false
       coreUrlTip.value = false
+      cfTokenTip.value = false
       if (copyTimer !== undefined) clearTimeout(copyTimer)
     }
   },
@@ -252,15 +281,50 @@ async function onSave(): Promise<void> {
   }
 }
 
+async function onLoadZones(): Promise<void> {
+  errorText.value = null
+  const account = accountId.value.trim()
+  const token = cfToken.value.trim()
+  if (!account || !token) {
+    errorText.value = '先填账号 ID 与 API Token，再读取账号域名'
+    return
+  }
+  busy.value = true
+  try {
+    const zones = await fetchAccountZones(account, token)
+    cfDomainOptions.value = zones.map((zone) => ({ value: zone.name, label: zone.name }))
+    if (zones.length === 0) {
+      cfDomain.value = ''
+      errorText.value = '账号下没有可用域名（也可以选 workers.dev 子域）'
+      return
+    }
+    if (!zones.some((zone) => zone.name === cfDomain.value)) {
+      cfDomain.value = zones[0]!.name
+    }
+  } catch (err) {
+    errorText.value = (err as Error).message
+  } finally {
+    busy.value = false
+  }
+}
+
 async function onInstall(): Promise<void> {
   busy.value = true
   errorText.value = null
+  const mount: ModuleMount =
+    cfMount.value === 'zone'
+      ? { kind: 'zone', domain: cfDomain.value }
+      : cfMount.value === 'existing'
+        ? { kind: 'existing', entry: cfEntry.value.trim() }
+        : { kind: 'workers-dev' }
   try {
     await installCloudflareModule({
       npmSpec: npmSpec.value.trim(),
-      cfToken: cfToken.value.trim(),
-      accountId: accountId.value.trim(),
       storageLevel: cfStorage.value === 'core' ? 'core' : undefined,
+      mount,
+      ...(cfMount.value === 'existing'
+        ? {}
+        : { cfToken: cfToken.value.trim(), accountId: accountId.value.trim() }),
     })
     emit('done')
     close()
@@ -377,20 +441,77 @@ function close(): void {
       </template>
     </div>
 
-    <!-- 模式一：core 运行时拉包部署（装配后增补单模块，决策 #109） -->
+    <!-- 模式一：core 运行时拉包部署 + 挂载选择（装配后增补单模块，决策 #109；#369 挂到哪） -->
     <div v-else class="add-dialog-fields" data-test="add-module-cloudflare">
       <label class="add-field">
         <span class="add-field-label">npm 包</span>
         <input v-model="npmSpec" class="add-field-input" data-test="cf-npmspec" placeholder="@unself/hello@0.1.0" />
       </label>
-      <label class="add-field">
-        <span class="add-field-label">Cloudflare 账号 ID</span>
-        <input v-model="accountId" class="add-field-input" data-test="cf-account" placeholder="32 位十六进制" />
+      <div class="add-field">
+        <span class="add-field-label" id="cf-mount-label">挂到</span>
+        <UMotionSelect
+          v-model="cfMount"
+          :options="cfMountOptions"
+          label="挂到"
+          aria-labelledby="cf-mount-label"
+          data-test="cf-mount"
+        />
+      </div>
+
+      <div v-if="cfMount === 'zone'" class="add-field">
+        <span class="add-field-label" id="cf-domain-label">域名</span>
+        <div class="add-mount-row">
+          <UMotionSelect
+            v-model="cfDomain"
+            :options="cfDomainOptions"
+            label="域名"
+            aria-labelledby="cf-domain-label"
+            placeholder="先读取账号域名"
+            data-test="cf-domain"
+          />
+          <UButton variant="outline" :loading="busy" data-test="cf-load-zones" @click="onLoadZones">读取账号域名</UButton>
+        </div>
+      </div>
+
+      <label v-if="cfMount === 'existing'" class="add-field">
+        <span class="add-field-label">模块地址</span>
+        <input
+          v-model="cfEntry"
+          class="add-field-input"
+          data-test="cf-entry"
+          placeholder="https://modules.example.com/hello/"
+        />
       </label>
-      <label class="add-field">
-        <span class="add-field-label">API Token（用后即焚）</span>
-        <input v-model="cfToken" type="password" class="add-field-input" data-test="cf-token" autocomplete="off" />
-      </label>
+
+      <template v-if="needsCfCredentials">
+        <label class="add-field">
+          <span class="add-field-label">Cloudflare 账号 ID</span>
+          <input v-model="accountId" class="add-field-input" data-test="cf-account" placeholder="32 位十六进制" />
+        </label>
+        <div class="add-field">
+          <span class="add-field-label">
+            API Token（用后即焚）
+            <button
+              type="button"
+              class="add-help-icon"
+              aria-label="Token 需要哪些权限"
+              aria-describedby="cf-token-tip"
+              data-test="cf-token-help"
+              @focus="cfTokenTip = true"
+              @blur="cfTokenTip = false"
+              @mouseenter="cfTokenTip = true"
+              @mouseleave="cfTokenTip = false"
+            >
+              <CircleHelp aria-hidden="true" :size="14" />
+            </button>
+          </span>
+          <input v-model="cfToken" type="password" class="add-field-input" data-test="cf-token" autocomplete="off" />
+          <span v-show="cfTokenTip" id="cf-token-tip" role="tooltip" class="add-tooltip" data-test="cf-token-tip">
+            需要 Workers Scripts 写；挂到自有域名还要 Zone 读 + Workers Routes 写；workers.dev 形态不需要 zone 权限
+          </span>
+        </div>
+      </template>
+
       <div class="add-field">
         <span class="add-field-label" id="cf-storage-label">存储落点</span>
         <UMotionSelect
@@ -419,7 +540,7 @@ function close(): void {
         </UButton>
       </template>
       <UButton v-else variant="primary" :disabled="!canInstall" :loading="busy" data-test="cf-install" @click="onInstall">
-        部署并注册
+        {{ installLabel }}
       </UButton>
     </footer>
   </AquaDialog>
@@ -506,6 +627,35 @@ function close(): void {
 .add-help-row :deep(button) {
   width: 100%;
   justify-content: center;
+}
+.add-mount-row {
+  display: flex;
+  align-items: center;
+  gap: var(--unself-space-2);
+}
+.add-mount-row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.add-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: var(--unself-space-1);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--unself-color-text-secondary);
+  cursor: pointer;
+  vertical-align: middle;
+}
+.add-help-icon:hover {
+  color: var(--unself-color-text);
+}
+.add-help-icon:focus-visible {
+  outline: var(--unself-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--unself-radius-full);
 }
 .add-env-eye {
   position: absolute;

@@ -176,7 +176,7 @@ describe('GET /api/modules/frame-origins（外壳动态 CSP 数据源）', () =>
         body: JSON.stringify({
           id: 'todo',
           enabled: true,
-          manifest: { id: 'todo', route: '/m/todo', runtimes: ['external'], version: '1.0.0' },
+          manifest: { id: 'todo', route: '/m/todo', runtimes: ['node'], version: '1.0.0' },
           entry: 'https://todo.example.org/',
         }),
       },
@@ -220,7 +220,7 @@ function regExternal(env: { CORE_DB: D1Database; JWT_PRIVATE_KEY: string }, cook
       body: JSON.stringify({
         id: 'todo',
         enabled: true,
-        manifest: { id: 'todo', route: '/m/todo', runtimes: ['external'], version: '1.0.0' },
+        manifest: { id: 'todo', route: '/m/todo', runtimes: ['node'], version: '1.0.0' },
         entry: origin,
       }),
     },

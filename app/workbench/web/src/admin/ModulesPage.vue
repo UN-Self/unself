@@ -64,6 +64,11 @@ function storageLabel(level: AdminModule['storage_level']): string {
   return STORAGE_LEVEL_LABELS[level ?? ''] ?? '自托管'
 }
 
+/** 接入方式的人话（#369 两态）：direct = 壳 iframe 直指模块，connect = core 隧道转发。 */
+function modeLabel(mode: AdminModule['mode']): string {
+  return mode === 'connect' ? '反连' : '直连'
+}
+
 /** 行内「测试」结果（#349 U7）：仅 mode='connect' 行有测试动作；点按钮才测，不轮询不自动测。 */
 const testStatus = ref<Record<string, { online: boolean; reason?: string }>>({})
 /** 测试中：按钮 loading（UButton loading 自带禁用）；同一时刻一行一个测试。 */
@@ -247,9 +252,9 @@ async function onRemoveConfirm(): Promise<void> {
         <div class="module-id">
           {{ mod.id }}
           <span v-if="mod.version" class="module-version">v{{ mod.version }}</span>
-          <!-- #348 落点三列（决策 #107 最小消费面）：纯文本展示，徽章视觉属 D3 -->
+          <!-- #348/#369 落点展示（决策 #107 最小消费面）：接入方式给人话，徽章视觉属 D3 -->
           <span class="module-provisioning" data-test="module-provisioning">
-            落点 {{ mod.mode }} · 存储 {{ storageLabel(mod.storage_level) }}<template v-if="mod.mode === 'connect' && mod.entry"> · 接入 {{ mod.entry }}</template>
+            落点 {{ modeLabel(mod.mode) }} · 存储 {{ storageLabel(mod.storage_level) }}<template v-if="mod.mode === 'connect' && mod.entry"> · 接入 {{ mod.entry }}</template>
           </span>
         </div>
         <span class="badge" :class="mod.enabled ? 'badge-ok' : 'badge-muted'">
