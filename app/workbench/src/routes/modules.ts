@@ -8,27 +8,120 @@ import { checkTokenGate, issueModuleToken, MODULE_TOKEN_ISSUER } from '../token'
 import { ConnectRegisterSchema, getModuleConfig, listMemberModules, listModules, ModuleRegistrationSchema, registerPendingConnectModule, registryFrameOrigins, saveModuleConfig, toggleModule, upsertModule } from '../registry';
 import { audit } from '../services/audit';
 import { CONFIG_SECRET_MASK, ConfigValidationError, validateModuleConfigValues } from '../services/module-config';
-import { installNpmModule, RuntimeInstallError, wipeCredential } from '../services/runtime-install';
+import { installNpmModule, readNpmModule, RuntimeInstallError, wipeCredential } from '../services/runtime-install';
+import {
+  accountWorkersDevSubdomain,
+  CfRoutingError,
+  enableWorkerWorkersDev,
+  ensureWorkerRoute,
+  findZoneForDomain,
+  listAccountZones,
+  mountEntryUrl,
+  type ModuleMount,
+} from '../services/cf-routing';
+import { moduleRoutePattern, type ModuleManifest } from '@unself/contracts';
 import { configuredMailSender, deliverNotification } from '../services/notifications';
-import { DEPLOY_MODES, STORAGE_LEVELS } from '@unself/control-plane/types';
+import { STORAGE_LEVELS } from '@unself/control-plane/types';
 
 /**
- * 运行时装配入参（#349 模式一）：npm 规格 + 会话内 CF 凭证 + 账号维度 + 可选落点覆盖。
+ * 运行时装配入参（#349 模式一 + #369 挂载选择）：npm 规格 + 会话内 CF 凭证 + 账号维度 + 挂载。
  * `cfToken` 不进任何持久面（#165）；`accountId` 是 CF 的资源定位，不是凭证。
+ *
+ * `mount` 三种（都是 direct 接入，区别只在 entry 怎么来、要不要碰 CF）：
+ * - zone：上传 worker + 建 zone 路由 `<domain>/m/<id>/*` → entry=`https://<domain>/m/<id>/`；
+ * - workers-dev：上传 + 开通脚本子域 → entry=`https://<script>.<accountSubdomain>.workers.dev/`；
+ * - existing：不上传不建路由，只登记管理员给的地址（manifest 仍从 npm 包读，不碰 CF）。
+ * 前两种需要 cfToken/accountId（superRefine 兜底），existing 两个都不用。
  */
-export const InstallRequestSchema = z.object({
-  npmSpec: z.string().min(1).max(200),
-  cfToken: z.string().min(1).max(200),
-  accountId: z.string().min(1).max(64),
-  scriptName: z.string().regex(/^[a-z][a-z0-9-]*$/).max(63).optional(),
-  mode: z.enum(DEPLOY_MODES).optional(),
-  entry: z.string().max(2048).nullish(),
-  storageLevel: z.enum(STORAGE_LEVELS).nullish(),
-});
+export const InstallMountSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('zone'), domain: z.string().trim().min(1).max(253) }),
+  z.object({ kind: z.literal('workers-dev') }),
+  z.object({ kind: z.literal('existing'), entry: z.string().trim().min(1).max(2048) }),
+]);
+
+export const InstallRequestSchema = z
+  .object({
+    npmSpec: z.string().min(1).max(200),
+    cfToken: z.string().min(1).max(200).optional(),
+    accountId: z.string().min(1).max(64).optional(),
+    scriptName: z.string().regex(/^[a-z][a-z0-9-]*$/).max(63).optional(),
+    storageLevel: z.enum(STORAGE_LEVELS).nullish(),
+    mount: InstallMountSchema,
+  })
+  .superRefine((input, ctx) => {
+    if (input.mount.kind === 'existing') return;
+    if (!input.cfToken) {
+      ctx.addIssue({ code: 'custom', path: ['cfToken'], message: '上传/建路由需要 CF API Token' });
+    }
+    if (!input.accountId) {
+      ctx.addIssue({ code: 'custom', path: ['accountId'], message: '上传/建路由需要 Cloudflare 账号 ID' });
+    }
+  });
 import { readSession } from '../session';
 import { profileAvatarUrl } from '../services/avatar-store';
 import { getProfileIdentity } from '../services/users';
 import type { Bindings } from '../index';
+
+type InstallInput = z.infer<typeof InstallRequestSchema>;
+
+interface MountedInstall {
+  manifest: ModuleManifest;
+  scriptName: string;
+  /** 注册表 entry：三种挂载都给出（direct 必须有对外地址，只是地址怎么来不同）。 */
+  entry: string;
+}
+
+/**
+ * 挂载执行：existing 只读包（不碰 CF）；另两种先上传脚本，再按形态建 zone 路由或开 workers.dev 子域。
+ * 这里只做 CF 副作用与 URL 计算，注册表写入归调用方的 upsertModule（单一写入口）。
+ */
+async function installWithMount(input: InstallInput, mount: ModuleMount): Promise<MountedInstall> {
+  if (mount.kind === 'existing') {
+    const pkg = await readNpmModule({ npmSpec: input.npmSpec });
+    const scriptName = input.scriptName ?? pkg.manifest.id;
+    return {
+      manifest: pkg.manifest,
+      scriptName,
+      entry: mountEntryUrl(mount, { moduleId: pkg.manifest.id, scriptName, workersDevSubdomain: null }),
+    };
+  }
+
+  // cfToken/accountId 的存在性由 InstallRequestSchema.superRefine 保证（上传形态才要求）
+  const cfToken = input.cfToken!;
+  const accountId = input.accountId!;
+  const installed = await installNpmModule({
+    npmSpec: input.npmSpec,
+    cfToken,
+    accountId,
+    scriptName: input.scriptName,
+  });
+  const moduleId = installed.manifest.id;
+
+  if (mount.kind === 'zone') {
+    const zone = await findZoneForDomain(cfToken, mount.domain);
+    if (!zone) {
+      throw new CfRoutingError(`账号下找不到 ${mount.domain} 的 zone（Token 需要 Zone 读权限）`, 400);
+    }
+    await ensureWorkerRoute(cfToken, zone.id, moduleRoutePattern(mount.domain, moduleId), installed.scriptName);
+    return {
+      manifest: installed.manifest,
+      scriptName: installed.scriptName,
+      entry: mountEntryUrl(mount, { moduleId, scriptName: installed.scriptName, workersDevSubdomain: null }),
+    };
+  }
+
+  // workers.dev：没有账号子域就给可操作错误，不回落拼假 URL（#273 教训）
+  const subdomain = await accountWorkersDevSubdomain(cfToken, accountId);
+  if (!subdomain) {
+    throw new CfRoutingError('账号还没有 workers.dev 子域：先在 Cloudflare 控制台开通再重试', 400);
+  }
+  await enableWorkerWorkersDev(cfToken, accountId, installed.scriptName);
+  return {
+    manifest: installed.manifest,
+    scriptName: installed.scriptName,
+    entry: mountEntryUrl(mount, { moduleId, scriptName: installed.scriptName, workersDevSubdomain: subdomain }),
+  };
+}
 
 /**
  * 启停公共处理（PATCH /enabled 遗留端点与 POST /toggle 归属端点共用同一语义，§5.5）：
@@ -108,11 +201,11 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
   });
 
   /**
-   * 运行时装配（#349 模式一，决策 #109）：装后增补单个 CF 模块。
+   * 运行时装配（#349 模式一，决策 #109；#369 挂载选择）：装后增补单个模块。
    *
-   * 凭证纪律（#165）：`cfToken` 只做本次请求的一次上传，`finally` 里连请求体副本一起抹掉；
-   * 审计只记模块 id（不记 npmSpec 之外的任何凭证痕迹，也不记 token）。
-   * 落点三列（#348/#103②）与既有注册同一写入口 upsertModule——不另开旁路写库。
+   * 凭证纪律（#165）：`cfToken` 只做本次请求的 CF 调用，`finally` 里连请求体副本一起抹掉；
+   * 审计只记模块 id（不记 token，也不记 token 出现在 URL/错误文案里）。
+   * 注册与落点列与既有注册同一写入口 upsertModule——不另开旁路写库。
    */
   app.post('/api/admin/modules/install', async (c) => {
     const parsed = InstallRequestSchema.safeParse(await c.req.json().catch(() => null));
@@ -120,32 +213,61 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
       return c.json({ error: 'invalid install request', detail: z.prettifyError(parsed.error) }, 400);
     }
     const input = parsed.data;
+    const mount: ModuleMount = input.mount;
     try {
-      const installed = await installNpmModule({
-        npmSpec: input.npmSpec,
-        cfToken: input.cfToken,
-        accountId: input.accountId,
-        scriptName: input.scriptName,
-      });
-      const entry = await upsertModule(c.env.CORE_DB, {
-        id: installed.manifest.id,
+      const mounted = await installWithMount(input, mount);
+      const registration = ModuleRegistrationSchema.safeParse({
+        id: mounted.manifest.id,
         enabled: true,
-        manifest: installed.manifest,
-        // 运行时装的是 CF worker（模式一语义），落点三列显式落库
-        mode: input.mode ?? 'cloudflare',
-        entry: input.entry ?? null,
+        manifest: mounted.manifest,
+        // 三种挂载都是直连接入（#369）：有没有对外地址由 entry 表达，不由 mode 表达
+        mode: 'direct',
+        entry: mounted.entry,
         storage_level: input.storageLevel ?? null,
       });
-      await audit(c.env.CORE_DB, (await readSession(c))!.uid, 'module_upserted', installed.manifest.id);
-      return c.json({ ...entry, scriptName: installed.scriptName, version: installed.version }, 201);
+      if (!registration.success) {
+        return c.json({ error: 'invalid entry', detail: z.prettifyError(registration.error) }, 400);
+      }
+      const entry = await upsertModule(c.env.CORE_DB, registration.data);
+      await audit(c.env.CORE_DB, (await readSession(c))!.uid, 'module_upserted', mounted.manifest.id);
+      return c.json(
+        { ...entry, scriptName: mounted.scriptName, version: mounted.manifest.version },
+        201,
+      );
     } catch (error) {
       if (error instanceof RuntimeInstallError) {
+        return c.json({ error: error.message }, error.status);
+      }
+      if (error instanceof CfRoutingError) {
         return c.json({ error: error.message }, error.status);
       }
       throw error;
     } finally {
       // 用后即焚：请求体副本与本作用域入参都不留凭证
       wipeCredential(input);
+    }
+  });
+
+  /**
+   * 账号下 active zone 清单（「挂到」下拉的数据源）。
+   * token 走 `x-cf-token` 头而不是 query：GET 无法带 body，而 URL 会进访问日志（#165）。
+   * 只读且用后即焚，不落库、不进审计。
+   */
+  app.get('/api/admin/modules/cf/zones', async (c) => {
+    const accountId = c.req.query('accountId');
+    const holder = { cfToken: c.req.header('x-cf-token') ?? '' };
+    try {
+      if (!accountId || !holder.cfToken) {
+        return c.json({ error: 'accountId（query）与 x-cf-token（header）必填' }, 400);
+      }
+      return c.json(await listAccountZones(holder.cfToken));
+    } catch (error) {
+      if (error instanceof CfRoutingError) {
+        return c.json({ error: error.message }, error.status);
+      }
+      throw error;
+    } finally {
+      wipeCredential(holder);
     }
   });
 

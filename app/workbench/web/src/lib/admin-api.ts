@@ -57,9 +57,9 @@ export interface AdminModule {
   id: string
   enabled: boolean
   version: string | null
-  /** 落点形态（#348/#103② 用户实际选择）；字面量与 control-plane DEPLOY_MODES 同源清单。 */
-  mode: 'cloudflare' | 'docker' | 'connect'
-  /** connect 模式接入 URL；其余模式 NULL。 */
+  /** 接入方式（#369 两态；字面量与 control-plane DEPLOY_MODES 同源清单）。 */
+  mode: 'direct' | 'connect'
+  /** 装载地址：direct = 模块真实地址（如 https://<domain>/m/<id>/）；connect = core 的 /m/<id>/。 */
   entry: string | null
   /** 存储落点两值（#349 U5：core|self；旧值由迁移 0014 映射，NULL = 未选）。 */
   storage_level: 'core' | 'self' | null

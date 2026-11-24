@@ -1183,6 +1183,7 @@ describe('邀请域 HTTP（#18）', () => {
       '0014_storage_level_two_values.sql', // #349 U5：storage_level 五值→两值（存量值映射）
       '0015_registry_config_values.sql', // #349 U8：registry config_values（模块配置值）
       '0016_registry_lifecycle.sql', // #349：registry lifecycle（pending/active/disabled）
+      '0017_registry_mode_two_values.sql', // #369：registry mode 三值→两值（cloudflare/docker → direct）
     ]);
 
     const sqlite = new DatabaseSync(':memory:');

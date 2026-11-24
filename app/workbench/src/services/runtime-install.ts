@@ -14,8 +14,8 @@
  * - 单文件 ESM 上传（`worker.js`），不带 bindings/migrations/assets。带 DO/资产/迁移的模块
  *   （chat 等）仍走 installer 装配期路径；本端点是"增补简单模块"的过渡形态，完全形态随
  *   D8（core Node 运行体）/ D4（向导扩展）收敛。
- * - workers.dev 子域启用、路由绑定、secrets 下发不在本端点职责内（需要 zone 级能力，
- *   且与 #165 凭证纪律冲突：那些动作应留在部署期）。
+ * - 本文件只负责「拉包 → 校清单 → 上传脚本」；挂载（zone 路由 / workers.dev 子域）在
+ *   `services/cf-routing.ts`，URL 纯计算单点在 `@unself/contracts/cf-routing`。
  */
 
 import { ModuleManifestSchema, type ModuleManifest } from '@unself/contracts';
@@ -46,6 +46,14 @@ export interface RuntimeInstallResult {
   files: string[];
 }
 
+/** 只读包产物（「我已有地址」形态：不上传、不建路由，只需清单快照与版本）。 */
+export interface ModulePackage {
+  manifest: ModuleManifest;
+  version: string;
+  /** 包内文件清单（诊断用；不落库）。 */
+  files: string[];
+}
+
 /** 人话装配错误（路由层转 400/502，不把 CF 原始响应整段回给前端）。 */
 export class RuntimeInstallError extends Error {
   constructor(message: string, readonly status: 400 | 502) {
@@ -55,14 +63,24 @@ export class RuntimeInstallError extends Error {
 }
 
 /**
- * 装配一个 npm 模块到 CF：拉 tarball → 校 manifest（含权限词表）→ 上传 worker。
- * 不写 registry——注册与落点三列由路由层用同一条 `upsertModule` 通道落（单一写入口）。
+ * 拉 npm 包并校清单（不碰 CF）：manifest.json 是包的真相（#78），未知能力在 schema 层直接拒（#56）。
+ * 「我已有地址」形态只走这一段——用户自己部署，core 只登记清单快照与地址。
  */
-export async function installNpmModule(
-  input: RuntimeInstallInput,
+export async function readNpmModule(
+  input: { npmSpec: string },
   fetchImpl: typeof fetch = fetch,
-): Promise<RuntimeInstallResult> {
-  const pkg = await fetchNpmPackage(input.npmSpec, fetchImpl);
+): Promise<ModulePackage> {
+  const pkg = await readPackage(input.npmSpec, fetchImpl);
+  return { manifest: pkg.manifest, version: pkg.version, files: pkg.files };
+}
+
+interface ParsedPackage extends ModulePackage {
+  workerSource: string;
+}
+
+/** 包 → 清单 + 入口脚本（拉取/校验只在这里发生一次）。 */
+async function readPackage(npmSpec: string, fetchImpl: typeof fetch): Promise<ParsedPackage> {
+  const pkg = await fetchNpmPackage(npmSpec, fetchImpl);
 
   // manifest.json 是包的真相（#78：安装侧只看它，不看 package.json）
   const manifestText = readTextFile(pkg, 'package/manifest.json');
@@ -86,26 +104,41 @@ export async function installNpmModule(
   // 未知能力不再后置过滤：ModulePermissionSchema = z.enum(MODULE_PERMISSIONS) 在 schema 层
   // 直接拒（词表单点 @unself/contracts/manifest.ts；上方 issues 映射已点名到 permissions.N），
   // 走不到这里——保留本地过滤就是第二份词表规则（消融实验 B 删除）。
-  const manifest = schema.data;
-
-  const worker = readTextFile(pkg, 'package/worker.js');
-  if (!worker) {
+  const workerSource = readTextFile(pkg, 'package/worker.js');
+  if (!workerSource) {
     throw new RuntimeInstallError('包内缺少 worker.js（远端来源必须是已打包形态，#58）', 400);
   }
+  return {
+    manifest: schema.data,
+    version: pkg.ref.version,
+    files: [...pkg.files.keys()],
+    workerSource,
+  };
+}
 
-  const scriptName = input.scriptName ?? manifest.id;
+/**
+ * 装配一个 npm 模块到 CF：拉 tarball → 校 manifest（含权限词表）→ 上传 worker。
+ * 不写 registry——注册与落点列由路由层用同一条 `upsertModule` 通道落（单一写入口）；
+ * 挂载（zone 路由 / workers.dev）也归路由层，本函数只负责让脚本存在。
+ */
+export async function installNpmModule(
+  input: RuntimeInstallInput,
+  fetchImpl: typeof fetch = fetch,
+): Promise<RuntimeInstallResult> {
+  const pkg = await readPackage(input.npmSpec, fetchImpl);
+  const scriptName = input.scriptName ?? pkg.manifest.id;
   await uploadWorkerScript(fetchImpl, {
     cfToken: input.cfToken,
     accountId: input.accountId,
     scriptName,
-    workerSource: worker,
+    workerSource: pkg.workerSource,
   });
 
   return {
-    manifest,
-    version: pkg.ref.version,
+    manifest: pkg.manifest,
+    version: pkg.version,
     scriptName,
-    files: [...pkg.files.keys()],
+    files: pkg.files,
   };
 }
 
@@ -144,6 +177,6 @@ async function uploadWorkerScript(
 }
 
 /** 抹掉凭证引用（#165：用完即焚；调用方在 finally 里执行）。 */
-export function wipeCredential(holder: { cfToken: string }): void {
+export function wipeCredential(holder: { cfToken?: string }): void {
   holder.cfToken = '';
 }

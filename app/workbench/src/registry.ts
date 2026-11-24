@@ -30,7 +30,7 @@ export const ModuleRegistrationSchema = z
     /**
      * 落点三列（#348/#103② 用户实际选择，非 manifest 声明快照）。合并语义（#348 review 定案）：
      * 未写 = 保留列中旧值，清空必须显式传值（装配器/注册调用不承担清空）。
-     * 注意不用 .default()：默认值会把「未写」变成「写了 cloudflare/null」，合并语义就没意义了。
+     * 注意不用 .default()：默认值会把「未写」变成「写了 direct/null」，合并语义就没意义了。
      */
     mode: z.enum(DEPLOY_MODES).optional(),
     /** connect 模式的接入 URL；显式 null/空串 = 清空，缺字段 = 保留旧值。 */
@@ -50,7 +50,7 @@ export const ModuleRegistrationSchema = z
     ),
   })
   // #349 U9：entry 列成为地址真值面后的 #63 锚点（原在清单 manifest.entry，U9 移出清单）。
-  // 公网明文 http 拒收（仅 localhost/127.0.0.1/[::1] 明文豁免）——external 模块经浏览器装载,
+  // 公网明文 http 拒收（仅 localhost/127.0.0.1/[::1] 明文豁免）——direct 模块经浏览器装载,
   // 明文公网地址等于令牌裸华；非 http(s)/不可解析也拒（白名单/装载都消费不了）。
   .superRefine((data, ctx) => {
     if (data.entry) {
@@ -104,7 +104,7 @@ export function connectPendingManifest(moduleId: string): z.infer<typeof ModuleM
   return ModuleManifestSchema.parse({
     id: moduleId,
     version: '0.0.0',
-    runtimes: ['external'],
+    runtimes: ['node'],
     route: `/m/${moduleId}`,
   });
 }
@@ -121,7 +121,7 @@ export interface RegistryEntry {
   lifecycle: ModuleLifecycle;
   version: string | null;
   manifest: unknown;
-  /** 落点形态（#348）；缺省 cloudflare。 */
+  /** 接入方式（#369 两态）；缺省 direct。 */
   mode: DeployMode;
   /** connect 模式接入 URL；其余模式 NULL。 */
   entry: string | null;
@@ -176,7 +176,7 @@ export function rowToEntry(row: {
     lifecycle: (row.lifecycle ?? 'pending') as ModuleLifecycle,
     version: row.version,
     manifest,
-    mode: (row.mode ?? 'cloudflare') as DeployMode,
+    mode: (row.mode ?? 'direct') as DeployMode,
     entry: row.entry ?? null,
     storage_level: (row.storage_level ?? null) as StorageLevel | null,
   };
@@ -195,7 +195,7 @@ export async function upsertModule(db: D1Database, reg: ModuleRegistration): Pro
   const lifecycle: ModuleLifecycle = reg.enabled ? 'active' : 'disabled';
   const row = await db
     .prepare(
-      `INSERT INTO module_registry (id, enabled, lifecycle, version, manifest_json, mode, entry, storage_level, credential_hash) VALUES (?1, ?2, ?9, ?3, ?4, coalesce(?5, 'cloudflare'), ?6, ?7, ?8)
+      `INSERT INTO module_registry (id, enabled, lifecycle, version, manifest_json, mode, entry, storage_level, credential_hash) VALUES (?1, ?2, ?9, ?3, ?4, coalesce(?5, 'direct'), ?6, ?7, ?8)
        ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, lifecycle = excluded.lifecycle, version = excluded.version, manifest_json = excluded.manifest_json,
        mode = coalesce(?5, mode), entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END), storage_level = coalesce(?7, storage_level),
        credential_hash = coalesce(?8, credential_hash)

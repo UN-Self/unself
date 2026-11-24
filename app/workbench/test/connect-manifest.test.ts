@@ -19,14 +19,14 @@ const app = createApp();
 const pendingManifest = {
   id: 'bridge',
   route: '/m/bridge',
-  runtimes: ['external'],
+  runtimes: ['node'],
   version: '0.0.0',
 };
 
 const realManifest = {
   id: 'bridge',
   route: '/m/bridge',
-  runtimes: ['external'],
+  runtimes: ['node'],
   version: '1.4.2',
   description: 'bridge 模块',
   config: [

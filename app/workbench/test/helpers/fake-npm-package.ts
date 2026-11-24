@@ -44,7 +44,10 @@ export async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/** 假 npm + CF 源；调用记录里 auth 只有 CF 上传那一跳有值。 */
+/** 假 npm + CF 源；调用记录里 auth 只有 CF 那一跳有值。
+ * CF 侧按路径回最小合法信封（zones 列表 / 路由列表 / 脚本上传 / workers.dev 子域），
+ * 供「安装 + 挂载」端点级测试断言副作用顺序，不需要逐条 mock。
+ */
 export function stubNpmFetch(pkgFiles: Record<string, string>, opts?: { cfStatus?: number }) {
   const calls: Array<{ url: string; method: string; auth?: string }> = [];
   const impl = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -62,11 +65,20 @@ export function stubNpmFetch(pkgFiles: Record<string, string>, opts?: { cfStatus
     }
     if (target.includes('api.cloudflare.com')) {
       const status = opts?.cfStatus ?? 200;
-      return Response.json(status === 200 ? { success: true, result: {} } : { success: false, errors: [{ message: 'auth denied' }] }, {
-        status,
-      });
+      if (status !== 200) {
+        return Response.json({ success: false, errors: [{ message: 'auth denied' }] }, { status });
+      }
+      return Response.json({ success: true, result: cfResultFor(target) });
     }
     return new Response('not found', { status: 404 });
   };
   return { impl: impl as typeof fetch, calls };
+}
+
+/** CF 端点最小合法 result（挂载流程用到的几类）。 */
+function cfResultFor(target: string): unknown {
+  if (target.includes('/workers/subdomain')) return { subdomain: 'test-subdomain' };
+  if (/\/zones\?/.test(target)) return [{ id: 'zone-1', name: 'team.example.com' }];
+  if (/\/workers\/routes(\?|$)/.test(target)) return [];
+  return {};
 }

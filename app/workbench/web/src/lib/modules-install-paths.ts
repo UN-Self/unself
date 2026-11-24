@@ -13,4 +13,5 @@ export const ADD_MODULE_PATHS = {
   status: '/api/modules/connect-status',
   activate: '/api/admin/modules',
   install: '/api/admin/modules/install',
+  zones: '/api/admin/modules/cf/zones',
 } as const
