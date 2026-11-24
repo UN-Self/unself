@@ -43,7 +43,7 @@ const MINI_MANIFEST = [
   'version: 1.2.3',
   'route: /m/mini',
   'runtimes:',
-  '  - external',
+  '  - node',
   '',
 ].join('\n');
 
@@ -179,7 +179,7 @@ describe('worker 运行时 + 错误路径', () => {
     await mkdir(join(modDir, 'src'), { recursive: true });
     await writeFile(
       join(modDir, 'manifest.yaml'),
-      MINI_MANIFEST.replace('  - external', '  - worker'),
+      MINI_MANIFEST.replace('  - node', '  - worker'),
     );
     await writeFile(join(modDir, 'src', 'index.ts'), 'export default { fetch() { return new Response("ok"); } };\n');
     const names = (await modulePackageFiles({ dir: modDir })).files.map((f) => f.name);
@@ -188,7 +188,7 @@ describe('worker 运行时 + 错误路径', () => {
 
   it('已打包形态：包根 worker.js 原样收录（字节不二次加工）', async () => {
     const modDir = join(work, 'prebuilt-module');
-    await makeModule(modDir, MINI_MANIFEST.replace('  - external', '  - worker'));
+    await makeModule(modDir, MINI_MANIFEST.replace('  - node', '  - worker'));
     await writeFile(join(modDir, 'worker.js'), '// prebuilt bytes ✔\n');
     const result = await modulePackageFiles({ dir: modDir });
     expect(result.files.find((f) => f.name === 'worker.js')?.data.toString()).toBe('// prebuilt bytes ✔\n');
@@ -290,7 +290,7 @@ describe('#285 生成的 package.json（npm 发布形态）', () => {
 });
 
 describe('生成的 package.json.license（manifest.license，issue #292）', () => {
-  /** 造一个带 license 字段的最小源码模块目录（runtimes=external，不触发 esbuild）。 */
+  /** 造一个带 license 字段的最小源码模块目录（runtimes=node（非 worker），不触发 esbuild）。 */
   async function makeLicensedModule(name: string, licenseLine: string): Promise<string> {
     const dir = join(work, name);
     await makeModule(dir, [
@@ -298,7 +298,7 @@ describe('生成的 package.json.license（manifest.license，issue #292）', ()
       'version: 1.2.3',
       'route: /m/mini',
       'runtimes:',
-      '  - external',
+      '  - node',
       ...(licenseLine ? [licenseLine] : []),
       '',
     ].join('\n'));
@@ -365,7 +365,7 @@ describe('生成的 package.json.license（manifest.license，issue #292）', ()
       'version: 1.2.3',
       'route: /m/mini',
       'runtimes:',
-      '  - external',
+      '  - node',
       ...licenseLines,
       '',
     ].join('\n'));

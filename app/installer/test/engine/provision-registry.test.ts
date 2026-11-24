@@ -67,7 +67,7 @@ describe('registry（⑤ · 形状契约）', () => {
   it('registryUpsertCommand：enabled=1 + manifest 快照 JSON + 落点三列（#348；U9 起 entry 列承载地址）', () => {
     const cmd = registryUpsertCommand({
       manifest: ModuleManifestSchema.parse(manifest),
-      mode: 'cloudflare',
+      mode: 'direct',
       entry: 'https://team.example.com/m/hello/',
       storage_level: 'core',
     });
@@ -75,13 +75,13 @@ describe('registry（⑤ · 形状契约）', () => {
     expect(cmd.binds[1]).toBe(1);
     expect(cmd.binds[2]).toBe('0.1.0');
     expect(JSON.parse(String(cmd.binds[3]))).toMatchObject({ id: 'hello' });
-    // 落点三列（#348）：显式传参原样透传，缺省回落 cloudflare/空；entry（U9）= 装配器算的实例地址
-    expect(cmd.binds[4]).toBe('cloudflare');
+    // 落点三列（#348）：显式传参原样透传，缺省回落直接 (direct)/空；entry（U9）= 装配器算的实例地址
+    expect(cmd.binds[4]).toBe('direct');
     expect(cmd.binds[5]).toBe('https://team.example.com/m/hello/');
     expect(cmd.binds[6]).toBe('core');
     const bare = registryUpsertCommand({ manifest: ModuleManifestSchema.parse(manifest) });
     // 合并语义（#348 review 定案）：未写三列 binds 归一 NULL（= 保留旧值），
-    // 首次插入的 mode 缺省 'cloudflare' 由 SQL 内 coalesce 承载，不在 binds 里补。
+    // 首次插入的 mode 缺省 'direct' 由 SQL 内 coalesce 承载，不在 binds 里补。
     expect(bare.binds[4]).toBeNull();
     expect(bare.binds[5]).toBeNull();
     expect(bare.binds[6]).toBeNull();
@@ -93,7 +93,7 @@ describe('registry（⑤ · 形状契约）', () => {
     const bare = registryUpsertCommand({ manifest: ModuleManifestSchema.parse(manifest) });
     // #349 起 8 参形态：第 8 参 credential_hash 恒 NULL（installer 不经手凭证；首插落 NULL，冲突保留旧值）
     expect(bare.binds).toEqual(['hello', 1, '0.1.0', expect.any(String), null, null, null, null]);
-    expect(bare.sql).toContain("coalesce(?5, 'cloudflare')");
+    expect(bare.sql).toContain("coalesce(?5, 'direct')");
     expect(bare.sql).toContain('coalesce(?5, mode)');
     expect(bare.sql).toContain("coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END)");
     expect(bare.sql).toContain('coalesce(?7, storage_level)');
