@@ -30,9 +30,17 @@ export interface RegistryEntry {
   enabled: boolean;
   version: string | null;
   manifest: unknown;
-  /** 落点形态（#103② 用户实际选择，非 manifest 声明快照；0012 起有列，缺省 cloudflare）。 */
+  /**
+   * 接入方式（#369 两态，0017 起值域 direct/connect；用户实际选择，非 manifest 声明快照）。
+   * 只回答「谁把请求送到模块」：direct = 壳 iframe 直指模块地址，connect = core 隧道转发。
+   * 不回答模块跑在哪（那是 manifest.runtimes 的事）。0012–0016 的三值 cloudflare/docker/connect
+   * 混了两根轴，0017 把 cloudflare/docker 归并为 direct。
+   */
   mode: DeployMode;
-  /** connect 模式的接入 URL（其余模式 NULL）；connect 必填由 0012 CHECK 承载。 */
+  /**
+   * 壳装载模块用的地址，两种接入方式都有值（不是「有没有」的二值信号）：
+   * direct = 模块真实可达 URL（CF 装机由系统算、自建反代由管理员填）；connect = core 自己的 /m/<id>/。
+   */
   entry: string | null;
   /** 存储落点（#349 U5 两值）：core（核心代管，分表隔离）| self（自托管）；NULL = 未选（undefined = self）。 */
   storage_level: StorageLevel | null;
@@ -43,8 +51,8 @@ export interface RegistryEntry {
   credential_hash: string | null;
 }
 
-/** 落点形态枚举（0012 CHECK 同源清单；zod 侧直接 z.enum(DEPLOY_MODES) 复用）。 */
-export const DEPLOY_MODES = ['cloudflare', 'docker', 'connect'] as const;
+/** 接入方式两值枚举（#369；0017 CHECK 同源清单，zod 侧直接 z.enum(DEPLOY_MODES) 复用）。 */
+export const DEPLOY_MODES = ['direct', 'connect'] as const;
 export type DeployMode = (typeof DEPLOY_MODES)[number];
 
 /** 存储落点两值枚举（#349 U5 定案；0014 映射后的列值域同源清单）。 */
@@ -83,8 +91,9 @@ export interface ModuleRegistration {
   /** manifest.version 镜像列（upsert 时随快照刷新）。 */
   version?: string;
   /** 落点形态；未写 = 保留旧值（#348 review 定案）。 */
+  /** 接入方式；未写 = 保留旧值（#348 review 定案）。 */
   mode?: DeployMode | null;
-  /** connect 模式接入 URL；未写 = 保留旧值。#349 U9：本列是全形态地址真值面（CF=装配器写、connect=core 隧道路由）。 */
+  /** 装载地址（见 RegistryEntry.entry）；未写 = 保留旧值。 */
   entry?: string | null;
   /** 存储落点两值；未写 = 保留旧值（NULL = 未选，undefined = self）。 */
   storage_level?: StorageLevel | null;

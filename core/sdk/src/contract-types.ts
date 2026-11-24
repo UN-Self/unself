@@ -32,7 +32,7 @@ export interface ModuleManifest {
   /** semver 版本号（x.y.z）。 */
   version: string;
   /** 支持的运行时（至少一项）：worker / docker / external。 */
-  runtimes: ('worker' | 'docker' | 'external')[];
+  runtimes: ('worker' | 'node')[];
   /** 挂载路由建议值，以 `/m/` 开头。 */
   route: string;
   /** 权限门禁声明（词表见 MODULE_PERMISSIONS）；省略 = 不调用需授权的 Core API。 */
