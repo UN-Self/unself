@@ -38,7 +38,7 @@ function plainRow(row: Record<string, unknown>): Record<string, unknown> {
 }
 
 /** node:sqlite → 控制面执行器（?N 序号占位符按位置绑定，run 回 meta.changes）。 */
-class SqliteExecutor implements ControlPlaneExecutor {
+export class SqliteExecutor implements ControlPlaneExecutor {
   constructor(private readonly db: DatabaseSync) {}
 
   prepare(sql: string): BoundQuery {

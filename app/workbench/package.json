@@ -13,15 +13,20 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:web": "vite",
-    "build": "pnpm --filter @unself/sdk run build && pnpm typecheck && pnpm build:worker && vite build",
+    "build": "pnpm --filter @unself/sdk run build && pnpm typecheck && pnpm build:worker && pnpm build:node && vite build",
     "build:web": "vite build",
-    "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit && pnpm typecheck:node && vue-tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "build:worker": "tsx scripts/build-worker.ts"
+    "build:worker": "tsx scripts/build-worker.ts",
+    "build:node": "tsx scripts/build-node.ts",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",
     "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
     "@unself/contracts": "workspace:*",
     "@unself/control-plane": "workspace:*",
     "@unself/mail-smtp": "workspace:*",
@@ -50,5 +55,9 @@
     "dist",
     "migrations"
   ],
-  "description": "Unself 平台运行体（一个包两半边）：core Worker（后端）+ 工作台 SPA（前端）+ 迁移 SQL；发布预构建产物，由 @unself/installer 装配"
+  "description": "Unself 平台运行体（一个包两半边）：core Worker（后端）+ 工作台 SPA（前端）+ 迁移 SQL；发布预构建产物，由 @unself/installer 装配",
+  "dependencies": {
+    "pg": "^8.23.1",
+    "ws": "^8.23.0"
+  }
 }

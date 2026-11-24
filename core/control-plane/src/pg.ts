@@ -74,7 +74,7 @@ function ledgerName(fileName: string): string {
 }
 
 /** 控制面执行器（ControlPlaneExecutor）：与 D1 语义一致——first 无行 null / all 回 results / run 回 changes。 */
-class PgExecutor implements ControlPlaneExecutor {
+export class PgExecutor implements ControlPlaneExecutor {
   constructor(private readonly pool: Pool) {}
 
   prepare(sql: string): BoundQuery {
