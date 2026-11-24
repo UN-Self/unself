@@ -12,7 +12,9 @@
  */
 import type { ApplyReport, ControlPlane, ControlPlaneExecutor } from '@unself/control-plane';
 import { PgControlPlane, PgExecutor, SqliteControlPlane, SqliteExecutor, openCoreDb } from '@unself/control-plane';
+import type { TransactionRunner } from './d1-executor';
 import { Pool } from 'pg';
+import type { DatabaseSync } from 'node:sqlite';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -23,6 +25,11 @@ export interface NodeDatabase {
   controlPlane: ControlPlane;
   executor: ControlPlaneExecutor;
   migrationReport: ApplyReport;
+  /**
+   * 事务（D1 的 `batch()` 语义落到 Node 运行体）：回调拿到「事务内执行器」，其中的语句
+   * 必须走事务连接（PG 的 pool 会把语句派发到别的连接，事务就不成立）。
+   */
+  transaction: TransactionRunner;
   close(): Promise<void>;
 }
 
@@ -36,6 +43,41 @@ async function readMigrations(
     .filter((name) => (dialect === 'postgres' ? name.endsWith('.pg.sql') : name.endsWith('.sql')))
     .sort();
   return Promise.all(names.map(async (name) => ({ name, sql: await readFile(join(dir, name), 'utf8') })));
+}
+
+/** sqlite 事务：回调里的语句走同一个 DatabaseSync（node:sqlite 单连接，天然同事务）。 */
+async function runSqliteTransaction<T>(
+  db: DatabaseSync,
+  fn: (tx: ControlPlaneExecutor) => Promise<T>,
+): Promise<T> {
+  db.exec('BEGIN');
+  try {
+    const result = await fn(new SqliteExecutor(db));
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+/** PG 事务：必须独占一条连接（pool 会把语句派发到任意连接，那样事务不成立）。 */
+async function runPgTransaction<T>(
+  pool: Pool,
+  fn: (tx: ControlPlaneExecutor) => Promise<T>,
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(new PgExecutor(client));
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /** 打开数据库、跑迁移、回执行器与关闭钩子。 */
@@ -53,6 +95,7 @@ export async function openNodeDatabase(
       dialect: 'postgres',
       controlPlane: cp,
       executor: new PgExecutor(cp.pool),
+      transaction: (fn) => runPgTransaction(pool, fn),
       close: () => cp.close(),
       migrationReport: report,
     };
@@ -65,6 +108,7 @@ export async function openNodeDatabase(
     dialect: 'sqlite',
     controlPlane: cp,
     executor: new SqliteExecutor(cp.db),
+    transaction: (fn) => runSqliteTransaction(db, fn),
     close: async () => {
       db.close();
     },

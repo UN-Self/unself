@@ -14,6 +14,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
+import type { DatabaseSync } from 'node:sqlite';
+import { SqliteExecutor, openCoreDb } from '@unself/control-plane';
+import { toD1Database, type TransactionRunner } from '../src/node/d1-executor';
 
 import { startNode, type NodeHandle } from '../src/entry.node';
 import { localAvatarStore } from '../src/adapters/local-avatar-store';
@@ -189,5 +192,54 @@ describe('Node 运行体（#360）', () => {
     });
     expect(again.canonicalRequest).toBe(signed.canonicalRequest);
     expect(again.authorization).toBe(signed.authorization);
+  });
+});
+
+describe('D1 batch 适配（#360）：D1 的隐式事务语义落在 Node 运行体上', () => {
+  /** 内存 sqlite + 最小表 + 带事务的 D1 形状。 */
+  function makeD1(): { db: DatabaseSync; d1: D1Database } {
+    const { db } = openCoreDb(':memory:');
+    db.exec('CREATE TABLE t (id TEXT PRIMARY KEY)');
+    const transaction: TransactionRunner = async (fn) => {
+      db.exec('BEGIN');
+      try {
+        const result = await fn(new SqliteExecutor(db));
+        db.exec('COMMIT');
+        return result;
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    };
+    return { db, d1: toD1Database(new SqliteExecutor(db), { transaction }) };
+  }
+
+  it('两条都成功：全部生效', async () => {
+    const { db, d1 } = makeD1();
+    try {
+      await d1.batch([
+        d1.prepare('INSERT INTO t (id) VALUES (?)').bind('a'),
+        d1.prepare('INSERT INTO t (id) VALUES (?)').bind('b'),
+      ]);
+      expect(db.prepare('SELECT id FROM t ORDER BY id').all()).toEqual([{ id: 'a' }, { id: 'b' }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('第二条撞主键：第一条也回滚（不留半截数据）', async () => {
+    const { db, d1 } = makeD1();
+    try {
+      await expect(
+        d1.batch([
+          d1.prepare('INSERT INTO t (id) VALUES (?)').bind('a'),
+          d1.prepare('INSERT INTO t (id) VALUES (?)').bind('a'),
+        ]),
+      ).rejects.toThrow();
+      // 关键：第一条必须一起回滚——否则会留下「有用户行、没凭据」的账号（永远登录不了）
+      expect(db.prepare('SELECT id FROM t').all()).toEqual([]);
+    } finally {
+      db.close();
+    }
   });
 });
