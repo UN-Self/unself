@@ -73,27 +73,35 @@ function ledgerName(fileName: string): string {
   return fileName.replace(/\.pg\.sql$/, '.sql');
 }
 
+/**
+ * PG 查询面（`Pool` 与 `PoolClient` 都满足）：事务内必须用 client，否则语句会被
+ * pool 派发到别的连接上、事务形同虚设（`toD1Database` 的 batch 依赖这一点）。
+ */
+export interface PgQueryable {
+  query(sql: string, values?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }>;
+}
+
 /** 控制面执行器（ControlPlaneExecutor）：与 D1 语义一致——first 无行 null / all 回 results / run 回 changes。 */
 export class PgExecutor implements ControlPlaneExecutor {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly db: PgQueryable) {}
 
   prepare(sql: string): BoundQuery {
     const text = toPgSql(sql);
-    const pool = this.pool;
+    const db = this.db;
     return {
       bind(...values: unknown[]) {
         const params = values as unknown[];
         return {
           async first<T = Record<string, unknown>>(): Promise<T | null> {
-            const result = await pool.query(text, params);
+            const result = await db.query(text, params);
             return (result.rows[0] as T | undefined) ?? null;
           },
           async all<T = Record<string, unknown>>(): Promise<{ results: T[] }> {
-            const result = await pool.query(text, params);
+            const result = await db.query(text, params);
             return { results: result.rows as T[] };
           },
           async run(): Promise<{ meta: { changes: number } }> {
-            const result = await pool.query(text, params);
+            const result = await db.query(text, params);
             return { meta: { changes: result.rowCount ?? 0 } };
           },
         };
