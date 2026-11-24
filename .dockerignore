@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 构建上下文 = 仓库根（见 docker/Dockerfile）。镜像自己 build，宿主的安装产物/旧产物不进镜像。
+**/node_modules
+**/dist
+**/.wrangler
+**/test
+**/coverage
+**/*.md
+**/*.log
+**/*.tgz
+.git
+.github
+.deploy
+**/.env
+docker/.env
+# 保留：pnpm-lock.yaml、pnpm-workspace.yaml、package.json、LICENSE、NOTICE、全部构建源码。

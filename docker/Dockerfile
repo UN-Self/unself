@@ -1,41 +1,71 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# R2：单容器最简部署（核心 workbench）+ 首启自举（迁移 → mint 一次性 setup token → 打印深链接）。
+# Unself workbench 正式运行体镜像（#360 轨道 A）：自包含 Node 进程，镜像里没有 wrangler/workerd。
 #
-# 运行体 = wrangler dev（进程模式，挂 workerd）+ workbench 产物（dist/worker.js + 壳 SPA dist/web）
-# + 迁移 SQL（migrations/core/）。为什么 wrangler dev 而非裸 workerd：core bundle 以 workerd 为目标
-# （import 'cloudflare:sockets' 在裸 Node 下直接 SyntaxError），而 wrangler dev 提供 D1（内置 SQLite）、
-# --persist-to 状态外置（compose 卷挂这一层）、--var 注入 JWT_PRIVATE_KEY（免 .dev.vars 与 secret 样板）。
-# wrangler 是 Apache-2.0 的 CLI，非 AGPL 交付物。
+# 构建上下文 = 仓库根（compose 里 context: ..）。理由：`pnpm install --frozen-lockfile` 需要根
+# pnpm-lock.yaml / pnpm-workspace.yaml 与全部 workspace 包清单，单包上下文拼不出可复现安装。
 #
-# ⚠️ wrangler dev 自声明不适合生产（无 supervisor/自动重启）；R2 验收 = 链接打印 + 可点进向导，暂可接受。
-# TODO(#108): R1（native workerd + node:sqlite 全自管运行时）落地后本目录整块删除。
-FROM node:22-slim
-ARG WRANGLER_VERSION=4.129.0
-ARG PNPM_VERSION=11.24.0
-ENV NODE_ENV=production
+# 包根布局（与 app/workbench/src/node/config.ts 的 resolvePackageRoot/readNodeConfig 一致）：
+#   /app/dist/node/entry.node.cjs   Node 入口（pg/ws 已 bundle 进单文件）
+#   /app/dist/web/                  工作台 SPA（assetsDir）
+#   /app/migrations/{core,pg}/      迁移 SQL（migrationsDir；sqlite 取 core，postgres 取 pg）
+#
+# 运行时零 node_modules：依赖已打进 entry.node.cjs，装依赖只发生在构建阶段。
+
+# ---------------------------------------------------------------- 构建阶段
+FROM node:22-slim AS build
+# CI=true：pnpm 非交互；PNPM_HOME/PATH：corepack 装入的 pnpm 可被后续 RUN 找到。
+ENV CI=true \
+    PNPM_HOME=/pnpm \
+    PATH=/pnpm:$PATH
+
+# corepack 版本锁死到根 package.json 的 packageManager，避免与仓库锁文件漂移。
+RUN corepack enable && corepack prepare pnpm@11.24.0 --activate
+
+WORKDIR /src
+# .dockerignore 已剔除 node_modules/dist/.git 等；这里拿到的就是构建源码。
+COPY . .
+
+# 全量安装而不是 --filter：workbench 的 workspace 依赖（如 @unself/sdk）构建脚本需要自己的
+# devDependencies（esbuild），过滤安装不会带上它们；workerd 也来自 workbench 的 wrangler
+# devDependency，过滤省不掉。--frozen-lockfile 保证与仓库锁文件一致。
+RUN pnpm install --frozen-lockfile
+
+# workbench 的 build 脚本链已含 sdk 必须先 build 的前置：
+#   pnpm --filter @unself/sdk run build → typecheck → build:worker → build:node → vite build
+RUN pnpm --filter @unself/workbench run build
+
+# ---------------------------------------------------------------- 运行阶段
+FROM node:22-slim AS runtime
+ENV NODE_ENV=production \
+    UNSELF_ADDR=0.0.0.0:8787 \
+    UNSELF_DATA_DIR=/app/data
+
 WORKDIR /app
 
-# 构建上下文：wb = app/workbench（docker build --build-context wb=<路径>，compose 里已配 additional_contexts）。
-# dist/ = worker.js + 壳 SPA web/ + build-info.json；LICENSE/NOTICE（在 dist 内，build-worker.ts 随包拷入）上提到 /app。
-COPY --from=wb dist/ /app/dist/
-COPY --from=wb dist/LICENSE dist/NOTICE /app/
-COPY --from=wb migrations/ /app/migrations/
+# 只拷运行期需要的：Node 入口、SPA、迁移 SQL、许可证。不拷 node_modules / pnpm / wrangler。
+COPY --from=build /src/app/workbench/dist/node/ /app/dist/node/
+COPY --from=build /src/app/workbench/dist/web/ /app/dist/web/
+# 整个 migrations/ 一起拷：core（sqlite）与 pg（postgres）是方言入口，modules/ 等旁支
+# 体积可忽略，拷全避免运行时缺目录。
+COPY --from=build /src/app/workbench/migrations/ /app/migrations/
+COPY --from=build /src/LICENSE /app/LICENSE
+COPY --from=build /src/NOTICE /app/NOTICE
+COPY docker/entrypoint.sh /app/entrypoint.sh
 
-# 运行时依赖仅 wrangler（workerd 由其依赖树带出）。pnpm 走 allowBuilds 白名单放行
-# workerd/esbuild 的 install 脚本（platform 包正确解压，与仓库根 pnpm-workspace.yaml 同口径）。
-COPY entrypoint.sh /app/entrypoint.sh
+# 非 root：node 镜像自带 uid/gid 1000 的 node 用户。只把数据目录交给它——具名卷首次挂载
+# 会继承镜像内该目录的属主，所以默认 compose（具名卷）开箱即写；宿主目录 bind mount 时
+# 必须宿主侧先 `chown 1000:1000`（见 docker/README.md）。
 RUN chmod 0755 /app/entrypoint.sh \
- && corepack enable pnpm \
- && corepack prepare "pnpm@${PNPM_VERSION}" --activate \
- && printf '{"name":"unself-workbench-runtime","private":true}\n' > /app/package.json \
- && printf 'allowBuilds:\n  esbuild: true\n  workerd: true\n' > /app/pnpm-workspace.yaml \
- && CI=true pnpm add "wrangler@${WRANGLER_VERSION}" \
- && ln -s /app/node_modules/.bin/wrangler /usr/local/bin/wrangler \
- && wrangler --version
+ && mkdir -p /app/data \
+ && chown node:node /app/data
 
-ENV UNSELF_PORT=8787 \
-    UNSELF_DATA_DIR=/app/data
+USER node
+
 VOLUME /app/data
 EXPOSE 8787
+
+# slim 镜像没有 curl：用镜像自带的 node 打健康检查（/api/health 返回 200）。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:8787/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
 
 ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
