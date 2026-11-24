@@ -85,11 +85,13 @@ async function fetchAdminModulesSafe(): Promise<Array<AdminModule & { manifest?:
   return request('/api/admin/modules', undefined, { messagePolicy: statusOnlyMessage })
 }
 
-/** 挂载选择（#369）：三种都是直连接入，区别只在 entry 怎么来。 */
+/** 挂载选择（#369）：三种都是直连接入，区别只在 entry 怎么来。
+ * existing：管理员自己部署好的地址 + 声明的模块 id（不读 npm 包，见服务端 install 端点）。
+ */
 export type ModuleMount =
   | { kind: 'zone'; domain: string }
   | { kind: 'workers-dev' }
-  | { kind: 'existing'; entry: string }
+  | { kind: 'existing'; moduleId: string; entry: string }
 
 /** 账号下 active zone 清单（「挂到 → 账号下已有域名」下拉的数据源）。
  * token 走 `x-cf-token` 头而不是 query：GET 不能带 body，URL 会进访问日志（#165）。
@@ -102,9 +104,11 @@ export function fetchAccountZones(accountId: string, cfToken: string): Promise<A
   )
 }
 
-/** 模式一：core 运行时拉 npm 包并按挂载方式部署/登记（CF token 只在本次请求体里，前端不落任何存储）。 */
+/** 模式一：core 运行时拉 npm 包并按挂载方式部署/登记（CF token 只在本次请求体里，前端不落任何存储）。
+ * 「我已有地址」形态不传 npmSpec/cfToken/accountId——管理员自己的 worker 早就部署好了。
+ */
 export function installCloudflareModule(input: {
-  npmSpec: string
+  npmSpec?: string
   cfToken?: string
   accountId?: string
   storageLevel?: AdminModule['storage_level']

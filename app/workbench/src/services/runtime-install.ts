@@ -46,7 +46,7 @@ export interface RuntimeInstallResult {
   files: string[];
 }
 
-/** 只读包产物（「我已有地址」形态：不上传、不建路由，只需清单快照与版本）。 */
+/** 只读包产物（包内清单快照 + 版本；不上传、不建路由）。 */
 export interface ModulePackage {
   manifest: ModuleManifest;
   version: string;
@@ -60,18 +60,6 @@ export class RuntimeInstallError extends Error {
     super(message);
     this.name = 'RuntimeInstallError';
   }
-}
-
-/**
- * 拉 npm 包并校清单（不碰 CF）：manifest.json 是包的真相（#78），未知能力在 schema 层直接拒（#56）。
- * 「我已有地址」形态只走这一段——用户自己部署，core 只登记清单快照与地址。
- */
-export async function readNpmModule(
-  input: { npmSpec: string },
-  fetchImpl: typeof fetch = fetch,
-): Promise<ModulePackage> {
-  const pkg = await readPackage(input.npmSpec, fetchImpl);
-  return { manifest: pkg.manifest, version: pkg.version, files: pkg.files };
 }
 
 interface ParsedPackage extends ModulePackage {

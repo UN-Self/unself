@@ -95,9 +95,16 @@ export const ConnectRegisterSchema = z.object({
 });
 
 /**
- * connect 记账 pending 态的 manifest 占位快照（#349）：ModuleManifestSchema 的最小合法形状。
- * 决策 #109 两段式中本段不携带真清单（模块还没部署）；真快照由第②段「测试连接→保存」
- * 的 POST /api/admin/modules 写入并覆盖此占位。地址面只在 entry 列（U9：清单不承载地址），
+ * 记账占位 manifest（#349 反连接入；#369「我已有地址」登记共用）：ModuleManifestSchema 的最小合法形状。
+ * 承载两种「先记账、真清单后补」的动线：
+ * - 反连：决策 #109 两段式的第①段，本段不携带真清单（模块还没部署），真快照由第②段
+ *   「测试连接→保存」的 POST /api/admin/modules 写入并覆盖此占位；
+ * - 已有地址：管理员直接登记自己部署好的 worker（不一定发过 npm），注册表先落占位，
+ *   真清单当前没有自报通道（见 routes/modules.ts 的 install 端点注释）。
+ *
+ * `runtimes` 在这里**不表达事实**：反连模块跑在 Node 进程里，已有地址的模块跑在哪不确定
+ * （它只是一个能被访问到的 HTTP 服务）。占位只求过 schema 的最小形状（runtimes 非空且
+ * ∈ {worker,node}），真清单靠模块自报。地址面只在 entry 列（U9：清单不承载地址），
  * credential_hash 列（非快照）才是凭证真值面。
  */
 export function connectPendingManifest(moduleId: string): z.infer<typeof ModuleManifestSchema> {

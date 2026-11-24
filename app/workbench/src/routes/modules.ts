@@ -5,10 +5,10 @@ import { z } from 'zod';
 
 import { getSigningRuntime } from '../keys';
 import { checkTokenGate, issueModuleToken, MODULE_TOKEN_ISSUER } from '../token';
-import { ConnectRegisterSchema, getModuleConfig, listMemberModules, listModules, ModuleRegistrationSchema, registerPendingConnectModule, registryFrameOrigins, saveModuleConfig, toggleModule, upsertModule } from '../registry';
+import { ConnectRegisterSchema, connectPendingManifest, getModuleConfig, listMemberModules, listModules, ModuleRegistrationSchema, registerPendingConnectModule, registryFrameOrigins, saveModuleConfig, toggleModule, upsertModule } from '../registry';
 import { audit } from '../services/audit';
 import { CONFIG_SECRET_MASK, ConfigValidationError, validateModuleConfigValues } from '../services/module-config';
-import { installNpmModule, readNpmModule, RuntimeInstallError, wipeCredential } from '../services/runtime-install';
+import { installNpmModule, RuntimeInstallError, wipeCredential } from '../services/runtime-install';
 import {
   accountWorkersDevSubdomain,
   CfRoutingError,
@@ -27,21 +27,28 @@ import { STORAGE_LEVELS } from '@unself/control-plane/types';
  * 运行时装配入参（#349 模式一 + #369 挂载选择）：npm 规格 + 会话内 CF 凭证 + 账号维度 + 挂载。
  * `cfToken` 不进任何持久面（#165）；`accountId` 是 CF 的资源定位，不是凭证。
  *
- * `mount` 三种（都是 direct 接入，区别只在 entry 怎么来、要不要碰 CF）：
- * - zone：上传 worker + 建 zone 路由 `<domain>/m/<id>/*` → entry=`https://<domain>/m/<id>/`；
- * - workers-dev：上传 + 开通脚本子域 → entry=`https://<script>.<accountSubdomain>.workers.dev/`；
- * - existing：不上传不建路由，只登记管理员给的地址（manifest 仍从 npm 包读，不碰 CF）。
- * 前两种需要 cfToken/accountId（superRefine 兜底），existing 两个都不用。
+ * `mount` 三种（都是 direct 接入，区别只在 moduleId/entry 怎么来、要不要碰 CF）：
+ * - zone：npm 包上传 worker + 建 zone 路由 `<domain>/m/<id>/*` → entry=`https://<domain>/m/<id>/`；
+ * - workers-dev：npm 包上传 + 开通脚本子域 → entry=`https://<script>.<accountSubdomain>.workers.dev/`；
+ * - existing（#369 用户定案）：管理员自己已经部署好了（不一定发到 npm），只给「模块 id + 模块地址」
+ *   登记一行，不读包、不碰 CF；清单停在占位（见 install 端点注释里的已知缺口）。
+ * 前两种要 npmSpec + cfToken + accountId（superRefine 兜底），existing 三个都不用。
  */
 export const InstallMountSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('zone'), domain: z.string().trim().min(1).max(253) }),
   z.object({ kind: z.literal('workers-dev') }),
-  z.object({ kind: z.literal('existing'), entry: z.string().trim().min(1).max(2048) }),
+  z.object({
+    kind: z.literal('existing'),
+    /** 注册表主键由管理员直接声明（与 ConnectRegisterSchema 的 moduleId 同一形状）。 */
+    moduleId: z.string().regex(/^[a-z][a-z0-9-]+$/),
+    /** 地址校验沿用 ModuleRegistrationSchema 的 entry 规则（https 强制，localhost 明文豁免）。 */
+    entry: z.string().trim().min(1).max(2048),
+  }),
 ]);
 
 export const InstallRequestSchema = z
   .object({
-    npmSpec: z.string().min(1).max(200),
+    npmSpec: z.string().min(1).max(200).optional(),
     cfToken: z.string().min(1).max(200).optional(),
     accountId: z.string().min(1).max(64).optional(),
     scriptName: z.string().regex(/^[a-z][a-z0-9-]*$/).max(63).optional(),
@@ -50,6 +57,9 @@ export const InstallRequestSchema = z
   })
   .superRefine((input, ctx) => {
     if (input.mount.kind === 'existing') return;
+    if (!input.npmSpec) {
+      ctx.addIssue({ code: 'custom', path: ['npmSpec'], message: '上传需要一个 npm 包规格' });
+    }
     if (!input.cfToken) {
       ctx.addIssue({ code: 'custom', path: ['cfToken'], message: '上传/建路由需要 CF API Token' });
     }
@@ -66,31 +76,32 @@ type InstallInput = z.infer<typeof InstallRequestSchema>;
 
 interface MountedInstall {
   manifest: ModuleManifest;
-  scriptName: string;
+  /** 上传后的 worker 名；existing 不上传，没有脚本（null）。 */
+  scriptName: string | null;
   /** 注册表 entry：三种挂载都给出（direct 必须有对外地址，只是地址怎么来不同）。 */
   entry: string;
 }
 
 /**
- * 挂载执行：existing 只读包（不碰 CF）；另两种先上传脚本，再按形态建 zone 路由或开 workers.dev 子域。
+ * 挂载执行：existing 既不读包也不碰 CF（只登记管理员给的 id 与地址，清单落占位）；
+ * 另两种先上传脚本，再按形态建 zone 路由或开 workers.dev 子域。
  * 这里只做 CF 副作用与 URL 计算，注册表写入归调用方的 upsertModule（单一写入口）。
  */
 async function installWithMount(input: InstallInput, mount: ModuleMount): Promise<MountedInstall> {
   if (mount.kind === 'existing') {
-    const pkg = await readNpmModule({ npmSpec: input.npmSpec });
-    const scriptName = input.scriptName ?? pkg.manifest.id;
     return {
-      manifest: pkg.manifest,
-      scriptName,
-      entry: mountEntryUrl(mount, { moduleId: pkg.manifest.id, scriptName, workersDevSubdomain: null }),
+      // 占位清单：管理员自己部署的 worker 不会自报清单（无接入码，走不了 connect-manifest）
+      manifest: connectPendingManifest(mount.moduleId),
+      scriptName: null,
+      entry: mountEntryUrl(mount, { moduleId: mount.moduleId, scriptName: mount.moduleId, workersDevSubdomain: null }),
     };
   }
 
-  // cfToken/accountId 的存在性由 InstallRequestSchema.superRefine 保证（上传形态才要求）
+  // cfToken/accountId/npmSpec 的存在性由 InstallRequestSchema.superRefine 保证（上传形态才要求）
   const cfToken = input.cfToken!;
   const accountId = input.accountId!;
   const installed = await installNpmModule({
-    npmSpec: input.npmSpec,
+    npmSpec: input.npmSpec!,
     cfToken,
     accountId,
     scriptName: input.scriptName,
@@ -206,6 +217,16 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
    * 凭证纪律（#165）：`cfToken` 只做本次请求的 CF 调用，`finally` 里连请求体副本一起抹掉；
    * 审计只记模块 id（不记 token，也不记 token 出现在 URL/错误文案里）。
    * 注册与落点列与既有注册同一写入口 upsertModule——不另开旁路写库。
+   *
+   * existing（#369 用户定案）：管理员自己部署好、有可达地址时，只填「模块 id + 模块地址」
+   * 登记一行（mode=direct、enabled→active），不读 npm 包、不碰 CF。
+   * **已知缺口**：这种模块没接入码，`POST /api/modules/connect-manifest`（按 keyHash 反查）
+   * 走不了，所以它没有自报清单的通道——manifest 停在 0.0.0 占位，版本/图标在列表里看不到。
+   * 本 PR 不解决，不假装能跑。
+   * id 已存在（任何 lifecycle）→ 409，整行不动：不能把已装好的模块（或反连记账的 pending 行，
+   * 及其 credential_hash）悄悄覆盖；与 connect-register 同一语义。
+   * （检查+写入不是单条 SQL 原子操作；装配是管理员低频动作，此处不做并发优化，
+   *  upsertModule 的 SQL 不在本 PR 开洞。）
    */
   app.post('/api/admin/modules/install', async (c) => {
     const parsed = InstallRequestSchema.safeParse(await c.req.json().catch(() => null));
@@ -215,6 +236,14 @@ export function registerModuleRoutes(app: Hono<{ Bindings: Bindings }>): void {
     const input = parsed.data;
     const mount: ModuleMount = input.mount;
     try {
+      if (mount.kind === 'existing') {
+        const taken = await c.env.CORE_DB.prepare('SELECT id FROM module_registry WHERE id = ?')
+          .bind(mount.moduleId)
+          .first<{ id: string }>();
+        if (taken) {
+          return c.json({ error: 'module already installed' }, 409);
+        }
+      }
       const mounted = await installWithMount(input, mount);
       const registration = ModuleRegistrationSchema.safeParse({
         id: mounted.manifest.id,

@@ -17,11 +17,14 @@ import { moduleEntryUrl } from '@unself/contracts';
 /** CF API 版本面（与 installer REST 客户端同源：v4）。 */
 const CF_API = 'https://api.cloudflare.com/client/v4';
 
-/** 挂载选择（install 请求体的 `mount` 字段；三种都是 direct 接入，区别只在地址怎么来）。 */
+/** 挂载选择（install 请求体的 `mount` 字段；三种都是 direct 接入，区别只在地址怎么来）。
+ * existing（#369）：管理员自己部署好的地址，连 moduleId 一起给（登记行不靠 package 清单）；
+ * scriptName 对 existing 无意义（本文件不碰 CF）。
+ */
 export type ModuleMount =
   | { kind: 'zone'; domain: string }
   | { kind: 'workers-dev' }
-  | { kind: 'existing'; entry: string };
+  | { kind: 'existing'; moduleId: string; entry: string };
 
 /** 人话错误（路由层转 400/502；CF 原始响应不整段回给前端）。 */
 export class CfRoutingError extends Error {
@@ -160,7 +163,8 @@ export async function enableWorkerWorkersDev(
  * 挂载 → 注册表 entry。纯计算，实际 CF 副作用由调用方先做完：
  * - zone：`https://<domain>/m/<id>/`（路由 pattern 由 moduleRoutePattern 给）；
  * - workers-dev：`https://<scriptName>.<accountSubdomain>.workers.dev/`；
- * - existing：管理员自己给的地址（https 校验由 ModuleRegistrationSchema 兜底）。
+ * - existing：管理员自己给的地址（恒等回 entry；https 校验由 ModuleRegistrationSchema 兜底），
+ *   moduleId/scriptName 只为统一签名而收，本分支不使用。
  */
 export function mountEntryUrl(
   mount: ModuleMount,

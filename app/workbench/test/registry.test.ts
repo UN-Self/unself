@@ -844,55 +844,89 @@ describe('运行时装配端点 POST /api/admin/modules/install（#349）', () =
     }
   });
 
-  it('我已有地址：不上传、不建路由，只登记清单快照与管理员给的地址', async () => {
+  it('我已有地址：只给模块 id + 地址就登记（mode=direct、active、清单是占位；不读包、不碰 CF）', async () => {
     const { env, db, cookie } = await envFor('admin');
     const { vi } = await import('vitest');
-    const tar = await import('./helpers/fake-npm-package');
-    const stub = tar.stubNpmFetch({
-      'package/manifest.json': JSON.stringify({ id: 'hello', route: '/m/hello', runtimes: ['worker'], version: '1.2.3' }),
-      'package/worker.js': 'export default {}',
+    // existing 分支不该发任何网络请求（既不拉 npm，也不调 CF）：一有请求就炸
+    const noNetwork = vi.fn(() => {
+      throw new Error('existing 登记不该发网络请求');
     });
-    vi.stubGlobal('fetch', stub.impl);
+    vi.stubGlobal('fetch', noNetwork);
     try {
       const res = await install(env, cookie, {
-        npmSpec: 'hello',
-        mount: { kind: 'existing', entry: 'https://modules.example.com/hello/' },
+        mount: { kind: 'existing', moduleId: 'hello', entry: 'https://modules.example.com/hello/' },
       });
       expect(res.status).toBe(201);
-      expect(await res.json()).toMatchObject({
+      const body = (await res.json()) as {
+        id: string;
+        enabled: boolean;
+        lifecycle: string;
+        mode: string;
+        entry: string;
+        manifest: { version: string };
+      };
+      expect(body).toMatchObject({
         id: 'hello',
+        enabled: true,
+        lifecycle: 'active',
         mode: 'direct',
         entry: 'https://modules.example.com/hello/',
       });
+      // 清单停在 0.0.0 占位：版本/图标要等模块自报（existing 当前没有自报通道）
+      expect(body.manifest.version).toBe('0.0.0');
+      expect(noNetwork).not.toHaveBeenCalled();
       expect(
-        db.first<{ mode: string; entry: string }>('SELECT mode, entry FROM module_registry WHERE id = ?', 'hello'),
-      ).toEqual({ mode: 'direct', entry: 'https://modules.example.com/hello/' });
-      // 不碰 CF：没有上传、没有 zone/子域调用（token 也不需要）
-      expect(stub.calls.filter((c) => c.url.includes('api.cloudflare.com'))).toEqual([]);
+        db.first<{ mode: string; entry: string; lifecycle: string; version: string; enabled: number }>(
+          'SELECT mode, entry, lifecycle, version, enabled FROM module_registry WHERE id = ?',
+          'hello',
+        ),
+      ).toEqual({
+        mode: 'direct',
+        entry: 'https://modules.example.com/hello/',
+        lifecycle: 'active',
+        version: '0.0.0',
+        enabled: 1,
+      });
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
+  it('我已有地址：缺模块 id 400，不落库', async () => {
+    const { env, db, cookie } = await envFor('admin');
+    const res = await install(env, cookie, {
+      mount: { kind: 'existing', entry: 'https://modules.example.com/hello/' },
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: 'invalid install request' });
+    expect(db.query('SELECT id FROM module_registry')).toEqual([]);
+  });
+
+  it('我已有地址：id 已存在 active 行 409，整行不动（不覆盖已装好的模块）', async () => {
+    const { env, db, cookie } = await envFor('admin');
+    db.run(
+      `INSERT INTO module_registry (id, enabled, lifecycle, version, manifest_json, mode, entry) VALUES ('hello', 1, 'active', '1.2.3', '{"id":"hello","version":"1.2.3","runtimes":["worker"],"route":"/m/hello"}', 'direct', 'https://old.example.com/hello/')`,
+    );
+
+    const res = await install(env, cookie, {
+      mount: { kind: 'existing', moduleId: 'hello', entry: 'https://modules.example.com/hello/' },
+    });
+    expect(res.status).toBe(409);
+    expect(
+      db.first<{ entry: string; version: string; lifecycle: string }>(
+        'SELECT entry, version, lifecycle FROM module_registry WHERE id = ?',
+        'hello',
+      ),
+    ).toEqual({ entry: 'https://old.example.com/hello/', version: '1.2.3', lifecycle: 'active' });
+  });
+
   it('我已有地址：非 https（公网）拒收，不落库', async () => {
     const { env, db, cookie } = await envFor('admin');
-    const { vi } = await import('vitest');
-    const tar = await import('./helpers/fake-npm-package');
-    const stub = tar.stubNpmFetch({
-      'package/manifest.json': JSON.stringify({ id: 'hello', route: '/m/hello', runtimes: ['worker'], version: '1.2.3' }),
-      'package/worker.js': 'export default {}',
+    const res = await install(env, cookie, {
+      mount: { kind: 'existing', moduleId: 'hello', entry: 'http://modules.example.com/hello/' },
     });
-    vi.stubGlobal('fetch', stub.impl);
-    try {
-      const res = await install(env, cookie, {
-        npmSpec: 'hello',
-        mount: { kind: 'existing', entry: 'http://modules.example.com/hello/' },
-      });
-      expect(res.status).toBe(400);
-      expect(db.query('SELECT id FROM module_registry')).toEqual([]);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(res.status).toBe(400);
+    expect(db.query('SELECT id FROM module_registry')).toEqual([]);
   });
 });
 
