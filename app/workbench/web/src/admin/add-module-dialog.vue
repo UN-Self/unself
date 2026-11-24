@@ -12,7 +12,8 @@
  *   （明文立刻进剪贴板）→ env 展示框**默认打码**（点框=复制明文；右侧内嵌眼睛切打码/明文）→ 测试连接（查隧道在线）
  *   → 保存（激活记账行）。壳从不持有明文 key 的常驻视图：打码是默认，明文只活在剪贴板与显式的显示态（#349 验收定案）。
  * - CF 部署：npm 规格 + 挂到哪 + CF token + 账号 → 一次请求完成部署/登记（token 用后即焚，#165）。
- *   挂到三种（#369）：账号下已有域名（上传 + zone 路由）/ workers.dev 子域（上传 + 开子域）/ 我已有地址（只登记）。
+ *   挂到三种（#369）：账号下已有域名（上传 + zone 路由）/ workers.dev 子域（上传 + 开子域）/ 我已有地址
+ *   （不上传不读包：管理员自己的 worker 已经部署好了，只登记「模块 id + 模块地址」）。
  *
  * 为什么不做「模式一先测试再保存」：运行时装配本身就是部署动作（拉包→校验→上传），
  * 没有「半成品可保存态」；失败即什么都没发生，重试即重跑（决策 #109 的语义）。
@@ -52,6 +53,17 @@ const open = computed({
 })
 
 type Tab = 'connect' | 'cloudflare'
+
+/**
+ * 模块 id 形状单点（反连 tab 与「我已有地址」共用）：服务端同一正则
+ * （registry.ts 的 ConnectRegisterSchema.moduleId / InstallMountSchema.existing.moduleId）。
+ */
+const MODULE_ID_PATTERN = /^[a-z][a-z0-9-]+$/
+const MODULE_ID_INVALID = '模块 id 只能用小写字母、数字与连字符，且以字母开头'
+
+function moduleIdError(moduleId: string): string | null {
+  return MODULE_ID_PATTERN.test(moduleId) ? null : MODULE_ID_INVALID
+}
 
 const tab = ref<Tab>('connect')
 const errorText = ref<string | null>(null)
@@ -96,7 +108,8 @@ const cfMountOptions: SelectOption[] = [
 /** 账号域名下拉（「读取账号域名」按当前账号 + token 拉一次）。 */
 const cfDomain = ref('')
 const cfDomainOptions = ref<SelectOption[]>([])
-/** 「我已有地址」形态：管理员自己给的模块地址。 */
+/** 「我已有地址」形态：管理员自己给的模块 id 与模块地址（不发 npm 包）。 */
+const cfModuleId = ref('')
 const cfEntry = ref('')
 /** Token 权限说明 tooltip（同 coreUrlTip 的 hover/focus 承载方式）。 */
 const cfTokenTip = ref(false)
@@ -124,8 +137,11 @@ const canSave = computed(
   () => connectStatus.value === 'online' && testedSnapshot.value === connectSnapshot.value && !busy.value,
 )
 const canInstall = computed(() => {
-  if (!npmSpec.value.trim() || busy.value) return false
-  if (cfMount.value === 'existing') return Boolean(cfEntry.value.trim())
+  if (busy.value) return false
+  if (cfMount.value === 'existing') {
+    return Boolean(cfModuleId.value.trim()) && Boolean(cfEntry.value.trim())
+  }
+  if (!npmSpec.value.trim()) return false
   if (!cfToken.value.trim() || !accountId.value.trim()) return false
   return cfMount.value === 'zone' ? Boolean(cfDomain.value) : true
 })
@@ -173,8 +189,9 @@ watch(
 async function onGenerate(): Promise<void> {
   errorText.value = null
   const moduleId = connectId.value.trim()
-  if (!/^[a-z][a-z0-9-]+$/.test(moduleId)) {
-    errorText.value = '模块 id 只能用小写字母、数字与连字符，且以字母开头'
+  const shapeError = moduleIdError(moduleId)
+  if (shapeError) {
+    errorText.value = shapeError
     return
   }
   busy.value = true
@@ -309,22 +326,31 @@ async function onLoadZones(): Promise<void> {
 }
 
 async function onInstall(): Promise<void> {
-  busy.value = true
   errorText.value = null
+  const existingModuleId = cfModuleId.value.trim()
+  if (cfMount.value === 'existing') {
+    const shapeError = moduleIdError(existingModuleId)
+    if (shapeError) {
+      errorText.value = shapeError
+      return
+    }
+  }
+  busy.value = true
   const mount: ModuleMount =
     cfMount.value === 'zone'
       ? { kind: 'zone', domain: cfDomain.value }
       : cfMount.value === 'existing'
-        ? { kind: 'existing', entry: cfEntry.value.trim() }
+        ? { kind: 'existing', moduleId: existingModuleId, entry: cfEntry.value.trim() }
         : { kind: 'workers-dev' }
   try {
     await installCloudflareModule({
-      npmSpec: npmSpec.value.trim(),
       storageLevel: cfStorage.value === 'core' ? 'core' : undefined,
       mount,
+      // 已有地址：不读 npm 包（worker 已部署）、不要 CF 凭证；npm 输入值留着不动，
+      // 用户切回上传形态时照旧能用（不清空用户输入）。
       ...(cfMount.value === 'existing'
         ? {}
-        : { cfToken: cfToken.value.trim(), accountId: accountId.value.trim() }),
+        : { npmSpec: npmSpec.value.trim(), cfToken: cfToken.value.trim(), accountId: accountId.value.trim() }),
     })
     emit('done')
     close()
@@ -443,10 +469,6 @@ function close(): void {
 
     <!-- 模式一：core 运行时拉包部署 + 挂载选择（装配后增补单模块，决策 #109；#369 挂到哪） -->
     <div v-else class="add-dialog-fields" data-test="add-module-cloudflare">
-      <label class="add-field">
-        <span class="add-field-label">npm 包</span>
-        <input v-model="npmSpec" class="add-field-input" data-test="cf-npmspec" placeholder="@unself/hello@0.1.0" />
-      </label>
       <div class="add-field">
         <span class="add-field-label" id="cf-mount-label">挂到</span>
         <UMotionSelect
@@ -457,6 +479,16 @@ function close(): void {
           data-test="cf-mount"
         />
       </div>
+
+      <!-- 上两种要先拉 npm 包上传；已有地址不读包（worker 已部署），第一个输入换成管理员声明的模块 id -->
+      <label v-if="cfMount !== 'existing'" class="add-field">
+        <span class="add-field-label">npm 包</span>
+        <input v-model="npmSpec" class="add-field-input" data-test="cf-npmspec" placeholder="@unself/hello@0.1.0" />
+      </label>
+      <label v-else class="add-field">
+        <span class="add-field-label">模块 id</span>
+        <input v-model="cfModuleId" class="add-field-input" data-test="cf-module-id" placeholder="如 hello" />
+      </label>
 
       <div v-if="cfMount === 'zone'" class="add-field">
         <span class="add-field-label" id="cf-domain-label">域名</span>

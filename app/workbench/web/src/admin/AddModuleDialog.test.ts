@@ -379,11 +379,14 @@ describe('AddModuleDialog（#349 双模式）', () => {
     await flushPromises()
   }
 
-  it('挂到「我已有地址」：只出现地址输入，不要求 token/账号；按钮改「注册」，请求只带地址', async () => {
+  it('挂到「我已有地址」：npm 包输入消失，换成模块 id + 地址；不要求 token/账号，请求只带 id 与地址', async () => {
     const wrapper = mountDialog()
     await wrapper.find('[data-test="add-module-tab-cloudflare"]').trigger('click')
     await chooseMount(wrapper, 'existing')
 
+    // 管理员自己的 worker 已经部署好了：不需要 npm 包
+    expect(wrapper.find('[data-test="cf-npmspec"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="cf-module-id"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="cf-entry"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="cf-token"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="cf-account"]').exists()).toBe(false)
@@ -391,16 +394,47 @@ describe('AddModuleDialog（#349 双模式）', () => {
     expect(installButton.text()).toContain('注册')
     expect(installButton.text()).not.toContain('部署')
 
-    await wrapper.find('[data-test="cf-npmspec"]').setValue('@unself/hello@0.1.0')
+    await wrapper.find('[data-test="cf-module-id"]').setValue('hello')
     await wrapper.find('[data-test="cf-entry"]').setValue('https://modules.example.com/hello/')
     await installButton.trigger('click')
     await flushPromises()
 
-    expect(installCloudflareModule).toHaveBeenCalledWith({
-      npmSpec: '@unself/hello@0.1.0',
+    const payload = vi.mocked(installCloudflareModule).mock.calls[0]![0]
+    expect(payload).not.toHaveProperty('npmSpec')
+    expect(payload).not.toHaveProperty('cfToken')
+    expect(payload).not.toHaveProperty('accountId')
+    expect(payload).toMatchObject({
       storageLevel: undefined,
-      mount: { kind: 'existing', entry: 'https://modules.example.com/hello/' },
+      mount: { kind: 'existing', moduleId: 'hello', entry: 'https://modules.example.com/hello/' },
     })
+  })
+
+  it('「我已有地址」不要求 npm 包：只填 id 与地址即可提交；模块 id 不合法时说人话拦下', async () => {
+    const wrapper = mountDialog()
+    await wrapper.find('[data-test="add-module-tab-cloudflare"]').trigger('click')
+    await chooseMount(wrapper, 'existing')
+
+    await wrapper.find('[data-test="cf-entry"]').setValue('https://modules.example.com/hello/')
+    // 没有 id：不可提交（id 是注册表主键，不能从包里读）
+    expect(wrapper.find('[data-test="cf-install"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.find('[data-test="cf-module-id"]').setValue('Hello_1')
+    await wrapper.find('[data-test="cf-install"]').trigger('click')
+    await flushPromises()
+    expect(installCloudflareModule).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="add-module-alert"]').text()).toContain('小写字母')
+  })
+
+  it('从「我已有地址」切回上传形态：npm 包原值还在，可继续部署', async () => {
+    const wrapper = mountDialog()
+    await wrapper.find('[data-test="add-module-tab-cloudflare"]').trigger('click')
+    await wrapper.find('[data-test="cf-npmspec"]').setValue('@unself/hello@0.1.0')
+
+    await chooseMount(wrapper, 'existing')
+    expect(wrapper.find('[data-test="cf-npmspec"]').exists()).toBe(false)
+
+    await chooseMount(wrapper, 'workers-dev')
+    expect((wrapper.find('[data-test="cf-npmspec"]').element as HTMLInputElement).value).toBe('@unself/hello@0.1.0')
   })
 
   it('挂到「账号下已有域名」：读取账号域名后可选；部署请求带 zone + domain', async () => {
