@@ -9,6 +9,14 @@
 # （**必须显式勾选允许直接 `npm publish`**——2026-09-03 之后新建的配置默认只允许 `npm stage publish`）。
 # provenance 由 Trusted Publishing 自动生成，不需要 `--provenance`。
 #
+# 两条发布路径都在本文件里（npm Trusted Publishing 按 workflow 文件名授权，另开 yml 没有发布权限）：
+#   正式包：只在 main 上打 tag（如 workbench-v0.1.3）触发，dist-tag = latest。
+#           版本形态 <包版本>，tag 必须在 main 上（本 workflow 会校验）。
+#   测试包：workflow_dispatch 从任意分支触发，dist-tag = test，**永不**写 latest。
+#           version 留空时自动生成 <包当前版本>-test.<清洗后的分支名>.<短 sha>，
+#           例 0.1.1-test.feat-369-360-entry-mode-and-selfhost.01361fe。
+#           目前只支持 @unself/workbench（其他包的 workspace:* 会指向仓库里的旧版本）。
+#
 # 打 tag 前的三条前提：
 #   ① tag 必须在 main 上（本 workflow 会校验）
 #   ② 发版前有一次真机走查记录（docs/testing.md）
@@ -23,6 +31,22 @@ on:
       - 'chat-v*'
       - 'workbench-v*'
       - 'installer-v*'
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 要发布的包（测试包目前只支持 workbench）
+        type: choice
+        default: workbench
+        options:
+          - sdk
+          - installer
+          - workbench
+          - hello
+          - chat
+      version:
+        description: 版本号（留空自动生成 <版本>-test.<分支>.<短 sha>）
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -48,6 +72,7 @@ jobs:
 
       # E9：发布只从 main 出（决策 #79 前提⑧）
       - name: 校验 tag 在 main 上
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           git fetch --no-tags --depth=1 origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
@@ -55,11 +80,16 @@ jobs:
             exit 1
           fi
 
-      - name: 解析 tag
+      - name: 解析发布目标
         id: rel
+        env:
+          INPUT_PACKAGE: ${{ inputs.package }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           node --input-type=module <<'JS' >> "$GITHUB_OUTPUT"
-          const tag = process.env.GITHUB_REF_NAME ?? '';
+          import { readFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+
           const targets = {
             sdk: { package: '@unself/sdk', kind: 'workspace', dir: 'core/sdk' },
             installer: { package: '@unself/installer', kind: 'workspace', dir: 'app/installer' },
@@ -67,25 +97,81 @@ jobs:
             hello: { package: '@unself/hello', kind: 'module', dir: 'app/modules/hello' },
             chat: { package: '@unself/chat', kind: 'module', dir: 'app/modules/chat' },
           };
-          const m = /^([a-z]+)-v(.+)$/.exec(tag.trim());
           const semver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-          if (!m || !targets[m[1]] || !semver.test(m[2])) {
-            console.error(`tag 不认识或版本不合法：${tag}`);
-            process.exit(1);
+          const ref = process.env.GITHUB_REF ?? '';
+
+          let name;
+          let version;
+          let distTag;
+
+          if (ref.startsWith('refs/tags/')) {
+            // 正式包：tag 触发，沿用原有解析逻辑，dist-tag 固定 latest。
+            const tag = process.env.GITHUB_REF_NAME ?? '';
+            const m = /^([a-z]+)-v(.+)$/.exec(tag.trim());
+            if (!m || !targets[m[1]] || !semver.test(m[2])) {
+              console.error(`tag 不认识或版本不合法：${tag}`);
+              process.exit(1);
+            }
+            name = m[1];
+            version = m[2];
+            distTag = 'latest';
+          } else {
+            // 测试包：workflow_dispatch 触发，dist-tag 固定 test，永不写 latest。
+            name = (process.env.INPUT_PACKAGE ?? '').trim();
+            if (!targets[name]) {
+              console.error(`::error::不认识的包：${name}`);
+              process.exit(1);
+            }
+            if (name !== 'workbench') {
+              console.error('::error::测试包目前只支持 @unself/workbench：installer 等包的 workspace:* 会被改写成仓库里的旧版本号，测试包会指向不含新代码的依赖');
+              process.exit(1);
+            }
+            const pkg = JSON.parse(
+              await readFile(join(process.env.GITHUB_WORKSPACE, targets[name].dir, 'package.json'), 'utf8'),
+            );
+            if (!pkg.version || !semver.test(pkg.version)) {
+              console.error(`::error::${targets[name].package} 的当前版本不合法：${pkg.version}`);
+              process.exit(1);
+            }
+            // refs/pull/N/merge → pr-N；refs/heads/a/b → a-b；小写，只留 [0-9a-z.-]，截 40 字符。
+            const pr = /^refs\/pull\/(\d+)\//.exec(ref);
+            let branch = pr
+              ? `pr-${pr[1]}`
+              : ref
+                  .replace(/^refs\/heads\//, '')
+                  .toLowerCase()
+                  .replace(/[^0-9a-z.-]+/g, '-')
+                  .slice(0, 40)
+                  .replace(/^[.-]+|[.-]+$/g, '');
+            if (!branch) branch = 'detached';
+            const sha = (process.env.GITHUB_SHA ?? '').slice(0, 7).toLowerCase();
+            const auto = `${pkg.version}-test.${branch}.${sha}`;
+            version = (process.env.INPUT_VERSION ?? '').trim() || auto;
+            if (!semver.test(version)) {
+              console.error(`::error::测试版本不合法：${version}`);
+              process.exit(1);
+            }
+            distTag = 'test';
           }
-          const t = targets[m[1]];
-          process.stdout.write(`name=${m[1]}\npackage=${t.package}\nkind=${t.kind}\ndir=${t.dir}\nversion=${m[2]}\n`);
+
+          const t = targets[name];
+          process.stdout.write(
+            `name=${name}\npackage=${t.package}\nkind=${t.kind}\ndir=${t.dir}\nversion=${version}\ndist_tag=${distTag}\n`,
+          );
           JS
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
 
+      # 注入版本必须在 build 之前：dist/build-info.json 读的是构建时的 package.json。
       - name: 注入版本
         run: npm pkg set version="${{ steps.rel.outputs.version }}"
         working-directory: ${{ steps.rel.outputs.dir }}
 
+      - run: pnpm -r build
+
       # npm publish 不改写 workspace:。改写成仓库里对应包的 version，再发布。
       # --ignore-scripts：上面已经 build；改过 package.json 后再跑 prepack 会和 lockfile 冲突。
+      # --tag 必须显式给：没有 dist-tag 的发布会直接覆盖 latest。
       - name: 改写 workspace 依赖并发布
         working-directory: ${{ steps.rel.outputs.dir }}
         run: |
@@ -133,6 +219,7 @@ jobs:
           await writeFile(pjPath, JSON.stringify(pkg, null, 2) + '\n');
           JS
           if [ -f dist/worker.js ]; then cp dist/worker.js worker.js; fi
-          npm publish --access public --ignore-scripts
+          npm publish --access public --ignore-scripts --tag "$DIST_TAG"
         env:
           PKG_DIR: ${{ github.workspace }}/${{ steps.rel.outputs.dir }}
+          DIST_TAG: ${{ steps.rel.outputs.dist_tag }}
