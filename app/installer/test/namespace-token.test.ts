@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * #272：向导① token 接线 + 资源名预览 + `unself deploy` 九步进度/撞车开关。
+ * #272：向导① token 接线 + 资源名预览 + `installer deploy` 九步进度/撞车开关。
  *
  * 验收对照：
  * - 向导里粘的 token 真进部署调用（内存），且状态投影里查不到明文；
  * - 向导页/`init` 能看到本实例会占用的资源名；
- * - `unself deploy` 转发九步进度事件；`--allow-adopt` 传给引擎。
+ * - `installer deploy` 转发九步进度事件；`--allow-adopt` 传给引擎。
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

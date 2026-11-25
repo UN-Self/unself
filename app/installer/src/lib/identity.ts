@@ -2,7 +2,7 @@
 /**
  * 安装器身份（#287，决策 #80）：「线上到底跑的哪一版」可自证的三项信息——
  * 安装器版本 + 构建 commit + 平台产物（@unself/workbench）版本。
- * 落点：`unself --version` 与部署收尾屏（`unself deploy` / 向导⑤）共用同一份格式化，
+ * 落点：`installer --version` 与部署收尾屏（`installer deploy` / 向导⑤）共用同一份格式化，
  * 报障可整段粘贴——两处各写一份必然漂移，所以只有这一个真值点。
  *
  * **构建期烙印（方案 A：esbuild `--define`）**：`scripts/build-bin.sh` 构建时把
@@ -35,7 +35,7 @@ export interface InstallerIdentity {
 
 /** 读安装器包 package.json 的 version（dist 形态向上一级、源码形态当前目录向上都能命中）。 */
 function installerPackageVersion(): string {
-  // dist/unself.mjs 运行期 import.meta.dirname = …/app/installer/dist → 向上一级即包根；
+  // dist/installer.mjs 运行期 import.meta.dirname = …/app/installer/dist → 向上一级即包根；
   // 源码/tsx 形态 = …/app/installer/src/lib → 需要上两级。两处候选逐个试，判据是包名。
   const base = typeof import.meta.dirname === 'string' ? import.meta.dirname : process.cwd();
   for (const dir of [base, join(base, '..'), join(base, '..', '..')]) {
@@ -111,7 +111,7 @@ export function formatIdentity(input: {
 }
 
 /**
- * 解析 + 格式化一条龙（#287）：`unself --version`、`unself deploy` 收尾屏、向导⑤ 完成屏
+ * 解析 + 格式化一条龙（#287）：`installer --version`、`installer deploy` 收尾屏、向导⑤ 完成屏
  * 三处共用的唯一出口——再添第四处也必须走这里，防止格式漂移。
  * 解析失败（包未装 / IO 异常）不抛不静默留空：占位行带原因。
  */

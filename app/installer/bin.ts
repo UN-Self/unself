@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * @unself/installer 入口（bin）：unself <命令>。
+ * @unself/installer 入口（bin）：installer <命令>（`npx @unself/installer <命令>`）。
  * 零克隆语义：本包不读仓库、不 clone、不 pnpm install（引擎经依赖随包装好）。
  *
  * 加载策略：src/ 是无后缀 ESM 导入的 TypeScript。

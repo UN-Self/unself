@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 部署执行桥（薄）：向导④与 `unself deploy` 都经由 runDeploy。
+ * 部署执行桥（薄）：向导④与 `installer deploy` 都经由 runDeploy。
  * 引擎（`./engine`，与壳同包同树——#303 把 deploy/cloudflare 并了进来）经动态 import 调用：
- * 它**随安装器 bundle 进 dist/unself.mjs**（#257）
+ * 它**随安装器 bundle 进 dist/installer.mjs**（#257）
  * （安装器 tarball 零运行期依赖），仓库开发形态下则由 workspace 链接提供——两种形态同一份代码。
  * 引擎运行期消费的装配产物（core/shell/SDK/builtin 模块包）随包分发在 `<安装器>/dist/artifacts`，
  * `rootDir`（实例目录的父目录）只当**输出目录**（.deploy/、unself.lock）。
@@ -384,7 +384,7 @@ export interface AddModuleResult extends ModuleSourcePreview {
 /**
  * `unself module add <source>`：预览（含未知能力门禁）→ 写 unself.config.jsonc 的 modules →
  * 把包放进装配暂存区（供 deploy lock 命中复用）→ 写 unself.lock（决策 #60：重跑一律用 lock）。
- * 这样紧接着的 `unself deploy` 不会因「来源漂移未确认」而报错，而是直接复用锁定内容。
+ * 这样紧接着的 `installer deploy` 不会因「来源漂移未确认」而报错，而是直接复用锁定内容。
  */
 export async function addModuleSource(input: {
   instancePath: string;

@@ -1,6 +1,6 @@
 # @unself/installer
 
-本地 Web 向导与 `unself` CLI，把工作台和选中的模块装配到你自己的 Cloudflare 账户。
+本地 Web 向导与 `installer` CLI，把工作台和选中的模块装配到你自己的 Cloudflare 账户。
 
 ## 使用
 

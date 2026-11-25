@@ -22,9 +22,9 @@ describe('web-path：dist/web 定位（不依赖 cwd）', () => {
     roots.length = 0;
   });
 
-  it('bundle 形态：包根/dist/unself.mjs（fromFile=dist/unself.mjs）→ 候选含同级 web/', () => {
+  it('bundle 形态：包根/dist/installer.mjs（fromFile=dist/installer.mjs）→ 候选含同级 web/', () => {
     const root = makeRoot();
-    const candidates = webDistDirCandidates(join(root, 'dist', 'unself.mjs'));
+    const candidates = webDistDirCandidates(join(root, 'dist', 'installer.mjs'));
     expect(candidates[0]).toBe(join(root, 'dist', 'web'));
   });
 
@@ -48,8 +48,8 @@ describe('web-path：dist/web 定位（不依赖 cwd）', () => {
     void message;
   });
 
-  it('bundle 形态就地命中（dist/web 与 unself.mjs 同级）——发布形态的真实布局（真包根实测）', () => {
-    // build-bin.sh 产物布局：dist/unself.mjs + dist/web/index.html（构建门禁保证存在）
-    expect(webDistDirCandidates(join(pkgRoot, 'dist', 'unself.mjs'))[0]).toBe(join(pkgRoot, 'dist', 'web'));
+  it('bundle 形态就地命中（dist/web 与 installer.mjs 同级）——发布形态的真实布局（真包根实测）', () => {
+    // build-bin.sh 产物布局：dist/installer.mjs + dist/web/index.html（构建门禁保证存在）
+    expect(webDistDirCandidates(join(pkgRoot, 'dist', 'installer.mjs'))[0]).toBe(join(pkgRoot, 'dist', 'web'));
   });
 });

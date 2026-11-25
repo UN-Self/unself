@@ -21,7 +21,7 @@ npx @unself/installer@latest
 
 安装器只部署 core 和 workbench，不部署模块。向导跑完后，用一次性链接设管理员。另一条平台路径是 Docker，见 [docs/deploy.md](docs/deploy.md)。
 
-> 贡献者 / 仓库内运行：`git clone` → `pnpm install` → `pnpm -r build` → `node app/installer/dist/unself.mjs`（同一条装配路径）。
+> 贡献者 / 仓库内运行：`git clone` → `pnpm install` → `pnpm -r build` → `node app/installer/dist/installer.mjs`（同一条装配路径）。
 
 失败自救、升级已有实例、备份：[docs/deploy.md](docs/deploy.md)。
 

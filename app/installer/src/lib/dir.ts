@@ -58,7 +58,7 @@ const LOCK_SKELETON_MODULES: Record<string, never> = {};
 
 /**
  * 空 lock 骨架（形状必须过引擎 `LockFileSchema`：#269 实测旧骨架 `{instance:{},modules:[]}`
- * 缺 generatedAt 且 modules 不是 record，干净实例首跑 `unself deploy` 会直接「结构非法」）。
+ * 缺 generatedAt 且 modules 不是 record，干净实例首跑 `installer deploy` 会直接「结构非法」）。
  */
 function lockSkeleton(): string {
   return JSON.stringify(
