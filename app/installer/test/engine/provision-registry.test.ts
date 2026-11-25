@@ -94,10 +94,12 @@ describe('registry（⑤ · 形状契约）', () => {
     // #349 起 8 参形态：第 8 参 credential_hash 恒 NULL（installer 不经手凭证；首插落 NULL，冲突保留旧值）
     expect(bare.binds).toEqual(['hello', 1, '0.1.0', expect.any(String), null, null, null, null]);
     expect(bare.sql).toContain("coalesce(?5, 'direct')");
-    expect(bare.sql).toContain('coalesce(?5, mode)');
-    expect(bare.sql).toContain("coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END)");
-    expect(bare.sql).toContain('coalesce(?7, storage_level)');
-    expect(bare.sql).toContain('coalesce(?8, credential_hash)');
+    // 写语句本体已改为「目标行必须带表名」形态（#360 真 PG 实测：DO UPDATE 里裸 `mode`
+    // 与 excluded 撞名，PG 报 ambiguous；SQLite 接受限定名，两方言共用这一份）。
+    expect(bare.sql).toContain('coalesce(?5, module_registry.mode)');
+    expect(bare.sql).toContain("coalesce(?6, CASE WHEN coalesce(?5, module_registry.mode) = 'connect' THEN module_registry.entry END)");
+    expect(bare.sql).toContain('coalesce(?7, module_registry.storage_level)');
+    expect(bare.sql).toContain('coalesce(?8, module_registry.credential_hash)');
   });
 
   it('registryDisableCommand：只翻 enabled，不凭空建行', () => {
