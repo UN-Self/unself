@@ -129,7 +129,7 @@ describe('#269 unself module add', () => {
     expect(again.exitCode()).toBe(1);
     expect(errs.join('\n')).toContain('已在 unself.config.jsonc');
 
-    // 紧接的 `unself deploy` 不会因「来源漂移未确认」报错：lock 已命中 → 动作 reuse（#245 安全闸门不变）
+    // 紧接的 `installer deploy` 不会因「来源漂移未确认」报错：lock 已命中 → 动作 reuse（#245 安全闸门不变）
     const engine = await import('../src/engine/index');
     const cfg = engine.parseUnselfConfigText(config);
     const plan = engine.buildLockPlan({
@@ -180,7 +180,7 @@ describe('#269 unself module add', () => {
   }, 60_000);
 });
 
-describe('#269 unself deploy --yes', () => {
+describe('#269 installer deploy --yes', () => {
   it('--yes 传进九步引擎调用', async () => {
     const init = opts(['init', 'demo']);
     await run(init);

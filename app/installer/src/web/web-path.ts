@@ -2,7 +2,7 @@
 /**
  * dist/web 定位（发布纪律）：向导 SPA 静态产物目录唯一真源。
  *
- * - 发布形态（dist/unself.mjs）：静态产物与 bundle 同级 → <bundle目录>/web；
+ * - 发布形态（dist/installer.mjs）：静态产物与 bundle 同级 → <bundle目录>/web；
  * - 仓库开发形态（tsx 跑 src/）：dist/web 在包根 → 逐级向上找 name=@unself/installer 的 package.json。
  * 绝不依赖 process.cwd()（全局安装 / 任意目录启动都要能用）。
  * 找不到 = 构建产物缺失，抛人话错（指引 pnpm build），不静默返回空目录。

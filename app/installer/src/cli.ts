@@ -50,7 +50,7 @@ export interface RunOptions {
     allowAdopt?: boolean;
     /** 来源漂移已确认（#269，`--yes`）。 */
     yes?: boolean;
-    /** 九步进度事件转发（#272：`unself deploy` 不再吞进度）。 */
+    /** 九步进度事件转发（#272：`installer deploy` 不再吞进度）。 */
     onEvent?: (text: string) => void;
   }) => Promise<{ baseUrl: string; setupToken: string | null }>;
   /**
@@ -71,9 +71,9 @@ export interface RunOptions {
 }
 
 const USAGE: string[] = [
-  'unself —— 零克隆安装器（主入口 = 本地 Web 向导；CLI 为逃生门/CI）',
+  'installer —— 零克隆安装器（主入口 = 本地 Web 向导；CLI 为逃生门/CI）',
   '',
-  '用法：unself <命令>',
+  '用法：installer <命令>',
   '',
   '命令：',
   "  wizard [名字]        启动本地 Web 向导（默认命令；浏览器打开 http://localhost:<port>）",
@@ -146,7 +146,7 @@ export function resolveCurrentInstance(
   const resolved = resolveCurrent(reg, env, cwd);
   if (!resolved) {
     throw new Error(
-      '没有当前实例：先 `unself init <名字> <目录>` 创建，或 `unself use <名字>` 切换（已注册：'
+      '没有当前实例：先 `installer init <名字> <目录>` 创建，或 `installer use <名字>` 切换（已注册：'
         + (Object.keys(reg.instances).join('、') || '无') + '）',
     );
   }
@@ -186,7 +186,7 @@ async function exec(opts: RunOptions): Promise<number> {
 
   // 未知命令先拦：不消耗注册表读取，也不给「没有当前实例」的误导性错误。
   if (!KNOWN_COMMANDS.includes(cmd)) {
-    throw new Error(`未知命令「${cmd}」。可用命令见 unself help`);
+    throw new Error(`未知命令「${cmd}」。可用命令见 installer help`);
   }
 
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
@@ -213,7 +213,7 @@ async function exec(opts: RunOptions): Promise<number> {
     }
     log(`实例注册表：${registryPath(home)}`);
     if (names.length === 0) {
-      log('（空）—— 用 `unself init <名字> <目录>` 创建第一个实例');
+      log('（空）—— 用 `installer init <名字> <目录>` 创建第一个实例');
       return 0;
     }
     for (const [name, p] of Object.entries(reg.instances)) {
@@ -243,7 +243,7 @@ async function exec(opts: RunOptions): Promise<number> {
     } catch (err) {
       log(`（资源名预览不可用：${err instanceof Error ? err.message : String(err)}）`);
     }
-    log('下一步：`unself wizard` 打开本地向导（或 `unself deploy` CI 直达）。');
+    log('下一步：`installer wizard` 打开本地向导（或 `installer deploy` CI 直达）。');
     return 0;
   }
 
@@ -255,7 +255,7 @@ async function exec(opts: RunOptions): Promise<number> {
       throw new Error(`实例「${name}」未注册（已注册：${Object.keys(reg.instances).join('、') || '无'}）`);
     }
     if (!existsSync(reg.instances[name] as string)) {
-      throw new Error(`实例「${name}」的目录已消失：${reg.instances[name]}（用 \`unself list\` 查看现状）`);
+      throw new Error(`实例「${name}」的目录已消失：${reg.instances[name]}（用 \`installer list\` 查看现状）`);
     }
     reg = { ...reg, current: name };
     saveRegistry(reg, home);
@@ -317,7 +317,7 @@ async function exec(opts: RunOptions): Promise<number> {
     }
     if (sub === 'add') {
       const source = positionals[0] ?? '';
-      if (!source) throw new Error('用法：unself module add <来源> [--as <实例内名字>]（来源形如 npm:@acme/pkg@1.2.0）');
+      if (!source) throw new Error('用法：installer module add <来源> [--as <实例内名字>]（来源形如 npm:@acme/pkg@1.2.0）');
       const as = values['--as'];
       const reg = loadRegistry(home);
       const inst = resolveCurrentInstance(reg, env, cwd);
@@ -328,7 +328,7 @@ async function exec(opts: RunOptions): Promise<number> {
       log(`声明权限：${r.permissions.length > 0 ? r.permissions.join('、') : '（无）'}`);
       log(`数据落点：accepts=${r.storage.accepts.join('/')}${r.storage.preferred ? `，preferred=${r.storage.preferred}` : ''}`);
       log(`已写入：${pathline(r.configPath)}（modules 段）与 ${pathline(r.lockPath)}`);
-      log('下一步：`unself deploy`（lock 已命中，不会重复下载，也不会因来源漂移报错）。');
+      log('下一步：`installer deploy`（lock 已命中，不会重复下载，也不会因来源漂移报错）。');
       echoPathline(inst.path, log);
       return 0;
     }
@@ -350,7 +350,7 @@ async function exec(opts: RunOptions): Promise<number> {
     // ---- module remove（#270）：引擎卸载 + 同步 config ----
     if (sub === 'remove') {
       const id = positionals[0] ?? '';
-      if (!id) throw new Error('用法：unself module remove <实例内 id>（与 `unself module add` 对称；成功后同步改 config）');
+      if (!id) throw new Error('用法：installer module remove <实例内 id>（与 `installer module add` 对称；成功后同步改 config）');
       const reg = loadRegistry(home);
       const inst = resolveCurrentInstance(reg, env, cwd);
       const { removeModuleFromInstance } = await import('./deploy');
@@ -368,11 +368,11 @@ async function exec(opts: RunOptions): Promise<number> {
       echoPathline(inst.path, log);
       return 0;
     }
-    throw new Error(`未知 module 子命令「${sub}」。可用：unself module pack|add|validate|remove`);
+    throw new Error(`未知 module 子命令「${sub}」。可用：installer module pack|add|validate|remove`);
   }
 
   // ---- wizard（默认）/ deploy：都需要当前实例 ----
-  // 零克隆主路径（README「一条命令」）：全新机器上没有任何实例时，`unself`/`unself wizard [名字]`
+  // 零克隆主路径（README「一条命令」）：全新机器上没有任何实例时，`installer`/`installer wizard [名字]`
   // 就地建一个再进向导——向导里的 ②③④ 才是用户要填的东西，不该先逼他学 `init`。
   // `deploy` 保持原口径（CI/逃生门：必须有实例，不隐式建目录）。
   let inst: { name: string; path: string };
@@ -525,7 +525,7 @@ async function exec(opts: RunOptions): Promise<number> {
     return 0;
   }
 
-  throw new Error(`未知命令「${cmd}」。可用命令见 unself help`);
+  throw new Error(`未知命令「${cmd}」。可用命令见 installer help`);
 }
 
 /** CLI 主入口：异常转人话 + exit 1（不裸栈）。

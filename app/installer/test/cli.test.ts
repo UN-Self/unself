@@ -194,7 +194,7 @@ describe('异常路径（人话 + exit 1，不裸栈）', () => {
 
   it('空注册表 current → 指引 init', async () => {
     await run(opts(['current']));
-    expect(errs.join('')).toContain('unself init');
+    expect(errs.join('')).toContain('installer init');
   });
 
   it('help 输出用法', async () => {

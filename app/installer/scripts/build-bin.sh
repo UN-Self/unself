@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-only
-# 打包单文件 CLI（#242 零克隆；#257 引擎进 bundle）：esbuild bundle 成 dist/unself.mjs（bin 入口）。
+# 打包单文件 CLI（#242 零克隆；#257 引擎进 bundle）：esbuild bundle 成 dist/installer.mjs（bin 入口）。
 # - 平台 node、ESM、target node22；
 # - banner 注入 createRequire：bundle 内第三方依赖的 CJS require 在 ESM 输出里可用；
 # - 九步引擎（src/engine，与壳同包同树 #303）**不 external**（#257）：必须随 tarball 分发，
@@ -11,7 +11,7 @@
 # - 平台产物（core worker bundle / 壳 / 迁移 SQL）**不再随安装器内嵌**（#303 修订 #257）：
 #   它们是 @unself/workbench 的预构建产物、随该包发布，引擎从 node_modules 读——installer 只出 CLI。
 # - 向导 SPA（web/，Vue + @unself/ui）先经 vite build 产出 dist/web（2026-09-22 Vue 迁移）：
-#   server.ts 运行时按 import.meta.url 定位 dist/web，故它必须与 unself.mjs 一起随包发布。
+#   server.ts 运行时按 import.meta.url 定位 dist/web，故它必须与 installer.mjs 一起随包发布。
 # - 安装器自身身份烙印（#287，方案 A：esbuild --define）：构建身份由 scripts/build-info.ts（tsx）
 #   计算——commit 解析复用 @unself/contracts 的 resolveBuildCommit（GITHUB_SHA → git → 抛错，
 #   与 workbench 构建同一套规则；shell 里自拼 git rev-parse 会绕开这套规则，禁止）。
@@ -27,7 +27,7 @@ echo "安装器身份烙印：${BUILD_DEFINE}"
   "--banner:js=import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" \
   --external:esbuild \
   "--define:__UNSELF_INSTALLER_BUILD__=${BUILD_DEFINE}" \
-  --outfile=dist/unself.mjs
+  --outfile=dist/installer.mjs
 # 许可证随包（AGPL 交付要求）
 for f in LICENSE NOTICE; do
   [ -f "../../$f" ] && cp "../../$f" "dist/$f"

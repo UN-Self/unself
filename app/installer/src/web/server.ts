@@ -663,12 +663,12 @@ export function createWizardServer(opts: ServeOptions): Server {
             })
             .then(async (r) => {
               broadcast(`✓ 装配完成：${r.baseUrl}`);
-              // 收尾身份三项（#287，决策 #80）：与 `unself --version`、`unself deploy` 共用同一出口。
+              // 收尾身份三项（#287，决策 #80）：与 `installer --version`、`installer deploy` 共用同一出口。
               // 两处落地，缺一不可：
               //   ① 事件日志（SSE 快照重放可见，部署中/失败时也能看到）；
               //   ② **结果状态（⑤ 完成屏渲染）**——日志会被完成屏取代，而收尾屏上的身份
               //      「可整段粘贴」是验收要求（2026-09-23 走查发现：只进日志则完成屏看不到）。
-              // rootDir 用本向导实例目录（与 `unself deploy` 用 inst.path 同基准）；
+              // rootDir 用本向导实例目录（与 `installer deploy` 用 inst.path 同基准）；
               // workbench 包按实例侧 node_modules 解析，而非进程 cwd（cwd 与实例可无关）。
               let identity: string[] = [];
               try {

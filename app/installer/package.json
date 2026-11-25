@@ -10,7 +10,7 @@
   },
   "type": "module",
   "bin": {
-    "unself": "dist/unself.mjs"
+    "installer": "dist/installer.mjs"
   },
   "files": [
     "dist"

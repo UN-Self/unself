@@ -72,14 +72,14 @@ async function copyLink(): Promise<void> {
         <li><span class="k">模块</span>{{ modules.join('、') }}</li>
       </ul>
       <!--
-        版本身份三项（#287，决策 #80）：与 `unself --version` / `unself deploy` 同源。
+        版本身份三项（#287，决策 #80）：与 `installer --version` / `installer deploy` 同源。
         落在完成屏（而非只写部署日志）：日志会被本屏取代，报障要能在收尾屏整段复制。
         逐行 <code> 保留换行前的可复制形态（与终端输出一致）。
       -->
       <ul class="summary" data-test="build-identity">
         <li v-for="(line, i) in identity" :key="i"><code>{{ line }}</code></li>
       </ul>
-      <p class="hint">任何时候重跑 <code>unself wizard</code> 都收敛同一终态（幂等）。</p>
+      <p class="hint">任何时候重跑 <code>installer wizard</code> 都收敛同一终态（幂等）。</p>
     </div>
   </section>
 </template>
