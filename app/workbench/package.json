@@ -21,6 +21,9 @@
     "build:node": "tsx scripts/build-node.ts",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json"
   },
+  "bin": {
+    "workbench": "./dist/node/cli.cjs"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",
     "@tailwindcss/vite": "^4.0.0",
