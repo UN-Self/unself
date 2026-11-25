@@ -27,6 +27,9 @@ import { migrationsTableFor, type ModuleRegistration } from './types';
  * （D1 / node:sqlite / REST / PG）用的 REGISTRY_UPSERT_SQL 是它 + RETURNING（要回显合并后的
  * 真行）；installer 的装配路径只写不读结果集，直接用写语句本体。以前 installer 自带一份
  * 「逐字同构」的副本、靠注释提醒同步——现在结构上不可能漂移（#369 收口）。
+ * 可移植性（#360 真库实测）：ON CONFLICT DO UPDATE 的 SET 表达式里引用目标行时**必须**写表名
+ * （`module_registry.mode`）。PG 的 DO UPDATE 同时把目标行与 `excluded` 放进作用域，裸列名
+ * 会报 `column reference "mode" is ambiguous`；SQLite 接受限定名，两边都是这一份。
  */
 export const REGISTRY_UPSERT_WRITE_SQL = `INSERT INTO module_registry (id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash)
 VALUES (?1, ?2, ?3, ?4, coalesce(?5, 'direct'), ?6, ?7, ?8)
@@ -34,10 +37,10 @@ ON CONFLICT(id) DO UPDATE SET
   enabled = excluded.enabled,
   version = excluded.version,
   manifest_json = excluded.manifest_json,
-  mode = coalesce(?5, mode),
-  entry = coalesce(?6, CASE WHEN coalesce(?5, mode) = 'connect' THEN entry END),
-  storage_level = coalesce(?7, storage_level),
-  credential_hash = coalesce(?8, credential_hash)`;
+  mode = coalesce(?5, module_registry.mode),
+  entry = coalesce(?6, CASE WHEN coalesce(?5, module_registry.mode) = 'connect' THEN module_registry.entry END),
+  storage_level = coalesce(?7, module_registry.storage_level),
+  credential_hash = coalesce(?8, module_registry.credential_hash)`;
 
 export const REGISTRY_UPSERT_SQL = `${REGISTRY_UPSERT_WRITE_SQL}
 RETURNING id, enabled, version, manifest_json, mode, entry, storage_level, credential_hash`;

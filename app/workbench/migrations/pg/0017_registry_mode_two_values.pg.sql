@@ -33,5 +33,9 @@ BEGIN
 END $$;
 
 ALTER TABLE module_registry DROP CONSTRAINT IF EXISTS module_registry_mode_two_values;
+-- 列 DEFAULT 也要跟着换：0012 建列时写的是 DEFAULT 'cloudflare'，只换 CHECK 不换 DEFAULT
+-- 会让"省略 mode 的 INSERT"落一个旧值（SQLite 变体的 0017 重建表时已改成 'direct'，
+-- 两方言的 schema 契约必须一致）。
+ALTER TABLE module_registry ALTER COLUMN mode SET DEFAULT 'direct';
 ALTER TABLE module_registry ADD CONSTRAINT module_registry_mode_two_values
   CHECK (mode IN ('direct', 'connect') AND (mode != 'connect' OR entry IS NOT NULL));
