@@ -3,7 +3,7 @@
  * Node 运行体组合根（#360）：打开数据库 → 跑 core 迁移 → 自举签名私钥 → 装配头像存储
  * → 首启 mint setup token → 组出与 Worker 入口同形的 `ProdEnv` 与 Hono app。
  *
- * 首启深链接与 `docker/entrypoint.sh` 同语义：探测未封箱则签发/复用一次性 token，
+ * 首启深链接由 `workbench start`（`src/cli.ts` → `startNode`）负责：探测未封箱则签发/复用一次性 token，
  * stdout 打印醒目链接（复用 `ControlPlane.issueSetupToken`，不另写一套状态判定）。
  */
 import { createStalwartMailProvisioner, toStalwartProvisionerConfig } from '@unself/stalwart-provisioner';
@@ -69,7 +69,7 @@ export async function bootstrapNode(
   const tunnel = createTunnelRuntime(d1);
   const avatarStore = createAvatarStore(config);
 
-  // 首启：探测未封箱则签发/复用一次性 token（与 docker/entrypoint.sh 同语义）。
+  // 首启：探测未封箱则签发/复用一次性 token（`workbench start` 的唯一一套，容器与裸机共用）。
   let setupLink: string | null = null;
   const issued = await database.controlPlane.issueSetupToken(generateOneTimeToken);
   if (issued.status !== 'sealed') {

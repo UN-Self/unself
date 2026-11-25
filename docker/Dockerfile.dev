@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 开发用镜像：从仓库源码构建 workbench，用来跑「还没发布的分支」。
+# 正式部署请用 docker/Dockerfile（装 @unself/workbench@<dist-tag> 的发布包，跟裸机同一个 bin）。
+# 用法见 docker/README.md 的 dev profile 段；compose 里的服务名是 workbench-dev。
+#
+# 自包含 Node 进程，镜像里没有 wrangler/workerd。
+#
+# 构建上下文 = 仓库根（compose 里 context: ..）。理由：`pnpm install --frozen-lockfile` 需要根
+# pnpm-lock.yaml / pnpm-workspace.yaml 与全部 workspace 包清单，单包上下文拼不出可复现安装。
+#
+# 包根布局（与 app/workbench/src/node/config.ts 的 resolvePackageRoot/readNodeConfig 一致）：
+#   /app/dist/node/entry.node.cjs   Node 入口（pg/ws 已 bundle 进单文件）
+#   /app/dist/web/                  工作台 SPA（assetsDir）
+#   /app/migrations/{core,pg}/      迁移 SQL（migrationsDir；sqlite 取 core，postgres 取 pg）
+#
+# 运行时零 node_modules：依赖已打进 entry.node.cjs，装依赖只发生在构建阶段。
+
+# ---------------------------------------------------------------- 构建阶段
+FROM node:22-slim AS build
+# CI=true：pnpm 非交互；PNPM_HOME/PATH：corepack 装入的 pnpm 可被后续 RUN 找到。
+ENV CI=true \
+    PNPM_HOME=/pnpm \
+    PATH=/pnpm:$PATH
+
+# 构建身份（决策 #80）：build-info 必须拿到 commit，来源只有 GITHUB_SHA 或 git rev-parse。
+# 本镜像的构建上下文不含 .git（.dockerignore），slim 基础镜像也没有 git，所以只能由构建参数
+# 显式传入；缺失时构建会在 `pnpm build:worker` 抛「拿不到构建 commit」而失败（拒绝产出无 commit 的产物）。
+# compose 用 build.args 传：GITHUB_SHA=$(git rev-parse HEAD) docker compose --profile dev build
+ARG GITHUB_SHA
+ENV GITHUB_SHA=${GITHUB_SHA}
+
+# corepack 版本锁死到根 package.json 的 packageManager，避免与仓库锁文件漂移。
+RUN corepack enable && corepack prepare pnpm@11.24.0 --activate
+
+WORKDIR /src
+# .dockerignore 已剔除 node_modules/dist/.git 等；这里拿到的就是构建源码。
+COPY . .
+
+# 全量安装而不是 --filter：workbench 的 workspace 依赖（如 @unself/sdk）构建脚本需要自己的
+# devDependencies（esbuild），过滤安装不会带上它们；workerd 也来自 workbench 的 wrangler
+# devDependency，过滤省不掉。--frozen-lockfile 保证与仓库锁文件一致。
+RUN pnpm install --frozen-lockfile
+
+# workbench 的 build 脚本链已含 sdk 必须先 build 的前置：
+#   pnpm --filter @unself/sdk run build → typecheck → build:worker → build:node → vite build
+RUN pnpm --filter @unself/workbench run build
+
+# ---------------------------------------------------------------- 运行阶段
+FROM node:22-slim AS runtime
+ENV NODE_ENV=production \
+    UNSELF_ADDR=0.0.0.0:8787 \
+    UNSELF_DATA_DIR=/app/data
+
+WORKDIR /app
+
+# 只拷运行期需要的：Node 入口、SPA、迁移 SQL、许可证。不拷 node_modules / pnpm / wrangler。
+COPY --from=build /src/app/workbench/dist/node/ /app/dist/node/
+# 构建身份烙印（commit/version）：CLI 的 --version 读 /app/dist/build-info.json。
+COPY --from=build /src/app/workbench/dist/build-info.json /app/dist/build-info.json
+COPY --from=build /src/app/workbench/dist/web/ /app/dist/web/
+# 整个 migrations/ 一起拷：core（sqlite）与 pg（postgres）是方言入口，modules/ 等旁支
+# 体积可忽略，拷全避免运行时缺目录。
+COPY --from=build /src/app/workbench/migrations/ /app/migrations/
+COPY --from=build /src/LICENSE /app/LICENSE
+COPY --from=build /src/NOTICE /app/NOTICE
+
+# 非 root：node 镜像自带 uid/gid 1000 的 node 用户。只把数据目录交给它——具名卷首次挂载
+# 会继承镜像内该目录的属主，所以默认 compose（具名卷）开箱即写；宿主目录 bind mount 时
+# 必须宿主侧先 `chown 1000:1000`（见 docker/README.md）。
+RUN mkdir -p /app/data \
+ && chown node:node /app/data
+
+USER node
+
+VOLUME /app/data
+EXPOSE 8787
+
+# slim 镜像没有 curl：用镜像自带的 node 打健康检查（/api/health 返回 200）。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:8787/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+
+# 入口走与发布包同一个 CLI（bin `workbench` → dist/node/cli.cjs）：无参数 = start，
+# 所以「跑未发布分支」验证的就是发布形态本身，`--version` / `--help` 也可直接验。
+# exec 形式：node 是 PID 1，信号直达。
+ENTRYPOINT ["node", "/app/dist/node/cli.cjs"]

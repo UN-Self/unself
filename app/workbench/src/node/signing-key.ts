@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * 实例签名私钥自举（#360）：与 `docker/entrypoint.sh` 同语义，不另造第二套。
+ * 实例签名私钥自举（#360）：`workbench start`（`src/cli.ts` → `startNode`）里的唯一一套，
+ * 容器与裸机共用，不另造第二套。
  *
  * 优先用环境注入的 `JWT_PRIVATE_KEY`（用户自带）；否则沿用数据目录里的
  * `jwt_private_key.pem`；都没有就首启生成一份落盘（0600）——容器重建+卷保留则沿用，

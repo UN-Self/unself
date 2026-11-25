@@ -210,8 +210,8 @@ async function migrate() {
 }
 
 // ----------------------------------------------------------------
-// ②′ setup 深链接：与 docker/entrypoint.sh ③③ 同一套探测/签发语义
-//    （docker 首启打印一次性 setup 链接，dev 同款——三路同逻辑，不是 docker 特有）。
+// ②′ setup 深链接：与 `workbench start`（src/cli.ts）的探测/签发同一套语义
+//    （`workbench start` 首启打印一次性 setup 链接，dev 同款——三路同逻辑，不是容器特有）。
 //    SQL 与 core/control-plane SETUP_STATUS_SQL 同形状（SQL 单点防漂移；同款复制）。
 // ----------------------------------------------------------------
 const SETUP_PROBE_SQL =
@@ -230,7 +230,7 @@ function ensureSetupLink(dbPath) {
     if (token) {
       log('复用未消费的 setup token（幂等重跑收敛）');
     } else {
-      // 与 entrypoint lower(hex(randomblob(24))) 同形：48 hex，消费后自动作废
+      // 沿用旧容器入口的 48 hex 形状（lower(hex(randomblob(24)))），消费后自动作废
       token = randomBytes(24).toString('hex');
       db.prepare('INSERT INTO setup_tokens (token) VALUES (?1)').run(token);
       log('已签发一次性 setup token（消费后自动作废）');
