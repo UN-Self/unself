@@ -2,6 +2,9 @@
 /**
  * Node 运行体入口（#360 轨道 A）：不依赖 Cloudflare 的 core 进程。
  *
+ * **deprecated（对外入口）**：直接运行本文件等价于 `workbench start`；新入口见 `src/cli.ts`
+ * （产物 `dist/node/cli.cjs`，bin 名 `workbench`）。本文件保留为装配实现 + 直跑形态。
+ *
  * 启动（两参数 + 可选）：
  *   UNSELF_DB=sqlite:///abs/path/core.db node dist/node/entry.node.mjs
  *   UNSELF_DB=postgres://user:pass@host:5432/db node dist/node/entry.node.mjs

@@ -9,6 +9,7 @@
   },
   "include": [
     "src/entry.node.ts",
+    "src/cli.ts",
     "src/node/**/*",
     "src/adapters/local-avatar-store.ts",
     "src/adapters/s3-avatar-store.ts",
