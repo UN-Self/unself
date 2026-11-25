@@ -18,6 +18,19 @@ import type { ControlPlaneExecutor } from '@unself/control-plane';
 /** 事务能力：把一组操作放进单个事务内执行；回调收到「事务内执行器」。 */
 export type TransactionRunner = <T>(fn: (tx: ControlPlaneExecutor) => Promise<T>) => Promise<T>;
 
+/** 事务内操作：SQL + 参数（同步事务直接在同一句柄上顺序执行，不经过 Promise）。 */
+export interface TransactionOp {
+  readonly sql: string;
+  readonly params: unknown[];
+}
+
+/**
+ * 同步事务能力（node:sqlite 这类同步驱动专用）：BEGIN…COMMIT 之间**不产生 await**。
+ * 异步事务在同步驱动上有真实危险——`await` 会让出微任务队列，别的请求的语句可能挤进
+ * 同一事务；本事务失败 ROLLBACK 时连带撤掉别的请求已经成功的写（#360 走查）。
+ */
+export type SyncTransactionRunner = (ops: readonly TransactionOp[]) => unknown[];
+
 /** batch 语句的内部形状：既要能当 D1PreparedStatement 用，也要能被还原重放。 */
 interface ReplayableStatement {
   readonly sql: string;
@@ -26,7 +39,7 @@ interface ReplayableStatement {
 
 export function toD1Database(
   executor: ControlPlaneExecutor,
-  options: { transaction?: TransactionRunner } = {},
+  options: { transaction?: TransactionRunner; transactionSync?: SyncTransactionRunner } = {},
 ): D1Database {
   const statements = new WeakMap<object, ReplayableStatement>();
 
@@ -63,6 +76,13 @@ export function toD1Database(
      * 没有时退化为顺序执行（此时**不保证原子**，仅供无事务的运行体/单测使用）。
      */
     async batch(input: readonly unknown[]) {
+      const collected = input.map((item) => statements.get(item as object));
+      // 同步事务优先：能一次拿全 SQL/参数时整段同步执行，事务里没有 await 让出点。
+      if (options.transactionSync && collected.every((meta): meta is ReplayableStatement => meta !== undefined)) {
+        return options.transactionSync(
+          collected.map((meta) => ({ sql: meta.sql, params: meta.params() })),
+        );
+      }
       const replay = async (tx: ControlPlaneExecutor) => {
         const out: unknown[] = [];
         for (const item of input) {

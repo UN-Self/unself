@@ -65,7 +65,10 @@ export async function bootstrapNode(
   const database = await openNodeDatabase(config.database, config.migrationsDir);
   const signingKey = await resolveSigningKey(processEnv, config.dataDir);
   const assets = createAssetsFetcher(config.assetsDir);
-  const d1 = toD1Database(database.executor, { transaction: database.transaction });
+  const d1 = toD1Database(database.executor, {
+    transaction: database.transaction,
+    transactionSync: database.transactionSync,
+  });
   const tunnel = createTunnelRuntime(d1);
   const avatarStore = createAvatarStore(config);
 

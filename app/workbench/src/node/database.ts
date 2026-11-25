@@ -12,7 +12,7 @@
  */
 import type { ApplyReport, ControlPlane, ControlPlaneExecutor } from '@unself/control-plane';
 import { PgControlPlane, PgExecutor, SqliteControlPlane, SqliteExecutor, openCoreDb } from '@unself/control-plane';
-import type { TransactionRunner } from './d1-executor';
+import type { SyncTransactionRunner, TransactionOp, TransactionRunner } from './d1-executor';
 import { Pool } from 'pg';
 import type { DatabaseSync } from 'node:sqlite';
 import { readdir, readFile } from 'node:fs/promises';
@@ -26,10 +26,15 @@ export interface NodeDatabase {
   executor: ControlPlaneExecutor;
   migrationReport: ApplyReport;
   /**
-   * 事务（D1 的 `batch()` 语义落到 Node 运行体）：回调拿到「事务内执行器」，其中的语句
-   * 必须走事务连接（PG 的 pool 会把语句派发到别的连接，事务就不成立）。
+   * 异步事务（PG）：回调拿到「事务内执行器」，语句必须走事务连接（pool 会把语句派发到
+   * 别的连接，事务就不成立）。sqlite 不提供这条——同步驱动请用 `transactionSync`。
    */
-  transaction: TransactionRunner;
+  transaction?: TransactionRunner;
+  /**
+   * 同步事务（sqlite）：BEGIN…COMMIT 之间零 await。node:sqlite 是同步 API，走异步事务
+   * 会让微任务插进事务中间（见 d1-executor.ts 的 SyncTransactionRunner 注释）。
+   */
+  transactionSync?: SyncTransactionRunner;
   close(): Promise<void>;
 }
 
@@ -45,16 +50,21 @@ async function readMigrations(
   return Promise.all(names.map(async (name) => ({ name, sql: await readFile(join(dir, name), 'utf8') })));
 }
 
-/** sqlite 事务：回调里的语句走同一个 DatabaseSync（node:sqlite 单连接，天然同事务）。 */
-async function runSqliteTransaction<T>(
-  db: DatabaseSync,
-  fn: (tx: ControlPlaneExecutor) => Promise<T>,
-): Promise<T> {
+/**
+ * sqlite 事务（同步）：node:sqlite 的语句执行是同步的，BEGIN…COMMIT 之间一次 await 都
+ * 不能有——`await` 会让出微任务队列，别的请求的语句就挤进同一个事务；本事务失败
+ * ROLLBACK 时会连带撤掉那些请求已经回 200 的写，两个并发 batch 还会撞
+ * "cannot start a transaction within a transaction"。语句在主线程上一口气跑完才是真原子。
+ */
+function runSqliteTransactionSync(db: DatabaseSync, ops: readonly TransactionOp[]): unknown[] {
   db.exec('BEGIN');
   try {
-    const result = await fn(new SqliteExecutor(db));
+    const out = ops.map(({ sql, params }) => {
+      const info = db.prepare(sql).run(...(params as never[]));
+      return { meta: { changes: Number(info.changes) } };
+    });
     db.exec('COMMIT');
-    return result;
+    return out;
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
@@ -108,7 +118,7 @@ export async function openNodeDatabase(
     dialect: 'sqlite',
     controlPlane: cp,
     executor: new SqliteExecutor(cp.db),
-    transaction: (fn) => runSqliteTransaction(db, fn),
+    transactionSync: (ops) => runSqliteTransactionSync(db, ops),
     close: async () => {
       db.close();
     },
