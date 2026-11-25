@@ -1,63 +1,38 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# Unself workbench 正式运行体镜像（#360 轨道 A）：自包含 Node 进程，镜像里没有 wrangler/workerd。
+# Unself workbench 正式运行体镜像（#360 轨道 A）：单阶段，镜像里只有装好的 npm 包 + Node 运行时。
 #
-# 构建上下文 = 仓库根（compose 里 context: ..）。理由：`pnpm install --frozen-lockfile` 需要根
-# pnpm-lock.yaml / pnpm-workspace.yaml 与全部 workspace 包清单，单包上下文拼不出可复现安装。
+# 为什么是「装包」不是「源码构建」：
+#   - 跟裸机 `npx @unself/workbench start` 是同一个 bin、同一条命令（bin `workbench` → start），
+#     不再另造一条只在 Docker 里存在的启动路径。
+#   - 构建（pnpm / esbuild / vite / bundle）已经在 CI 发包时做完，镜像里不需要 pnpm、esbuild
+#     或任何源码；镜像内容 = 发布产物，与 registry 上那个包完全一致。
+#   - 升级 = 换 UNSELF_VERSION 重建（或换 dist-tag），不需要重新拉仓库源码。
 #
-# 包根布局（与 app/workbench/src/node/config.ts 的 resolvePackageRoot/readNodeConfig 一致）：
-#   /app/dist/node/entry.node.cjs   Node 入口（pg/ws 已 bundle 进单文件）
-#   /app/dist/web/                  工作台 SPA（assetsDir）
-#   /app/migrations/{core,pg}/      迁移 SQL（migrationsDir；sqlite 取 core，postgres 取 pg）
+# UNSELF_VERSION 是 npm dist-tag 或精确版本，不是 git ref：
+#   latest（默认，正式部署）/ test（联调测试包，例如 --build-arg UNSELF_VERSION=test）/ 0.1.2
 #
-# 运行时零 node_modules：依赖已打进 entry.node.cjs，装依赖只发生在构建阶段。
+# 自定义环境变量（UNSELF_DB / UNSELF_FILES / UNSELF_BASE_URL / JWT_PRIVATE_KEY …）一律由
+# compose 的 environment 注入，这里只固定容器内不变的 UNSELF_ADDR / UNSELF_DATA_DIR。
+#
+# 跑未发布的分支（源码构建）用 docker/Dockerfile.dev，见 docker/README.md。
 
-# ---------------------------------------------------------------- 构建阶段
-FROM node:22-slim AS build
-# CI=true：pnpm 非交互；PNPM_HOME/PATH：corepack 装入的 pnpm 可被后续 RUN 找到。
-ENV CI=true \
-    PNPM_HOME=/pnpm \
-    PATH=/pnpm:$PATH
+FROM node:22-slim
 
-# corepack 版本锁死到根 package.json 的 packageManager，避免与仓库锁文件漂移。
-RUN corepack enable && corepack prepare pnpm@11.24.0 --activate
+# npm dist-tag 或精确版本号（split 自 release.yml 的分支规则：main tag → latest，其他 → test）。
+ARG UNSELF_VERSION=latest
 
-WORKDIR /src
-# .dockerignore 已剔除 node_modules/dist/.git 等；这里拿到的就是构建源码。
-COPY . .
+# 全局安装即得 /usr/local/bin/workbench；清缓存让镜像不背 npm 的下载残留。
+RUN npm i -g @unself/workbench@${UNSELF_VERSION} && npm cache clean --force
 
-# 全量安装而不是 --filter：workbench 的 workspace 依赖（如 @unself/sdk）构建脚本需要自己的
-# devDependencies（esbuild），过滤安装不会带上它们；workerd 也来自 workbench 的 wrangler
-# devDependency，过滤省不掉。--frozen-lockfile 保证与仓库锁文件一致。
-RUN pnpm install --frozen-lockfile
-
-# workbench 的 build 脚本链已含 sdk 必须先 build 的前置：
-#   pnpm --filter @unself/sdk run build → typecheck → build:worker → build:node → vite build
-RUN pnpm --filter @unself/workbench run build
-
-# ---------------------------------------------------------------- 运行阶段
-FROM node:22-slim AS runtime
+# 容器内固定项。其余环境变量走 compose。
 ENV NODE_ENV=production \
     UNSELF_ADDR=0.0.0.0:8787 \
     UNSELF_DATA_DIR=/app/data
 
-WORKDIR /app
-
-# 只拷运行期需要的：Node 入口、SPA、迁移 SQL、许可证。不拷 node_modules / pnpm / wrangler。
-COPY --from=build /src/app/workbench/dist/node/ /app/dist/node/
-COPY --from=build /src/app/workbench/dist/web/ /app/dist/web/
-# 整个 migrations/ 一起拷：core（sqlite）与 pg（postgres）是方言入口，modules/ 等旁支
-# 体积可忽略，拷全避免运行时缺目录。
-COPY --from=build /src/app/workbench/migrations/ /app/migrations/
-COPY --from=build /src/LICENSE /app/LICENSE
-COPY --from=build /src/NOTICE /app/NOTICE
-COPY docker/entrypoint.sh /app/entrypoint.sh
-
 # 非 root：node 镜像自带 uid/gid 1000 的 node 用户。只把数据目录交给它——具名卷首次挂载
 # 会继承镜像内该目录的属主，所以默认 compose（具名卷）开箱即写；宿主目录 bind mount 时
 # 必须宿主侧先 `chown 1000:1000`（见 docker/README.md）。
-RUN chmod 0755 /app/entrypoint.sh \
- && mkdir -p /app/data \
- && chown node:node /app/data
+RUN mkdir -p /app/data && chown node:node /app/data
 
 USER node
 
@@ -68,4 +43,6 @@ EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:8787/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
 
-ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
+# exec 形式：workbench / node 直接是 PID 1，SIGTERM 直达，没有中间 shell 残留。
+# 自举（迁移、签名私钥、首启 setup token）都在 start 里，跟裸机同一条命令。
+ENTRYPOINT ["workbench", "start"]

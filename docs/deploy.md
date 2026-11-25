@@ -17,7 +17,8 @@ npx @unself/installer@latest
 
 ### 2. Docker
 
-不走 Cloudflare。一个容器，一个 Node 进程，镜像里没有 wrangler。
+不走 Cloudflare。一个容器，一个 Node 进程，镜像里没有 wrangler。镜像装的是发布包
+`@unself/workbench@<dist-tag>`，跑的是跟裸机 `npx @unself/workbench start` 同一个 bin。
 
 ```sh
 cp docker/.env.example docker/.env
@@ -25,7 +26,14 @@ docker compose -f docker/compose.yml up --build -d
 docker compose -f docker/compose.yml logs -f workbench   # 首启的一次性 setup 链接在这里
 ```
 
+首次要带 `--build`：镜像由本地 Dockerfile 构建（构建阶段 `npm i -g`），不是从 registry pull。
 数据在卷 `unself-data` 里。容器起来之后，打开 workbench，设管理员。
+
+要跑仓库里未发布的分支，用源码构建的 dev profile（需要 `GITHUB_SHA`，端口 8788，独立卷）：
+
+```sh
+GITHUB_SHA=$(git rev-parse HEAD) docker compose -f docker/compose.yml --profile dev up --build workbench-dev
+```
 
 **数据库两种方言**（同一个 compose 文件）：
 
@@ -40,6 +48,7 @@ pg 服务挂在 `profile: pg` 下，默认 `up` 不会起它。PG 未就绪时 w
 
 | 变量 | 作用 |
 |---|---|
+| `UNSELF_VERSION` | 装哪个版本：npm dist-tag 或精确版本号，不是 git ref。默认 `latest`；测试包填 `test` |
 | `UNSELF_DB` | `sqlite:///app/data/core.db` 或 `postgres://user:pass@host:5432/db` |
 | `UNSELF_FILES` | 头像存储。`local:/app/data/avatars` 或 `s3://bucket?endpoint=…&accessKeyId=…&secretAccessKey=…&forcePathStyle=1`（MinIO / 自建 / R2 的 S3 口同一套）。**不设 = 头像能力关闭** |
 | `UNSELF_BASE_URL` | 反代或远程访问时必设，否则首启链接指向 localhost |

@@ -8,6 +8,15 @@
 # 也可以 cd docker 后省略 -f（默认找 compose.yml）：
 #   cd docker && docker compose up --build -d
 #
+# 镜像形态（services.workbench）：装发布包，不编译源码。
+#   `npm i -g @unself/workbench@${UNSELF_VERSION}` + `ENTRYPOINT workbench start`，跟裸机
+#   `npx @unself/workbench start` 同一个 bin。默认 latest；联调测试包用 .env 里 UNSELF_VERSION=test。
+#   首次仍需 --build：镜像由本地 Dockerfile 构建（不是从 registry pull）。
+#
+# 跑未发布的分支（services.workbench-dev，源码构建）：
+#   GITHUB_SHA=$(git rev-parse HEAD) docker compose -f docker/compose.yml --profile dev up --build workbench-dev
+#   dev 服务用独立端口（UNSELF_PORT_DEV，默认 8788）与独立卷（unself-data-dev），不与正式实例抢数据。
+#
 # 两种方言（同一 compose 文件）：
 #   默认（sqlite）：只起 workbench，数据落 unself-data 卷的 /app/data/core.db。
 #   PostgreSQL：docker/.env 里把 UNSELF_DB 改成 postgres://unself:<密码>@postgres:5432/unself，
@@ -17,16 +26,21 @@
 #   `restart: unless-stopped` 会持续重试直到 postgres 健康。
 #
 # 数据卷：unself-data → /app/data（sqlite 库、实例签名私钥、可选的 local 头像目录）；
-#         pg-data → postgres 数据目录。宿主 bind mount 时目录须归 uid 1000（见 README）。
-# 项目名固定为 unself：卷实际名为 unself_unself-data / unself_pg-data，不随调用目录变化。
+#         unself-data-dev → dev profile 的数据目录；pg-data → postgres 数据目录。
+#         宿主 bind mount 时目录须归 uid 1000（见 README）。
+# 项目名固定为 unself：卷实际名为 unself_unself-data / unself_unself-data-dev / unself_pg-data，
+# 不随调用目录变化。
 name: unself
 
 services:
   workbench:
     build:
-      # 仓库根为上下文：pnpm install 需要根锁文件与 workspace 清单（理由见 Dockerfile 头注释）。
+      # 仓库根为上下文（与 dev 服务一致；装包形态其实不需要源码，但 context 保持统一）。
       context: ..
       dockerfile: docker/Dockerfile
+      # UNSELF_VERSION 是 npm dist-tag 或精确版本，不是 git ref。正式部署留空 = latest。
+      args:
+        UNSELF_VERSION: ${UNSELF_VERSION:-latest}
     image: unself-workbench:local
     restart: unless-stopped
     ports:
@@ -37,6 +51,7 @@ services:
       UNSELF_DB: ${UNSELF_DB:-sqlite:///app/data/core.db}
       # 留空 = 头像能力关闭；`local:/app/data/avatars` 或 `s3://…`（见 .env.example）。
       UNSELF_FILES: ${UNSELF_FILES:-}
+      # 以下两项镜像 ENV 里也有，这里显式写出来让容器实际配置一眼可见。
       UNSELF_ADDR: 0.0.0.0:8787
       UNSELF_DATA_DIR: /app/data
       # 反代/远程访问必设，否则首启深链接指向 localhost。
@@ -45,6 +60,31 @@ services:
       JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
     volumes:
       - unself-data:/app/data
+
+  # 开发用：从源码构建未发布的分支。正式部署不要用它。
+  workbench-dev:
+    profiles: ["dev"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+      # build-info 的 commit 只能由构建参数给（上下文无 .git，slim 镜像无 git）：
+      #   GITHUB_SHA=$(git rev-parse HEAD) docker compose -f docker/compose.yml --profile dev build
+      args:
+        GITHUB_SHA: ${GITHUB_SHA:-}
+    image: unself-workbench:dev
+    restart: unless-stopped
+    ports:
+      # 默认 8788，避免与正式实例的 8787 撞。
+      - "${UNSELF_PORT_DEV:-8788}:8787"
+    environment:
+      UNSELF_DB: ${UNSELF_DB:-sqlite:///app/data/core.db}
+      UNSELF_FILES: ${UNSELF_FILES:-}
+      UNSELF_ADDR: 0.0.0.0:8787
+      UNSELF_DATA_DIR: /app/data
+      UNSELF_BASE_URL: ${UNSELF_BASE_URL:-}
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
+    volumes:
+      - unself-data-dev:/app/data
 
   postgres:
     image: postgres:16-alpine
@@ -65,4 +105,5 @@ services:
 
 volumes:
   unself-data:
+  unself-data-dev:
   pg-data:
