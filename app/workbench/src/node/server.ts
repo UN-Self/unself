@@ -33,6 +33,20 @@ const HOP_BY_HOP = new Set([
   'content-length',
 ]);
 
+/**
+ * 请求的真实协议：直连 TLS（socket 加密）优先，其次看反代终结 TLS 的标准头
+ * `X-Forwarded-Proto`（取首跳，与 `session.ts` 的 requestIsSecure 同规则）。
+ * 不加这段，反代后面所有由 origin 派生的东西（OIDC redirect_uri、邀请链接、头像 URL、
+ * CSP selfOrigin）都会拼成 http——https 反代下 SSO 回跳不匹配、页面混内容。
+ */
+function requestProto(request: IncomingMessage): 'http' | 'https' {
+  // net.Socket 的类型没有 encrypted（TLSSocket 才有），直连 TLS 时它在那里是 true
+  if ((request.socket as { encrypted?: boolean }).encrypted) return 'https';
+  const forwarded = request.headers['x-forwarded-proto'];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim().toLowerCase();
+  return first === 'https' ? 'https' : 'http';
+}
+
 function readBody(request: IncomingMessage): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -45,7 +59,7 @@ function readBody(request: IncomingMessage): Promise<Uint8Array> {
 /** Node 请求 → Fetch Request（upgrade 请求不读 body，头保留 upgrade）。 */
 async function toFetchRequest(request: IncomingMessage, keepUpgradeHeaders = false): Promise<Request> {
   const host = request.headers.host ?? 'localhost';
-  const url = new URL(request.url ?? '/', `http://${host}`);
+  const url = new URL(request.url ?? '/', `${requestProto(request)}://${host}`);
   const headers = new Headers();
   for (const [name, value] of Object.entries(request.headers)) {
     if (value === undefined) continue;
