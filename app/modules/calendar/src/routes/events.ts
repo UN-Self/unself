@@ -153,6 +153,25 @@ export async function deleteEvent(c: Context<AppEnv>): Promise<Response> {
     return await conflict(c, rowToEvent(latest));
   }
 
+  // 删除也要进变更流，否则别人的 3 秒轮询看不到这条已经消失
+  try {
+    await insertChange(
+      c.env.DB,
+      {
+        id: newChangeId(),
+        eventId: row.id,
+        actorId: claims.sub,
+        actorName: claims.name ?? claims.sub,
+        fromVersion: row.version,
+        toVersion: row.version + 1,
+        changedFields: ['deleted'],
+      },
+      now,
+    );
+  } catch {
+    // 有意留空：主表已删成功，少一条提示不影响正确性
+  }
+
   return c.json({ ok: true, id: row.id, version: row.version + 1 });
 }
 
