@@ -31,6 +31,14 @@ export class VersionConflictError extends Error {
   }
 }
 
+/** 日程已不存在或已被删除：DELETE 收到 404 时抛这个错，界面据此回列表。 */
+export class EventGoneError extends Error {
+  constructor() {
+    super('日程已不存在')
+    this.name = 'EventGoneError'
+  }
+}
+
 /** 登录过期：401 时抛这个错，界面提示重新登录。 */
 export class AuthExpiredError extends Error {
   constructor() {
@@ -163,6 +171,50 @@ export async function patchEvent(id: string, patch: EventPatch): Promise<Calenda
   if (!res.ok) throw new ApiError('保存失败', res.status)
   const body = (await res.json()) as { event: CalendarEvent }
   return body.event
+}
+
+export interface DeleteResult {
+  id: string
+  version: number
+}
+
+/** 软删：带当前版本号，版本不符返回 409（与保存同一套撞车语义）。 */
+export async function deleteEvent(id: string, baseVersion: number): Promise<DeleteResult> {
+  if (isMock()) {
+    loadMock()
+    if (!mockEvent || mockEvent.id !== id) throw new EventGoneError()
+    if (baseVersion !== mockEvent.version) {
+      throw new VersionConflictError({ ...mockEvent }, mockEvent.version, '同学 A')
+    }
+    const version = mockEvent.version + 1
+    mockEvent = null
+    mockChanges.push({
+      eventId: id,
+      actorName: '我',
+      toVersion: version,
+      changedFields: ['deleted'],
+      createdAt: Date.now(),
+    })
+    return { id, version }
+  }
+  const res = await fetch(`${API_BASE}/api/events/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ baseVersion }),
+  })
+  if (res.status === 401) throw new AuthExpiredError()
+  if (res.status === 404) throw new EventGoneError()
+  if (res.status === 403) throw new ApiError('只有创建者可以删除', 403, 'forbidden')
+  if (res.status === 409) {
+    const body = (await res.json()) as { event: CalendarEvent; version: number; actorName?: string | null }
+    throw new VersionConflictError(body.event, body.version, body.actorName ?? null)
+  }
+  if (res.status === 400) {
+    const body = (await res.json()) as { error?: string; field?: string }
+    throw new ApiError('删除失败', res.status, body.error, body.field)
+  }
+  if (!res.ok) throw new ApiError('删除失败', res.status)
+  return (await res.json()) as DeleteResult
 }
 
 export async function fetchChanges(since: number): Promise<ChangesResult> {
