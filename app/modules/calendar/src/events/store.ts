@@ -34,6 +34,27 @@ export async function updateEventConditional(
   return result.meta.changes ?? 0;
 }
 
+/**
+ * 软删：id、版本号、未删除三者同时对得上才落库，返回受影响行数。
+ * 删与改共用一套乐观锁——否则停在旧视图的客户端能把别人刚保存的内容盖掉。
+ */
+export async function softDeleteEvent(
+  db: D1Database,
+  id: string,
+  expectedVersion: number,
+  deletedAt: number,
+): Promise<number> {
+  const result = await db
+    .prepare(
+      `UPDATE calendar_events
+          SET deleted_at = ?, version = version + 1, updated_at = ?
+        WHERE id = ? AND version = ? AND deleted_at IS NULL`,
+    )
+    .bind(deletedAt, deletedAt, id, expectedVersion)
+    .run();
+  return result.meta.changes ?? 0;
+}
+
 /** 写一条变更记录（独立 INSERT，失败不回滚主表）。 */
 export async function insertChange(
   db: D1Database,
