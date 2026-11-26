@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 模块契约 v1（docs/modules.md §3 字段冻结；决策 #56/#57）
+# 地址不在此声明：壳装载与白名单只读注册表 entry 列
+id: calendar
+route: /m/calendar
+runtimes:
+  - worker
+version: 0.1.0
+description: 团队日历（日程编辑与变更流）
+# 直连专属 D1，不走 Core API 的 storage 代理，因此不声明 permissions
+storage:
+  accepts:
+    - core
+  preferred: core
+# 表名必须以模块 id 开头（迁移契约硬要求，docs/modules.md §6）
+tables:
+  - calendar_events
+  - calendar_event_changes
