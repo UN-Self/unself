@@ -203,7 +203,6 @@ describe('mock 全链路：列表 → 房间 → 发送/接收（WS）→ 附件
       unreadCount: before + 1,
       mentionUnreadCount: 1,
       mentionsMe: true,
-      replyToMe: false,
       contentPreview: '在吗',
       sender: {
         kind: 'local',

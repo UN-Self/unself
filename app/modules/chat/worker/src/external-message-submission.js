@@ -17,7 +17,6 @@ export async function submitExternalMessage(env, { room, payload }) {
 	});
 	return {
 		...result,
-		replyToSenderId: payload.replyToSenderId || null,
 		packet: JSON.stringify({ type: "message", message: result.message }),
 	};
 }
