@@ -9,6 +9,7 @@ import MessageContent from './MessageContent.vue'
 import MessageActions from './MessageActions.vue'
 import ForwardBundleView from './ForwardBundleView.vue'
 import { deletionLabel } from '../lib/message-deletion'
+import { isLocalSender } from '../lib/message-sender'
 import type { ChannelMember, Message, ReadReceiptsSummary } from '../lib/types'
 
 /**
@@ -32,8 +33,6 @@ export interface MessageBubbleProps {
   replyJumpable?: boolean
   /** 点击跳转后短暂高亮该气泡（flash 由父层定时清除）。 */
   flash?: boolean
-  /** 高亮（提及我/回复我）。 */
-  highlighted?: boolean
   /** 私聊会话（#220）：DM 且已读 → 「已读」标签（aria=对方已读）。 */
   isDm?: boolean
   /** 可达收件人数（#220 分母：房间成员−发件人，发件人恒已读）。 */
@@ -55,7 +54,6 @@ const props = withDefaults(defineProps<MessageBubbleProps>(), {
   replyDeleted: undefined,
   replyJumpable: false,
   flash: false,
-  highlighted: undefined,
   isDm: false,
   audienceSize: undefined,
   readSummary: null,
@@ -104,9 +102,9 @@ function onBubbleAnimEnd(event: AnimationEvent): void {
 /** 回执面是否显示：仅 mine 气泡 + 有回执数据（旧格式/缺省不显示）。 */
 const showReceiptTag = computed(() => !props.message.deleted && props.mine && props.readSummary !== null && props.readSummary !== undefined)
 
-/** #347 头像右键菜单：@ 提及（DM 服务端丢弃提及，不出该项；撤回消息不弹）。 */
+/** #347 头像右键菜单：@ 提及（DM 服务端丢弃提及、外部发送者不可 @，都不出该项；撤回消息不弹）。 */
 const avatarMenuItems = computed<MenuAction[]>(() => {
-  if (props.message.deleted || props.isDm) return []
+  if (props.message.deleted || props.isDm || !isLocalSender(props.message.sender)) return []
   return [{ id: 'mention', label: '@ 提及', icon: AtSign }]
 })
 
@@ -152,7 +150,7 @@ const bundleOpen = ref(false)
     v-else
     :mine="mine"
     class="bubble-row"
-    :class="{ 'bubble-row-mine': mine, 'bubble-row-highlight': highlighted, 'bubble-row-flash': flash, 'bubble-entering': entering, 'bubble-row-theirs-enter': receiving && !mine }"
+    :class="{ 'bubble-row-mine': mine, 'bubble-row-flash': flash, 'bubble-entering': entering, 'bubble-row-theirs-enter': receiving && !mine }"
     :data-test="mine ? 'bubble-mine' : 'bubble-theirs'"
     @animationend="onBubbleAnimEnd"
   >
@@ -275,9 +273,6 @@ const bundleOpen = ref(false)
 .bubble-avatar-shell { display:inline-flex; flex:none; }
 .bubble-avatar-card { display:flex; flex:none; align-items:center; padding:0; border:0; border-radius:var(--unself-radius-full); background:transparent; cursor:pointer; }
 .bubble-avatar-card:focus-visible { outline:var(--unself-focus-ring); outline-offset:2px; }
-.bubble-row-highlight .bubble-main {
-  outline: 1px solid var(--unself-color-primary-soft);
-}
 .bubble-main {
   display: flex;
   flex-direction: column;
@@ -363,10 +358,6 @@ const bundleOpen = ref(false)
 }
 .bubble-body {
   max-width:100%;
-}
-.bubble-row-highlight .bubble-body {
-  background: var(--unself-color-primary-soft);
-  color: var(--unself-color-text);
 }
 .bubble-text {
   margin: 0;

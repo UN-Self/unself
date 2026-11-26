@@ -30,7 +30,7 @@ export interface ComposerProps {
   replyTo?: Message | null
   /** 输入区占位文案。 */
   placeholder?: string
-  /** @候选联系人（父级传房间成员/联系人）。 */
+  /** @候选联系人（父级传房间成员/联系人）。DM 不提供 @ 提及（契约 4.1）：父层在 DM 传空，候选为空则不弹浮层。 */
   contacts?: UserSummary[]
   /** @all（@所有人）可用（契约 4.1）：仅频道/群聊群主（myRole === 'owner'，canManage 含 admin 口径更宽，不用它）。 */
   canMentionAll?: boolean
@@ -200,16 +200,35 @@ function applyMention(contact: UserSummary): void {
 }
 
 /**
- * #347 外部插入提及（右键头像 @）：插入 mention chip（显示 @displayName，序列化为
+ * #347 外部插入提及（右键头像 @、引用回复补 @）：插入 mention chip（显示 @displayName，序列化为
  * @username），mentions 由 onDocumentChange 从 parts 自动回填。前文非边界时补一个
  * 空格，否则序列化出的 `@username` 粘连前文会被前后端边界口径同时判否（提及失效）。
+ * 编辑器禁用期间（发送中/连接出错）编辑器会丢弃插入——先挂起，恢复可编辑后再插。
  */
+let pendingMention: { id: number; username: string; displayName: string } | null = null
+
 function insertMention(mention: { id: number; username: string; displayName: string }): void {
   if (!mention.username) return
+  if (props.disabled || busy.value) {
+    pendingMention = mention
+    return
+  }
   const prefix = text.value.length > 0 && !/\s$/.test(text.value) ? ' ' : ''
   if (prefix) editor.value?.insertText(prefix)
   editor.value?.insertMention(mention)
 }
+
+watch(
+  () => props.disabled || busy.value,
+  (blocked) => {
+    if (blocked || !pendingMention) return
+    const mention = pendingMention
+    pendingMention = null
+    insertMention(mention)
+  },
+  // 渲染后再执行：默认时机早于 RichInput 收到新的 disabled，插入仍会被它丢弃
+  { flush: 'post' },
+)
 
 /**
  * 统一键盘处理：@浮层打开时 ↑↓/Enter/Esc 归浮层；否则 Enter 发送、

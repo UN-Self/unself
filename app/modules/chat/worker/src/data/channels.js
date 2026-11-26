@@ -85,12 +85,11 @@ export async function listVisibleChannels(db, userId, env) {
 					             AND (
 					               EXISTS (
 					                 SELECT 1 FROM json_each(COALESCE(m.mention_user_ids, '[]')) mention_ids
-					                 WHERE CAST(mention_ids.value AS INTEGER) = ?
+					               WHERE CAST(mention_ids.value AS INTEGER) = ?
 					               )
-					               OR m.reply_to_sender_id = ?
 					             ))
 					     ELSE 0 END AS attention_unread_count,
-					     -- @all 未读（契约 4.1）：只数 mention_all=1，与 attention（提及+回复）独立。
+					     -- @all 未读（契约 4.1）：只数 mention_all=1，与 attention（仅提及）独立。
 					     CASE WHEN EXISTS (SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.user_id = ?)
 					     THEN (SELECT COUNT(*) FROM messages m
 					           WHERE m.channel_id = c.id AND m.deleted_at IS NULL AND m.mention_all = 1
@@ -121,8 +120,7 @@ export async function listVisibleChannels(db, userId, env) {
 					normalizedUserId,
 					normalizedUserId,
 					normalizedUserId,
-				normalizedUserId,
-				normalizedUserId,
+					normalizedUserId,
 				normalizedUserId,
 			)
 		.all();

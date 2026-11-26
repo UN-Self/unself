@@ -98,7 +98,6 @@ export function createMessageSubmission({
 			return {
 				message,
 				created,
-				replyToSenderId: reply.senderId,
 				packet: JSON.stringify({ protocolVersion: 1, type: "message", message }),
 			};
 		} catch (error) {

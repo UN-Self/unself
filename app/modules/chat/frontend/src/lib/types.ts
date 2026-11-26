@@ -115,7 +115,10 @@ export interface Mention {
   displayName: string
 }
 
-/** 发送者（本地用户；external/Telegram 桥上游已裁剪，前端仅处理 local 形状）。 */
+/**
+ * 发送者（本系统用户，kind='local'）。外部桥接消息 worker 下发 kind='external'、id 为字符串、
+ * username 为空，形状未在此声明；按本地用户处理前先用 lib/message-sender.ts 的 isLocalSender 判别。
+ */
 export interface MessageSender {
   kind: 'local'
   id: number
@@ -206,7 +209,6 @@ export interface WsRoomMessageNotice {
   mentionsMe: boolean
   /** @all 对所有非发送成员触发（不含在 mentionsMe 里，两类红标独立）。 */
   mentionedByAll?: boolean
-  replyToMe: boolean
   contentPreview: string
   sender: MessageSender
 }

@@ -189,13 +189,12 @@ export class ChannelRoom {
     }
   }
 
-  runMessageProjections(room, message, replyToSenderId = null) {
+  runMessageProjections(room, message) {
     this.state.waitUntil(
       projectUnreadMessage(this.env, {
         room,
         senderId: message.sender.kind === 'local' ? message.sender.id : null,
-        message,
-        replyToSenderId
+        message
       })
     );
   }
@@ -220,7 +219,7 @@ export class ChannelRoom {
     const result = await submitExternalMessage(this.env, { room, payload });
     if (result.created) {
       await this.broadcast(result.packet);
-      this.runMessageProjections(room, result.message, result.replyToSenderId);
+      this.runMessageProjections(room, result.message);
     }
     return Response.json({ ok: true, created: result.created, message: result.message });
   }
@@ -270,7 +269,7 @@ export class ChannelRoom {
         const result = await submitRoomMessageIdempotent(this.env, meta, action);
         if (result.created) {
           await this.broadcast(result.packet);
-          this.runMessageProjections(access.room, result.message, result.replyToSenderId);
+          this.runMessageProjections(access.room, result.message);
         }
         return Response.json({ created: result.created, message: result.message });
       }

@@ -189,7 +189,6 @@ describe('#230 提及数据面：mock 链路的接收方 @未读投影', () => {
       unreadCount: channel2.unreadCount + 1,
       mentionUnreadCount: before + 1,
       mentionsMe: true,
-      replyToMe: false,
       contentPreview: '@core:2 看一下',
       sender: {
         kind: 'local',

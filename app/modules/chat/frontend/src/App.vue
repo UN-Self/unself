@@ -17,6 +17,7 @@ import { forwardSuccessTickKey } from './lib/forward-events'
 import { createChatSession } from './lib/session'
 import { createChatStorage } from './lib/storage'
 import type { ChannelMember, Message, RoomKind, UserSummary } from './lib/types'
+import { isLocalSender } from './lib/message-sender'
 
 /**
  * 聊天模块根视图（#218 T5 合成）：mock/live 双模式接线。
@@ -340,6 +341,37 @@ function onMention(message: Message): void {
   composerView.value?.insertMention({ id, username, displayName })
 }
 
+/**
+ * 引用回复（契约 4.1：[有人@我] 只认 @）：群聊引用他人消息时，在输入框光标处插入一个 @对方的 chip。
+ * DM 不能 @、引用自己的消息、发送者不在联系人里（已退群/注销）或外部发送者——这几种只带引用。
+ * 联系人与进房并行载入：刚刷新就引用时还没到（live 下本人 chat id 此时也还是 0），等载入后再判定。
+ */
+async function onQuote(message: Message): Promise<void> {
+  replyTo.value = message
+  const room = activeRoom.value
+  if (room?.kind === 'dm') return
+  if (store.state.contacts.length === 0) {
+    try {
+      await store.loadContacts()
+    } catch {
+      // 载入失败：只带引用，不补 @
+      return
+    }
+  }
+  // 等待期间取消了引用或改引了别的消息：不再插入。
+  if (replyTo.value !== message) return
+  // 等待期间切了房：引用已被切房逻辑清掉，chip 不能落进别的房间。
+  if (activeRoom.value?.kind !== room?.kind || activeRoom.value?.id !== room?.id) return
+  const sender = message.sender
+  const contact =
+    isLocalSender(sender) && sender.id !== store.state.myUserId
+      ? contacts.value.find((user) => user.id === sender.id)
+      : undefined
+  if (contact) {
+    composerView.value?.insertMention({ id: contact.id, username: contact.username, displayName: contact.displayName })
+  }
+}
+
 // 切房清引用：replyTo 指向的是上一条消息，换房后原房间已变，留着会把旧 replyMessageId 发到新房。
 // 转发失败保留的幂等键同样只属于当前消息流，切房即弃（防隔久误复用）
 watch(
@@ -355,9 +387,11 @@ watch(
 )
 
 async function onSend(text: string, mentionUserIds: number[], mentionAll = false): Promise<void> {
+  const sentReply = replyTo.value
   try {
-    await store.sendMessage({ content: text, mentionUserIds, mentionAll, replyTo: replyTo.value })
-    replyTo.value = null
+    await store.sendMessage({ content: text, mentionUserIds, mentionAll, replyTo: sentReply })
+    // 发送期间新设的引用不属于这条消息，不清（否则引用条没了、随之补插的 @ 却还在）
+    if (replyTo.value === sentReply) replyTo.value = null
   } catch {
     // 发送失败：sendError 已由 store 置为人话提示（发送态复原，输入不丢可重试）
   }
@@ -381,8 +415,9 @@ async function onSendDocument(document: ComposerDocument, mentionUserIds: number
   try {
     await sendDocument(document, mentionUserIds, mentionAll, signal)
   } catch {
-    // 中止是用户主动放弃，引用条保持清空；房间已切换也不恢复（documentReplyTo 指向旧房间，塞回新房间会发错 replyMessageId）
-    if (!signal.aborted && store.state.currentRoom && roomKeyString(store.state.currentRoom) === replyRoomKey) {
+    // 中止是用户主动放弃，引用条保持清空；房间已切换也不恢复（documentReplyTo 指向旧房间，塞回新房间会发错 replyMessageId）；
+    // 上传期间新设了引用也不恢复（不能拿旧引用盖掉新的）
+    if (!signal.aborted && replyTo.value === null && store.state.currentRoom && roomKeyString(store.state.currentRoom) === replyRoomKey) {
       replyTo.value = documentReplyTo
     }
   } finally {
@@ -400,9 +435,10 @@ async function onSendVoice(recording: {
   try {
     const uploaded = await store.uploadFile(recording.file)
     if (!uploaded) return
+    const sentReply = replyTo.value
     await store.sendMessage({
       content: '',
-      replyTo: replyTo.value,
+      replyTo: sentReply,
       attachment: {
         ...uploaded,
         kind: 'voice',
@@ -410,7 +446,7 @@ async function onSendVoice(recording: {
         waveform: recording.waveform,
       },
     })
-    replyTo.value = null
+    if (replyTo.value === sentReply) replyTo.value = null
   } finally {
     uploading.value = false
   }
@@ -466,7 +502,7 @@ const contextKey = computed(() =>
       @visible-read="onVisibleRead"
       @enter-done="store.enterDone"
       @delete="onDeleteMessage"
-      @quote="replyTo = $event"
+      @quote="onQuote"
       @mention="onMention"
       @forward="onForward"
       @create-group="onCreateGroup"
@@ -482,7 +518,7 @@ const contextKey = computed(() =>
           :sending="store.state.sending"
           :uploading="uploading"
           :reply-to="replyTo"
-          :contacts="contacts"
+          :contacts="activeRoom?.kind === 'dm' ? [] : contacts"
           :can-mention-all="activeRoom?.kind !== 'dm' && (store.state.channels.find((channel) => channel.id === activeRoom?.id)?.myRole === 'owner')"
           @send="onSend"
           :submit-document="onSendDocument"

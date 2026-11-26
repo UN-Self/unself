@@ -104,6 +104,7 @@ export async function countUnreadMessages(db, { channelId, userId }) {
 	return Number(results[0]?.unread_count || 0);
 }
 
+/** 未读的 @我 条数（[有人@我]，契约 4.1）：只认 mention_user_ids，引用回复本身不计数。 */
 export async function countUnreadAttention(db, { channelId, userId }) {
 	const { results } = await db
 		.prepare(
@@ -115,14 +116,11 @@ export async function countUnreadAttention(db, { channelId, userId }) {
 				                            FROM message_reads mr
 				                            WHERE mr.channel_id = ? AND mr.user_id = ?), 0)
 				   AND (m.sender_id IS NULL OR m.sender_id != ?)
-				   AND (
-				     EXISTS (
+				   AND EXISTS (
 				       SELECT 1
 				       FROM json_each(COALESCE(m.mention_user_ids, '[]')) mention_ids
 				       WHERE CAST(mention_ids.value AS INTEGER) = ?
-				     )
-				     OR m.reply_to_sender_id = ?
-				   )`,
+				     )`,
 			)
 			.bind(
 				Number(channelId),
@@ -130,14 +128,10 @@ export async function countUnreadAttention(db, { channelId, userId }) {
 				Number(userId),
 				Number(userId),
 				Number(userId),
-				Number(userId),
 			)
 			.all();
 	return Number(results[0]?.unread_count || 0);
 }
-
-// 协议沿用 mentionUnreadCount 兼容旧客户端，但计数语义与外部桥接一致：同时覆盖提及和回复。
-export const countUnreadMentions = countUnreadAttention;
 
 /**
  * @all 未读（契约 docs/requirements.md 4.1）：只数 mention_all=1 的未读非本人消息。

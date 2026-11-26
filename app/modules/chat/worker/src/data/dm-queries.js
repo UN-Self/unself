@@ -71,7 +71,11 @@ export async function listUserDms(db, userId, env) {
 					    WHERE m.channel_id = c.id AND m.deleted_at IS NULL
 					      AND (m.sender_id IS NULL OR m.sender_id != ?)
 					      AND m.id > COALESCE((SELECT mr.last_read_message_id FROM message_reads mr WHERE mr.channel_id = c.id AND mr.user_id = ?), 0)
-					      AND m.reply_to_sender_id = ?) AS attention_unread_count
+					      AND EXISTS (
+					        SELECT 1
+					        FROM json_each(COALESCE(m.mention_user_ids, '[]')) mention_ids
+					        WHERE CAST(mention_ids.value AS INTEGER) = ?
+					      )) AS attention_unread_count
 			 FROM channels c
 			 JOIN channel_members me ON me.channel_id = c.id AND me.user_id = ?
 			 JOIN channel_members peer ON peer.channel_id = c.id AND peer.user_id != ?
