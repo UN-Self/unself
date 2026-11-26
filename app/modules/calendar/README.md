@@ -1,35 +1,48 @@
-# @unself/calendar
+# calendar 模块
 
-日历与日程管理模块。同一份业务代码支持 Cloudflare Worker，以及通过 Workbench 反连接入的 Node/Docker 本地运行方式。
+日历模块，本期做「编辑日程」：读取一条日程、按版本号乐观锁改字段、通过变更流提示他人改动。
 
-## 本地运行
+## 目录
 
-先启动本地 Workbench，并在管理台「新增模块 → 反连接入」创建 `calendar`，取得模块 key。
+- `src/`：worker 入口、认证、路由、事件读写与校验
+- `frontend/`：Vue 前端，含 409 对比横幅与 3 秒轮询提示
+- `test/`：真 SQLite 跑真迁移的路由级集成测试
+- `migrations/calendar/`：D1 迁移
+- `scripts/build.mjs`：打包、校验 manifest
+
+## 接口
+
+- `PATCH /api/events/:id`：改字段，必带 `version`；200 回 `{ event, version }`，409 回 `{ error: version_conflict, event, version, actorName }`
+- `GET /api/events/:id`：读详情，软删一律 404。归模块自有：变更流只给 eventId，撞车对比必须靠它取完整日程；后续查组若有详情接口再统一口径。
+- `GET /api/changes?since=`：变更流，`since` 含当毫秒，cursor 只前进，单次上限 200
+- `GET /api/health`、`GET /life/export`、`POST /life/purge`：平台约定接口
+
+## 运行
 
 ```bash
-cp .env.example .env
-# 填写 UNSELF_CORE_URL 与 UNSELF_MODULE_KEY
 pnpm --filter @unself/calendar dev
 ```
 
-宿主默认监听 `127.0.0.1:8790`（Docker 部署在 `compose.yml` 里显式设 `0.0.0.0:8791` 以打通端口映射），同时主动连接 Workbench。连接成功后即可在模块列表打开 Calendar。
-
-## Docker
+前端：
 
 ```bash
-pnpm --filter @unself/calendar pack --pack-destination app/modules/calendar
-docker compose -f app/modules/calendar/compose.yml up --build
+pnpm --filter @unself/calendar-frontend dev
 ```
 
-Dockerfile 会安装刚生成的 `unself-calendar-*.tgz`，运行与本地 Node 模式相同的 `unself-calendar` 入口。
+真接口模式需在工作台或 `frontend/public/dev-shim.html` 里打开，由壳注入 token。
 
-## 验证
+本地 D1 不会自动跑迁移，需先执行 `migrations/calendar/0001_events.sql` 并插入测试行。
+
+PATCH 只允许改自己的日程：行上 `organizer_id` 必须等于 token 的 `sub`，否则 403。
+
+## 校验与产物
 
 ```bash
+pnpm --filter @unself/calendar typecheck
 pnpm --filter @unself/calendar test
-pnpm --filter @unself/calendar build
+node scripts/build.mjs
 ```
 
-日程数据使用 Core 的 `module-api/storage` 接口，因此不依赖 Cloudflare R2。
+## 部署变量
 
-> AI生成
+装容器注入 `MODULE_ID`（实例 id，也是 token 的 aud）、`CORE_JWKS_JSON`、可选 `CORE_ISSUER`；不注 `MODULE_ID` 时回落 `manifest.id`，仅本地调试用。

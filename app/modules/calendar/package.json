@@ -5,8 +5,7 @@
   "type": "module",
   "main": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./node": "./dist/main.js"
+    ".": "./src/index.ts"
   },
   "engines": {
     "node": ">=22"
@@ -14,27 +13,21 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "pnpm --filter @unself/sdk run build && node scripts/build.mjs",
-    "prepack": "pnpm run build && node -e \"require('node:fs').copyFileSync('dist/worker.js','worker.js')\"",
-    "dev": "pnpm --filter @unself/sdk run build && tsx --env-file=.env src/main.ts",
-    "postpack": "node -e \"require('node:fs').rmSync('worker.js',{force:true})\""
+    "build": "node scripts/build.mjs"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@unself/sdk": "workspace:*",
+    "hono": "^4.10.0"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",
     "@types/node": "^24.0.0",
     "@unself/contracts": "workspace:*",
-    "@unself/sdk": "workspace:*",
     "esbuild": "^0.28.0",
-    "hono": "^4.10.0",
     "jose": "^6.1.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
-    "vitest": "^3.2.0",
-    "wrangler": "^4.0.0"
-  },
-  "bin": {
-    "unself-calendar": "./dist/main.js"
+    "vitest": "^3.2.0"
   },
   "files": [
     "dist",
