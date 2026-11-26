@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 使用前：cp .env.example .env，填写 core 地址和模块 key，然后 pnpm pack。
+services:
+  calendar:
+    build: .
+    env_file: .env
+    environment:
+      # 容器内必须显式监听 0.0.0.0：@unself/sdk/host 默认只听 127.0.0.1:8790，
+      # 不设则端口映射打不通（评审：8791 映射落空）。
+      UNSELF_MODULE_ADDR: 0.0.0.0:8791
+    ports:
+      - "8791:8791"
+    restart: unless-stopped
