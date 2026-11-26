@@ -75,6 +75,12 @@ async function load(): Promise<void> {
 void bootstrap()
 
 function onRemoteChange(change: EventChange): void {
+  // 别人把这条删掉了：编辑器和保存都没有意义了，直接进收口态。
+  // 已经收口过（含自己删的）就不再改写文案，避免「已删除」被刷成「不在了」
+  if (change.changedFields.includes('deleted')) {
+    if (gone.value === null) onGone()
+    return
+  }
   // 轮询提前提示：changes 里没有完整 event，刷新时走 GET；这种横幅不提供重试
   banner.value = { actorName: change.actorName, fields: change.changedFields, latest: null, retry: null }
 }
