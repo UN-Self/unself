@@ -8,8 +8,8 @@
  *
  * 业务体统一回 501 `not_implemented`：这是**显式占位**，不是假装成功。
  * 为什么占位而不是先写一半：
- * - 鉴权要查 `docs_documents.owner_id` / `docs_document_members.role`，表还没落（T2）；
- * - JWKS 通道没建（T0），认证在 docker 路径拿不到公钥。
+ * - 鉴权要查 `docs_documents.owner_id` / `docs_document_members.role`，裁决还没接进请求链路；
+ * - 公钥由部署期注入的 `CORE_JWKS_JSON` 提供（入口 node.ts 建验签器后传入），缺它回 503。
  * 两块到位后，这里把 501 换成「裁决 + 仓储调用」，路由与认证不用改。
  */
 import { Hono } from 'hono';

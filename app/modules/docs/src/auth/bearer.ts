@@ -7,9 +7,10 @@
  * 2. 验签不过（签名不符 / 过期 / aud 不符）→ 401 `token_invalid`，**不区分原因**
  * 3. 本进程拿不到 core 公钥 → 503 `jwks_unavailable`（配置缺口，不冒充 401）
  *
- * 验签器由装配层注入（`createDocsApp({ verifier })`）：CF 路径从 `vars.CORE_JWKS_JSON`
- * 建本地验签，docker 路径等 T0（`@unself/sdk/host` 建连后下发公钥）——本文件不关心
- * 公钥从哪来，只关心「拿不到就是 503」。这样 T0 落地前后这份代码零改动。
+ * 验签器由装配层注入（`createDocsApp({ verifier })`）：公钥是部署期注入的 `CORE_JWKS_JSON`
+ * （CF 形态来自 `vars`，node/docker 形态来自进程环境变量，同一变量同一语义——本地验签、
+ * 运行时不联网取钥；见安装器 README「Docker 等价注记」）——本文件不关心
+ * 公钥从哪来，只关心「拿不到就是 503」。
  */
 import type { ModuleTokenClaims } from '@unself/contracts';
 
