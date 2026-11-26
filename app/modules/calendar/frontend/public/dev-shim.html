@@ -1,0 +1,72 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Unself Calendar · dev-shim</title>
+    <style>
+      body { font-family: ui-monospace, monospace; margin: 0; display: flex; height: 100vh; }
+      #console { width: 320px; overflow: auto; border-right: 1px solid silver; padding: 8px; box-sizing: border-box; font-size: 12px; }
+      #framebox { flex: 1; }
+      iframe { width: 100%; height: 100%; border: 0; display: block; }
+      .log { margin: 0 0 4px; white-space: pre-wrap; word-break: break-all; }
+      .ok { color: green; }
+      .warn { color: darkorange; }
+      .err { color: crimson; }
+    </style>
+  </head>
+  <body>
+    <div id="console"><h3>handshake shim</h3><p class="warn">等待模块 ready…</p></div>
+    <div id="framebox"><iframe id="module" src="/"></iframe></div>
+    <script>
+      const w = new URLSearchParams(location.search).get('w')
+      if (w) document.getElementById('framebox').style.maxWidth = w + 'px'
+
+      const consoleEl = document.getElementById('console')
+      function log(kind, text) {
+        const p = document.createElement('p')
+        p.className = 'log ' + (kind || '')
+        p.textContent = '[shim] ' + text
+        consoleEl.appendChild(p)
+      }
+
+      const moduleOrigin = location.origin
+      const CORE_ORIGIN = moduleOrigin
+      const base64urlUtf8 = (obj) => {
+        const bytes = new TextEncoder().encode(JSON.stringify(obj))
+        let bin = ''
+        for (const b of bytes) bin += String.fromCharCode(b)
+        return btoa(bin).replace(/=+$/, '')
+      }
+      // 真接口联调：用 node scripts/dev-token.mjs 打出来的 ?token=<jwt> 覆盖假 token。
+      // 假 token 只演示握手流程，后端 JWKS 验签一定不过，会回 401。
+      const injectedToken = new URLSearchParams(location.search).get('token')
+      const issuedToken = injectedToken || ('dev-shim-token.' + base64urlUtf8({ iss: 'dev-shim', sub: 'u1', aud: 'calendar', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 600, name: '走查用户' }) + '.sig')
+      if (injectedToken) log('ok', '使用 URL 注入的真 token（JWKS 可验签）')
+
+      window.addEventListener('message', (event) => {
+        if (event.origin !== moduleOrigin) return
+        const data = event.data
+        if (!data || typeof data !== 'object') return
+        if (data.type === 'ready') {
+          log('ok', 'ready 收到 → 下发 token（aud=calendar）')
+          event.source.postMessage({ type: 'token', token: issuedToken }, CORE_ORIGIN)
+          log('ok', 'token 已下发')
+          setTimeout(() => {
+            event.source.postMessage({ type: 'tokens', tokens: {} }, CORE_ORIGIN)
+          }, 50)
+        } else if (data.type === 'theme') {
+          log('ok', 'theme: ' + data.mode)
+        } else if (data.type === 'navigate') {
+          log('warn', 'navigate: ' + data.path)
+        } else if (data.type === 'notify') {
+          log('ok', 'notify: ' + data.title)
+        } else {
+          log('', '消息: ' + JSON.stringify(data))
+        }
+      })
+      log('', 'shim 已启动，origin=' + moduleOrigin)
+    </script>
+  </body>
+</html>
