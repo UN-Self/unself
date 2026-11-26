@@ -62,7 +62,7 @@ describe('GET /api/docs/:id', () => {
     await api.getDoc('doc_1')
 
     const call = calls[0]!
-    expect(call.url).toBe('/api/docs/doc_1')
+    expect(call.url).toBe('./api/docs/doc_1')
     expect((call.init?.headers as Record<string, string>).authorization).toBe('Bearer tok_1')
     expect((call.init?.headers as Record<string, string>)['content-type']).toBe('application/json')
   })
@@ -81,7 +81,7 @@ describe('GET /api/docs/:id', () => {
     const api = createHttpDocsApi({ getToken: () => null })
     await api.getDoc('a/b c?d')
 
-    expect(calls[0]!.url).toBe('/api/docs/a%2Fb%20c%3Fd')
+    expect(calls[0]!.url).toBe('./api/docs/a%2Fb%20c%3Fd')
   })
 
   it('baseUrl 只做前缀拼接', async () => {

@@ -23,7 +23,7 @@ export interface DocsListApi {
 }
 
 export interface HttpDocsListApiOptions {
-  /** 模块挂在 /m/docs，core 已剥离前缀，所以默认空串（同源相对路径）。 */
+  /** 接口地址前缀，默认 `'.'`（相对当前页面）；不能写 `/api/...`，理由见 docs-api.ts。 */
   baseUrl?: string
   /** 从壳拿到的短时模块 token（aud=docs）。 */
   getToken: () => string | null
@@ -60,7 +60,7 @@ function toListDoc(raw: unknown): Doc {
 }
 
 export function createHttpDocsListApi(options: HttpDocsListApiOptions): DocsListApi {
-  const base = options.baseUrl ?? ''
+  const base = options.baseUrl ?? '.'
 
   return {
     async listDocs(query = {}) {

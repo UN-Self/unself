@@ -30,7 +30,10 @@ export interface DocsApi {
 }
 
 export interface HttpDocsApiOptions {
-  /** 模块挂在 /m/docs，core 已剥离前缀，所以默认空串（同源相对路径）。 */
+  /**
+   * 接口地址前缀，默认 `'.'`（相对当前页面）：页面从壳的 `/m/docs/` 加载，接口就在同一个
+   * 目录下。不能写 `/api/...`——绝对路径会打到实例根路径，进不了模块。
+   */
   baseUrl?: string
   /** 从壳拿到的短时模块 token（aud=docs）。由 D7 的握手层注入，编辑器不管来源。 */
   getToken: () => string | null
@@ -57,7 +60,7 @@ async function readErrorCode(response: Response): Promise<string> {
 }
 
 export function createHttpDocsApi(options: HttpDocsApiOptions): DocsApi {
-  const base = options.baseUrl ?? ''
+  const base = options.baseUrl ?? '.'
 
   return {
     async getDoc(id: string): Promise<Doc> {
