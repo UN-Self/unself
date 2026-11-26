@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { DEFAULT_MODULE_ID, type AppEnv } from './auth';
 import { exportData, purgeData } from './life';
 import { listChanges } from './routes/changes';
-import { getEvent, patchEvent } from './routes/events';
+import { getEvent, deleteEvent, patchEvent } from './routes/events';
 
 /** 模块入口：只挂载路由与生命周期端点，业务实现放各自文件，避免多人改同一处。 */
 
@@ -23,6 +23,7 @@ app.get('/api/health', (c) => c.json({ ok: true, service: 'module-calendar' }));
 app.get('/api/events/changes', listChanges);
 app.get('/api/events/:id', getEvent);
 app.patch('/api/events/:id', patchEvent);
+app.delete('/api/events/:id', deleteEvent);
 
 app.get('/life/export', exportData);
 app.post('/life/purge', purgeData);
