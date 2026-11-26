@@ -7,6 +7,7 @@ import type { CalendarEvent, EventChange } from '../../src/types'
 import {
   AuthExpiredError,
   fetchEvent,
+  EventGoneError,
   mockSimulateRemoteEdit,
   patchEvent,
   setTokenProvider,
@@ -25,6 +26,8 @@ const loadError = ref('')
 const authExpired = ref(false)
 const handshakeError = ref('')
 const handshakeReady = ref(false)
+/** 删除收口：goodbye 是「这条已经没了」的统一态，两种来源都落到这里。 */
+const gone = ref<'deleted' | 'gone' | null>(null)
 const banner = ref<{
   actorName: string
   fields: string[]
@@ -60,7 +63,12 @@ async function load(): Promise<void> {
   try {
     event.value = await fetchEvent(EVENT_ID)
     loadError.value = ''
-  } catch {
+  } catch (err) {
+    if (err instanceof EventGoneError) {
+      // 进来时就已经被删了：与删除后同一个收口，不显示「加载失败」
+      gone.value = 'gone'
+      return
+    }
     loadError.value = '加载日程失败'
   }
 }
@@ -137,6 +145,29 @@ function keepMine(): void {
   banner.value = null
 }
 
+/** 删除撞到 409：只提示「有人先改了」，不替用户重试删除。 */
+const deleteConflict = ref<{ actorName: string | null } | null>(null)
+
+function onDeleteConflict(payload: { actorName: string | null }): void {
+  deleteConflict.value = { actorName: payload.actorName }
+  void load()
+}
+
+/** 删除成功或发现已被删：清掉编辑器，进同一个收口态。 */
+function onDeleted(_id: string): void {
+  event.value = null
+  banner.value = null
+  deleteConflict.value = null
+  gone.value = 'deleted'
+}
+
+function onGone(): void {
+  event.value = null
+  banner.value = null
+  deleteConflict.value = null
+  gone.value = 'gone'
+}
+
 /** 演示按钮：模拟另一个人保存了一条变更，3 秒内触发黄条。 */
 function simulateRemote(): void {
   mockSimulateRemoteEdit(['title', 'location'])
@@ -152,6 +183,15 @@ function simulateRemote(): void {
     <p v-if="!handshakeReady && !handshakeError" class="msg">正在连接平台…</p>
     <p v-if="authExpired" class="msg err">登录已过期，请重新登录。</p>
     <p v-if="loadError" class="msg err">{{ loadError }}</p>
+
+    <p v-if="deleteConflict" class="msg err">
+      删除没生效：{{ deleteConflict.actorName ?? '其他人' }} 刚改过这条日程，已刷新成最新，请确认后再删。
+    </p>
+
+    <section v-if="gone" class="card">
+      <p class="gone-title">{{ gone === 'deleted' ? '日程已删除' : '这条日程已经不在了' }}</p>
+      <p class="page-note">列表和详情都不再返回它；导出备份里仍保留，清库时才会物理清除。</p>
+    </section>
 
     <p v-if="pendingCount > 0" class="msg">另有 {{ pendingCount }} 条日程有更新</p>
     <RemoteEditBanner
@@ -170,7 +210,10 @@ function simulateRemote(): void {
       v-if="event"
       :event="event"
       @saved="onSaved"
+      @deleted="onDeleted"
+      @gone="onGone"
       @conflict="onConflict"
+      @delete-conflict="onDeleteConflict"
       @auth-expired="authExpired = true"
     />
 
@@ -186,6 +229,14 @@ function simulateRemote(): void {
 .page-note { font-size: var(--unself-font-size-sm, 13px); color: var(--unself-color-text-secondary, #666); }
 .msg { font-size: var(--unself-font-size-sm, 13px); }
 .err { color: var(--unself-color-danger, #c0392b); }
+.card {
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  border: 1px solid var(--unself-color-border, #ddd);
+  border-radius: var(--unself-radius-lg, 12px);
+  background: var(--unself-color-surface, #fff);
+}
+.gone-title { margin: 0 0 6px; font-size: var(--unself-font-size-base, 14px); color: var(--unself-color-text, #1a1a1a); }
 .demo-tools { margin-top: 16px; }
 .demo-tools button {
   padding: 6px 12px;

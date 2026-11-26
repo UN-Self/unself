@@ -76,11 +76,13 @@ export interface ChangesResult {
 
 // ---- mock 内存状态 ----
 let mockEvent: CalendarEvent | null = null
+/** 演示删过之后就别再自动种回来了，否则刷新一次日程又出现。 */
+let mockDeleted = false
 let mockChanges: EventChange[] = []
 let mockChangeId = 0
 
 function loadMock(): void {
-  if (mockEvent) return
+  if (mockEvent || mockDeleted) return
   mockEvent = {
     id: 'demo-1',
     uid: 'demo-1@example',
@@ -125,13 +127,14 @@ export function mockSimulateRemoteEdit(fields: string[], actorName = '同学 A')
 export async function fetchEvent(id: string): Promise<CalendarEvent> {
   if (isMock()) {
     loadMock()
-    if (!mockEvent || mockEvent.id !== id) throw new ApiError('not_found', 404)
+    if (!mockEvent || mockEvent.id !== id) throw new EventGoneError()
     return { ...mockEvent }
   }
   const res = await fetch(`${API_BASE}/api/events/${encodeURIComponent(id)}`, {
     headers: authHeaders(),
   })
   if (res.status === 401) throw new AuthExpiredError()
+  if (res.status === 404) throw new EventGoneError()
   if (!res.ok) throw new ApiError('加载日程失败', res.status)
   const body = (await res.json()) as { event: CalendarEvent }
   return body.event
@@ -140,7 +143,7 @@ export async function fetchEvent(id: string): Promise<CalendarEvent> {
 export async function patchEvent(id: string, patch: EventPatch): Promise<CalendarEvent> {
   if (isMock()) {
     loadMock()
-    if (!mockEvent || mockEvent.id !== id) throw new ApiError('not_found', 404)
+    if (!mockEvent || mockEvent.id !== id) throw new EventGoneError()
     if (patch.version !== mockEvent.version) {
       throw new VersionConflictError({ ...mockEvent }, mockEvent.version, '同学 A')
     }
@@ -159,6 +162,7 @@ export async function patchEvent(id: string, patch: EventPatch): Promise<Calenda
     body: JSON.stringify(patch),
   })
   if (res.status === 401) throw new AuthExpiredError()
+  if (res.status === 404) throw new EventGoneError()
   if (res.status === 409) {
     const body = (await res.json()) as { event: CalendarEvent; version: number; actorName?: string | null }
     throw new VersionConflictError(body.event, body.version, body.actorName ?? null)
@@ -188,6 +192,7 @@ export async function deleteEvent(id: string, baseVersion: number): Promise<Dele
     }
     const version = mockEvent.version + 1
     mockEvent = null
+    mockDeleted = true
     mockChanges.push({
       eventId: id,
       actorName: '我',

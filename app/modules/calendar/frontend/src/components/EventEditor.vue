@@ -2,14 +2,25 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
 import type { CalendarEvent, EventStatus } from '../../../src/types'
-import { ApiError, AuthExpiredError, patchEvent, VersionConflictError, type EventPatch } from '../lib/api'
+import {
+  ApiError,
+  AuthExpiredError,
+  deleteEvent,
+  EventGoneError,
+  patchEvent,
+  VersionConflictError,
+  type EventPatch,
+} from '../lib/api'
 import { describeApiError, diffEditableFields, validateDraft } from '../lib/validate'
 import { fromZonedInput, toZonedInput } from '../lib/time'
 
 const props = defineProps<{ event: CalendarEvent }>()
 const emit = defineEmits<{
   saved: [event: CalendarEvent]
+  deleted: [id: string]
+  gone: []
   conflict: [payload: { latest: CalendarEvent; actorName: string | null; fields: string[]; patch: EventPatch; draft: Draft }]
+  'delete-conflict': [payload: { latest: CalendarEvent; actorName: string | null }]
   'auth-expired': []
 }>()
 
@@ -117,6 +128,37 @@ async function onSave(): Promise<void> {
     saving.value = false
   }
 }
+
+const deleting = ref(false)
+
+/** 二次确认后再删：删除不可撤销，误点代价比多一次点击高。 */
+async function onDelete(): Promise<void> {
+  error.value = ''
+  if (!globalThis.confirm(`删除「${props.event.title}」？删除后无法恢复。`)) return
+
+  deleting.value = true
+  try {
+    await deleteEvent(props.event.id, props.event.version)
+    emit('deleted', props.event.id)
+  } catch (err) {
+    if (err instanceof EventGoneError) {
+      // 别人已经删掉了：结果和我要的一样，直接当删除成功收口
+      emit('gone')
+    } else if (err instanceof VersionConflictError) {
+      // 有人先改了：先让人看见新值，再决定删不删；不提供「用我的重试」，
+      // 因为删除的重试对象是别人改过的内容，不该替用户决定
+      emit('delete-conflict', { latest: err.event, actorName: err.actorName })
+    } else if (err instanceof AuthExpiredError) {
+      emit('auth-expired')
+    } else if (err instanceof ApiError) {
+      error.value = err.status === 403 ? '只有创建者可以删除这条日程' : '删除失败，请稍后再试'
+    } else {
+      error.value = '删除失败，请稍后再试'
+    }
+  } finally {
+    deleting.value = false
+  }
+}
 </script>
 
 <template>
@@ -151,7 +193,10 @@ async function onSave(): Promise<void> {
     <p v-if="error" class="msg err">{{ error }}</p>
     <p v-if="saved" class="msg ok">已保存</p>
     <div class="actions">
-      <button type="button" :disabled="saving" @click="onSave">
+      <button type="button" class="danger" :disabled="saving || deleting" @click="onDelete">
+        {{ deleting ? '删除中…' : '删除' }}
+      </button>
+      <button type="button" :disabled="saving || deleting" @click="onSave">
         {{ saving ? '保存中…' : '保存' }}
       </button>
     </div>
@@ -166,7 +211,12 @@ async function onSave(): Promise<void> {
 .msg { font-size: var(--unself-font-size-sm, 13px); margin: 0 0 10px; }
 .err { color: var(--unself-color-danger, #c0392b); }
 .ok { color: var(--unself-color-success, #1f8b4c); }
-.actions { display: flex; justify-content: flex-end; }
+.actions { display: flex; justify-content: flex-end; gap: 10px; }
 .actions button { padding: 8px 18px; border: 0; border-radius: var(--unself-radius-md, 8px); background: var(--unself-color-primary, #3457d5); color: #fff; cursor: pointer; }
 .actions button:disabled { opacity: 0.6; cursor: default; }
+.actions button.danger {
+  background: transparent;
+  color: var(--unself-color-danger, #c0392b);
+  border: 1px solid var(--unself-color-border, #ddd);
+}
 </style>
