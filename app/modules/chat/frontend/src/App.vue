@@ -482,7 +482,7 @@ const contextKey = computed(() =>
           :sending="store.state.sending"
           :uploading="uploading"
           :reply-to="replyTo"
-          :contacts="contacts"
+          :contacts="activeRoom?.kind === 'dm' ? [] : contacts"
           :can-mention-all="activeRoom?.kind !== 'dm' && (store.state.channels.find((channel) => channel.id === activeRoom?.id)?.myRole === 'owner')"
           @send="onSend"
           :submit-document="onSendDocument"

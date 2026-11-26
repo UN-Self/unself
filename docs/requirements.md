@@ -63,7 +63,7 @@
 ### 4.1 聊天（可选）
 - [x] 聊天模块就是 `app/modules/chat`（包名 `@unself/chat`）。代码源自 EdgeChat，现在是本仓库里的一个模块，不是还要再接的外部产品。（2026-09-23 对齐：`@unself/chat` 0.1.1 已发 npm）
 - [x] 频道消息、附件、消息持久化已经在这个模块里（表：`channels`、`messages`、`message_attachments`、`uploaded_files`）。
-- [x] @ 提醒已验收：发送透传 `mentionUserIds`、服务端复核（mentions.js）、气泡高亮、右键头像 @、列表 `[有人@我]` 前缀。（2026-11-21 实测：mock 全链路真机走查；live 待部署后复验）
+- [x] @ 提醒已验收：发送透传 `mentionUserIds`、服务端复核（mentions.js）、气泡高亮、右键头像 @、列表 `[有人@我]` 前缀。（2026-11-21 实测：mock 全链路真机走查；live 待部署后复验）DM 不提供 @ 提及个人（2026-11-26 PR #378 本地验收定案）：DM 里输入 `@` 不弹候选，头像右键无「@ 提及」项，服务端对 DM 的 `mentionUserIds` 一律置空（不点亮气泡高亮、不因 @ 点亮 `[有人@我]`，回复我仍计红标）；@ 仅频道/群聊可用
 - [x] @ 全体成员（@all）：仅频道/群聊的群主（`channel_members.role = 'owner'`）可用，DM 无此功能；服务端按 owner 角色 + 客户端 `mentionAll` chip 标记（手打 `@所有人` 文本不算，只有选中 @ 候选插入的 @all chip 才置位）+ content 含边界包裹的 `@所有人` 三重复核，任一不满足即降级为普通消息；`@all` 只点亮列表 `[@全体成员]` 前缀（独立计数 `mentionAllUnread`），单独特定我才点亮 `[有人@我]`（沿用 `mentionUnreadCount`），两者可并存、`[@全体成员]` 在前。（2026-11-21 契约定案：仅群主口径，管理(admin)角色另立）
 - [x] 消息转发：右键菜单「转发」（单条直达）与「多选」（勾选集底部操作条，勾 1 条也可选）；目标为已加入的群组（频道）和联系人（`openDm` 解析私聊），支持多选目标。逐条转发 = 每条源消息复制为一条普通消息；合并转发 = 一条 `[聊天记录] N 条消息` 摘要卡（`forward_bundle` blocks 存 `message_block_payloads.content_blocks`，浮层展开逐条查看）。客户端只传 `forward{mode, messageIds}`，服务端读取源消息复制落地（校验源消息存在、未删除且所在房间可读；附件沿用原 key，归属按 uploaded_files 真实 owner 校验，转发多少手都不断链）；转发消息不做任何来源标注，外观与普通消息一致。（2026-11-21 实现；live 待部署后实测）
 - [ ] 历史检索还没单独立项验收。

@@ -30,7 +30,7 @@ export interface ComposerProps {
   replyTo?: Message | null
   /** 输入区占位文案。 */
   placeholder?: string
-  /** @候选联系人（父级传房间成员/联系人）。 */
+  /** @候选联系人（父级传房间成员/联系人）。DM 不提供 @ 提及（契约 4.1）：父层在 DM 传空，候选为空则不弹浮层。 */
   contacts?: UserSummary[]
   /** @all（@所有人）可用（契约 4.1）：仅频道/群聊群主（myRole === 'owner'，canManage 含 admin 口径更宽，不用它）。 */
   canMentionAll?: boolean

@@ -436,14 +436,16 @@ export function createMockChatApi(
     // 幂等：同 clientMessageId 直接回显已存在消息（上游 idempotent 语义）
     const existing = rows.find((r) => r.clientMessageId === input.clientMessageId)
     if (existing) return { created: false, message: rowToMessage(existing) }
-    const mentions = (input.mentionUserIds ?? [])
+    // DM 不提供 @ 提及（契约 4.1）：dm 分支与 worker resolveMessageMentionUserIds 同语义，mentionUserIds 与 mentions 一律落空
+    const mentionUserIds = input.kind === 'dm' ? [] : (input.mentionUserIds ?? [])
+    const mentions = mentionUserIds
       .map((id) => world.contacts.find((u) => u.id === id))
       .filter((u): u is UserSummary => Boolean(u))
       .map((u) => ({ userId: u.id, username: u.username, displayName: u.displayName }))
     const created: MockMessageRow = {
       id: ++nextMessageId,
       content: input.content,
-      mentionUserIds: input.mentionUserIds ?? [],
+      mentionUserIds,
       mentions,
       createdAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
       source: 'edgechat',
