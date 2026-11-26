@@ -199,6 +199,37 @@ export function validatePatch(raw: unknown, base: EventRow): ValidateResult {
   return { ok: true, patch, columns, next, changedFields };
 }
 
+/** 删除请求体里的并发令牌字段名（与 PATCH 的 version 分开，避免误当补丁字段）。 */
+export const BASE_VERSION_FIELD = 'baseVersion';
+
+export type DeleteValidateResult =
+  | { ok: true; baseVersion: number }
+  | { ok: false; error: string; field?: string };
+
+function failDelete(error: string, field?: string): DeleteValidateResult {
+  return field === undefined ? { ok: false, error } : { ok: false, error, field };
+}
+
+/** 校验 DELETE 请求体：只认 baseVersion，与 PATCH 一样不做宽容处理。 */
+export function validateDelete(raw: unknown): DeleteValidateResult {
+  if (!isPlainObject(raw)) {
+    return failDelete('body_must_be_object');
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== BASE_VERSION_FIELD) {
+      return failDelete('unknown_field', key);
+    }
+  }
+  if (!(BASE_VERSION_FIELD in raw)) {
+    return failDelete('baseVersion_required', BASE_VERSION_FIELD);
+  }
+  const value = raw[BASE_VERSION_FIELD];
+  if (!isInteger(value) || value < 1) {
+    return failDelete('baseVersion_invalid', BASE_VERSION_FIELD);
+  }
+  return { ok: true, baseVersion: value };
+}
+
 /** API 值 → 列值（allDay 布尔转 0/1，其余原样）。 */
 function toColumnValue(field: keyof Omit<EventPatch, 'version'>, patch: EventPatch): string | number | null {
   if (field === 'allDay') {
