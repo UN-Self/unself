@@ -174,6 +174,18 @@ importers:
       '@unself/contracts':
         specifier: workspace:*
         version: link:../../../core/contracts
+      '@unself/sdk':
+        specifier: workspace:*
+        version: link:../../../core/sdk
+      esbuild:
+        specifier: ^0.28.0
+        version: 0.28.2
+      jose:
+        specifier: ^6.1.0
+        version: 6.2.12
+      tsx:
+        specifier: ^4.20.0
+        version: 4.23.13
       typescript:
         specifier: ^5.9.0
         version: 5.9.3

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# 云笺：Markdown 文档模块（issue #358）。模块契约 v1（docs/modules.md）。
+# 地址不在此声明（#349 U9）：反连模块的接入点 = core 隧道路由 /m/<id>/。
+id: docs
+version: 0.1.0
+route: /m/docs
+# 运行体只有 worker / node 两个值（docker 是分发形式，不是运行体）。本 MVP 只跑通 node。
+runtimes:
+  - node
+description: 云笺 · Markdown 文档（列表、编辑器、预览）
+# 不经 Core API：permissions 省略 = 不申请任何权限词（契约默认）。
+# 数据落点 = self：模块自带 SQLite，平台不接线、不跑迁移、卸载时不碰数据。
+# 所以不申报 tables（申报 tables 就必须 accepts 含 core）。
+storage:
+  accepts:
+    - self
+  preferred: self
