@@ -34,5 +34,11 @@ app/installer/*.tgz
 # chat 模块前端产物（#284：vite 构建产物随模块包打包，不入库）
 app/modules/chat/assets/
 
+# calendar 模块前端产物（vite 构建产物随模块包打包，不入库）
+app/modules/calendar/assets/
+
+# 本地联调签名私钥（可随时用 --rotate 重建，不入库）
+**/.dev-keys.json
+
 # SDK tarball（可重建，不入库）
 core/sdk/*.tgz

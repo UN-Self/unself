@@ -1,0 +1,20 @@
+{
+  // SPDX-License-Identifier: AGPL-3.0-only
+  // 本地开发参考（真实部署走装配器生成的 .deploy/cloudflare/app/modules/calendar.wrangler.jsonc）。
+  // 日历直连专属 D1（storage = core + tables 申报），不走 Core API 的 storage 代理。
+  "name": "unself-module-calendar",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "unself-calendar",
+      "database_id": "REPLACE_ME"
+    }
+  ],
+  "vars": {
+    // 部署装配期注入核心 JWKS JSON（模块 token 本地验签，零运行时网络）；空 = 未配，需认证接口回 503
+    "CORE_JWKS_JSON": "",
+    "CORE_ISSUER": ""
+  }
+}
