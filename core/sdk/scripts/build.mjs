@@ -13,7 +13,7 @@
  */
 import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';
-import { cp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rename, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -23,6 +23,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG = join(HERE, '..');
 const ROOT = join(PKG, '..', '..');
 const DIST = join(PKG, 'dist');
+/**
+ * 先生成到暂存目录，最后整体换名成 dist（#382）。
+ *
+ * 起因：`pnpm -r build` 里 hello / installer 的 build 会再跑一次本脚本，与同级包（如
+ * app/modules/chat 的 `tsc --noEmit`）**并发**。原来一上来就 `rm -rf dist`，正好撞上
+ * 对方解析 `@unself/sdk/host` 的窗口，CI 上表现为「找不到模块」。
+ * 换名期间 dist 只有「旧的」和「新的」两种状态，没有「不存在」。
+ */
+const STAGING = join(PKG, `dist.staging-${process.pid}`);
 const ENTRY = join(PKG, 'src', 'index.ts');
 
 /** SPDX 横幅：esbuild 默认会剥掉源码里的 `// SPDX-...`（非 legal comment），显式补回。 */
@@ -39,13 +48,13 @@ const common = {
 };
 
 async function main() {
-  await rm(DIST, { recursive: true, force: true });
-  await mkdir(DIST, { recursive: true });
+  await rm(STAGING, { recursive: true, force: true });
+  await mkdir(STAGING, { recursive: true });
 
   // 1. 包入口：契约（含 zod）内联，唯一外部运行期依赖 = jose。
   await build({
     ...common,
-    outfile: join(DIST, 'index.js'),
+    outfile: join(STAGING, 'index.js'),
     format: 'esm',
     platform: 'neutral',
     target: 'es2022',
@@ -57,7 +66,7 @@ async function main() {
   await build({
     ...common,
     entryPoints: ['src/host.ts'],
-    outfile: join(DIST, 'host.js'),
+    outfile: join(STAGING, 'host.js'),
     format: 'esm',
     platform: 'node',
     target: 'es2022',
@@ -66,14 +75,14 @@ async function main() {
   // 2. 浏览器侧资产：完全自包含（含 jose）——平台注入时不依赖 npm 运行期。
   await build({
     ...common,
-    outfile: join(DIST, 'module-sdk.esm.js'),
+    outfile: join(STAGING, 'module-sdk.esm.js'),
     format: 'esm',
     platform: 'browser',
     target: 'es2020',
   });
   await build({
     ...common,
-    outfile: join(DIST, 'module-sdk.js'),
+    outfile: join(STAGING, 'module-sdk.js'),
     format: 'iife',
     platform: 'browser',
     target: 'es2020',
@@ -83,10 +92,14 @@ async function main() {
   // 3. 类型声明：逐文件 emit（相对引用自包含）；contract-types 保证 d.ts 不泄漏 @unself/contracts。
   const require = createRequire(import.meta.url);
   const tsc = require.resolve('typescript/bin/tsc');
-  const res = spawnSync(process.execPath, [tsc, '-p', join(PKG, 'tsconfig.build.json')], {
-    cwd: PKG,
-    stdio: 'inherit',
-  });
+  const res = spawnSync(
+    process.execPath,
+    [tsc, '-p', join(PKG, 'tsconfig.build.json'), '--outDir', STAGING],
+    {
+      cwd: PKG,
+      stdio: 'inherit',
+    },
+  );
   if (res.status !== 0) {
     throw new Error(`tsc 声明构建失败（退出码 ${res.status}）`);
   }
@@ -95,9 +108,9 @@ async function main() {
   // 的模块引用——第三方只需装 `@unself/sdk` 一个包，契约内容必须已内联（类型侧由 contract-types.ts 保证）。
   // 放在构建里当硬闸：一旦有人把契约包标成 external，构建当场失败，而不是等发版后第三方装不上。
   const CONTRACTS_IMPORT = /(?:from|import|require\()\s*['"]@unself\/contracts(?:\/[^'"]*)?['"]/;
-  const emitted = (await readdir(DIST)).filter((f) => /\.(?:js|d\.ts|ts)$/.test(f));
+  const emitted = (await readdir(STAGING)).filter((f) => /\.(?:js|d\.ts|ts)$/.test(f));
   for (const rel of emitted) {
-    const text = await readFile(join(DIST, rel), 'utf8');
+    const text = await readFile(join(STAGING, rel), 'utf8');
     if (CONTRACTS_IMPORT.test(text)) {
       throw new Error(
         `产物 ${rel} 残留对 @unself/contracts 的引用（应已内联）：第三方只需装 @unself/sdk 一个包；` +
@@ -109,8 +122,16 @@ async function main() {
   // 4. 许可证随包（AGPL 交付要求；dist 内随 files 发布）。
   for (const name of ['LICENSE', 'NOTICE']) {
     const from = join(ROOT, name);
-    if (existsSync(from)) await cp(from, join(DIST, name));
+    if (existsSync(from)) await cp(from, join(STAGING, name));
   }
+
+  // 原子换名：先把旧 dist 挪开（一次 rename），再把暂存换上来（再一次 rename）。
+  // 两次 rename 之间以外的时间，dist 都存在且可用。
+  const retired = join(PKG, `dist.retired-${process.pid}`);
+  await rm(retired, { recursive: true, force: true });
+  if (existsSync(DIST)) await rename(DIST, retired);
+  await rename(STAGING, DIST);
+  await rm(retired, { recursive: true, force: true });
 
   console.log('▣ @unself/sdk 产物就绪：dist/');
 }
