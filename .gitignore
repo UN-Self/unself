@@ -3,10 +3,15 @@ node_modules/
 
 # 构建产物
 dist/
+dist.staging-*/
+dist.retired-*/
 coverage/
 
 # Cloudflare Wrangler 本地状态
 .wrangler/
+
+# 模块自部署形态的本地库（#382：chat node 入口默认落包内 .data/）
+.data/
 
 # 部署脚本生成的装配产物（临时部署配置与 shell 构建副本）
 .deploy/

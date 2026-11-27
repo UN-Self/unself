@@ -14,6 +14,6 @@
     "noUncheckedIndexedAccess": false,
     "skipLibCheck": true
   },
-  "include": ["test"],
+  "include": ["test", "src"],
   "exclude": ["worker"]
 }

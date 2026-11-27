@@ -40,10 +40,12 @@
     "prepack": "pnpm run build"
   },
   "dependencies": {
-    "jose": "^6.1.0"
+    "jose": "^6.1.0",
+    "ws": "^8.23.0"
   },
   "devDependencies": {
     "@types/node": "^24",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.28.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"

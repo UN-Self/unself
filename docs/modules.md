@@ -259,6 +259,7 @@ flowchart LR
 - **健康检查**：`GET /api/health`（冒烟和可达性体检用）。
 - **生命周期**：`GET /life/export`、`POST /life/purge`（卸载时「导出并删除」/「直接删除」用）。
 - **反连宿主**：`@unself/sdk/host`。进程环境变量 `UNSELF_CORE_URL`、`UNSELF_MODULE_KEY`，可选 `UNSELF_MODULE_ADDR`。不读 `.env` 文件，文件加载交给调用方。
+- **env 与执行上下文是注入的**：模块写 `(request, env, ctx)`，CF 部署由平台注入，自部署由 host 注入。自部署形态声明 `moduleEnv.durableObjects`（如 `{ CHANNEL_ROOM: ChannelRoom }`），host 为每个绑定注入一个 Node 形状的 Durable Objects 替身（按名寻址、单实例串行、`acceptWebSocket` / `getWebSockets` / `waitUntil` / `storage.setAlarm` 全齐）；模块的 DO 类源码两边同一份，不写分支。`storage.setAlarm` 的跨重启账本由 `moduleEnv.alarms` 提供，不给就只活在内存里。
 - **实例 id**（下文与图示里的「模块 id」同义）：注册时定死，落注册表 `module_registry.id`（反连 = 管理台填的 id，CF = 装配器按表单/包名生成），`/m/<id>/`、隧道分片、`aud`、存储记账、审计全用它。`manifest.id` 只供默认命名，部署者可覆盖（见第 3 节）。**模块不得硬编码自己的 id**：反连模式下由握手响应 `POST /api/modules/connect-manifest` 的 `{ id }` 下发，`@unself/sdk/host` 负责交给模块；CF 部署态模块不需要知道外部 id。
 - **core → 模块的两条入站路径**：直连（按注册表里存的模块地址指过去）和反连（core 转发隧道帧）。模块只实现普通的 HTTP 处理，不知道请求走的是哪条——前缀 `/m/<id>/` 由宿主剥掉（见第 4.1 节）。
 
@@ -274,5 +275,5 @@ flowchart LR
 |---|---|
 | `permissions` 词表的对外可见面（首版 6 项） | 由 `@unself/sdk` 具名导出 |
 | 发版约定细节 | 留档待定 |
-| chat / meeting 模块对 DO 的依赖在 Node 运行体上的平替（core 自己的反连隧道已平替：Node 运行体里同一份 `TunnelRoom` 经薄适配层跑；模块侧的 `ChannelRoom` / `Scheduler` / `UserInbox` 是 SQLite-backed DO，要平替得先给模块一套本地存储与消息广播，不是换个 WebSocket hub 的事） | 下一阶段，落地前这两个模块 manifest 如实只写 `worker` |
+| chat / meeting 模块在 Node 运行体上的落位 | chat 已能跑（`runtimes: worker, node`）：`env.DB` 坐 sqlite 上的 D1 形状绑定、三个 DO 走替身、模块自跑迁移。剩下 PostgreSQL 方言（模块 SQL 是 SQLite 写法）与 `env.SESSIONS` 的 KV 替身（会话机制已下架，只剩体检探活）；meeting 模块尚不存在 |
 | `oauth` 类型配置字段的交互细节 | 下一阶段 |

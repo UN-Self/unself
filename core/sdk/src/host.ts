@@ -31,9 +31,46 @@
  * 退避只惩罚失败（error）：1s→2s→4s…上限 60s；干净断开（close）立即重试不惩罚。
  * stop() 后不再重连。
  */
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
+import type { Duplex } from 'node:stream';
+
+import {
+  createDurableObjectRuntime,
+  type AlarmStore,
+  type DurableObjectBindings,
+  type DurableObjectRuntime,
+} from './do-runtime.js';
+
+// DO 替身的公开面（模块作者在 node 入口声明 durableObjects 时需要这些类型；
+// `createDurableObjectRuntime` 供不走 dial-home 的宿主直接复用）。
+export { createDurableObjectRuntime, createMemoryAlarmStore } from './do-runtime.js';
+// sqlite → D1 形状的绑定与模块迁移（#382）：模块的 env.DB 在自部署形态下坐这份实现。
+export { createSqliteD1, readModuleMigrations, applyModuleMigrations } from './sqlite-d1.js';
+export type {
+  ModuleMigrationFile,
+  ModuleMigrationReport,
+  SqliteD1,
+  SqliteD1Database,
+  SqliteD1Meta,
+  SqliteD1Options,
+  SqliteD1PreparedStatement,
+  SqliteD1Result,
+  SqliteD1RunResult,
+} from './sqlite-d1.js';
+export type {
+  AlarmStore,
+  DurableObjectBindings,
+  DurableObjectClass,
+  DurableObjectIdLike,
+  DurableObjectInstance,
+  DurableObjectNamespaceLike,
+  DurableObjectStubLike,
+  WorkersDurableObjectState,
+  WorkersDurableObjectStorage,
+  WorkersWebSocket,
+} from './do-runtime.js';
 
 /** 入站请求帧（core → 模块）。 */
 export interface TunnelRequestFrame {
@@ -66,9 +103,43 @@ export interface WebSocketLike {
   send(data: string): void;
 }
 
+/** 模块 handler 拿到的执行上下文（CF `ExecutionContext` 的最小等价物）。 */
+export interface ModuleExecutionContext {
+  /** 响应之后的活（投影/清理）：单进程里就是挂着自己跑完。 */
+  waitUntil(promise: Promise<unknown>): void;
+  /** 与 CF 同名：本运行时没有「先失败再兜底」的两段式，保留为空实现以对齐签名。 */
+  passThroughOnException(): void;
+}
+
+/**
+ * 模块 env 注入（#382）：自部署时由 host 组装，CF 部署时由平台注入，模块源码两边同一份。
+ * 显式项优先于 `process.env`（`process.env` 值恒为字符串，布尔/对象类绑定只能走这里）。
+ */
+export interface ModuleEnvOptions {
+  /** 额外绑定（DB、FILES 等）。 */
+  bindings?: Record<string, unknown>;
+  /**
+   * DO 类 → env 绑定名（如 `{ CHANNEL_ROOM: ChannelRoom, USER_INBOX: UserInbox }`）。
+   * 每个绑定得到一个 Node 形状的 namespace 替身；不声明 = env 上没有这些绑定。
+   */
+  durableObjects?: DurableObjectBindings;
+  /** alarm 跨重启账本（`Scheduler` 的 03:00 闹钟）；缺省仅内存。 */
+  alarms?: AlarmStore;
+}
+
 export interface StartDialHomeOptions {
-  /** 模块自身的 HTTP 处理函数（Hono app.fetch 直接传入——同一套路由，不造第二套）。 */
-  handler: (request: Request) => Promise<Response> | Response;
+  /**
+   * 模块自身的 HTTP 处理函数（Hono app.fetch 直接传入——同一套路由，不造第二套）。
+   * `env` 与 `ctx` 由 host 注入（自部署形态），CF 形态由平台注入：模块写 `(request, env, ctx)`
+   * 即可两边同源；不用 env 的模块保持单参签名也能编译（少参数函数可赋值给多参数类型）。
+   */
+  handler: (
+    request: Request,
+    env: Record<string, unknown>,
+    ctx: ModuleExecutionContext,
+  ) => Promise<Response> | Response;
+  /** 自部署形态的 env 注入（#382）；不传 = 只注入 `process.env`。 */
+  moduleEnv?: ModuleEnvOptions;
   /** core 可达地址；默认读 `UNSELF_CORE_URL`。末尾斜杠容忍。 */
   coreUrl?: string;
   /** 模块凭据明文；默认读 `UNSELF_MODULE_KEY`。 */
@@ -101,6 +172,11 @@ export interface DialHomeHandle {
   isOnline: () => boolean;
   /** 本地 HTTP 服务实际地址（listen 完成后可用）。 */
   addr: () => string | null;
+  /**
+   * 组装好的模块 env（含注入的 DO namespace 替身）。给入口在启动后做一次性动作用——
+   * 例如把 Scheduler 的 GC 闹钟挂上：CF 上由健康检查/安装器触发，Node 上没人触发。
+   */
+  env: Record<string, unknown>;
 }
 
 /** 退避首档（毫秒）：core 重启/短断网的常见窗口，1s 起跳足够。 */
@@ -200,6 +276,28 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
     }
   }
 
+  // ---- 模块 env：`process.env` 打底，显式绑定覆盖，DO namespace 替身注入（#382） ----
+  const moduleEnv: Record<string, unknown> = {
+    ...env,
+    ...(options.moduleEnv?.bindings ?? {}),
+  };
+  const doRuntime: DurableObjectRuntime = createDurableObjectRuntime({
+    env: moduleEnv,
+    ...(options.moduleEnv?.alarms ? { alarms: options.moduleEnv.alarms } : {}),
+  });
+  for (const [binding, cls] of Object.entries(options.moduleEnv?.durableObjects ?? {})) {
+    moduleEnv[binding] = doRuntime.namespace(binding, cls);
+  }
+  /** 模块 handler 的第二/第三个参数：两条入口（本地 HTTP、隧道帧）用同一份。 */
+  const moduleCtx: ModuleExecutionContext = {
+    waitUntil: (promise) => {
+      void promise;
+    },
+    passThroughOnException: () => {},
+  };
+  const callHandler = (request: Request): Promise<Response> | Response =>
+    options.handler(request, moduleEnv, moduleCtx);
+
   // ---- 本地 HTTP 宿主：模块业务的路，隧道帧也走同一 handler（同一条路由，不造第二套） ----
   let server: Server | null = null;
   let addrNow: string | null = null;
@@ -213,7 +311,7 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
       body: req.method === 'GET' || req.method === 'HEAD' ? undefined : body,
     });
     // SDK 资产先于模块业务（部署态同优先级：静态资产先于 worker）
-    const response = (await sdkAssets(new URL(request.url).pathname)) ?? (await options.handler(request));
+    const response = (await sdkAssets(new URL(request.url).pathname)) ?? (await callHandler(request));
     res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
     res.end(Buffer.from(await response.arrayBuffer()));
   });
@@ -222,9 +320,44 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
     addrNow = `${address}:${port}`;
   });
 
+  /**
+   * WebSocket upgrade（#382）：模块的 DO 只能在 `WebSocketPair` + 101 的平台上建连，
+   * 这里把真 socket 接上去。与普通 HTTP 分开的原因：普通路径会重读 body，
+   * 而 upgrade 的元数据（`Upgrade`/`Connection` 头 + 已握手前的裸 socket）只能从
+   * `node:http` 的 upgrade 事件拿。
+   */
+  server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    void (async () => {
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (value === undefined) continue;
+        headers.set(key, Array.isArray(value) ? value.join(', ') : value);
+      }
+      const request = new Request(`http://${req.headers.host ?? addrText}${req.url ?? '/'}`, {
+        method: req.method ?? 'GET',
+        headers,
+      });
+      await doRuntime.handleUpgrade(request, req, socket, head, callHandler);
+    })().catch(() => {
+      try {
+        socket.destroy();
+      } catch {
+        // 已被对端关掉。
+      }
+    });
+  });
+
   // ---- 反连客户端：coreUrl+key 齐才拨号 ----
   if (!(coreUrl && moduleKey && WebSocketCtor)) {
-    return { stop: () => server?.close(), isOnline: () => false, addr: () => addrNow };
+    return {
+      stop: () => {
+        server?.close();
+        void doRuntime.close();
+      },
+      isOnline: () => false,
+      addr: () => addrNow,
+      env: moduleEnv,
+    };
   }
 
   let stopped = false;
@@ -259,7 +392,7 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
     try {
       // SDK 资产先于模块业务（与本地 HTTP 同优先级；core 已剥前缀，帧路径即根路径）
       const asset = await sdkAssets(frame.path || '/');
-      const res = asset ?? (await options.handler(frameToRequest(frame)));
+      const res = asset ?? (await callHandler(frameToRequest(frame)));
       const buffer = await res.arrayBuffer();
       response = {
         v: 1,
@@ -360,8 +493,10 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
       }
       socket = null;
       server?.close();
+      void doRuntime.close();
     },
     isOnline: () => online,
     addr: () => addrNow,
+    env: moduleEnv,
   };
 }
