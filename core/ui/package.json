@@ -7,7 +7,11 @@
     "node": ">=22"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./button": "./src/button.vue",
+    "./banner": "./src/banner.vue",
+    "./skeleton": "./src/skeleton.vue",
+    "./error-card": "./src/error-card.vue"
   },
   "scripts": {
     "typecheck": "vue-tsc --noEmit",

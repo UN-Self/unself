@@ -3,7 +3,7 @@
 import { computed } from 'vue'
 
 /**
- * 按钮基元：primary / outline / ghost 三变体 + sm/md/lg 尺寸。
+ * 按钮基元：primary / outline / ghost / danger 四变体 + sm/md/lg 尺寸。
  * 动效参数（§6.5 查找序）：beUI button-base 的 press-scale/hover-lift 语义
  * 在无 motion 库下以 transition + active:scale 等价移植：
  * - 按下 = scale(var(--unself-motion-press-scale))（beUI SPRING_PRESS 语义）
@@ -11,7 +11,7 @@ import { computed } from 'vue'
  * 时长走 --duration-fast、缓动 --ease-out（#307 基础反馈层）。
  */
 export interface ButtonProps {
-  variant?: 'primary' | 'outline' | 'ghost'
+  variant?: 'primary' | 'outline' | 'ghost' | 'danger'
   size?: 'sm' | 'md' | 'lg'
   type?: 'button' | 'submit'
   disabled?: boolean
@@ -32,6 +32,8 @@ const variantClass = computed(() => {
       return 'u-btn-outline'
     case 'ghost':
       return 'u-btn-ghost'
+    case 'danger':
+      return 'u-btn-danger'
     default:
       return 'u-btn-primary'
   }
@@ -120,6 +122,15 @@ const sizeClass = computed(() => {
 .u-btn-ghost:hover:not(:disabled) {
   background: var(--unself-color-surface);
   color: var(--unself-color-text);
+}
+
+/* danger：不可逆/丢弃类操作，与 primary 同构的实心填充。
+   不用 danger-soft 底配红字：danger(#dc2626) 压在 danger-soft(#fee2e2) 上只有 3.96:1，
+   14px/500 的普通文本过不了 AA 4.5——error-card 里早有同一条结论。
+   悬浮不改底——令牌里没有 danger-hover，凭空调色会绕开契约；反馈靠基类的按压缩放（#307）。 */
+.u-btn-danger {
+  background: var(--unself-color-danger);
+  color: var(--unself-color-bg);
 }
 
 .u-btn-sm {

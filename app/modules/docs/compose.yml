@@ -1,0 +1,20 @@
+# docker compose 跑法（#358）：env_file 挂载配置，镜像内不落明文。
+# 用前：cp .env.example .env && pnpm pack（见 Dockerfile 注释）。
+# DOCS_DB_PATH 显式指到卷内——全局包落在 /usr/local/lib/node_modules，默认值（相对包根）
+# 会写进容器层丢掉，宿主可见的只有 /app/data 这个卷。
+services:
+  docs:
+    build: .
+    env_file: .env
+    environment:
+      DOCS_DB_PATH: /app/data/docs.sqlite
+      # 容器内不能绑 127.0.0.1（host.ts 默认值），否则 8791 端口映射发布的是无人监听的端口
+      UNSELF_MODULE_ADDR: 0.0.0.0:8791
+    ports:
+      - "8791:8791"
+    volumes:
+      - docs-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  docs-data:
