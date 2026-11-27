@@ -6,6 +6,10 @@
  * 组件查找序已执行：beUI（React/motion，无 Vue 等价动效可移植）→
  * shadcn-vue（菜单/预览使用 Reka UI 无样式基元）→ 无对应项才手写；Vue 动效通过 @vueuse/motion
  * 接入，参数统一来自契约令牌，符合 M0 亮色单主题约定。
+ *
+ * 入口两套：`.` 是桶（全量，连 tiptap/reka 一起）；只想要个别基元、又不想背整桶依赖的
+ * 构建型消费者（如各模块的 frontend 子包）走 `@unself/ui/<基元名>` 子路径——
+ * 目前开放 button / banner / skeleton / error-card，需要新的就按同样的 kebab 名补一条 exports。
  */
 
 export { UI_VERSION } from './version';
