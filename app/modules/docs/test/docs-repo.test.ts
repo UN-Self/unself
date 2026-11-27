@@ -4,6 +4,7 @@
  * - 迁移：空库连跑两次成功；表/列与 §5 一致。
  * - 仓储：版本从 1 起、保存严格递增、同 baseVersion 二次保存冲突并回服务端当前内容、
  *   软删后查询/列表/更新一律不可见、列表只给「我的 + 共享给我的」。
+ *   （临时放开期间，列表用例改为「全部未删除文档」，见 OPEN_ACCESS_ROLE。）
  */
 import { describe, expect, it } from 'vitest';
 
@@ -156,7 +157,9 @@ describe('文档仓储层（D2）', () => {
     }
   });
 
-  it('列表：我拥有的 + 共享给我的可见，非成员不可见，按 updated_at 倒序', async () => {
+  // 临时放开（#358 收尾期，OPEN_ACCESS_ROLE = 'viewer'）：列表返回全部未删除文档，
+  // 非 owner / 非成员按 viewer 返回。恢复共享机制时还原为「我拥有的 + 共享给我的」。
+  it('列表（临时放开）：全部未删除文档可见，非 owner / 非成员按 viewer，按 updated_at 倒序', async () => {
     const db = createDocsDb();
     try {
       const mine = await createDocument(db.d1, { ownerId: 'u_me', title: '我的' });
@@ -170,16 +173,20 @@ describe('文档仓储层（D2）', () => {
       );
       db.run("UPDATE docs_documents SET updated_at = '2026-11-17 10:00:01' WHERE id = ?", mine.id);
       db.run("UPDATE docs_documents SET updated_at = '2026-11-17 10:00:02' WHERE id = ?", shared.id);
+      // 钉死时间，避免依赖真实时钟（否则 foreign 的「现在」可能早于手写的 2026-11-17）
+      db.run("UPDATE docs_documents SET updated_at = '2026-11-17 10:00:03' WHERE id = ?", foreign.id);
       await softDeleteDocument(db.d1, deletedMine.id);
 
+      // 临时：全部未删除文档可见；别人的按 viewer，自己是 owner
       const { items: list } = await listDocuments(db.d1, 'u_me');
-      expect(list.map((doc) => doc.id)).toEqual([shared.id, mine.id]);
-      expect(list.map((doc) => doc.role)).toEqual(['viewer', 'owner']);
-      expect(list.map((doc) => doc.id)).not.toContain(foreign.id);
+      expect(list.map((doc) => doc.id)).toEqual([foreign.id, shared.id, mine.id]);
+      expect(list.map((doc) => doc.role)).toEqual(['viewer', 'viewer', 'owner']);
+      expect(list.map((doc) => doc.id)).not.toContain(deletedMine.id);
 
-      // 另一个成员看不到我的私有文档，只看得到自己拥有/被共享的
+      // 换个人看：自己建的两篇是 owner，我的文档临时只读可见（恢复时这里应只剩 shared / foreign）
       const { items: others } = await listDocuments(db.d1, 'u_other');
-      expect(others.map((doc) => doc.id).sort()).toEqual([shared.id, foreign.id].sort());
+      expect(others.map((doc) => doc.id)).toEqual([foreign.id, shared.id, mine.id]);
+      expect(others.map((doc) => doc.role)).toEqual(['owner', 'owner', 'viewer']);
     } finally {
       db.close();
     }

@@ -101,7 +101,7 @@ describe('GET /api/docs/:id', () => {
     })
   })
 
-  it('404 非成员/不存在 → not_found', async () => {
+  it('404（不存在 / 已软删）→ not_found', async () => {
     stubFetch(() => json(404, { error: 'not_found' }))
     const api = createHttpDocsApi({ getToken: () => 't' })
     await expect(api.getDoc('nope')).rejects.toMatchObject({ code: 'not_found', status: 404 })

@@ -19,9 +19,12 @@ export const ERROR_CODES = {
   jwksUnavailable: 'jwks_unavailable',
   /** 400：请求体不合法（字段缺失/类型不符/limit 越界由服务端钳制而非报错）。 */
   invalidRequest: 'invalid_request',
-  /** 404：文档不存在、已软删、或调用者非成员——三者同码，不泄露存在性。 */
+  /**
+   * 404：文档不存在、已软删，或调用者非成员（成员表脏值也算）。三者同码，不泄露存在性。
+   * 临时放开期间：无成员行的调用者读路径不再 404（按只读放行），写/删仍 403；见 auth/policy.ts。
+   */
   notFound: 'not_found',
-  /** 403：是成员但角色不够（owner / editor / viewer 矩阵见 auth/policy.ts）。 */
+  /** 403：角色不够（owner / editor / viewer 矩阵见 auth/policy.ts）。临时放开期间，无成员行的调用者写/删也落这里。 */
   forbidden: 'forbidden',
   /** 409：baseVersion 与库内 version 不符，体里带服务端最新行。 */
   versionConflict: 'version_conflict',

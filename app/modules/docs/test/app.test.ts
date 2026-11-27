@@ -140,7 +140,9 @@ describe('装配后行为', () => {
     }
   });
 
-  it('裁决：非成员与不存在同为 404，成员角色不够 403', async () => {
+  // 临时放开（#358 收尾期，OPEN_ACCESS_ROLE = 'viewer'）：非成员不再 404，
+  // 可只读打开；写/删仍 403。恢复共享机制时把 stranger 那几条断言还原为 404。
+  it('裁决：成员角色不够 403；非成员临时只读可见；不存在的仍 404', async () => {
     // 三个用户共用同一个库：库由最外层关一次
     const db = createDocsDb();
     const owner = asUser('owner', 'ok', db);
@@ -161,13 +163,25 @@ describe('装配后行为', () => {
       expect(remove.status).toBe(403);
 
       const stranger = asUser('stranger', 'ok', db);
+      // 临时：非成员按 viewer 只读可见（恢复时还原为 404）
       const foreign = await stranger.app.request(`/api/docs/${id}`, { headers: AUTHORIZED });
+      expect(foreign.status).toBe(200);
+      expect(await foreign.json()).toMatchObject({ id, role: 'viewer' });
+      const foreignWrite = await stranger.app.request(
+        `/api/docs/${id}`,
+        json('PUT', { content: 'x', baseVersion: 1 }),
+      );
+      expect(foreignWrite.status).toBe(403);
+      const foreignRemove = await stranger.app.request(`/api/docs/${id}`, {
+        method: 'DELETE',
+        headers: AUTHORIZED,
+      });
+      expect(foreignRemove.status).toBe(403);
+
+      // 不存在的文档仍 404：放开的是「非成员」，不是「不存在」
       const missing = await stranger.app.request('/api/docs/d_missing', { headers: AUTHORIZED });
-      expect([foreign.status, missing.status]).toEqual([404, 404]);
-      expect([await foreign.json(), await missing.json()]).toEqual([
-        { error: 'not_found' },
-        { error: 'not_found' },
-      ]);
+      expect(missing.status).toBe(404);
+      expect(await missing.json()).toEqual({ error: 'not_found' });
     } finally {
       db.close();
     }

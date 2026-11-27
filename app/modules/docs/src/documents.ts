@@ -10,6 +10,9 @@
  * 裁决语义沿用 auth/policy.ts 的定案：不存在 / 已软删 / 非成员一律 404，成员但角色不够 403。
  * 列表不裁决——SQL 本身只返回「我拥有的 + 共享给我的」。
  *
+ * 【临时偏离，非正式口径】共享入口未实现：无成员行的调用者读路径按只读放行（不再 404），
+ * 写/删仍 403；列表返回全部未删除文档。恢复清单见模块 README「当前权限状态（临时）」。
+ *
  * 返回的是「结果」不是 Response：状态码与错误体的对应只留在 app.ts 一处（词表在 errors.ts）。
  */
 import type { D1Like } from './d1';
@@ -81,7 +84,7 @@ export async function createDocumentAction(
   return { ok: true, document: { ...document, role: 'owner' as const } };
 }
 
-/** GET /api/docs：我拥有的 + 共享给我的，offset 分页。limit/offset 不是数字时取默认值。 */
+/** GET /api/docs：全部未删除文档（临时放开；原口径为「我拥有的 + 共享给我的」），offset 分页。limit/offset 不是数字时取默认值。 */
 export async function listDocumentsAction(db: D1Like, userId: string, query: URLSearchParams) {
   return {
     ok: true,

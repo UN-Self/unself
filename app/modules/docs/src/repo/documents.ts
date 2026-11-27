@@ -8,13 +8,14 @@
  * 不读后写、不开事务：D1 单写者 + 单语句原子性足够，版本号在 UPDATE 内自增，天然严格递增。
  *
  * 软删语义：deleted_at 非空即不可见（查询/列表/更新都带 `deleted_at IS NULL`）。
- * 仓储层只负责数据，不做鉴权——非成员 404 由 documents.ts 在调用本层之前裁决（角色值由 findAccess 读出）。
+ * 仓储层只负责数据，不做鉴权——裁决由 documents.ts 在调用本层之前完成（角色值由 findAccess 读出）。
+ * （临时放开期间裁决口径变化见 auth/policy.ts 的 OPEN_ACCESS_ROLE，本层不受影响。）
  *
  * 类型依赖：D1 的最小结构化类型在 ../d1.ts（与迁移执行器共用），
  * 真实 D1Database / D1PreparedStatement 结构兼容，可直接传。
  */
 import type { D1Like } from '../d1';
-import type { Role } from '../auth/policy';
+import { OPEN_ACCESS_ROLE, type Role } from '../auth/policy';
 
 /** 落库行（snake_case，与基线迁移列名一一对应）。 */
 export interface DocumentRow {
@@ -135,12 +136,17 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 
 /**
- * 列表：我拥有的 + 我被共享的，未删、按 updated_at 倒序，offset 分页。
+ * 列表【原正式口径；当前已临时放开为「全部未删除文档」】：我拥有的 + 我被共享的，未删、按 updated_at 倒序，offset 分页。
  * 每行带调用者的角色：owner_id 命中是 owner（owner 优先于成员表里的残留行），否则取成员表的角色。
  * 注意：这里的 m.role 直信库值、不走 resolveRole 的 fail-closed——成员表的
  * CHECK (role IN ('editor','viewer'))（0001_baseline.sql）在库层挡住了脏值；
  * 将来若放宽该约束，此处必须改走 resolveRole。
  * limit 收口在 1..100 防止前端一次拉全库。
+ *
+ * 临时（#358 收尾期，非正式口径）：共享入口未落地，全部未删除文档对所有人可见，
+ * 非 owner / 无成员行一律按 `OPEN_ACCESS_ROLE`（当前 = viewer，只读）返回；成员表真实角色照旧。
+ * 原共享过滤 SQL 与 5 个绑定注释在函数体内，恢复时整条还原；恢复清单见本模块 README，
+ * 常量定义见 src/auth/policy.ts。
  */
 export async function listDocuments(
   db: D1Like,
@@ -149,18 +155,36 @@ export async function listDocuments(
 ): Promise<DocumentPage> {
   const limit = Math.min(Math.max(Math.trunc(options.limit ?? DEFAULT_LIMIT), 1), MAX_LIMIT);
   const offset = Math.max(Math.trunc(options.offset ?? 0), 0);
+  /*
+   * 原正式口径（共享入口落地后恢复）：我拥有的 + 共享给我的，其余不可见。
+   *   绑定：userId, userId, userId, limit + 1, offset
+   *
+   * SELECT ${DOCUMENT_COLUMNS.map((column) => `d.${column}`).join(', ')},
+   *        CASE WHEN d.owner_id = ? THEN 'owner' ELSE m.role END AS role
+   *   FROM docs_documents d
+   *   LEFT JOIN docs_document_members m ON m.doc_id = d.id AND m.user_id = ?
+   *  WHERE d.deleted_at IS NULL
+   *    AND (d.owner_id = ? OR m.doc_id IS NOT NULL)
+   *  ORDER BY d.updated_at DESC, d.id DESC
+   *  LIMIT ? OFFSET ?
+   */
   const { results } = await db
     .prepare(
       `SELECT ${DOCUMENT_COLUMNS.map((column) => `d.${column}`).join(', ')},
-              CASE WHEN d.owner_id = ? THEN 'owner' ELSE m.role END AS role
+              CASE
+                WHEN d.owner_id = ? THEN 'owner'
+                WHEN m.role IN ('editor', 'viewer') THEN m.role
+                /* 临时：兜底角色取自 OPEN_ACCESS_ROLE 参数，不写字面量；恢复时连同上方原 SQL 一起还原 */
+                ELSE ?
+              END AS role
          FROM docs_documents d
          LEFT JOIN docs_document_members m ON m.doc_id = d.id AND m.user_id = ?
         WHERE d.deleted_at IS NULL
-          AND (d.owner_id = ? OR m.doc_id IS NOT NULL)
         ORDER BY d.updated_at DESC, d.id DESC
         LIMIT ? OFFSET ?`,
     )
-    .bind(userId, userId, userId, limit + 1, offset)
+    // 绑定顺序 = SQL 里 ? 出现的顺序：SELECT 的 owner 判定 → SELECT 的 ELSE 兜底 → JOIN 的 user_id → LIMIT → OFFSET
+    .bind(userId, OPEN_ACCESS_ROLE, userId, limit + 1, offset)
     .all<DocumentRow & { role: Role }>();
   return {
     items: results.slice(0, limit).map(toDocumentWithRole),

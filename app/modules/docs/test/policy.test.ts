@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 
-import { ACTIONS, ROLES, decide, may, resolveRole, type Action, type Role } from '../src/auth/policy';
+import {
+  ACTIONS,
+  OPEN_ACCESS_ROLE,
+  ROLES,
+  decide,
+  may,
+  resolveRole,
+  type Action,
+  type Role,
+} from '../src/auth/policy';
 
 /**
  * 权限矩阵是「越权只能靠 API 侧裁决」这条纪律的唯一落点（#358 §10 风险三条）。
@@ -28,7 +37,9 @@ describe('角色 × 动作矩阵', () => {
 });
 
 describe('裁决顺序：404 先于 403', () => {
-  it('非成员 → 404（不是 403，存在性不外泄）', () => {
+  // 注意：临时放开期间 resolveRole 对「无成员行」不再返回 null（见 OPEN_ACCESS_ROLE），
+  // 所以以下 decide(null, …) 是纯函数语义与恢复后的口径，不是当前生产路径。
+  it('非成员 → 404（不是 403，存在性不外泄；恢复后的口径）', () => {
     expect(decide(null, 'read')).toEqual({ allow: false, status: 404 });
     expect(decide(null, 'write')).toEqual({ allow: false, status: 404 });
     expect(decide(null, 'delete')).toEqual({ allow: false, status: 404 });
@@ -57,11 +68,17 @@ describe('resolveRole：owner 优先，成员表只认两值', () => {
     expect(resolveRole({ ownerId: 'u1', userId: 'u2', memberRole: 'viewer' })).toBe('viewer');
   });
 
-  it('成员表脏值 / 缺行一律当非成员（fail-closed，不猜）', () => {
+  // 脏值仍 fail-closed（临时放开只接管「无成员行」）；缺行的期望随 OPEN_ACCESS_ROLE 变化，
+// 恢复时把该常量改回 null，这里无需改动。
+  it('成员表脏值 → 非成员；缺行 → 临时按 OPEN_ACCESS_ROLE', () => {
     expect(resolveRole({ ownerId: 'u1', userId: 'u2', memberRole: 'admin' })).toBeNull();
     expect(resolveRole({ ownerId: 'u1', userId: 'u2', memberRole: '' })).toBeNull();
-    expect(resolveRole({ ownerId: 'u1', userId: 'u2', memberRole: null })).toBeNull();
-    expect(resolveRole({ ownerId: 'u1', userId: 'u2' })).toBeNull();
+    expect(resolveRole({ ownerId: 'u1', userId: 'u2', memberRole: null })).toBe(OPEN_ACCESS_ROLE);
+    expect(resolveRole({ ownerId: 'u1', userId: 'u2' })).toBe(OPEN_ACCESS_ROLE);
+    // 临时角色的含义：读放行，写/删仍是 403（不是 404）
+    expect(decide(OPEN_ACCESS_ROLE, 'read')).toEqual({ allow: true });
+    expect(decide(OPEN_ACCESS_ROLE, 'write')).toEqual({ allow: false, status: 403 });
+    expect(decide(OPEN_ACCESS_ROLE, 'delete')).toEqual({ allow: false, status: 403 });
   });
 
   it('owner 判定用 id 相等，不做字符串归一（id 由 core 签发，不做业务加工）', () => {

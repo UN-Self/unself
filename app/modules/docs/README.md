@@ -2,6 +2,25 @@
 
 云笺模块（issue #358）：多人文档，五个业务接口 + 生命周期接口，三种跑法同一个包。
 
+## 当前权限状态（临时）
+
+文档共享所需的成员管理接口与前端共享入口尚未实现（#358 只落地了 owner/editor/viewer 裁决与
+五个文档端点，见 `src/routes.ts`）。在此之前的临时口径：
+
+- 持有 docs 模块 token 的实例成员可**只读**打开全部未删除文档；列表同样返回全部未删除文档，
+  **列表项含完整正文与 `ownerId`**——等于可翻页读遍全实例文档，不只是「按链接能打开」。
+- 编辑、保存仅限 owner 与成员表内的 editor；删除仅限 owner；成员表脏值仍按非成员处理。
+- 未登录仍 401；不存在或已软删仍 404；成员表已有的真实角色（editor/viewer）照常生效。
+
+这是临时偏离，不是正式契约。恢复步骤以下面这份清单为准（源码注释均指向这里）：
+
+1. `src/auth/policy.ts`：把 `OPEN_ACCESS_ROLE` 改回 `null`。`resolveRole` 的兜底会随之回到「无成员行 → 非成员」，无需删代码。
+2. `src/repo/documents.ts`：把 `listDocuments` 的新 SQL 与 5 个绑定整条换回函数体内注释的原 SQL
+   （原绑定：`userId, userId, userId, limit + 1, offset`）。
+3. 还原三处测试断言：`test/app.test.ts`（非成员 200/403 → 404）、
+   `test/docs-repo.test.ts`（全员可见 → 我的 + 共享给我的）、`test/policy.test.ts`（缺行 → 期望随常量变化）。
+4. 重新 `pnpm run build` 并 `pnpm pack`：`dist/` 与已打出的 tarball 都落后于源码，联调前必须重做。
+
 ## 目录
 
 ```
