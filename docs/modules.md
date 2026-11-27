@@ -275,5 +275,5 @@ flowchart LR
 |---|---|
 | `permissions` 词表的对外可见面（首版 6 项） | 由 `@unself/sdk` 具名导出 |
 | 发版约定细节 | 留档待定 |
-| chat / meeting 模块在 Node 运行体上的落位（模块自己的 DB / KV 绑定与 SQL 方言） | 下一阶段，落地前这两个模块 manifest 如实只写 `worker` |
+| chat / meeting 模块在 Node 运行体上的落位 | chat 已能跑（`runtimes: worker, node`）：`env.DB` 坐 sqlite 上的 D1 形状绑定、三个 DO 走替身、模块自跑迁移。剩下 PostgreSQL 方言（模块 SQL 是 SQLite 写法）与 `env.SESSIONS` 的 KV 替身（会话机制已下架，只剩体检探活）；meeting 模块尚不存在 |
 | `oauth` 类型配置字段的交互细节 | 下一阶段 |

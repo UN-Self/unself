@@ -8,6 +8,7 @@ id: chat
 route: /m/chat
 runtimes:
   - worker
+  - node
 version: 0.1.0
 description: EdgeChat 频道聊天（fork 自 aozorae/Edgechat，GPL-3.0-only）
 permissions:
