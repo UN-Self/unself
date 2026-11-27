@@ -46,6 +46,19 @@ import {
 // DO 替身的公开面（模块作者在 node 入口声明 durableObjects 时需要这些类型；
 // `createDurableObjectRuntime` 供不走 dial-home 的宿主直接复用）。
 export { createDurableObjectRuntime, createMemoryAlarmStore } from './do-runtime.js';
+// sqlite → D1 形状的绑定与模块迁移（#382）：模块的 env.DB 在自部署形态下坐这份实现。
+export { createSqliteD1, readModuleMigrations, applyModuleMigrations } from './sqlite-d1.js';
+export type {
+  ModuleMigrationFile,
+  ModuleMigrationReport,
+  SqliteD1,
+  SqliteD1Database,
+  SqliteD1Meta,
+  SqliteD1Options,
+  SqliteD1PreparedStatement,
+  SqliteD1Result,
+  SqliteD1RunResult,
+} from './sqlite-d1.js';
 export type {
   AlarmStore,
   DurableObjectBindings,
@@ -159,6 +172,11 @@ export interface DialHomeHandle {
   isOnline: () => boolean;
   /** 本地 HTTP 服务实际地址（listen 完成后可用）。 */
   addr: () => string | null;
+  /**
+   * 组装好的模块 env（含注入的 DO namespace 替身）。给入口在启动后做一次性动作用——
+   * 例如把 Scheduler 的 GC 闹钟挂上：CF 上由健康检查/安装器触发，Node 上没人触发。
+   */
+  env: Record<string, unknown>;
 }
 
 /** 退避首档（毫秒）：core 重启/短断网的常见窗口，1s 起跳足够。 */
@@ -338,6 +356,7 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
       },
       isOnline: () => false,
       addr: () => addrNow,
+      env: moduleEnv,
     };
   }
 
@@ -478,5 +497,6 @@ export function startDialHome(options: StartDialHomeOptions): DialHomeHandle {
     },
     isOnline: () => online,
     addr: () => addrNow,
+    env: moduleEnv,
   };
 }
