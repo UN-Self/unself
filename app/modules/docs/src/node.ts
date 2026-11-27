@@ -97,7 +97,7 @@ console.log(`docs 迁移就绪：新增 ${outcome.applied.length}，已跳过 ${
 // ---- 应用装配：健康检查 + 生命周期 + 业务路由，同一个 Hono ----
 const app = createDocsApp({ verifier, db: createSqliteExecutor(sqlite) });
 app.route('/', createHealthApp({ version: manifest?.version }));
-app.route('/', createLifeApp({ verifier }));
+app.route('/', createLifeApp({ verifier, db: createSqliteExecutor(sqlite), moduleId }));
 
 // 页面请求（assets/ 下的静态文件 + 单页回退）先于业务路由；/api/*、/life/* 不被认领，落回 Hono
 const assetsDir = join(PACKAGE_ROOT, 'assets');
