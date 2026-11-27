@@ -63,7 +63,7 @@ export const DOC_ERROR_TEXT: Record<DocErrorCode, string> = {
   not_found: '文档不存在，或你没有访问权限。',
   forbidden: '你没有这份文档的编辑权限。',
   version_conflict: '这份文档已被他人保存，请选择如何处理。',
-  not_implemented: '这个功能还没实现（后端 501）。',
+  not_implemented: '这个功能还没上线。',
 }
 
 /** 把服务端错误码翻成人话；未知码兜底，不抛。 */

@@ -25,7 +25,7 @@ export const ERROR_CODES = {
   forbidden: 'forbidden',
   /** 409：baseVersion 与库内 version 不符，体里带服务端最新行。 */
   versionConflict: 'version_conflict',
-  /** 501：路由已登记、业务未实现（d5 未落地期的显式占位，不假装成功）。 */
+  /** 501：路由已登记、业务未实现（当前只有 /life/* 在用，显式占位，不假装成功）。 */
   notImplemented: 'not_implemented',
 } as const;
 

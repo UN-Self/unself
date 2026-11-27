@@ -7,8 +7,7 @@
  * 列表逻辑在 lib/docs-list-state.ts，编辑逻辑在 lib/use-docs-editor.ts，
  * 两个状态机都已有独立用例，这里不重复测。
  *
- * 后端现状：D5（REST 业务）未落地时，app.ts 的业务体是显式 501。为了让界面能在
- * 真实模块页里打开并自证渲染，dev 态可用 VITE_DOCS_MOCK=1 切到内存 mock；
+ * 后端五个接口（D5）已落地；dev 态仍可用 VITE_DOCS_MOCK=1 切到内存 mock 自证渲染，
  * 生产构建里这条分支被常量折叠剔除（import.meta.env.DEV 为 false）。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -34,7 +33,7 @@ import {
   type ListState,
 } from './lib/docs-list-state'
 import { createDocsSession, HANDSHAKE_TIMEOUT_MS, type DocsSession } from './lib/docs-session'
-import type { Doc } from './lib/docs-types'
+import { errorText, type Doc } from './lib/docs-types'
 
 /** 当前视图：列表 or 某一篇文档。 */
 type View = { kind: 'list' } | { kind: 'editor'; id: string }
@@ -80,8 +79,8 @@ function mockListApi(): DocsListApi {
 
 function errorMessageOf(error: unknown): string {
   if (error instanceof DocsApiError) {
-    if (error.code === 'not_implemented') return '后端接口还没实现（D5 未落地）。'
-    return `请求失败：${error.code}`
+    // 与列表页同一张翻译表（docs-types.ts）：未知码兜底成通用文案
+    return errorText(error.code)
   }
   return '网络不可用，请稍后重试。'
 }

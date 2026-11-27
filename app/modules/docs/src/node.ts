@@ -95,7 +95,7 @@ const outcome = await applyDocsMigrations(createSqliteExecutor(sqlite));
 console.log(`docs 迁移就绪：新增 ${outcome.applied.length}，已跳过 ${outcome.skipped.length}（${dbPath}）`);
 
 // ---- 应用装配：健康检查 + 生命周期 + 业务路由，同一个 Hono ----
-const app = createDocsApp({ verifier });
+const app = createDocsApp({ verifier, db: createSqliteExecutor(sqlite) });
 app.route('/', createHealthApp({ version: manifest?.version }));
 app.route('/', createLifeApp({ verifier }));
 

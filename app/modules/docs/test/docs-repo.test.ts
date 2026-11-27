@@ -146,7 +146,7 @@ describe('文档仓储层（D2）', () => {
       expect(await softDeleteDocument(db.d1, doc.id)).toBe(false);
 
       expect(await getDocument(db.d1, doc.id)).toBeNull();
-      expect(await listDocuments(db.d1, 'u_owner')).toEqual([]);
+      expect(await listDocuments(db.d1, 'u_owner')).toEqual({ items: [], hasMore: false });
       // 软删 = 打标记，不物理删行
       expect(db.query("SELECT deleted_at FROM docs_documents WHERE id = ?", doc.id)).toEqual([
         { deleted_at: expect.any(String) },
@@ -172,12 +172,13 @@ describe('文档仓储层（D2）', () => {
       db.run("UPDATE docs_documents SET updated_at = '2026-11-17 10:00:02' WHERE id = ?", shared.id);
       await softDeleteDocument(db.d1, deletedMine.id);
 
-      const list = await listDocuments(db.d1, 'u_me');
+      const { items: list } = await listDocuments(db.d1, 'u_me');
       expect(list.map((doc) => doc.id)).toEqual([shared.id, mine.id]);
+      expect(list.map((doc) => doc.role)).toEqual(['viewer', 'owner']);
       expect(list.map((doc) => doc.id)).not.toContain(foreign.id);
 
       // 另一个成员看不到我的私有文档，只看得到自己拥有/被共享的
-      const others = await listDocuments(db.d1, 'u_other');
+      const { items: others } = await listDocuments(db.d1, 'u_other');
       expect(others.map((doc) => doc.id).sort()).toEqual([shared.id, foreign.id].sort());
     } finally {
       db.close();
@@ -190,10 +191,14 @@ describe('文档仓储层（D2）', () => {
       for (let i = 0; i < 3; i += 1) {
         await createDocument(db.d1, { ownerId: 'u_me', title: `t${i}` });
       }
-      expect(await listDocuments(db.d1, 'u_me', { limit: 2 })).toHaveLength(2);
-      expect(await listDocuments(db.d1, 'u_me', { limit: 2, offset: 2 })).toHaveLength(1);
-      expect(await listDocuments(db.d1, 'u_me', { limit: 0 })).toHaveLength(1);
-      expect(await listDocuments(db.d1, 'u_me', { limit: 1000 })).toHaveLength(3);
+      const first = await listDocuments(db.d1, 'u_me', { limit: 2 });
+      expect(first.items).toHaveLength(2);
+      expect(first.hasMore).toBe(true);
+      // 恰好满页：多取的那条不存在，hasMore 为 false（不靠「满页 = 还有」）
+      expect((await listDocuments(db.d1, 'u_me', { limit: 3 })).hasMore).toBe(false);
+      expect((await listDocuments(db.d1, 'u_me', { limit: 2, offset: 2 })).items).toHaveLength(1);
+      expect((await listDocuments(db.d1, 'u_me', { limit: 0 })).items).toHaveLength(1);
+      expect((await listDocuments(db.d1, 'u_me', { limit: 1000 })).items).toHaveLength(3);
     } finally {
       db.close();
     }
