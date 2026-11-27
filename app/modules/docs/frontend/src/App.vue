@@ -12,6 +12,11 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
+import { ArrowLeft } from 'lucide-vue-next'
+
+import UButton from '@unself/ui/button'
+import UErrorCard from '@unself/ui/error-card'
+
 import DocsEditor from './components/DocsEditor.vue'
 import DocsList from './components/DocsList.vue'
 import { DocsApiError, createHttpDocsApi, type DocsApi } from './lib/docs-api'
@@ -157,8 +162,8 @@ async function openDoc(id: string): Promise<void> {
 }
 
 function backToList(): void {
-  // 离开编辑器前确认未保存内容：编辑器组件卸载即丢草稿，先问一句再走。
-  if (!globalThis.confirm('返回列表？编辑器里未保存的修改会丢失。')) return
+  // 只有真正挂着文档时才有草稿可丢；加载失败/加载中直接返回，不该弹「未保存」的问句。
+  if (currentDoc.value !== null && !globalThis.confirm('返回列表？编辑器里未保存的修改会丢失。')) return
   view.value = { kind: 'list' }
   currentDoc.value = null
   // 有数据时原地刷新，不切骨架（避免整页闪空）
@@ -207,9 +212,8 @@ onBeforeUnmount(() => {
       正在连接工作台…
     </div>
 
-    <div v-else-if="handshakeState === 'failed'" class="center" data-test="handshake-failed" role="alert">
-      <p class="fail-title">无法打开文档模块</p>
-      <p class="fail-message">{{ handshakeError }}</p>
+    <div v-else-if="handshakeState === 'failed'" class="center" data-test="handshake-failed">
+      <UErrorCard title="无法打开文档模块" :message="handshakeError" />
       <p class="fail-hint">请刷新页面；若持续失败，联系管理员检查模块接入。</p>
     </div>
 
@@ -226,15 +230,31 @@ onBeforeUnmount(() => {
       />
 
       <section v-else class="editor-view">
-        <button type="button" class="u-btn u-btn-ghost u-btn-sm back" data-test="back-to-list" @click="backToList">
-          ← 返回列表
-        </button>
+        <!-- 加载/失败态没有编辑器标题栏：返回胶囊单独一行，否则这两种状态没有出口 -->
+        <UButton
+          v-if="!currentDoc"
+          variant="outline"
+          size="sm"
+          class="back-pill back-fallback"
+          data-test="back-to-list"
+          @click="backToList"
+        >
+          <ArrowLeft :size="14" aria-hidden="true" />
+          返回列表
+        </UButton>
 
         <p v-if="editorLoading" class="center" data-test="editor-loading">正在打开文档…</p>
         <p v-else-if="editorError" class="center error" role="alert" data-test="editor-error">
           {{ editorError }}
         </p>
-        <DocsEditor v-else-if="currentDoc" :doc="currentDoc" :api="docsApi" />
+        <DocsEditor v-else-if="currentDoc" :doc="currentDoc" :api="docsApi">
+          <template #leading>
+            <UButton variant="outline" size="sm" class="back-pill" data-test="back-to-list" @click="backToList">
+              <ArrowLeft :size="14" aria-hidden="true" />
+              返回列表
+            </UButton>
+          </template>
+        </DocsEditor>
       </section>
     </template>
   </main>
@@ -258,15 +278,6 @@ onBeforeUnmount(() => {
   text-align: center;
   color: var(--unself-color-text-secondary);
 }
-.fail-title {
-  margin: 0;
-  font-size: var(--unself-font-size-lg);
-  font-weight: 600;
-  color: var(--unself-color-text);
-}
-.fail-message {
-  margin: 0;
-}
 .fail-hint {
   margin: 0;
   font-size: var(--unself-font-size-sm);
@@ -279,7 +290,12 @@ onBeforeUnmount(() => {
   flex-direction: column;
   height: 100%;
 }
-.back {
+/* 胶囊形返回按钮：UButton 的圆角在自身 scoped 块里，这里用父级提一级压过去。 */
+.docs-app .back-pill {
+  border-radius: var(--unself-radius-full);
+}
+/* 加载/失败态没有编辑器 header，胶囊自成一行。 */
+.back-fallback {
   align-self: flex-start;
   margin: var(--unself-space-3) var(--unself-space-4) 0;
 }

@@ -2,6 +2,10 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 
+import { X } from 'lucide-vue-next'
+
+import UButton from '@unself/ui/button'
+
 import type { CommentsApi, DocComment } from '../lib/docs-api-mock'
 
 /**
@@ -133,7 +137,9 @@ function formatTime(iso: string): string {
     <form ref="composeEl" class="compose" @submit.prevent="submit">
       <div v-if="quote" class="quote" data-test="comment-quote">
         <span class="quote-text">{{ quote }}</span>
-        <button type="button" class="link" aria-label="移除引用" @click="dismissQuote">✕</button>
+        <button type="button" class="link" aria-label="移除引用" @click="dismissQuote">
+          <X :size="14" aria-hidden="true" />
+        </button>
       </div>
       <textarea
         ref="inputEl"
@@ -143,9 +149,9 @@ function formatTime(iso: string): string {
         aria-label="评论内容"
         data-test="comment-input"
       />
-      <button type="submit" class="primary" :disabled="body.trim() === ''" data-test="comment-submit">
+      <UButton type="submit" size="sm" class="submit" :disabled="body.trim() === ''" data-test="comment-submit">
         发表
-      </button>
+      </UButton>
     </form>
   </aside>
 </template>
@@ -260,6 +266,8 @@ h3 {
 }
 
 .link {
+  display: inline-flex;
+  align-items: center;
   margin-left: auto;
   background: none;
   border: none;
@@ -295,22 +303,7 @@ textarea:focus-visible {
   box-shadow: var(--unself-focus-ring);
 }
 
-button.primary {
+.submit {
   align-self: flex-end;
-  font: inherit;
-  cursor: pointer;
-  padding: var(--unself-space-2) var(--unself-space-3);
-  border-radius: var(--unself-radius-md);
-  border: 1px solid var(--unself-color-primary);
-  background: var(--unself-color-primary);
-  color: var(--unself-color-surface);
-}
-button.primary:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-button.primary:focus-visible {
-  outline: none;
-  box-shadow: var(--unself-focus-ring);
 }
 </style>

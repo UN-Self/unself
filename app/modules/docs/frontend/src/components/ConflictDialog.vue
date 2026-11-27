@@ -2,6 +2,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
+import UButton from '@unself/ui/button'
+
 import type { ConflictChoice } from '../lib/docs-editor-state'
 import { plainSummary } from '../lib/docs-markdown'
 import type { Doc } from '../lib/docs-types'
@@ -83,20 +85,15 @@ function choose(choice: ConflictChoice): void {
       </blockquote>
 
       <div class="actions">
-        <button type="button" class="primary" data-test="conflict-overwrite" @click="choose('overwrite')">
+        <UButton size="sm" data-test="conflict-overwrite" @click="choose('overwrite')">
           用我的版本覆盖
-        </button>
-        <button
-          type="button"
-          class="danger"
-          data-test="conflict-reload"
-          @click="choose('reload')"
-        >
+        </UButton>
+        <UButton variant="danger" size="sm" data-test="conflict-reload" @click="choose('reload')">
           {{ confirmingReload ? '确认丢弃我的改动？' : '载入服务端版本' }}
-        </button>
-        <button type="button" class="ghost" data-test="conflict-cancel" @click="choose('cancel')">
+        </UButton>
+        <UButton variant="outline" size="sm" data-test="conflict-cancel" @click="choose('cancel')">
           取消，先留着我的
-        </button>
+        </UButton>
       </div>
     </div>
   </div>
@@ -172,42 +169,5 @@ h2 {
   flex-wrap: wrap;
   gap: var(--unself-space-2);
   justify-content: flex-end;
-}
-
-button {
-  font: inherit;
-  cursor: pointer;
-  border-radius: var(--unself-radius-md);
-  padding: var(--unself-space-2) var(--unself-space-3);
-  border: 1px solid transparent;
-  transition: background var(--unself-duration-fast) var(--unself-ease-out);
-}
-button:focus-visible {
-  outline: none;
-  box-shadow: var(--unself-focus-ring);
-}
-
-.primary {
-  background: var(--unself-color-primary);
-  border-color: var(--unself-color-primary);
-  color: var(--unself-color-surface);
-}
-.primary:hover {
-  background: var(--unself-color-primary-hover);
-}
-
-.danger {
-  background: var(--unself-color-danger-soft);
-  border-color: var(--unself-color-danger);
-  color: var(--unself-color-danger);
-}
-
-.ghost {
-  background: transparent;
-  border-color: var(--unself-color-border);
-  color: var(--unself-color-text-secondary);
-}
-.ghost:hover {
-  background: var(--unself-color-surface-hover);
 }
 </style>

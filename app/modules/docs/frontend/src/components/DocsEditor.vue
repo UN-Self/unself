@@ -6,6 +6,8 @@ import { Decoration, EditorView, keymap, type DecorationSet, type ViewUpdate } f
 import { basicSetup } from 'codemirror'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import UButton from '@unself/ui/button'
+
 import ConflictDialog from './ConflictDialog.vue'
 import type { DocsApi } from '../lib/docs-api'
 import type { ConflictChoice } from '../lib/docs-editor-state'
@@ -192,6 +194,9 @@ function quoteSelection(): void {
 <template>
   <section class="doc-editor">
     <header class="bar">
+      <!-- 导航按钮由 App 注入（返回列表属于壳的视图切换，不进编辑器逻辑） -->
+      <slot name="leading" />
+
       <input
         class="title-input"
         type="text"
@@ -206,37 +211,36 @@ function quoteSelection(): void {
 
       <span class="status" :data-tone="statusTone" data-test="save-status">{{ statusText }}</span>
 
-      <button
-        type="button"
-        class="ghost"
+      <UButton
+        variant="outline"
+        size="sm"
         data-test="comment-selection"
         :disabled="selectedText.trim() === ''"
         title="先在正文里选中一段文字，再点这里，右侧评论框会带上引用"
         @click="quoteSelection"
       >
         评论所选
-      </button>
+      </UButton>
 
-      <button
-        type="button"
-        class="ghost"
+      <UButton
+        variant="outline"
+        size="sm"
         data-test="toggle-preview"
         :title="preview ? '回到 Markdown 编辑' : '渲染 Markdown 看排版效果'"
         @click="preview = !preview"
       >
         {{ preview ? '编辑' : '预览' }}
-      </button>
+      </UButton>
 
-      <button
-        type="button"
-        class="primary"
+      <UButton
+        size="sm"
         data-test="save"
         :disabled="!saveable"
         title="把当前修改存到服务端（快捷键 Cmd/Ctrl+S）"
         @click="editor.save()"
       >
         {{ saving ? '保存中…' : '保存' }}
-      </button>
+      </UButton>
     </header>
 
     <p v-if="errorMessage" class="notice bad" role="alert" data-test="save-error">
@@ -333,40 +337,6 @@ function quoteSelection(): void {
 .status[data-tone='busy'] {
   background: var(--unself-color-info);
   color: var(--unself-color-surface);
-}
-
-button {
-  font: inherit;
-  cursor: pointer;
-  border-radius: var(--unself-radius-md);
-  padding: var(--unself-space-2) var(--unself-space-3);
-  transition: background var(--unself-duration-fast) var(--unself-ease-out);
-}
-button:focus-visible {
-  outline: none;
-  box-shadow: var(--unself-focus-ring);
-}
-
-.primary {
-  background: var(--unself-color-primary);
-  color: var(--unself-color-surface);
-  border: 1px solid var(--unself-color-primary);
-}
-.primary:hover:not(:disabled) {
-  background: var(--unself-color-primary-hover);
-}
-.primary:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.ghost {
-  background: transparent;
-  color: var(--unself-color-text-secondary);
-  border: 1px solid var(--unself-color-border);
-}
-.ghost:hover {
-  background: var(--unself-color-surface-hover);
 }
 
 .notice {

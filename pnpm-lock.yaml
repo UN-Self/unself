@@ -207,12 +207,18 @@ importers:
       '@unself/sdk':
         specifier: workspace:*
         version: link:../../../../core/sdk
+      '@unself/ui':
+        specifier: workspace:*
+        version: link:../../../../core/ui
       codemirror:
         specifier: ^6.0.1
         version: 6.0.2
       dompurify:
         specifier: ^3.2.0
         version: 3.4.15
+      lucide-vue-next:
+        specifier: ^0.544.0
+        version: 0.544.0(vue@3.5.42(typescript@5.9.3))
       markdown-it:
         specifier: ^14.1.0
         version: 14.3.2

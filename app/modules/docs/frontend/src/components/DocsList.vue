@@ -8,6 +8,10 @@
  */
 import { computed } from 'vue'
 
+import UButton from '@unself/ui/button'
+import UBanner from '@unself/ui/banner'
+import USkeleton from '@unself/ui/skeleton'
+
 import type { ListState } from '../lib/docs-list-state'
 import { errorText, type Doc } from '../lib/docs-types'
 
@@ -62,21 +66,17 @@ function confirmDelete(doc: Doc): void {
   <section class="docs-list" data-test="docs-list">
     <header class="head">
       <h1 class="title">文档</h1>
-      <button type="button" class="u-btn u-btn-primary u-btn-md" data-test="create" @click="emit('create')">
-        新建文档
-      </button>
+      <UButton data-test="create" @click="emit('create')">新建文档</UButton>
     </header>
 
-    <p v-if="hasError" class="banner" role="alert" data-test="list-error">
+    <UBanner v-if="hasError" tone="danger" class="banner" data-test="list-error">
       {{ errorMessage }}
-      <button type="button" class="u-btn u-btn-ghost u-btn-sm" data-test="retry" @click="emit('retry')">
+      <UButton variant="outline" size="sm" data-test="retry" @click="emit('retry')">
         重试
-      </button>
-    </p>
+      </UButton>
+    </UBanner>
 
-    <div v-if="isFirstLoad" class="skeleton" data-test="list-loading" aria-busy="true">
-      <span v-for="n in 3" :key="n" class="skeleton-row" />
-    </div>
+    <USkeleton v-if="isFirstLoad" :lines="3" data-test="list-loading" />
 
     <p v-else-if="isEmpty" class="empty" data-test="list-empty">
       还没有文档。点「新建文档」写第一篇。
@@ -92,29 +92,31 @@ function confirmDelete(doc: Doc): void {
             <span v-if="doc.role === 'viewer'" class="badge">只读</span>
           </span>
         </button>
-        <button
+        <UButton
           v-if="canDelete(doc)"
-          type="button"
-          class="u-btn u-btn-ghost u-btn-sm danger"
+          variant="outline"
+          size="sm"
+          class="danger"
           data-test="delete"
           :disabled="state.deleting.includes(doc.id)"
           @click="confirmDelete(doc)"
         >
           {{ state.deleting.includes(doc.id) ? '删除中…' : '删除' }}
-        </button>
+        </UButton>
       </li>
     </ul>
 
-    <button
+    <UButton
       v-if="state.hasMore"
-      type="button"
-      class="u-btn u-btn-outline u-btn-sm more"
+      variant="outline"
+      size="sm"
+      class="more"
       data-test="load-more"
       :disabled="state.status === 'loading'"
       @click="emit('loadMore')"
     >
       {{ state.status === 'loading' ? '加载中…' : '加载更多' }}
-    </button>
+    </UButton>
   </section>
 </template>
 
@@ -138,17 +140,10 @@ function confirmDelete(doc: Doc): void {
   font-weight: 600;
   color: var(--unself-color-text);
 }
-.banner {
-  display: flex;
-  align-items: center;
-  gap: var(--unself-space-3);
-  margin: 0;
-  padding: var(--unself-space-3) var(--unself-space-4);
-  border: 1px solid var(--unself-color-danger);
-  border-radius: var(--unself-radius-md);
-  background: var(--unself-color-danger-soft);
-  color: var(--unself-color-text);
-  font-size: var(--unself-font-size-sm);
+/* UBanner 自带 margin-bottom，列表已用 gap 排版，这里清零。
+   父选择器抬一级：与基元同为单类 + scope 属性时，胜负会落在产物顺序上。 */
+.docs-list .banner {
+  margin-bottom: 0;
 }
 .empty {
   margin: 0;
@@ -206,21 +201,22 @@ function confirmDelete(doc: Doc): void {
   background: var(--unself-color-surface-active);
   font-size: var(--unself-font-size-sm);
 }
-.danger {
+/*
+ * 删除按钮做成胶囊：UButton 的圆角/配色在自身 scoped 块里，与这里的类同特异性，
+ * 胜负看产物先后；用父选择器抬一级才压得住。红字压在列表底色(#faf9f7)上 4.6:1，
+ * 换成 danger 变体是 danger-soft 底配红字，只有 3.96:1，过不了 AA。
+ */
+.item .danger {
+  border-color: var(--unself-color-danger);
+  border-radius: var(--unself-radius-full);
+  color: var(--unself-color-danger);
+}
+.item .danger:hover:not(:disabled) {
+  border-color: var(--unself-color-danger);
   color: var(--unself-color-danger);
 }
 .more {
   align-self: center;
-}
-.skeleton {
-  display: flex;
-  flex-direction: column;
-  gap: var(--unself-space-2);
-}
-.skeleton-row {
-  height: 56px;
-  border-radius: var(--unself-radius-md);
-  background: var(--unself-color-surface-active);
 }
 @media (prefers-reduced-motion: reduce) {
   * {
