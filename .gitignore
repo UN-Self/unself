@@ -3,6 +3,8 @@ node_modules/
 
 # 构建产物
 dist/
+dist.staging-*/
+dist.retired-*/
 coverage/
 
 # Cloudflare Wrangler 本地状态
